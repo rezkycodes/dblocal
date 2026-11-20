@@ -5,8 +5,8 @@
 //! the actual view off-screen and records pixel evidence numerically.
 
 use gpui::{
-    AnyWindowHandle, App, AppContext as _, AssetSource, Bounds, HeadlessAppContext, SharedString,
-    Window, WindowBounds, WindowOptions, px, size,
+    AnyWindowHandle, AppContext as _, AssetSource, Bounds, HeadlessAppContext, SharedString,
+    WindowBounds, WindowOptions, px, size,
 };
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -26,7 +26,7 @@ fn render_one(mode_dark: bool, name: &str) -> (image::RgbaImage, usize) {
     let mut app = HeadlessAppContext::with_platform(
         text_system,
         Arc::new(SpikeAssets),
-        || gpui_platform::current_headless_renderer(),
+        gpui_platform::current_headless_renderer,
     );
     app.update(gpui_component::init);
     app.update(gpui_spike::theme::init);
@@ -54,7 +54,7 @@ fn render_one(mode_dark: bool, name: &str) -> (image::RgbaImage, usize) {
                         ..Default::default()
                     },
                     |window, cx| {
-                        let view = cx.new(|cx| gpui_spike::app::AppState::preview(cx));
+                        let view = cx.new(gpui_spike::app::AppState::preview);
                         cx.new(|cx| gpui_component::Root::new(view, window, cx))
                     },
                 )
@@ -90,9 +90,15 @@ fn render_one(mode_dark: bool, name: &str) -> (image::RgbaImage, usize) {
 #[test]
 fn renders_zed_style_shell_dark_and_light() {
     let (dark, dark_n) = render_one(true, "zed-shell-dark.png");
-    assert!(dark_n > 20, "dark: expected a painted UI, got {dark_n} colours");
+    assert!(
+        dark_n > 20,
+        "dark: expected a painted UI, got {dark_n} colours"
+    );
     let (light, light_n) = render_one(false, "zed-shell-light.png");
-    assert!(light_n > 20, "light: expected a painted UI, got {light_n} colours");
+    assert!(
+        light_n > 20,
+        "light: expected a painted UI, got {light_n} colours"
+    );
 
     // Numeric proof the two themes differ: compare average luminance of a
     // central sample region (centre pane background area).
@@ -134,4 +140,3 @@ fn renders_zed_style_shell_dark_and_light() {
         }
     }
 }
-

@@ -69,24 +69,114 @@ pub fn dark_pairs() -> Vec<ContrastPair> {
     let status = Rgb::hex(0x21252b);
     let list_active = Rgb::hex(0x2c313a);
     vec![
-        ContrastPair { label: "dark/body on editor", fg: Rgb::hex(0xabb2bf), bg: editor, min_ratio: 4.5 },
-        ContrastPair { label: "dark/secondary on editor", fg: Rgb::hex(0x9da5b4), bg: editor, min_ratio: 4.5 },
-        ContrastPair { label: "dark/body on panel", fg: Rgb::hex(0xabb2bf), bg: panel, min_ratio: 4.5 },
-        ContrastPair { label: "dark/secondary on panel", fg: Rgb::hex(0x9da5b4), bg: panel, min_ratio: 4.5 },
-        ContrastPair { label: "dark/active tab fg on active tab", fg: Rgb::hex(0xabb2bf), bg: tab_active, min_ratio: 4.5 },
-        ContrastPair { label: "dark/inactive tab fg on tab bar", fg: Rgb::hex(0x9da5b4), bg: tab_bar, min_ratio: 4.5 },
-        ContrastPair { label: "dark/body on status bar", fg: Rgb::hex(0xabb2bf), bg: status, min_ratio: 4.5 },
-        ContrastPair { label: "dark/secondary on status bar", fg: Rgb::hex(0x9da5b4), bg: status, min_ratio: 4.5 },
-        ContrastPair { label: "dark/popover fg", fg: Rgb::hex(0xabb2bf), bg: popover, min_ratio: 4.5 },
-        ContrastPair { label: "dark/sidebar fg", fg: Rgb::hex(0xabb2bf), bg: sidebar, min_ratio: 4.5 },
-        ContrastPair { label: "dark/active row text", fg: Rgb::hex(0xabb2bf), bg: list_active, min_ratio: 4.5 },
-        ContrastPair { label: "dark/running green on editor", fg: Rgb::hex(0x98c379), bg: editor, min_ratio: 4.5 },
-        ContrastPair { label: "dark/warning yellow on editor", fg: Rgb::hex(0xe5c07b), bg: editor, min_ratio: 4.5 },
-        ContrastPair { label: "dark/failed red on editor (adjusted)", fg: Rgb::hex(0xe89aa3), bg: editor, min_ratio: 4.5 },
-        ContrastPair { label: "dark/accent blue on editor", fg: Rgb::hex(0x61afef), bg: editor, min_ratio: 4.5 },
-        ContrastPair { label: "dark/running green on panel", fg: Rgb::hex(0x98c379), bg: panel, min_ratio: 4.5 },
-        ContrastPair { label: "dark/failed red on panel (adjusted)", fg: Rgb::hex(0xe89aa3), bg: panel, min_ratio: 4.5 },
-        ContrastPair { label: "dark/accent blue on panel", fg: Rgb::hex(0x61afef), bg: panel, min_ratio: 4.5 },
+        ContrastPair {
+            label: "dark/body on editor",
+            fg: Rgb::hex(0xabb2bf),
+            bg: editor,
+            min_ratio: 4.5,
+        },
+        ContrastPair {
+            label: "dark/secondary on editor",
+            fg: Rgb::hex(0x9da5b4),
+            bg: editor,
+            min_ratio: 4.5,
+        },
+        ContrastPair {
+            label: "dark/body on panel",
+            fg: Rgb::hex(0xabb2bf),
+            bg: panel,
+            min_ratio: 4.5,
+        },
+        ContrastPair {
+            label: "dark/secondary on panel",
+            fg: Rgb::hex(0x9da5b4),
+            bg: panel,
+            min_ratio: 4.5,
+        },
+        ContrastPair {
+            label: "dark/active tab fg on active tab",
+            fg: Rgb::hex(0xabb2bf),
+            bg: tab_active,
+            min_ratio: 4.5,
+        },
+        ContrastPair {
+            label: "dark/inactive tab fg on tab bar",
+            fg: Rgb::hex(0x9da5b4),
+            bg: tab_bar,
+            min_ratio: 4.5,
+        },
+        ContrastPair {
+            label: "dark/body on status bar",
+            fg: Rgb::hex(0xabb2bf),
+            bg: status,
+            min_ratio: 4.5,
+        },
+        ContrastPair {
+            label: "dark/secondary on status bar",
+            fg: Rgb::hex(0x9da5b4),
+            bg: status,
+            min_ratio: 4.5,
+        },
+        ContrastPair {
+            label: "dark/popover fg",
+            fg: Rgb::hex(0xabb2bf),
+            bg: popover,
+            min_ratio: 4.5,
+        },
+        ContrastPair {
+            label: "dark/sidebar fg",
+            fg: Rgb::hex(0xabb2bf),
+            bg: sidebar,
+            min_ratio: 4.5,
+        },
+        ContrastPair {
+            label: "dark/active row text",
+            fg: Rgb::hex(0xabb2bf),
+            bg: list_active,
+            min_ratio: 4.5,
+        },
+        ContrastPair {
+            label: "dark/running green on editor",
+            fg: Rgb::hex(0x98c379),
+            bg: editor,
+            min_ratio: 4.5,
+        },
+        ContrastPair {
+            label: "dark/warning yellow on editor",
+            fg: Rgb::hex(0xe5c07b),
+            bg: editor,
+            min_ratio: 4.5,
+        },
+        ContrastPair {
+            label: "dark/failed red on editor (adjusted)",
+            fg: Rgb::hex(0xe89aa3),
+            bg: editor,
+            min_ratio: 4.5,
+        },
+        ContrastPair {
+            label: "dark/accent blue on editor",
+            fg: Rgb::hex(0x61afef),
+            bg: editor,
+            min_ratio: 4.5,
+        },
+        ContrastPair {
+            label: "dark/running green on panel",
+            fg: Rgb::hex(0x98c379),
+            bg: panel,
+            min_ratio: 4.5,
+        },
+        ContrastPair {
+            label: "dark/failed red on panel (adjusted)",
+            fg: Rgb::hex(0xe89aa3),
+            bg: panel,
+            min_ratio: 4.5,
+        },
+        ContrastPair {
+            label: "dark/accent blue on panel",
+            fg: Rgb::hex(0x61afef),
+            bg: panel,
+            min_ratio: 4.5,
+        },
     ]
 }
 
@@ -100,24 +190,114 @@ pub fn light_pairs() -> Vec<ContrastPair> {
     let status = Rgb::hex(0xf0f0f0);
     let list_active = Rgb::hex(0xe5e5e6);
     vec![
-        ContrastPair { label: "light/body on editor", fg: Rgb::hex(0x383a42), bg: editor, min_ratio: 4.5 },
-        ContrastPair { label: "light/secondary on editor", fg: Rgb::hex(0x696c77), bg: editor, min_ratio: 4.5 },
-        ContrastPair { label: "light/body on panel", fg: Rgb::hex(0x383a42), bg: panel, min_ratio: 4.5 },
-        ContrastPair { label: "light/secondary on panel", fg: Rgb::hex(0x696c77), bg: panel, min_ratio: 4.5 },
-        ContrastPair { label: "light/active tab fg on active tab", fg: Rgb::hex(0x383a42), bg: tab_active, min_ratio: 4.5 },
-        ContrastPair { label: "light/inactive tab fg on tab bar", fg: Rgb::hex(0x5c5f6b), bg: tab_bar, min_ratio: 4.5 },
-        ContrastPair { label: "light/body on status bar", fg: Rgb::hex(0x383a42), bg: status, min_ratio: 4.5 },
-        ContrastPair { label: "light/secondary on status bar", fg: Rgb::hex(0x696c77), bg: status, min_ratio: 4.5 },
-        ContrastPair { label: "light/popover fg", fg: Rgb::hex(0x383a42), bg: popover, min_ratio: 4.5 },
-        ContrastPair { label: "light/sidebar fg", fg: Rgb::hex(0x383a42), bg: sidebar, min_ratio: 4.5 },
-        ContrastPair { label: "light/active row text", fg: Rgb::hex(0x383a42), bg: list_active, min_ratio: 4.5 },
-        ContrastPair { label: "light/running green on editor", fg: Rgb::hex(0x2b7230), bg: editor, min_ratio: 4.5 },
-        ContrastPair { label: "light/warning yellow on editor", fg: Rgb::hex(0x856000), bg: editor, min_ratio: 4.5 },
-        ContrastPair { label: "light/failed red on editor", fg: Rgb::hex(0xb03730), bg: editor, min_ratio: 4.5 },
-        ContrastPair { label: "light/accent blue on editor", fg: Rgb::hex(0x2a56c0), bg: editor, min_ratio: 4.5 },
-        ContrastPair { label: "light/running green on panel", fg: Rgb::hex(0x2b7230), bg: panel, min_ratio: 4.5 },
-        ContrastPair { label: "light/failed red on panel", fg: Rgb::hex(0xb03730), bg: panel, min_ratio: 4.5 },
-        ContrastPair { label: "light/accent blue on panel", fg: Rgb::hex(0x2a56c0), bg: panel, min_ratio: 4.5 },
+        ContrastPair {
+            label: "light/body on editor",
+            fg: Rgb::hex(0x383a42),
+            bg: editor,
+            min_ratio: 4.5,
+        },
+        ContrastPair {
+            label: "light/secondary on editor",
+            fg: Rgb::hex(0x696c77),
+            bg: editor,
+            min_ratio: 4.5,
+        },
+        ContrastPair {
+            label: "light/body on panel",
+            fg: Rgb::hex(0x383a42),
+            bg: panel,
+            min_ratio: 4.5,
+        },
+        ContrastPair {
+            label: "light/secondary on panel",
+            fg: Rgb::hex(0x696c77),
+            bg: panel,
+            min_ratio: 4.5,
+        },
+        ContrastPair {
+            label: "light/active tab fg on active tab",
+            fg: Rgb::hex(0x383a42),
+            bg: tab_active,
+            min_ratio: 4.5,
+        },
+        ContrastPair {
+            label: "light/inactive tab fg on tab bar",
+            fg: Rgb::hex(0x5c5f6b),
+            bg: tab_bar,
+            min_ratio: 4.5,
+        },
+        ContrastPair {
+            label: "light/body on status bar",
+            fg: Rgb::hex(0x383a42),
+            bg: status,
+            min_ratio: 4.5,
+        },
+        ContrastPair {
+            label: "light/secondary on status bar",
+            fg: Rgb::hex(0x696c77),
+            bg: status,
+            min_ratio: 4.5,
+        },
+        ContrastPair {
+            label: "light/popover fg",
+            fg: Rgb::hex(0x383a42),
+            bg: popover,
+            min_ratio: 4.5,
+        },
+        ContrastPair {
+            label: "light/sidebar fg",
+            fg: Rgb::hex(0x383a42),
+            bg: sidebar,
+            min_ratio: 4.5,
+        },
+        ContrastPair {
+            label: "light/active row text",
+            fg: Rgb::hex(0x383a42),
+            bg: list_active,
+            min_ratio: 4.5,
+        },
+        ContrastPair {
+            label: "light/running green on editor",
+            fg: Rgb::hex(0x2b7230),
+            bg: editor,
+            min_ratio: 4.5,
+        },
+        ContrastPair {
+            label: "light/warning yellow on editor",
+            fg: Rgb::hex(0x856000),
+            bg: editor,
+            min_ratio: 4.5,
+        },
+        ContrastPair {
+            label: "light/failed red on editor",
+            fg: Rgb::hex(0xb03730),
+            bg: editor,
+            min_ratio: 4.5,
+        },
+        ContrastPair {
+            label: "light/accent blue on editor",
+            fg: Rgb::hex(0x2a56c0),
+            bg: editor,
+            min_ratio: 4.5,
+        },
+        ContrastPair {
+            label: "light/running green on panel",
+            fg: Rgb::hex(0x2b7230),
+            bg: panel,
+            min_ratio: 4.5,
+        },
+        ContrastPair {
+            label: "light/failed red on panel",
+            fg: Rgb::hex(0xb03730),
+            bg: panel,
+            min_ratio: 4.5,
+        },
+        ContrastPair {
+            label: "light/accent blue on panel",
+            fg: Rgb::hex(0x2a56c0),
+            bg: panel,
+            min_ratio: 4.5,
+        },
     ]
 }
 
@@ -140,13 +320,25 @@ pub fn token_table() -> String {
     out.push_str("|---|---|---|---|---:|---|\n");
     for pair in dark_pairs().into_iter().chain(light_pairs()) {
         let ratio = contrast_ratio(pair.fg, pair.bg);
-        let result = if ratio >= pair.min_ratio { "pass" } else { "fail" };
+        let result = if ratio >= pair.min_ratio {
+            "pass"
+        } else {
+            "fail"
+        };
         out.push_str(&format!(
             "| {} | {} | #{:02x}{:02x}{:02x} | #{:02x}{:02x}{:02x} | {:.2} | {} |\n",
-            if pair.label.starts_with("dark") { "dark" } else { "light" },
+            if pair.label.starts_with("dark") {
+                "dark"
+            } else {
+                "light"
+            },
             pair.label,
-            pair.fg.r, pair.fg.g, pair.fg.b,
-            pair.bg.r, pair.bg.g, pair.bg.b,
+            pair.fg.r,
+            pair.fg.g,
+            pair.fg.b,
+            pair.bg.r,
+            pair.bg.g,
+            pair.bg.b,
             ratio,
             result,
         ));
@@ -185,5 +377,16 @@ mod tests {
         assert!(table.contains("dark/body on editor"));
         assert!(table.contains("light/body on editor"));
         assert!(table.contains("| pass |") || table.contains("| fail |"));
+    }
+}
+
+#[cfg(test)]
+mod report {
+    use super::*;
+
+    /// Prints the token table so the README can quote real numbers.
+    #[test]
+    fn print_token_table() {
+        eprintln!("\n{}", token_table());
     }
 }

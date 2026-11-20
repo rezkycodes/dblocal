@@ -21,7 +21,18 @@ use gpui_component::{
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
-actions!(spike, [OpenCommandPalette, NewInstanceAction, QuitApp, CloseOverlay, PaletteDown, PaletteUp, PaletteConfirm]);
+actions!(
+    spike,
+    [
+        OpenCommandPalette,
+        NewInstanceAction,
+        QuitApp,
+        CloseOverlay,
+        PaletteDown,
+        PaletteUp,
+        PaletteConfirm
+    ]
+);
 
 const PUMP_TICK: std::time::Duration = std::time::Duration::from_millis(50);
 
@@ -262,13 +273,14 @@ impl AppState {
                     v_flex()
                         .gap_3()
                         .p_4()
-                        .child(div().text_sm().child("Create a new local database instance."))
                         .child(
                             div()
-                                .text_xs()
-                                .text_color(gpui::rgb(0x9da5b4))
-                                .child("Engine, version and port are assigned automatically in this spike."),
+                                .text_sm()
+                                .child("Create a new local database instance."),
                         )
+                        .child(div().text_xs().text_color(gpui::rgb(0x9da5b4)).child(
+                            "Engine, version and port are assigned automatically in this spike.",
+                        ))
                         .child(
                             div()
                                 .text_sm()
@@ -362,7 +374,11 @@ impl Render for AppState {
                 if this.command_palette_open {
                     let n = palette_actions(&this.instances).len();
                     if n > 0 {
-                        this.palette_selected = if this.palette_selected == 0 { n - 1 } else { this.palette_selected - 1 };
+                        this.palette_selected = if this.palette_selected == 0 {
+                            n - 1
+                        } else {
+                            this.palette_selected - 1
+                        };
                         cx.notify();
                     }
                 }
@@ -374,9 +390,18 @@ impl Render for AppState {
                         this.command_palette_open = false;
                         match action {
                             PaletteAction::NewInstance => this.open_new_instance_dialog(window, cx),
-                            PaletteAction::Open(idx) => { this.open_instance_tab(idx); cx.notify(); }
-                            PaletteAction::Toggle(idx) => { this.toggle(idx); cx.notify(); }
-                            PaletteAction::CopyUri(idx) => { this.copy_uri(idx, window, cx); cx.notify(); }
+                            PaletteAction::Open(idx) => {
+                                this.open_instance_tab(idx);
+                                cx.notify();
+                            }
+                            PaletteAction::Toggle(idx) => {
+                                this.toggle(idx);
+                                cx.notify();
+                            }
+                            PaletteAction::CopyUri(idx) => {
+                                this.copy_uri(idx, window, cx);
+                                cx.notify();
+                            }
                         }
                     } else {
                         this.command_palette_open = false;
@@ -426,7 +451,12 @@ impl AppState {
                 h_flex()
                     .gap_3()
                     .items_center()
-                    .child(div().text_sm().font_weight(FontWeight::SEMIBOLD).child("DBLocal"))
+                    .child(
+                        div()
+                            .text_sm()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child("DBLocal"),
+                    )
                     .child(
                         Button::new("tb-new")
                             .label("New instance")
@@ -443,7 +473,12 @@ impl AppState {
                     .items_center()
                     .gap_3()
                     .pr(px(8.))
-                    .child(div().text_xs().text_color(t.muted_foreground).child("Ctrl+K"))
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(t.muted_foreground)
+                            .child("Ctrl+K"),
+                    )
                     .child(window_controls(cx)),
             )
     }
@@ -451,7 +486,12 @@ impl AppState {
     fn render_sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let t = cx.theme();
         let mut groups = v_flex().gap_4().p_2();
-        for engine in [Engine::Postgres, Engine::Mysql, Engine::Mariadb, Engine::Valkey] {
+        for engine in [
+            Engine::Postgres,
+            Engine::Mysql,
+            Engine::Mariadb,
+            Engine::Valkey,
+        ] {
             let mut rows = v_flex().gap_1();
             let mut any = false;
             for (idx, inst) in self.instances.iter().enumerate() {
@@ -472,7 +512,10 @@ impl AppState {
                         .py(px(4.))
                         .rounded(px(4.))
                         .cursor_pointer()
-                        .when(selected, |s| s.bg(t.sidebar_accent).text_color(t.sidebar_accent_foreground))
+                        .when(selected, |s| {
+                            s.bg(t.sidebar_accent)
+                                .text_color(t.sidebar_accent_foreground)
+                        })
                         .hover(|s| s.bg(t.sidebar_accent))
                         .on_click(cx.listener(move |this, _, _w, _cx| {
                             this.open_instance_tab(idx);
@@ -493,12 +536,7 @@ impl AppState {
                                                 .child(inst.status.label()),
                                         ),
                                 )
-                                .child(
-                                    div()
-                                        .text_xs()
-                                        .text_color(t.muted_foreground)
-                                        .child(meta),
-                                ),
+                                .child(div().text_xs().text_color(t.muted_foreground).child(meta)),
                         ),
                 );
             }
@@ -588,15 +626,15 @@ impl AppState {
                 }
             }
         }
-        tab_bar = tab_bar.selected_index(self.selected_tab).on_click(cx.listener(
-            |this, ix: &usize, _w, cx| {
+        tab_bar = tab_bar
+            .selected_index(self.selected_tab)
+            .on_click(cx.listener(|this, ix: &usize, _w, cx| {
                 this.selected_tab = *ix;
                 if let Some(inst_idx) = this.open_tabs.get(*ix).copied() {
                     this.selected_sidebar = Some(inst_idx);
                 }
                 cx.notify();
-            },
-        ));
+            }));
 
         let content = if let Some(inst_idx) = self.open_tabs.get(self.selected_tab).copied() {
             self.render_instance_detail(inst_idx, cx).into_any_element()
@@ -634,7 +672,11 @@ impl AppState {
                         InnerTab::Logs => 1,
                     })
                     .on_click(cx.listener(|this, ix: &usize, _w, cx| {
-                        this.inner_tab = if *ix == 0 { InnerTab::Overview } else { InnerTab::Logs };
+                        this.inner_tab = if *ix == 0 {
+                            InnerTab::Overview
+                        } else {
+                            InnerTab::Logs
+                        };
                         cx.notify();
                     }));
                 this.child(
@@ -658,7 +700,12 @@ impl AppState {
             .items_center()
             .justify_center()
             .gap_3()
-            .child(div().text_xl().font_weight(FontWeight::SEMIBOLD).child("Welcome to DBLocal"))
+            .child(
+                div()
+                    .text_xl()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child("Welcome to DBLocal"),
+            )
             .child(
                 div()
                     .text_sm()
@@ -695,8 +742,18 @@ impl AppState {
                             .items_center()
                             .gap_3()
                             .child(div().size(px(10.)).rounded_full().bg(dot))
-                            .child(div().text_lg().font_weight(FontWeight::SEMIBOLD).child(inst.name.clone()))
-                            .child(div().text_sm().text_color(t.muted_foreground).child(inst.status.label())),
+                            .child(
+                                div()
+                                    .text_lg()
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .child(inst.name.clone()),
+                            )
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .text_color(t.muted_foreground)
+                                    .child(inst.status.label()),
+                            ),
                     )
                     .child(
                         div()
@@ -708,8 +765,16 @@ impl AppState {
                             .child(
                                 v_flex()
                                     .gap_2()
-                                    .child(info_row("Engine", format!("{} {}", inst.engine.label(), inst.version), t.muted_foreground))
-                                    .child(info_row("Port", inst.port.to_string(), t.muted_foreground))
+                                    .child(info_row(
+                                        "Engine",
+                                        format!("{} {}", inst.engine.label(), inst.version),
+                                        t.muted_foreground,
+                                    ))
+                                    .child(info_row(
+                                        "Port",
+                                        inst.port.to_string(),
+                                        t.muted_foreground,
+                                    ))
                                     .child(info_row("Host", "127.0.0.1".into(), t.muted_foreground))
                                     .child(info_row("URI", uri, t.muted_foreground)),
                             ),
@@ -718,9 +783,17 @@ impl AppState {
                         h_flex()
                             .gap_2()
                             .child({
-                                let label = if inst.status == InstanceStatus::Running { "Stop" } else { "Start" };
+                                let label = if inst.status == InstanceStatus::Running {
+                                    "Stop"
+                                } else {
+                                    "Start"
+                                };
                                 let mut b = Button::new(("dt", idx)).label(label).compact();
-                                b = if inst.status == InstanceStatus::Running { b.secondary() } else { b.primary() };
+                                b = if inst.status == InstanceStatus::Running {
+                                    b.secondary()
+                                } else {
+                                    b.primary()
+                                };
                                 b.on_click(cx.listener(move |this, _, _w, cx| {
                                     this.toggle(idx);
                                     cx.notify();
@@ -751,7 +824,12 @@ impl AppState {
                             .child(line),
                     );
                 }
-                div().id(("logs", idx)).size_full().overflow_y_scrollbar().child(col).into_any_element()
+                div()
+                    .id(("logs", idx))
+                    .size_full()
+                    .overflow_y_scrollbar()
+                    .child(col)
+                    .into_any_element()
             }
         }
     }
@@ -762,7 +840,11 @@ impl AppState {
         let total = self.instances.len();
         let pct = self.download_progress.clamp(0.0, 100.0);
         let download_label = format!("PostgreSQL 16.4  {:.0}%", pct);
-        let tray = if self.tray_available { "Tray: active" } else { "Tray: unavailable" };
+        let tray = if self.tray_available {
+            "Tray: active"
+        } else {
+            "Tray: unavailable"
+        };
 
         let pop = Popover::new("downloads-pop")
             .anchor(gpui::Anchor::BottomLeft)
@@ -781,8 +863,17 @@ impl AppState {
                     .child(
                         v_flex()
                             .gap_2()
-                            .child(div().text_sm().font_weight(FontWeight::MEDIUM).child("Downloads"))
-                            .child(div().text_xs().child(format!("PostgreSQL 16.4  {:.0}%", pct)))
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .child("Downloads"),
+                            )
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .child(format!("PostgreSQL 16.4  {:.0}%", pct)),
+                            )
                             .child(
                                 Progress::new("dl-pop-bar")
                                     .value(pct)
@@ -838,20 +929,34 @@ impl AppState {
                     .cursor_pointer()
                     .when(selected, |s| s.bg(t.accent))
                     .hover(|s| s.bg(t.accent))
-                    .on_mouse_down(MouseButton::Left, cx.listener(move |this, _, window, cx| {
-                        cx.stop_propagation();
-                        this.palette_selected = i;
-                        let actions = palette_actions(&this.instances);
-                        if let Some((_, action)) = actions.get(i).cloned() {
-                            this.command_palette_open = false;
-                            match action {
-                                PaletteAction::NewInstance => this.open_new_instance_dialog(window, cx),
-                                PaletteAction::Open(idx) => { this.open_instance_tab(idx); cx.notify(); }
-                                PaletteAction::Toggle(idx) => { this.toggle(idx); cx.notify(); }
-                                PaletteAction::CopyUri(idx) => { this.copy_uri(idx, window, cx); cx.notify(); }
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |this, _, window, cx| {
+                            cx.stop_propagation();
+                            this.palette_selected = i;
+                            let actions = palette_actions(&this.instances);
+                            if let Some((_, action)) = actions.get(i).cloned() {
+                                this.command_palette_open = false;
+                                match action {
+                                    PaletteAction::NewInstance => {
+                                        this.open_new_instance_dialog(window, cx)
+                                    }
+                                    PaletteAction::Open(idx) => {
+                                        this.open_instance_tab(idx);
+                                        cx.notify();
+                                    }
+                                    PaletteAction::Toggle(idx) => {
+                                        this.toggle(idx);
+                                        cx.notify();
+                                    }
+                                    PaletteAction::CopyUri(idx) => {
+                                        this.copy_uri(idx, window, cx);
+                                        cx.notify();
+                                    }
+                                }
                             }
-                        }
-                    }))
+                        }),
+                    )
                     .child(label_text),
             );
         }
@@ -935,8 +1040,14 @@ fn palette_actions(instances: &[Instance]) -> Vec<(String, PaletteAction)> {
     let mut actions = vec![("New instance".to_string(), PaletteAction::NewInstance)];
     for (idx, inst) in instances.iter().enumerate() {
         actions.push((format!("Open {}", inst.name), PaletteAction::Open(idx)));
-        actions.push((format!("Start/stop {}", inst.name), PaletteAction::Toggle(idx)));
-        actions.push((format!("Copy URI {}", inst.name), PaletteAction::CopyUri(idx)));
+        actions.push((
+            format!("Start/stop {}", inst.name),
+            PaletteAction::Toggle(idx),
+        ));
+        actions.push((
+            format!("Copy URI {}", inst.name),
+            PaletteAction::CopyUri(idx),
+        ));
     }
     actions
 }
@@ -945,7 +1056,13 @@ fn info_row(label: &str, value: String, muted: Hsla) -> impl IntoElement {
     h_flex()
         .gap_3()
         .items_start()
-        .child(div().w(px(80.)).text_sm().text_color(muted).child(label.to_string()))
+        .child(
+            div()
+                .w(px(80.))
+                .text_sm()
+                .text_color(muted)
+                .child(label.to_string()),
+        )
         .child(div().text_sm().flex_1().child(value))
 }
 
@@ -958,7 +1075,10 @@ fn fake_logs(inst: &Instance) -> Vec<String> {
             inst.port
         ),
         "[info] listening on 127.0.0.1 only".into(),
-        format!("[info] data directory ~/.dblocal/instances/{}/data", inst.name),
+        format!(
+            "[info] data directory ~/.dblocal/instances/{}/data",
+            inst.name
+        ),
         "[info] ready to accept connections".into(),
         "[debug] health check ok (12ms)".into(),
         "[info] autovacuum launcher started".into(),
@@ -983,8 +1103,16 @@ fn window_controls(cx: &App) -> impl IntoElement {
 }
 
 fn wc_btn(id: &'static str, label: &'static str, danger: bool, cx: &App) -> impl IntoElement {
-    let hover = if danger { cx.theme().danger } else { cx.theme().secondary_hover };
-    let hover_fg = if danger { cx.theme().danger_foreground } else { cx.theme().foreground };
+    let hover = if danger {
+        cx.theme().danger
+    } else {
+        cx.theme().secondary_hover
+    };
+    let hover_fg = if danger {
+        cx.theme().danger_foreground
+    } else {
+        cx.theme().foreground
+    };
     div()
         .id(id)
         .px_3()
@@ -1019,7 +1147,7 @@ fn spawn_pump(view: Entity<AppState>, rx: Receiver<UiEvent>, mailbox: TrayMailbo
             }
             let has_mail = mailbox.lock().map(|q| !q.is_empty()).unwrap_or(false);
             if progress_val.is_some() || has_mail || quit {
-                let _ = cx.update(|cx| {
+                cx.update(|cx| {
                     view.update(cx, |state, cx| {
                         if let Some(p) = progress_val {
                             state.download_progress = p.clamp(0.0, 100.0);
@@ -1105,7 +1233,12 @@ pub fn run() {
 
             // Retrieve the actual AppState entity for the pump.
             let view_entity: Entity<AppState> = window_handle
-                .update(cx, |root, _window, _cx| root.view().clone().downcast::<AppState>().expect("root view is AppState"))
+                .update(cx, |root, _window, _cx| {
+                    root.view()
+                        .clone()
+                        .downcast::<AppState>()
+                        .expect("root view is AppState")
+                })
                 .expect("window");
 
             // F-TRY-02: minimize instead of close when tray is available.
@@ -1192,7 +1325,7 @@ mod tests {
 
     #[test]
     fn toggle_cycles_states() {
-        let mut instances = vec![Instance {
+        let mut instances = [Instance {
             name: "a".into(),
             engine: Engine::Postgres,
             version: "1".into(),
