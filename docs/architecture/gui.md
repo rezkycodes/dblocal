@@ -14,9 +14,11 @@ Owner: W1-G. This document describes the `crates/gui` shell built against `dbloc
 | Module | Responsibility | Tests | Line coverage |
 |---|---|---|---|
 | `lib.rs` | Public `run()`, the GUI-availability seam, `verify_theme_contrast` | unit | 57% (entry/seam) |
-| `app.rs` | `Workspace` entity, window wiring, event pump | layout + render | 40% (layout) |
+| `app.rs` | `Workspace` entity, construction, event pump | layout + render | 586 lines |
 | `app/actions.rs` | Actions and key bindings | layout | 46% (layout) |
-| `app/state.rs` | Pure event reduction over `ShellState` | unit, thorough | 99.2% |
+| `app/state.rs` | Pure event reduction over `ShellState` | unit | 99.2% |
+| `app/create_submit.rs` | GPUI-free create submission (validate, spec, submit) | unit, thorough | 90.8% |
+| `app/workspace_api.rs` | One-line accessors the views call | layout | — |
 | `app/views.rs` | Element tree (sidebar, tabs, overview, logs) | layout + render | 72% (layout) |
 | `app/preview.rs` | Preview constructors for headless renders | render | 95% |
 | `app/bootstrap.rs` | Process bootstrap and window creation | layout | 20% (entry) |
@@ -25,9 +27,9 @@ Owner: W1-G. This document describes the `crates/gui` shell built against `dbloc
 | `app/palette.rs` | Command palette on `gpui_component::command::Command` | layout | 70% (layout) |
 | `app/create_dialog.rs` | Create-instance form on `InputState` | layout + render | 82% |
 | `app/delete_dialog.rs` | Delete modal with the two D-18 actions | layout + render | 81% |
-| `format.rs` | Pure view-models (grouping, labels, bytes/speed/ETA, masking, palette, validation) | unit, thorough | 98.6% |
-| `logs.rs` | Ring buffer, follow, copy | unit | 100% |
-| `service_bridge.rs` | Event bridge, no polling | unit | 89.6% |
+| `format.rs` | Pure view-models (grouping, labels, bytes/speed/ETA, masking, palette, validation) | unit, thorough | 98.5% |
+| `logs.rs` | Per-instance `LogStore` of `LogBuffer`s, follow, copy | unit, thorough | 99.5% |
+| `service_bridge.rs` | Event bridge, no polling, Resync on lag | unit | 92.1% |
 | `theme.rs` | JSON theme loading, font stack, system sync | unit | 96.2% |
 | `contrast.rs` | Parses the rendered theme JSON and asserts WCAG 4.5:1 | unit | 89.6% |
 | `vulkan.rs` | Vulkan pre-flight (exit 78) | unit | 89.5% |
@@ -71,19 +73,30 @@ Measured with `crates/gui/examples/measure` (release, strip + `lto=thin`) on Fed
 
 ## Headless render evidence
 
-`crates/gui/tests/render.rs` renders the real view off-screen through GPUI's headless wgpu path and asserts on sampled pixels and distinct-colour counts. PNGs land in `docs/design/renders/`:
+`crates/gui/tests/render.rs` renders the real view off-screen through GPUI's
+headless wgpu path. Frames are written to `target/renders/`; committed
+screenshots under `docs/design/renders/` are refreshed only with
+`DBLOCAL_UPDATE_RENDERS=1`, so `cargo test` never dirties a tracked path.
 
-| State | Distinct colours | Notable sample |
-|---|---:|---|
-| Dark | 1274 | title/sidebar `#21252b`, centre `#282c34`, status `#21252b` |
-| Light | 1336 | title/sidebar `#f0f0f0`, centre `#fafafa`, status `#f0f0f0` |
-| Palette | 1059 | — |
-| Logs | 978 | monospace lines over the editor surface |
-| Create modal | 1703 | — |
-| Delete modal | 1440 | — |
-| Failure state | 1464 | danger panel `#b03730` present (651k pixels) |
+Output is deterministic: two consecutive full runs produce byte-identical PNGs.
+The earlier non-determinism came from `MockService::seed_instance` using a
+random UUID v4, which changed `BTreeMap` order (and tab order) every run; it now
+derives a UUID from the seedable RNG.
 
-Centre-region mean luminance: dark **43.91**, light **241.70** (the test requires a gap > 10).
+Assertions sample specific regions against the theme tokens, so a layout
+regression fails the test rather than passing on a "> 40 colours" check:
+
+| Check | Evidence (this host) |
+|---|---|
+| Sidebar surface on the left edge, both themes | sampled `#21252b` / `#f0f0f0` over > half the height |
+| Centre background differs per theme | luminance 44.21 (dark) vs 241.30 (light) |
+| Status dots: running + failed in the sidebar | green 360 px, red 180 px |
+| Selected-row accent, both themes | 47903 / 47993 px |
+| Logs tab really selected: text in the lower body | 3978 px vs Overview 0; 65 text rows |
+| Two tabs each show their own lines | a=3978, b=5994, Overview 0 |
+| Catalog banner strip | 98785 warning px |
+| Failure panel danger surface | 606864 px |
+| Palette panel surface | present over the dimmed backdrop |
 
 ## Wave 2 seam (must change before the production build ships)
 
