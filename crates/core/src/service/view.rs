@@ -149,7 +149,10 @@ mod tests {
         assert_eq!(view.auth, AuthMode::Password);
         assert!(!view.autostart);
         assert_eq!(view.credential_backend, Some(CredentialBackend::File));
-        assert_eq!(view.failure.as_ref().expect("failure").diagnosis, StartFailure::PortInUse);
+        assert_eq!(
+            view.failure.as_ref().expect("failure").diagnosis,
+            StartFailure::PortInUse
+        );
         assert_eq!(view.failure.as_ref().expect("failure").log_tail.len(), 2);
     }
 

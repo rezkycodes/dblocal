@@ -469,7 +469,9 @@ mod tests {
     #[test]
     fn builders_return_new_values() {
         let base = spec();
-        let moved = base.clone().with_port(Some(Port::new(5433).expect("valid port")));
+        let moved = base
+            .clone()
+            .with_port(Some(Port::new(5433).expect("valid port")));
         assert_eq!(base.port().map(Port::get), Some(5432));
         assert_eq!(moved.port().map(Port::get), Some(5433));
         assert!(!base.autostart());

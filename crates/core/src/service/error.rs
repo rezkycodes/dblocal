@@ -60,9 +60,7 @@ impl std::fmt::Display for UserFacingError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::error::{
-        CODE_ENGINE, CODE_INVALID_INPUT, CODE_PORT_IN_USE, CODE_SECRET,
-    };
+    use crate::error::{CODE_ENGINE, CODE_INVALID_INPUT, CODE_PORT_IN_USE, CODE_SECRET};
 
     #[test]
     fn conversion_keeps_code_and_message() {
@@ -71,7 +69,10 @@ mod tests {
         assert_eq!(facing.code, CODE_PORT_IN_USE);
         assert_eq!(facing.message, err.user_message());
         assert!(facing.diagnosis.is_none());
-        assert_eq!(facing.to_string(), format!("[{}] {}", err.code(), err.user_message()));
+        assert_eq!(
+            facing.to_string(),
+            format!("[{}] {}", err.code(), err.user_message())
+        );
     }
 
     #[test]
