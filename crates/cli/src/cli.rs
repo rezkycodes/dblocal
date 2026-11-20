@@ -234,6 +234,18 @@ mod tests {
     }
 
     #[test]
+    fn unknown_subcommand_exits_two() {
+        let code = run(vec![OsString::from("frobnicate")]);
+        assert_eq!(code, ExitCode::from(EXIT_BAD_ARGS));
+    }
+
+    #[test]
+    fn help_succeeds() {
+        let code = run(vec![OsString::from("--help")]);
+        assert_eq!(code, ExitCode::from(EXIT_OK));
+    }
+
+    #[test]
     fn exit_codes_follow_the_contract() {
         assert_eq!(
             code_for(&DblError::NotFound {

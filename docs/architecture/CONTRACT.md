@@ -68,7 +68,7 @@ pub trait EngineAdapter: Send + Sync {
     fn key(&self) -> EngineKey;
     fn canonical_port(&self) -> u16 { self.key().canonical_port() }
     fn initialize(&self, ctx: &InitContext) -> Result<()>;
-    fn spawn_command(&self, ctx: &RunContext) -> Result<Command>;
+    fn spawn_command(&self, ctx: &RunContext) -> Command;
     fn health_check(&self, ctx: &RunContext) -> Result<Health>;
     fn shutdown(&self, ctx: &RunContext) -> Result<()>;
     fn connection_uri(&self, ctx: &RunContext, credential: &Credential) -> SecretString;
@@ -84,7 +84,8 @@ Contexts and types: `InitContext { instance_name, runtime_dir, data_dir, port, s
 `drop_database`, `create_user`, `reset_password`. Engines without admin support return `None`.
 
 `fn adapter_for(EngineKey) -> Box<dyn EngineAdapter>` currently returns stub adapters that answer
-`NotImplemented`. Wave 1 replaces this dispatch once the per-engine modules are filled.
+`NotImplemented` for fallible operations (and a placeholder command for `spawn_command`). Wave 1
+replaces this dispatch once the per-engine modules are filled.
 
 ## Instance state machine (`F-INS`)
 

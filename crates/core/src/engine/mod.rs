@@ -112,7 +112,10 @@ pub trait EngineAdapter: Send + Sync {
     fn initialize(&self, ctx: &InitContext) -> Result<()>;
 
     /// Builds the detached command that starts the server.
-    fn spawn_command(&self, ctx: &RunContext) -> Result<Command>;
+    ///
+    /// Errors are surfaced when the caller spawns or probes the process, not
+    /// when building the command description.
+    fn spawn_command(&self, ctx: &RunContext) -> Command;
 
     /// Performs a protocol-level readiness probe.
     fn health_check(&self, ctx: &RunContext) -> Result<Health>;
@@ -153,8 +156,8 @@ impl EngineAdapter for StubAdapter {
         Err(self.not_implemented())
     }
 
-    fn spawn_command(&self, _ctx: &RunContext) -> Result<Command> {
-        Err(self.not_implemented())
+    fn spawn_command(&self, _ctx: &RunContext) -> Command {
+        Command::new("dblocal-stub")
     }
 
     fn health_check(&self, _ctx: &RunContext) -> Result<Health> {
@@ -216,10 +219,12 @@ mod tests {
                 adapter.initialize(&init),
                 Err(DblError::NotImplemented(_))
             ));
-            assert!(matches!(
-                adapter.spawn_command(&run),
-                Err(DblError::NotImplemented(_))
-            ));
+            // `spawn_command` is infallible by contract; stubs surface failure
+            // through the fallible probes below.
+            assert_eq!(
+                adapter.spawn_command(&run).get_program(),
+                std::ffi::OsStr::new("dblocal-stub")
+            );
             assert!(matches!(
                 adapter.health_check(&run),
                 Err(DblError::NotImplemented(_))
