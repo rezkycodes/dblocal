@@ -62,5 +62,6 @@ Launch order (machine load): F, B, C, D first; A and E when slots free; G after 
 | W1-D | review round 1 sent (ctx_378f3376250c) | Verified: ownership, no `unsafe`, 94% coverage, `classify`/`terminate` read line by line and conservative. Blocking: D1 port tests race each other (4 of 25 full runs fail, production code is correct); D2 ESRCH reported as an I/O error; D3 document the residual validate-to-kill window |
 | W1-C | review round 1 sent (ctx_72de8ffd93bc) | Verified: gates green, 182 tests, deny ok, no temp-dir leak, redirect policy and 21 attack tests good. Findings: C1 body never bounded by declared size (disk-fill), C2 no explicit Accept-Encoding: identity / Content-Encoding check (CDN serves different bytes), C3 proxy comment. `downloads/` dir accepted; coordinator adds `DblPaths::downloads()` after merge |
 | W1-G | **running** | Started after W0-C merge, with the W0-C review fixes in its spec |
-| W1-A, W1-E | spec written | Held: 5 workers running, 6 GB RAM free of 30 and load 5 on 16 cores; a GPUI build is memory-heavy. Start when one of W1-B/C/D/F finishes |
+| W1-A | **running** | Started after the W1-B merge (store builds on `main` with the merged catalog) |
+| W1-E | spec written | Held until another slot frees (load 13.9 at launch, 6 GB RAM available) |
 | W1-G | spec waits for W0-C | |
