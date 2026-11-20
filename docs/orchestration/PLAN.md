@@ -58,9 +58,9 @@ Launch order (machine load): F, B, C, D first; A and E when slots free; G after 
 | W0-C | running | Redirected to Zed-style UI (D-23); waiting for go/no-go and widget coverage table |
 | W0-D | **merged** | Round 2 re-verified: 52/52 tests (12 fail on the old installer, so they are not vacuous), hostile `DBLOCAL_RELEASE_BASE_URL` values rejected with 0 curl calls, shellcheck clean. Not run on GitHub: `release.yml`, `valkey-build.yml` |
 | W1-B | review round 1 sent (ctx_d4fcc2c8916b) | Verified: gates, 94% coverage, 20/22 artifacts match upstream. Found: B1 redirect https->http on catalog refresh, B2 Valkey sizes hard-coded and CloudFront serving two different noble objects by `Accept-Encoding`, B3 ship jammy only, B4 constant `generated_at`, B5 two files < 80%, B6 `blocking` feature leaks into core |
-| W1-F | restarted (ctx_53c861124d59) | First worker stalled after asking a question; restarted with the decisions in the spec |
+| W1-F | review round 1 sent (ctx_7372663fc6ef) | Verified: gates green, real-binary e2e 3 passed (PG 18.7 + 17.12 side by side, Valkey jammy + noble), no leftovers; auth/perm code read (scram-sha-256 with password, 0700 socket dir, 0600 pwfile and conf). Findings: F1 wrong StartFailure labels (socket-too-long -> PermissionDenied, bind error -> PortInUse), F2 long home path must fall back to TCP-only instead of failing create, F3 postgres.rs 861 lines |
 | W1-D | review round 1 sent (ctx_378f3376250c) | Verified: ownership, no `unsafe`, 94% coverage, `classify`/`terminate` read line by line and conservative. Blocking: D1 port tests race each other (4 of 25 full runs fail, production code is correct); D2 ESRCH reported as an I/O error; D3 document the residual validate-to-kill window |
-| W1-C | running | |
+| W1-C | review round 1 sent (ctx_72de8ffd93bc) | Verified: gates green, 182 tests, deny ok, no temp-dir leak, redirect policy and 21 attack tests good. Findings: C1 body never bounded by declared size (disk-fill), C2 no explicit Accept-Encoding: identity / Content-Encoding check (CDN serves different bytes), C3 proxy comment. `downloads/` dir accepted; coordinator adds `DblPaths::downloads()` after merge |
 | W1-G | **running** | Started after W0-C merge, with the W0-C review fixes in its spec |
-| W1-A, W1-E | spec written | Start when a slot frees |
+| W1-A, W1-E | spec written | Held: 5 workers running, 6 GB RAM free of 30 and load 5 on 16 cores; a GPUI build is memory-heavy. Start when one of W1-B/C/D/F finishes |
 | W1-G | spec waits for W0-C | |
