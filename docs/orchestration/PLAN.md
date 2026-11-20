@@ -23,7 +23,7 @@ Decision D-23: the GUI is Zed-style. W1-G and every GUI-facing task starts from 
 
 | Task | Branch | Owns |
 |---|---|---|
-| W0-A | `w0-skeleton` | `Cargo.toml`, `Cargo.lock`, `rust-toolchain.toml`, `rustfmt.toml`, `clippy.toml`, `.cargo/`, `crates/**`, `docs/architecture/**` |
+| W0-A | **merged** (b1d3650) | Round 2: `zip` trimmed to `deflate`, 19 crates left the lockfile. On the merged tree `cargo deny check` (CI's exact command) reports advisories, bans, licenses, sources ok; `cargo xtask ci` green. First worker stalled without `worker_done`, so it was stopped and M5 re-run by a fresh worker in the same worktree |
 | W0-B | `w0-engine-spikes` | `spikes/engines/**`, `docs/spikes/engines/**` |
 | W0-C | `w0-gpui-spike` | `spikes/gpui/**`, `docs/spikes/gpui/**` |
 | W0-D | `w0-ci-packaging` | `.github/**`, `packaging/**`, `scripts/**`, `deny.toml`, `COPYING`, `README.md`, `docs/release/**`, `docs/install/**` |
@@ -57,5 +57,6 @@ Launch order (machine load): F, B, C, D first; A and E when slots free; G after 
 | W0-B | **merged** (952afaa) | Findings verified independently (MySQL 832 MB, no SHA-256; MariaDB Linux/Windows x64 only; Valkey Linux only). Reviewer found MySQL `-minimal` 79.8 MB. Recorded as D-24 |
 | W0-C | running | Redirected to Zed-style UI (D-23); waiting for go/no-go and widget coverage table |
 | W0-D | **merged** | Round 2 re-verified: 52/52 tests (12 fail on the old installer, so they are not vacuous), hostile `DBLOCAL_RELEASE_BASE_URL` values rejected with 0 curl calls, shellcheck clean. Not run on GitHub: `release.yml`, `valkey-build.yml` |
-| W1-A..F | specs written | Start after W0-A merges |
+| W1-F, W1-B, W1-C, W1-D | **running** | Started on `main` b1d3650: dispatches ctx_fb9d3c8383b9, ctx_1a5eac8f62e4, ctx_9ce0cedac8e3, ctx_70ebe54160ea |
+| W1-A, W1-E | spec written | Start when a slot frees |
 | W1-G | spec waits for W0-C | |
