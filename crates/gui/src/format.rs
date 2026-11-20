@@ -326,14 +326,9 @@ pub fn validate_form(name: &str, port_text: &str, instances: &[InstanceView]) ->
             }
             Ok(value) => {
                 if let Some(owner) = instances.iter().find(|view| view.port.get() == value) {
-                    conflict = Some(format!(
-                        "Port {value} sudah dipakai instance {}",
-                        owner.name
-                    ));
-                    Some(strings::UI_VALIDATE_PORT_LOW.replace(
-                        strings::UI_VALIDATE_PORT_LOW,
-                        &format!("Port {value} sudah dipakai instance {}", owner.name),
-                    ))
+                    let message = strings::validate_port_taken(value, &owner.name);
+                    conflict = Some(message.clone());
+                    Some(message)
                 } else {
                     None
                 }
@@ -605,7 +600,7 @@ mod tests {
         assert!(!result.is_valid());
         assert_eq!(
             result.conflict.as_deref(),
-            Some("Port 5432 sudah dipakai instance taken")
+            Some(dblocal_core::strings::validate_port_taken(5432, "taken").as_str())
         );
     }
 

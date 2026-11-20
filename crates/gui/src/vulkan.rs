@@ -135,22 +135,29 @@ fn probe_vulkan_adapters() -> Option<String> {
 }
 
 fn report(reason: &str) -> String {
+    use dblocal_core::strings as s;
     let mut out = String::new();
-    out.push_str("DBLocal tidak bisa dijalankan karena Vulkan tidak tersedia di sistem ini.\n\n");
-    out.push_str(&format!("Terdeteksi: {reason}\n\n"));
-    out.push_str("Sebab: antarmuka DBLocal memakai GPUI, yang membutuhkan driver/ICD Vulkan.\n\n");
-    out.push_str("Cara memperbaiki (pasang driver Vulkan untuk GPU Anda):\n");
+    out.push_str(s::VULKAN_HEADLINE);
+    out.push_str("\n\n");
+    out.push_str(&format!("{}: {reason}\n\n", s::VULKAN_DETECTED));
+    out.push_str(s::VULKAN_WHY);
+    out.push_str("\n\n");
+    out.push_str(s::VULKAN_FIX_HEADING);
+    out.push('\n');
     out.push_str("  Fedora:  sudo dnf install mesa-vulkan-drivers vulkan-loader\n");
     out.push_str("  Ubuntu:  sudo apt install mesa-vulkan-drivers vulkan-tools\n");
     out.push_str("  Arch:    sudo pacman -S vulkan-icd-loader mesa-vulkan-drivers\n\n");
-    out.push_str("Verifikasi setelah memasang:\n  vulkaninfo --summary\n\n");
-    out.push_str(&format!("Bantuan lebih lanjut: {DOCS_URL}\n\n"));
-    out.push_str(
-        "Jika driver sudah terpasang tetapi DBLocal tetap gagal, pastikan ada berkas ICD JSON \
-         di /usr/share/vulkan/icd.d dan VK_ICD_FILENAMES/VK_DRIVER_FILES tidak menunjuk path \
-         yang salah.\n\n",
-    );
-    out.push_str(&format!("Kode keluar: {EXIT_VULKAN} (DBLOCAL_E_VULKAN).\n"));
+    out.push_str(&format!(
+        "{}:\n  vulkaninfo --summary\n\n",
+        s::VULKAN_VERIFY
+    ));
+    out.push_str(&format!("{}: {DOCS_URL}\n\n", s::VULKAN_MORE_HELP));
+    out.push_str(s::VULKAN_HINT);
+    out.push_str("\n\n");
+    out.push_str(&format!(
+        "{}: {EXIT_VULKAN} (DBLOCAL_E_VULKAN).\n",
+        s::VULKAN_EXIT_CODE
+    ));
     out
 }
 

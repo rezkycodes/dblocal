@@ -258,3 +258,38 @@ pub const UI_VALIDATE_PORT_LOW: &str =
 /// Validation: instance name is invalid.
 pub const UI_VALIDATE_NAME: &str =
     "Nama harus 2-31 karakter, huruf kecil/angka/tanda hubung, diawali huruf atau angka.";
+
+/// Validation: the typed port already belongs to another instance.
+///
+/// `{port}` and `{name}` are placeholders the GUI fills in.
+pub const UI_VALIDATE_PORT_TAKEN: &str = "Port {port} sudah dipakai instance {name}";
+
+/// Formats [`UI_VALIDATE_PORT_TAKEN`] without adding a second copy of the
+/// sentence to the GUI.
+pub fn validate_port_taken(port: u16, name: &str) -> String {
+    UI_VALIDATE_PORT_TAKEN
+        .replace("{port}", &port.to_string())
+        .replace("{name}", name)
+}
+
+// --- Vulkan pre-flight (terminal, before any window exists) -------------------
+
+/// Vulkan pre-flight headline.
+pub const VULKAN_HEADLINE: &str =
+    "DBLocal tidak bisa dijalankan karena Vulkan tidak tersedia di sistem ini.";
+/// Vulkan pre-flight detected-reason prefix.
+pub const VULKAN_DETECTED: &str = "Terdeteksi";
+/// Vulkan pre-flight explanation.
+pub const VULKAN_WHY: &str =
+    "Sebab: antarmuka DBLocal memakai GPUI, yang membutuhkan driver/ICD Vulkan.";
+/// Vulkan pre-flight fix heading.
+pub const VULKAN_FIX_HEADING: &str = "Cara memperbaiki (pasang driver Vulkan untuk GPU Anda):";
+/// Vulkan pre-flight verification heading.
+pub const VULKAN_VERIFY: &str = "Verifikasi setelah memasang";
+/// Vulkan pre-flight help link prefix.
+pub const VULKAN_MORE_HELP: &str = "Bantuan lebih lanjut";
+/// Vulkan pre-flight closing hint.
+pub const VULKAN_HINT: &str = "Jika driver sudah terpasang tetapi DBLocal tetap gagal, pastikan ada berkas ICD JSON di \
+     /usr/share/vulkan/icd.d dan VK_ICD_FILENAMES/VK_DRIVER_FILES tidak menunjuk path yang salah.";
+/// Vulkan pre-flight exit-code line prefix.
+pub const VULKAN_EXIT_CODE: &str = "Kode keluar";
