@@ -116,7 +116,8 @@ See `docs/spikes/gpui/evidence/shell-measurements.txt` (raw). Host: Fedora 44, k
 
 | Metric | Result | Target | Notes |
 |---|---:|---:|---|
-| Cold start to first frame (release, 10 runs) | p50 **361 ms**, p95 **425 ms** (329.97–424.76) | < 1500 ms | `FIRST_FRAME_MS` from `AppState::render` |
+| Cold start to first frame (release, 10 runs) | p50 **361 ms**, p95 **425 ms** (329.97–424.76); repeat series p50 386 / p95 434 | < 1500 ms | `FIRST_FRAME_MS` from `AppState::render` |
+| First launch after a rebuild | **1315 ms** once | < 1500 ms | wgpu compiles its pipeline set on first use; the cache is outside the binary, so only the first run after an install pays this. Still inside the target. |
 | Idle RSS (t+20 s, download finished) | **176 MB** VmRSS/VmHWM, 41 threads, ~3.2% CPU | < 150 MB | **Above target.** Driven by wgpu/Vulkan + gpui-component retained structures + the 50 ms pump tick; ~64 cpu ticks at idle. Needs profiling before GA. |
 | Release binary (stripped, lto=thin) | **34.2 MiB** (35,888,416 B), no debug sections | installer < 60 MB | Excludes platform libs; archive compression not measured end-to-end. |
 | Incremental release rebuild (touch app.rs) | **113 s** | — | Warm cache, shared target dir |

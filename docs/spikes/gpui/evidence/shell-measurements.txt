@@ -76,3 +76,14 @@ id=5 latency=45.5 state=stopped
 ## Dark/light render evidence (headless wgpu, 1100x720 logical -> 2200x1440 device px)
 dark:  936 distinct colours, top colours #21252b (panel/title/sidebar/status), #282c34 (centre)
 light: 961 distinct colours, top colours #fafafa (centre), #f0f0f0 (panel), #eaeaeb (tab bar)
+
+## First launch after a rebuild (cold GPU pipeline cache)
+# The very first run after `cargo build --release` replaced the binary:
+FIRST_FRAME_MS=1314.68
+WINDOW_OPEN_DISPATCHED_MS=1337.56
+# The next 10 runs in the same session:
+# 361.45 395.78 400.14 388.17 433.46 363.74 380.95 380.32 376.41 391.16
+# p50 = 385.5 ms, p95 = 433.5 ms
+# Cause: wgpu/wgpu-hal compiles its shader/pipeline set on first use. The cache
+# lives outside the binary, so an installer's first launch is slower than every
+# launch after it. Budget for ~1.4 s on first run; the 1.5 s target still holds.
