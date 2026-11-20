@@ -6,6 +6,13 @@
 /// move is listed in the W1-A report.
 pub(crate) const STORE_BUSY_TIMEOUT_MS: u32 = 5_000;
 
+/// How many times the `journal_mode=WAL` switch is retried when a competing
+/// opener holds the database lock.
+pub(crate) const WAL_SWITCH_ATTEMPTS: u32 = 40;
+
+/// Pause between WAL switch retries, in milliseconds.
+pub(crate) const WAL_SWITCH_BACKOFF_MS: u64 = 25;
+
 /// Latest schema version this binary understands.
 pub(crate) const LATEST_USER_VERSION: i32 = 1;
 

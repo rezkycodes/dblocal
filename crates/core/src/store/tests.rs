@@ -656,3 +656,112 @@ fn superseded_superuser_row_is_rejected() {
         Err(DblError::Storage { .. })
     ));
 }
+
+#[test]
+fn concurrent_first_open_never_fails() {
+    use std::sync::{Arc, Barrier};
+
+    let threads = 4usize;
+    let rounds = 100usize;
+    let mut failures = 0usize;
+    for _ in 0..rounds {
+        let round_dir = tempdir().expect("tempdir");
+        let round_paths = Arc::new(DblPaths::with_root(round_dir.path()));
+        let barrier = Arc::new(Barrier::new(threads));
+        let handles: Vec<_> = (0..threads)
+            .map(|_| {
+                let p = Arc::clone(&round_paths);
+                let b = Arc::clone(&barrier);
+                std::thread::spawn(move || {
+                    b.wait();
+                    Store::open(&p)
+                })
+            })
+            .collect();
+        for handle in handles {
+            if handle.join().expect("join").is_err() {
+                failures += 1;
+            }
+        }
+    }
+    eprintln!(
+        "concurrent first open: {failures} failures out of {}",
+        threads * rounds
+    );
+    assert_eq!(failures, 0, "concurrent first open had failures");
+}
+
+#[test]
+fn concurrent_open_upgrades_version_zero_exactly_once() {
+    use std::sync::{Arc, Barrier};
+
+    let threads = 4usize;
+    let rounds = 50usize;
+    let latest = super::schema::LATEST_USER_VERSION;
+    for _ in 0..rounds {
+        let dir = tempdir().expect("tempdir");
+        let paths = Arc::new(DblPaths::with_root(dir.path()));
+        // Seed a database file at version 0 with no schema objects, as a
+        // pre-migration state an older process might leave behind.
+        {
+            std::fs::create_dir_all(dir.path()).expect("dir");
+            let conn = rusqlite::Connection::open(paths.state_db()).expect("open");
+            conn.pragma_update(None, "user_version", 0_i32).expect("v0");
+        }
+
+        let barrier = Arc::new(Barrier::new(threads));
+        let handles: Vec<_> = (0..threads)
+            .map(|_| {
+                let p = Arc::clone(&paths);
+                let b = Arc::clone(&barrier);
+                std::thread::spawn(move || {
+                    b.wait();
+                    Store::open(&p)
+                })
+            })
+            .collect();
+        let mut failures = 0usize;
+        for handle in handles {
+            if handle.join().expect("join").is_err() {
+                failures += 1;
+            }
+        }
+        assert_eq!(failures, 0, "concurrent upgrade from version 0 failed");
+
+        let store = Store::open(&paths).expect("reopen");
+        let version: i32 = store
+            .connection()
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .expect("version");
+        assert_eq!(version, latest);
+        // Schema is valid and usable after the concurrent upgrade.
+        assert!(store.list_instances().expect("list").is_empty());
+    }
+}
+
+#[test]
+fn latest_database_is_untouched_and_data_survives() {
+    let dir = tempdir().expect("tempdir");
+    let paths = DblPaths::with_root(dir.path());
+    let latest = super::schema::LATEST_USER_VERSION;
+    {
+        let store = Store::open(&paths).expect("open");
+        store.set_setting("probe", "kept").expect("set");
+        let inst = instance("app-dev", 5432, InstanceStatus::Stopped);
+        store.insert_instance(&inst).expect("insert");
+    }
+    // Reopen when already at the latest version: version and data must survive.
+    for _ in 0..5 {
+        let store = Store::open(&paths).expect("reopen");
+        let version: i32 = store
+            .connection()
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .expect("version");
+        assert_eq!(version, latest);
+        assert_eq!(
+            store.get_setting("probe").expect("get").as_deref(),
+            Some("kept")
+        );
+        assert_eq!(store.list_instances().expect("list").len(), 1);
+    }
+}

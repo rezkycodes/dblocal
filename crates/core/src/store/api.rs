@@ -20,7 +20,7 @@ use crate::paths::DblPaths;
 
 use super::error::map_sql;
 use super::migrations::apply;
-use super::schema::STORE_BUSY_TIMEOUT_MS;
+use super::schema::{STORE_BUSY_TIMEOUT_MS, WAL_SWITCH_ATTEMPTS, WAL_SWITCH_BACKOFF_MS};
 
 /// Synchronous persistence for DBLocal state.
 ///
@@ -132,23 +132,139 @@ impl Store {
 }
 
 fn configure(conn: &Connection) -> crate::Result<()> {
-    conn.pragma_update(None, "journal_mode", "WAL")
-        .map_err(map_sql)?;
-    conn.pragma_update(None, "foreign_keys", "ON")
-        .map_err(map_sql)?;
-    conn.pragma_update(None, "synchronous", "NORMAL")
-        .map_err(map_sql)?;
+    // The busy timeout must be in place before any other pragma: switching to
+    // WAL takes the database lock and a competing opener in that window must
+    // wait rather than fail immediately.
     conn.busy_timeout(std::time::Duration::from_millis(u64::from(
         STORE_BUSY_TIMEOUT_MS,
     )))
     .map_err(map_sql)?;
+    enable_wal(conn)?;
+    conn.pragma_update(None, "foreign_keys", "ON")
+        .map_err(map_sql)?;
+    conn.pragma_update(None, "synchronous", "NORMAL")
+        .map_err(map_sql)?;
     Ok(())
 }
 
+/// Switches the database to WAL, tolerating a competing opener.
+///
+/// `journal_mode=WAL` needs an exclusive lock briefly. Several processes
+/// opening a fresh database at once can still collide after the busy timeout
+/// expires, so a `SQLITE_BUSY`/`SQLITE_LOCKED` result is retried a bounded
+/// number of times within the timeout budget. Any other failure, or exhausting
+/// the attempts, is a real error.
+fn enable_wal(conn: &Connection) -> crate::Result<()> {
+    retry_while_busy(|| conn.pragma_update(None, "journal_mode", "WAL"))
+}
+
+/// Runs `step`, retrying a bounded number of times while it reports lock
+/// contention, then converting any remaining failure into a typed error.
+fn retry_while_busy(mut step: impl FnMut() -> rusqlite::Result<()>) -> crate::Result<()> {
+    let mut attempt = 0;
+    loop {
+        match step() {
+            Ok(()) => return Ok(()),
+            Err(err) if attempt < WAL_SWITCH_ATTEMPTS && is_busy(&err) => {
+                attempt += 1;
+                std::thread::sleep(std::time::Duration::from_millis(WAL_SWITCH_BACKOFF_MS));
+            }
+            Err(err) => return Err(map_sql(err)),
+        }
+    }
+}
+
+/// Whether a SQLite failure is a lock contention we may retry.
+fn is_busy(err: &rusqlite::Error) -> bool {
+    matches!(
+        err.sqlite_error_code(),
+        Some(rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked)
+    )
+}
+
+/// Creates the private state root directory.
 fn ensure_private_dir(path: &Path) -> crate::Result<()> {
     std::fs::create_dir_all(path).map_err(|source| DblError::Io { source })?;
     #[cfg(unix)]
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))
         .map_err(|source| DblError::Io { source })?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sqlite_failure(code: rusqlite::ffi::ErrorCode) -> rusqlite::Error {
+        rusqlite::Error::SqliteFailure(
+            rusqlite::ffi::Error {
+                code,
+                extended_code: 0,
+            },
+            Some("contended".to_owned()),
+        )
+    }
+
+    #[test]
+    fn busy_and_locked_are_retryable() {
+        assert!(is_busy(&sqlite_failure(
+            rusqlite::ffi::ErrorCode::DatabaseBusy
+        )));
+        assert!(is_busy(&sqlite_failure(
+            rusqlite::ffi::ErrorCode::DatabaseLocked
+        )));
+        assert!(!is_busy(&sqlite_failure(
+            rusqlite::ffi::ErrorCode::ConstraintViolation
+        )));
+        assert!(!is_busy(&rusqlite::Error::InvalidQuery));
+    }
+
+    #[test]
+    fn retry_delegates_to_the_step_and_returns_success() {
+        let mut calls = 0;
+        let result = retry_while_busy(|| {
+            calls += 1;
+            Ok(())
+        });
+        assert!(result.is_ok());
+        assert_eq!(calls, 1);
+    }
+
+    #[test]
+    fn retry_exhausts_its_budget_then_reports_storage_error() {
+        let mut calls = 0;
+        let result = retry_while_busy(|| {
+            calls += 1;
+            Err(sqlite_failure(rusqlite::ffi::ErrorCode::DatabaseBusy))
+        });
+        assert!(matches!(result, Err(DblError::Storage { .. })));
+        // One initial attempt plus the bounded retries.
+        assert_eq!(calls, WAL_SWITCH_ATTEMPTS as usize + 1);
+    }
+
+    #[test]
+    fn retry_stops_immediately_on_a_non_busy_error() {
+        let mut calls = 0;
+        let result = retry_while_busy(|| {
+            calls += 1;
+            Err(rusqlite::Error::InvalidQuery)
+        });
+        assert!(matches!(result, Err(DblError::Storage { .. })));
+        assert_eq!(calls, 1);
+    }
+
+    #[test]
+    fn retry_succeeds_after_transient_contention() {
+        let mut calls = 0;
+        let result = retry_while_busy(|| {
+            calls += 1;
+            if calls <= 2 {
+                Err(sqlite_failure(rusqlite::ffi::ErrorCode::DatabaseLocked))
+            } else {
+                Ok(())
+            }
+        });
+        assert!(result.is_ok());
+        assert_eq!(calls, 3);
+    }
 }
