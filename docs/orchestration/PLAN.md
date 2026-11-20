@@ -25,7 +25,7 @@ Decision D-23: the GUI is Zed-style. W1-G and every GUI-facing task starts from 
 |---|---|---|
 | W0-A | **merged** (b1d3650) | Round 2: `zip` trimmed to `deflate`, 19 crates left the lockfile. On the merged tree `cargo deny check` (CI's exact command) reports advisories, bans, licenses, sources ok; `cargo xtask ci` green. First worker stalled without `worker_done`, so it was stopped and M5 re-run by a fresh worker in the same worktree |
 | W0-B | `w0-engine-spikes` | `spikes/engines/**`, `docs/spikes/engines/**` |
-| W0-C | `w0-gpui-spike` | `spikes/gpui/**`, `docs/spikes/gpui/**` |
+| W0-C | restarted (ctx_17cc81ad5a33) | First worker stopped on a Command Code protocol error (it read a PNG; image input is unsupported, HTTP 422) after ~2 h, with 1,488 lines of spike code and 8 evidence files, uncommitted. It never saw the Zed redirect (message queued, not read). Restarted in the same worktree with a self-contained spec: inventory, commit WIP, rebuild the shell Zed-style, numeric evidence only |
 | W0-D | `w0-ci-packaging` | `.github/**`, `packaging/**`, `scripts/**`, `deny.toml`, `COPYING`, `README.md`, `docs/release/**`, `docs/install/**` |
 
 ## Review protocol
