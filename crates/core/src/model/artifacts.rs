@@ -642,6 +642,114 @@ mod tests {
     }
 
     #[test]
+    fn artifact_accessors_and_builders() {
+        let artifact = Artifact::new(
+            "a1",
+            EngineKey::Postgresql,
+            "18.7",
+            Os::Linux,
+            Arch::X86_64,
+            "https://example.test/pg.tar.gz",
+            sha(),
+            10,
+            ArchiveFormat::TarGz,
+        )
+        .expect("valid artifact")
+        .with_strip_prefix("pgsql/")
+        .with_min_glibc("2.28");
+        assert_eq!(artifact.id(), "a1");
+        assert_eq!(artifact.engine(), EngineKey::Postgresql);
+        assert_eq!(artifact.version(), "18.7");
+        assert_eq!(artifact.os(), Os::Linux);
+        assert_eq!(artifact.arch(), Arch::X86_64);
+        assert_eq!(artifact.url(), "https://example.test/pg.tar.gz");
+        assert_eq!(artifact.sha256(), sha());
+        assert_eq!(artifact.size_bytes(), 10);
+        assert_eq!(artifact.format(), ArchiveFormat::TarGz);
+        assert_eq!(artifact.strip_prefix(), Some("pgsql/"));
+        assert_eq!(artifact.min_glibc(), Some("2.28"));
+        assert_eq!(ArchiveFormat::TarGz.as_str(), "tar.gz");
+    }
+
+    #[test]
+    fn snapshot_accessors_and_mutation() {
+        let artifact = Artifact::new(
+            "a1",
+            EngineKey::Mysql,
+            "8.0.40",
+            Os::Linux,
+            Arch::X86_64,
+            "https://example.test/mysql.tar.gz",
+            sha(),
+            10,
+            ArchiveFormat::TarGz,
+        )
+        .expect("valid artifact");
+        let version = Version::new(EngineKey::Mysql, "8.0.40", Some("2025-01-01".into()), false)
+            .expect("valid version");
+        assert_eq!(version.engine(), EngineKey::Mysql);
+        assert_eq!(version.version(), "8.0.40");
+        assert_eq!(version.release_date(), Some("2025-01-01"));
+
+        let snapshot = CatalogSnapshot::new(
+            "s1",
+            SystemTime::UNIX_EPOCH,
+            "https://example.test/catalog.json",
+            1,
+            vec![version],
+            vec![artifact],
+            CatalogStatus::Stale,
+        );
+        assert_eq!(snapshot.id(), "s1");
+        assert_eq!(snapshot.fetched_at(), SystemTime::UNIX_EPOCH);
+        assert!(snapshot.etag().is_none());
+        assert_eq!(snapshot.source_url(), "https://example.test/catalog.json");
+        assert_eq!(snapshot.schema_version(), 1);
+        assert_eq!(snapshot.versions().len(), 1);
+        assert_eq!(snapshot.artifacts().len(), 1);
+        assert_eq!(snapshot.status(), CatalogStatus::Stale);
+        assert_eq!(
+            snapshot
+                .clone()
+                .with_status(CatalogStatus::Offline)
+                .status(),
+            CatalogStatus::Offline
+        );
+        assert_eq!(CatalogStatus::Offline.as_str(), "offline");
+
+        // An age equal to the TTL is not stale; larger ages are.
+        assert!(!snapshot.is_stale_at(SystemTime::UNIX_EPOCH, Duration::from_secs(0)));
+        assert!(snapshot.clone().is_stale_at(
+            SystemTime::UNIX_EPOCH + Duration::from_secs(2),
+            Duration::from_secs(1)
+        ));
+    }
+
+    #[test]
+    fn runtime_accessors() {
+        let runtime = Runtime::new(
+            "r1",
+            EngineKey::Mariadb,
+            "11.4",
+            Arch::Aarch64,
+            PathBuf::from("/tmp/mariadb"),
+            10,
+            SystemTime::UNIX_EPOCH,
+            RuntimeState::Installed,
+        );
+        assert_eq!(runtime.id(), "r1");
+        assert_eq!(runtime.engine(), EngineKey::Mariadb);
+        assert_eq!(runtime.version(), "11.4");
+        assert_eq!(runtime.arch(), Arch::Aarch64);
+        assert_eq!(runtime.path(), std::path::Path::new("/tmp/mariadb"));
+        assert_eq!(runtime.size_bytes(), 10);
+        assert_eq!(runtime.installed_at(), SystemTime::UNIX_EPOCH);
+        assert_eq!(runtime.state(), RuntimeState::Installed);
+        assert_eq!(RuntimeState::Installed.as_str(), "installed");
+        assert!("new".parse::<RuntimeState>().is_err());
+    }
+
+    #[test]
     fn port_allocation_keeps_its_owner() {
         let id = InstanceId::new();
         let allocation = PortAllocation::new(

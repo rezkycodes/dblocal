@@ -499,6 +499,99 @@ mod tests {
     }
 
     #[test]
+    fn archived_data_exposes_every_field() {
+        let archived = ArchivedData::new(
+            "arch-1",
+            InstanceName::new("app-dev").expect("valid name"),
+            EngineKey::Postgresql,
+            "18.7",
+            PathBuf::from("/tmp/archive/app-dev-20260101-1200"),
+            2048,
+            SystemTime::UNIX_EPOCH,
+        );
+        assert_eq!(archived.id(), "arch-1");
+        assert_eq!(archived.instance_name().as_str(), "app-dev");
+        assert_eq!(archived.engine(), EngineKey::Postgresql);
+        assert_eq!(archived.version(), "18.7");
+        assert_eq!(
+            archived.path(),
+            std::path::Path::new("/tmp/archive/app-dev-20260101-1200")
+        );
+        assert_eq!(archived.size_bytes(), 2048);
+        assert_eq!(archived.archived_at(), SystemTime::UNIX_EPOCH);
+    }
+
+    #[test]
+    fn spec_and_instance_accessors_are_consistent() {
+        let spec = spec();
+        assert_eq!(spec.name().as_str(), "app-dev");
+        assert_eq!(spec.engine(), EngineKey::Postgresql);
+        assert_eq!(spec.version(), "18.7");
+        assert_eq!(spec.port().get(), 5432);
+        assert_eq!(spec.auth(), AuthMode::Password);
+
+        let id = InstanceId::new();
+        let instance = Instance::new(
+            &spec,
+            id.clone(),
+            InstanceStatus::Stopped,
+            SystemTime::UNIX_EPOCH,
+        );
+        assert_eq!(instance.id(), &id);
+        assert_eq!(instance.name().as_str(), "app-dev");
+        assert_eq!(instance.engine(), EngineKey::Postgresql);
+        assert_eq!(instance.version(), "18.7");
+        assert_eq!(instance.port().get(), 5432);
+        assert_eq!(instance.status(), InstanceStatus::Stopped);
+        assert_eq!(instance.auth(), AuthMode::Password);
+        assert_eq!(instance.created_at(), SystemTime::UNIX_EPOCH);
+        assert!(instance.process_started_at().is_none());
+        assert!(instance.process_exe().is_none());
+    }
+
+    #[test]
+    fn instance_updates_return_new_values() {
+        let base = Instance::new(
+            &spec(),
+            InstanceId::new(),
+            InstanceStatus::Running,
+            SystemTime::UNIX_EPOCH,
+        );
+        let stopped = base.clone().with_status(InstanceStatus::Stopped);
+        assert_eq!(base.status(), InstanceStatus::Running);
+        assert_eq!(stopped.status(), InstanceStatus::Stopped);
+
+        let moved = base.clone().with_port(Port::new(5433).expect("valid port"));
+        assert_eq!(moved.port().get(), 5433);
+        assert!(base.clone().with_autostart(true).autostart());
+
+        let recorded = base.clone().with_process(
+            99,
+            SystemTime::UNIX_EPOCH,
+            PathBuf::from("/opt/pg/bin/postgres"),
+        );
+        assert_eq!(recorded.pid(), Some(99));
+        assert_eq!(recorded.process_started_at(), Some(SystemTime::UNIX_EPOCH));
+        assert_eq!(
+            recorded.process_exe(),
+            Some(std::path::Path::new("/opt/pg/bin/postgres"))
+        );
+    }
+
+    #[test]
+    fn credential_ref_backend_round_trips() {
+        for backend in [CredentialBackend::Keychain, CredentialBackend::File] {
+            assert_eq!(
+                backend.as_str().parse::<CredentialBackend>().ok(),
+                Some(backend)
+            );
+        }
+        assert!("vault".parse::<CredentialBackend>().is_err());
+        assert_eq!(DeleteMode::PurgeData.as_str(), "purge");
+        assert_eq!(DeleteMode::ArchiveData.to_string(), "archive");
+    }
+
+    #[test]
     fn delete_mode_defaults_to_archive() {
         assert_eq!(DeleteMode::default(), DeleteMode::ArchiveData);
         assert_eq!(

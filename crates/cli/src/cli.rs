@@ -213,6 +213,20 @@ mod tests {
     }
 
     #[test]
+    fn no_arguments_runs_the_gui_and_succeeds() {
+        // The Phase 0 GUI stub returns Ok, so the bare binary exits 0.
+        assert!(dblocal_gui::run().is_ok());
+        let code = run(Vec::new());
+        assert_eq!(code, ExitCode::from(EXIT_OK));
+    }
+
+    #[test]
+    fn stub_subcommand_exits_one() {
+        let code = run(vec![OsString::from("list")]);
+        assert_eq!(code, ExitCode::from(EXIT_GENERAL));
+    }
+
+    #[test]
     fn unknown_subcommand_is_rejected() {
         assert!(parse(&["frobnicate"]).is_err());
         assert!(parse(&["start"]).is_err(), "missing required name");

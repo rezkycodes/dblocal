@@ -522,6 +522,7 @@ name = "dblocal-gui"
 version = "0.1.0"
 dependencies = [
  "dblocal-core",
+ "tracing",
 ]
 
 [[package]]

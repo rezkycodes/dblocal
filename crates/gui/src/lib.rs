@@ -2,10 +2,10 @@ use dblocal_core::Result;
 
 /// Launches the DBLocal GUI.
 ///
-/// The real implementation is provided by a later worker once the GPUI
-/// dependency is added.
+/// Phase 0 stub: the real GPUI application lands with W1-G. Until then this
+/// returns success so `dblocal` with no arguments behaves as the finished
+/// binary does.
 pub fn run() -> Result<()> {
-    Err(dblocal_core::DblError::NotImplemented(
-        "GUI is not implemented yet".to_owned(),
-    ))
+    tracing::info!("dblocal-gui: no GUI yet (W1-G builds it)");
+    Ok(())
 }
