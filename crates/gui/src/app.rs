@@ -119,6 +119,8 @@ pub struct Workspace {
     focus_handle: FocusHandle,
     started_at: Instant,
     first_paint_logged: bool,
+    /// Instances whose connection URI password is currently revealed.
+    revealed: std::collections::HashSet<InstanceId>,
     _appearance: Option<Subscription>,
     _event_task: Option<gpui::Task<()>>,
 }
@@ -160,6 +162,7 @@ impl Workspace {
             focus_handle,
             started_at: Instant::now(),
             first_paint_logged: false,
+            revealed: std::collections::HashSet::new(),
             _appearance: None,
             _event_task: None,
         };
@@ -668,6 +671,34 @@ impl Workspace {
 
     pub(crate) fn choose_auth_action(&mut self, auth: AuthMode) {
         self.choose_auth(auth);
+    }
+
+    /// Overrides the cached catalog status for preview renders.
+    pub(crate) fn set_catalog_status_for_preview(
+        &mut self,
+        status: dblocal_core::model::CatalogStatus,
+    ) {
+        self.catalog.status = status;
+        self.catalog.banner = match status {
+            dblocal_core::model::CatalogStatus::Fresh => None,
+            dblocal_core::model::CatalogStatus::Stale => Some(strings::CATALOG_STALE.to_owned()),
+            dblocal_core::model::CatalogStatus::Offline => {
+                Some(strings::CATALOG_OFFLINE.to_owned())
+            }
+            _ => None,
+        };
+    }
+
+    pub(crate) fn is_revealed(&self, id: &InstanceId) -> bool {
+        self.revealed.contains(id)
+    }
+
+    pub(crate) fn toggle_reveal(&mut self, id: &InstanceId) {
+        if self.revealed.contains(id) {
+            self.revealed.remove(id);
+        } else {
+            self.revealed.insert(id.clone());
+        }
     }
 
     pub(crate) fn running_count_value(&self) -> usize {

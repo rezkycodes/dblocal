@@ -222,12 +222,35 @@ impl Workspace {
         ));
 
         let content = self.render_selected_tab(cx).into_any_element();
+        // F-CAT-01: a stale or offline catalog is a banner, never a modal.
+        let banner = self.catalog().banner.clone();
+        let banner_colour = match self.catalog().status {
+            dblocal_core::model::CatalogStatus::Offline => theme.danger,
+            _ => theme.warning,
+        };
+        let banner_fg = match self.catalog().status {
+            dblocal_core::model::CatalogStatus::Offline => theme.danger_foreground,
+            _ => theme.warning_foreground,
+        };
 
         v_flex()
             .flex_1()
             .h_full()
             .min_w_0()
             .bg(theme.background)
+            .when_some(banner, |this, banner| {
+                this.child(
+                    div()
+                        .id("catalog-banner")
+                        .w_full()
+                        .px_3()
+                        .py_1()
+                        .bg(banner_colour)
+                        .text_color(banner_fg)
+                        .text_xs()
+                        .child(banner),
+                )
+            })
             .child(
                 div()
                     .w_full()
@@ -298,10 +321,18 @@ impl Workspace {
         let id_copy = view.id.clone();
         let id_env = view.id.clone();
         let id_delete = view.id.clone();
+        let revealed = self.is_revealed(&view.id);
+        let id_reveal = view.id.clone();
         let uri = self
             .service
             .connection_uri(&view.id, UriFormat::Uri)
-            .map(|secret| format::mask_uri(secret.expose()))
+            .map(|secret| {
+                if revealed {
+                    secret.expose().to_owned()
+                } else {
+                    format::mask_uri(secret.expose())
+                }
+            })
             .unwrap_or_default();
         let mut sections = v_flex().id("overview").size_full().p_6().gap_4();
 
@@ -365,11 +396,31 @@ impl Workspace {
                             "127.0.0.1".to_owned(),
                             theme.muted_foreground,
                         ))
-                        .child(info_row(
-                            strings::UI_OVERVIEW_URI,
-                            uri,
-                            theme.muted_foreground,
-                        )),
+                        .child(
+                            h_flex()
+                                .gap_2()
+                                .items_start()
+                                .child(info_row(
+                                    strings::UI_OVERVIEW_URI,
+                                    uri,
+                                    theme.muted_foreground,
+                                ))
+                                .child(
+                                    Button::new(SharedString::from(format!("reveal-{}", view.id)))
+                                        .label(if revealed {
+                                            strings::UI_HIDE_PASSWORD
+                                        } else {
+                                            strings::UI_SHOW_PASSWORD
+                                        })
+                                        .xsmall()
+                                        .compact()
+                                        .ghost()
+                                        .on_click(cx.listener(move |this, _, _window, cx| {
+                                            this.toggle_reveal(&id_reveal);
+                                            cx.notify();
+                                        })),
+                                ),
+                        ),
                 ),
         );
 

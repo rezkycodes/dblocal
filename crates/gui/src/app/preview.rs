@@ -99,6 +99,30 @@ impl Workspace {
         workspace
     }
 
+    /// Preview with a stale/offline catalog banner over the centre pane.
+    pub fn preview_stale_banner(
+        service: Arc<dyn DblService>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let mut workspace = Self::preview(service, window, cx);
+        workspace.set_catalog_status_for_preview(dblocal_core::model::CatalogStatus::Stale);
+        workspace
+    }
+
+    /// Preview with every connection URI revealed.
+    pub fn preview_revealed(
+        service: Arc<dyn DblService>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let mut workspace = Self::preview(service, window, cx);
+        if let Some(id) = workspace.instances.first().map(|view| view.id.clone()) {
+            workspace.revealed.insert(id);
+        }
+        workspace
+    }
+
     /// Preview focused on a failed instance, exercising the diagnosis panel.
     pub fn preview_failure(
         service: Arc<dyn DblService>,

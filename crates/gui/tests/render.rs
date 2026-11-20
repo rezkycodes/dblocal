@@ -217,6 +217,28 @@ fn renders_palette_logs_create_and_failure() {
     let (_, delete_n) = render(false, "shell-delete.png", Workspace::preview_delete);
     assert!(delete_n > 40, "delete modal render too flat: {delete_n}");
 
+    let (stale, stale_n) = render(false, "shell-stale.png", Workspace::preview_stale_banner);
+    assert!(stale_n > 40, "stale banner render too flat: {stale_n}");
+    // The warning banner (`#856000` in One Light) must paint a strip across the top.
+    let warning = [0x85u8, 0x60, 0x00];
+    let banner_hits = stale
+        .pixels()
+        .filter(|pixel| {
+            let p = pixel.0;
+            p[0].abs_diff(warning[0]) < 10
+                && p[1].abs_diff(warning[1]) < 10
+                && p[2].abs_diff(warning[2]) < 10
+        })
+        .count();
+    eprintln!("STALE banner pixels={banner_hits}");
+    assert!(
+        banner_hits > 2000,
+        "catalog banner did not render (hits={banner_hits})"
+    );
+
+    let (_, reveal_n) = render(false, "shell-revealed.png", Workspace::preview_revealed);
+    assert!(reveal_n > 40, "revealed-URI render too flat: {reveal_n}");
+
     let (failure, failure_n) = render(false, "shell-failure.png", Workspace::preview_failure);
     assert!(failure_n > 40, "failure render too flat: {failure_n}");
 
