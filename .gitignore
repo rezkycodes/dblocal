@@ -4,3 +4,6 @@ target/
 .env
 .env.*
 !.env.example
+
+# Command Code agent state
+.commandcode/
