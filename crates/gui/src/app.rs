@@ -33,7 +33,7 @@ use gpui_component::{
     notification::Notification,
 };
 
-use crate::logs::LogBuffer;
+use crate::logs::LogStore;
 use crate::service_bridge::{self, UiEvent};
 
 pub use actions::{ROOT_CONTEXT, palette_hint};
@@ -92,7 +92,10 @@ pub struct Workspace {
     open_tabs: Vec<OpenTab>,
     selected_tab: usize,
     selected_instance: Option<InstanceId>,
-    logs: LogBuffer,
+    /// Per-instance log buffers, keyed by instance so each tab shows its own.
+    logs: LogStore,
+    /// Scroll handle for the visible Logs list, driving follow and pause.
+    log_scroll: gpui::UniformListScrollHandle,
     create: Option<CreateForm>,
     delete_target: Option<InstanceId>,
     delete_name_input: Option<Entity<InputState>>,
@@ -141,7 +144,8 @@ impl Workspace {
             open_tabs: Vec::new(),
             selected_tab: 0,
             selected_instance: None,
-            logs: LogBuffer::new(),
+            logs: LogStore::new(),
+            log_scroll: gpui::UniformListScrollHandle::new(),
             create: None,
             delete_target: None,
             delete_name_input: None,
@@ -216,7 +220,22 @@ impl Workspace {
                 }
             }
             UiEvent::LogLines { instance, lines } => {
-                self.state.on_log_lines(&mut self.logs, &instance, lines);
+                if let Ok(id) = instance.parse::<InstanceId>() {
+                    self.state.on_log_lines(&mut self.logs, &id, lines);
+                    // Follow the newest line only when the visible tab is this
+                    // instance's and follow mode is on.
+                    if self.visible_logs_following(&id) {
+                        self.log_scroll.scroll_to_bottom();
+                    }
+                }
+            }
+            UiEvent::Resync => {
+                // D: a lagged stream may have skipped InstanceChanged events,
+                // so re-read the truth rather than trusting the delta stream.
+                self.refresh_instances();
+                if let Ok(catalog) = self.service.catalog() {
+                    self.catalog = catalog;
+                }
             }
             UiEvent::Closed => {}
         }
@@ -237,11 +256,10 @@ impl Workspace {
             });
             self.selected_tab = self.open_tabs.len().saturating_sub(1);
         }
-        if let Ok(lines) = self.service.tail_logs(&id, crate::logs::capacity()) {
-            self.logs.replace_with(lines);
+        self.load_logs_for(&id);
+        if let Err(err) = self.service.watch_logs(&id, true) {
+            self.report_error(&err);
         }
-        let _ = self.service.watch_logs(&id, true);
-        self.logs.set_watched(Some(id.to_string()));
         cx.notify();
     }
 
@@ -250,13 +268,34 @@ impl Workspace {
             return;
         }
         let closed = self.open_tabs.remove(index);
-        let _ = self.service.watch_logs(&closed.instance, false);
+        if let Err(err) = self.service.watch_logs(&closed.instance, false) {
+            self.report_error(&err);
+        }
+        self.logs.close(&closed.instance);
         self.selected_tab = self
             .selected_tab
             .min(self.open_tabs.len().saturating_sub(1));
-        if self.logs.watched() == Some(closed.instance.to_string().as_str()) {
-            self.logs.set_watched(None);
+    }
+
+    /// Loads one instance's tail into its own buffer.
+    fn load_logs_for(&mut self, id: &InstanceId) {
+        match self.service.tail_logs(id, crate::logs::capacity()) {
+            Ok(lines) => self.logs.load(id, lines),
+            Err(err) => self.report_error(&err),
         }
+    }
+
+    /// Whether the currently visible Logs tab is this instance and following.
+    fn visible_logs_following(&self, id: &InstanceId) -> bool {
+        let Some(tab) = self.open_tabs.get(self.selected_tab) else {
+            return false;
+        };
+        tab.instance == *id
+            && tab.inner == InnerTab::Logs
+            && self
+                .logs
+                .get(id)
+                .is_some_and(|buffer| buffer.is_following())
     }
 
     fn start_instance(&mut self, id: InstanceId) {
@@ -303,7 +342,12 @@ impl Workspace {
     }
 
     fn copy_logs(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let text = self.logs.copy_text();
+        let text = self
+            .open_tabs
+            .get(self.selected_tab)
+            .and_then(|tab| self.logs.get(&tab.instance))
+            .map(|buffer| buffer.copy_text())
+            .unwrap_or_default();
         cx.write_to_clipboard(ClipboardItem::new_string(text));
         self.toast = Some(SharedString::from(strings::UI_TOAST_LOGS_COPIED));
         window.push_notification(Notification::success(strings::UI_TOAST_LOGS_COPIED), cx);

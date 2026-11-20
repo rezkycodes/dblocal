@@ -13,6 +13,9 @@ default = []
 x11 = ["gpui-platform/x11"]
 
 [dependencies]
+# W1 only: the GUI runs against the in-memory mock. W2-B must drop this feature
+# from the production build and reach `LocalService` through `run_with_service`;
+# see docs/architecture/gui.md ("Wave 2 seam").
 dblocal-core = { workspace = true, features = ["mock"] }
 gpui = { workspace = true }
 gpui-component = { workspace = true }

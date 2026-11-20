@@ -15,6 +15,43 @@ use crate::format::{self, PaletteAction};
 use super::{ActiveDownload, CreateForm, Workspace};
 
 impl Workspace {
+    /// Selects a centre-pane tab and loads that instance's own log buffer.
+    ///
+    /// Without this the Logs tab would keep showing whichever instance was
+    /// opened last, because one shared buffer used to be reused.
+    pub(crate) fn select_tab(&mut self, index: usize) {
+        if index >= self.open_tabs.len() {
+            return;
+        }
+        self.selected_tab = index;
+        let id = self.open_tabs[index].instance.clone();
+        self.selected_instance = Some(id.clone());
+        self.load_logs_for(&id);
+    }
+
+    /// Toggles follow mode for the visible Logs tab and, when turning it on,
+    /// scrolls to the newest line.
+    pub(crate) fn toggle_follow(&mut self, _cx: &mut Context<Self>) {
+        let Some(id) = self
+            .open_tabs
+            .get(self.selected_tab)
+            .map(|tab| tab.instance.clone())
+        else {
+            return;
+        };
+        let now_following = {
+            let Some(buffer) = self.logs.get_mut(&id) else {
+                return;
+            };
+            let next = !buffer.is_following();
+            buffer.set_following(next);
+            next
+        };
+        if now_following {
+            self.log_scroll.scroll_to_bottom();
+        }
+    }
+
     pub(crate) fn instances(&self) -> &[InstanceView] {
         &self.state.instances
     }

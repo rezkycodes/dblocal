@@ -99,6 +99,8 @@ pub const UI_DOWNLOADS: &str = "Unduhan";
 pub const UI_NO_DOWNLOADS: &str = "Tidak ada unduhan aktif";
 /// Status bar: tray unavailable note.
 pub const UI_TRAY_UNAVAILABLE: &str = "Tray tidak tersedia";
+/// Status bar: tray available note.
+pub const UI_TRAY_ACTIVE: &str = "Tray aktif";
 /// Version prefix.
 pub const UI_VERSION_PREFIX: &str = "v";
 /// Command palette placeholder.
@@ -293,3 +295,23 @@ pub const VULKAN_HINT: &str = "Jika driver sudah terpasang tetapi DBLocal tetap 
      /usr/share/vulkan/icd.d dan VK_ICD_FILENAMES/VK_DRIVER_FILES tidak menunjuk path yang salah.";
 /// Vulkan pre-flight exit-code line prefix.
 pub const VULKAN_EXIT_CODE: &str = "Kode keluar";
+
+// --- Human descriptions for machine slugs shown in the UI ---------------------
+
+/// Catalog freshness: fresh.
+pub const CATALOG_FRESH_LABEL: &str = "Terbaru";
+/// Catalog freshness: stale.
+pub const CATALOG_STALE_LABEL: &str = "Kedaluwarsa";
+/// Catalog freshness: offline.
+pub const CATALOG_OFFLINE_LABEL: &str = "Offline";
+
+/// Start diagnosis: the port was already bound.
+pub const DIAGNOSIS_PORT_IN_USE: &str = "Port sedang dipakai proses lain";
+/// Start diagnosis: the data directory belongs to another engine version.
+pub const DIAGNOSIS_VERSION_MISMATCH: &str = "Versi tidak cocok, butuh instance baru";
+/// Start diagnosis: a path could not be read or written.
+pub const DIAGNOSIS_PERMISSION_DENIED: &str = "Izin ditolak pada path data";
+/// Start diagnosis: the engine binary is missing or corrupt.
+pub const DIAGNOSIS_BINARY_MISSING: &str = "Biner engine hilang atau rusak";
+/// Start diagnosis: nothing the app recognises (see the log).
+pub const DIAGNOSIS_UNKNOWN: &str = "Penyebab tidak dikenali, lihat log";

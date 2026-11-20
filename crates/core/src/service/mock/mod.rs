@@ -334,7 +334,9 @@ impl MockService {
     /// Seeds an instance in `status` for demos/tests and emits a change event.
     pub fn seed_instance(&self, spec: InstanceSpec, status: InstanceStatus) -> InstanceId {
         let mut g = lock(&self.inner);
-        let id = InstanceId::new();
+        // Derive the id from the seedable RNG so the `BTreeMap` order, and the
+        // render tests that depend on it, are reproducible run to run.
+        let id = InstanceId::parse(g.det.gen_uuid()).unwrap_or_else(|_| InstanceId::new());
         let created = g.det.now();
         let instance = Instance::new(&spec, id.clone(), status, created);
         let mut view = InstanceView::from_instance(&instance);

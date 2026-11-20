@@ -213,13 +213,32 @@ pub fn catalog_banner(catalog: &CatalogView) -> Option<&str> {
     catalog.banner.as_deref()
 }
 
-/// Short label for the catalog freshness indicator.
+/// Human label for the catalog freshness indicator.
+///
+/// Returns the Indonesian words from `strings`, never the raw enum tag: the
+/// status bar used to print "Katalog: Fresh" straight from `as_str()`.
 pub fn catalog_status_label(catalog: &CatalogView) -> &'static str {
     match catalog.status {
-        dblocal_core::model::CatalogStatus::Fresh => "Fresh",
-        dblocal_core::model::CatalogStatus::Stale => "Stale",
-        dblocal_core::model::CatalogStatus::Offline => "Offline",
-        _ => "Fresh",
+        dblocal_core::model::CatalogStatus::Fresh => strings::CATALOG_FRESH_LABEL,
+        dblocal_core::model::CatalogStatus::Stale => strings::CATALOG_STALE_LABEL,
+        dblocal_core::model::CatalogStatus::Offline => strings::CATALOG_OFFLINE_LABEL,
+        _ => strings::CATALOG_FRESH_LABEL,
+    }
+}
+
+/// Human sentence for a start diagnosis, next to its `DBL-NNNN` code.
+///
+/// The failure panel printed `StartFailure::as_str()` ("port_in_use"), a
+/// machine slug. This maps it to the text a user can read.
+pub fn diagnosis_label(diagnosis: dblocal_core::model::StartFailure) -> &'static str {
+    use dblocal_core::model::StartFailure as D;
+    match diagnosis {
+        D::PortInUse => strings::DIAGNOSIS_PORT_IN_USE,
+        D::DataDirVersionMismatch => strings::DIAGNOSIS_VERSION_MISMATCH,
+        D::PermissionDenied => strings::DIAGNOSIS_PERMISSION_DENIED,
+        D::BinaryMissing => strings::DIAGNOSIS_BINARY_MISSING,
+        D::Unknown => strings::DIAGNOSIS_UNKNOWN,
+        _ => strings::DIAGNOSIS_UNKNOWN,
     }
 }
 
@@ -524,14 +543,42 @@ mod tests {
             engines: vec![],
         };
         assert_eq!(catalog_banner(&catalog), Some(strings::CATALOG_STALE));
-        assert_eq!(catalog_status_label(&catalog), "Stale");
+        assert_eq!(catalog_status_label(&catalog), strings::CATALOG_STALE_LABEL);
         let offline = CatalogView {
             status: CatalogStatus::Offline,
             banner: None,
             engines: vec![],
         };
-        assert_eq!(catalog_status_label(&offline), "Offline");
+        assert_eq!(
+            catalog_status_label(&offline),
+            strings::CATALOG_OFFLINE_LABEL
+        );
         assert!(catalog_banner(&offline).is_none());
+    }
+
+    #[test]
+    fn every_diagnosis_maps_to_readable_text_not_a_slug() {
+        use dblocal_core::model::StartFailure as D;
+        for (diagnosis, expected) in [
+            (D::PortInUse, strings::DIAGNOSIS_PORT_IN_USE),
+            (
+                D::DataDirVersionMismatch,
+                strings::DIAGNOSIS_VERSION_MISMATCH,
+            ),
+            (D::PermissionDenied, strings::DIAGNOSIS_PERMISSION_DENIED),
+            (D::BinaryMissing, strings::DIAGNOSIS_BINARY_MISSING),
+            (D::Unknown, strings::DIAGNOSIS_UNKNOWN),
+        ] {
+            let label = diagnosis_label(diagnosis);
+            assert_eq!(label, expected);
+            // Never the machine slug the review caught.
+            assert_ne!(label, diagnosis.as_str(), "{diagnosis:?} leaked its slug");
+            assert!(!label.contains('_'));
+        }
+        assert_eq!(
+            diagnosis_label(D::PortInUse),
+            strings::DIAGNOSIS_PORT_IN_USE
+        );
     }
 
     #[test]

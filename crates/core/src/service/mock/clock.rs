@@ -45,6 +45,51 @@ impl Deterministic {
     pub(crate) fn gen_id(&self, prefix: &str) -> String {
         format!("{prefix}-{:016x}", self.next_u64())
     }
+
+    /// A deterministic RFC 4122-shaped (version 4 variant) UUID drawn from the
+    /// seedable RNG. `seed_instance` uses it so `BTreeMap` iteration order — and
+    /// therefore the render tests — is reproducible.
+    pub(crate) fn gen_uuid(&self) -> String {
+        let hi = self.next_u64();
+        let lo = self.next_u64();
+        let bytes = [
+            (hi >> 56) as u8,
+            (hi >> 48) as u8,
+            (hi >> 40) as u8,
+            (hi >> 32) as u8,
+            (hi >> 24) as u8,
+            (hi >> 16) as u8,
+            (hi >> 8) as u8,
+            hi as u8,
+            (lo >> 56) as u8,
+            (lo >> 48) as u8,
+            (lo >> 40) as u8,
+            (lo >> 32) as u8,
+            (lo >> 24) as u8,
+            (lo >> 16) as u8,
+            (lo >> 8) as u8,
+            lo as u8,
+        ];
+        format!(
+            "{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-4{:01x}{:02x}-8{:01x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
+            bytes[0],
+            bytes[1],
+            bytes[2],
+            bytes[3],
+            bytes[4],
+            bytes[5],
+            bytes[6] & 0x0f,
+            bytes[7],
+            bytes[8] & 0x0f,
+            bytes[9],
+            bytes[10],
+            bytes[11],
+            bytes[12],
+            bytes[13],
+            bytes[14],
+            bytes[15],
+        )
+    }
 }
 
 /// Instant used only for internal bookkeeping; kept out of reported values.
@@ -72,6 +117,24 @@ mod tests {
         }
         let c = Deterministic::new(43, SystemTime::UNIX_EPOCH);
         assert_ne!(a.next_u64(), c.next_u64());
+    }
+
+    #[test]
+    fn generated_uuids_are_deterministic_and_parse() {
+        use crate::model::InstanceId;
+        let a = Deterministic::new(7, SystemTime::UNIX_EPOCH);
+        let b = Deterministic::new(7, SystemTime::UNIX_EPOCH);
+        for _ in 0..4 {
+            let first = a.gen_uuid();
+            let second = b.gen_uuid();
+            assert_eq!(first, second, "same seed must yield the same uuid");
+            assert!(
+                InstanceId::parse(&first).is_ok(),
+                "gen_uuid must be a parseable InstanceId: {first}"
+            );
+        }
+        let c = Deterministic::new(8, SystemTime::UNIX_EPOCH);
+        assert_ne!(a.gen_uuid(), c.gen_uuid());
     }
 
     #[test]

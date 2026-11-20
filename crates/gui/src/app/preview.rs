@@ -67,17 +67,66 @@ impl Workspace {
         workspace
     }
 
-    /// Preview on the Logs tab, with lines already in the buffer.
+    /// Preview on the Logs tab of the *selected* instance, with lines loaded.
+    ///
+    /// The previous version set `open_tabs.first_mut().inner = Logs`, but
+    /// `preview` leaves the failed instance selected, so the render showed the
+    /// Overview of a different tab. This selects the tab it modifies.
     pub fn preview_logs(
         service: Arc<dyn DblService>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
         let mut workspace = Self::preview(service, window, cx);
-        if let Some(tab) = workspace.open_tabs.first_mut() {
+        let index = workspace
+            .selected_tab
+            .min(workspace.open_tabs.len().saturating_sub(1));
+        if let Some(tab) = workspace.open_tabs.get_mut(index) {
             tab.inner = InnerTab::Logs;
+            let id = tab.instance.clone();
+            workspace.logs.load(&id, demo_log_lines_for(0));
         }
-        workspace.logs.replace_with(demo_log_lines());
+        workspace
+    }
+
+    /// Preview with two instance tabs open, both on Logs, the `index`-th
+    /// selected, each holding that instance's own lines.
+    ///
+    /// Proves the per-instance buffers: tab A's buffer never contains tab B's
+    /// lines even after a live event for B.
+    pub fn preview_logs_for(
+        service: Arc<dyn DblService>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+        index: usize,
+    ) -> Self {
+        let mut workspace = Self::preview(service, window, cx);
+        let ids: Vec<dblocal_core::model::InstanceId> = workspace
+            .state
+            .instances
+            .iter()
+            .take(2)
+            .map(|view| view.id.clone())
+            .collect();
+        for (position, id) in ids.iter().enumerate() {
+            workspace.logs.load(id, demo_log_lines_for(position));
+            if let Some(tab) = workspace
+                .open_tabs
+                .iter_mut()
+                .find(|tab| &tab.instance == id)
+            {
+                tab.inner = InnerTab::Logs;
+            } else {
+                workspace.open_tabs.push(OpenTab {
+                    instance: id.clone(),
+                    inner: InnerTab::Logs,
+                });
+            }
+        }
+        workspace.selected_tab = index.min(workspace.open_tabs.len().saturating_sub(1));
+        if let Some(tab) = workspace.open_tabs.get(workspace.selected_tab) {
+            workspace.selected_instance = Some(tab.instance.clone());
+        }
         workspace
     }
 
@@ -178,14 +227,15 @@ impl Workspace {
     }
 }
 
-/// Deterministic log lines for preview renders.
-pub fn demo_log_lines() -> Vec<String> {
-    (0..64)
-        .map(|index| match index % 4 {
-            0 => format!("[info] baris log contoh {index}"),
-            1 => format!("[debug] health check ok ({index}ms)"),
-            2 => "[info] listening on 127.0.0.1 only".to_string(),
-            _ => format!("[debug] checkpoint complete: wrote {index} buffers"),
+/// Deterministic per-instance log lines for the two-tab render.
+pub fn demo_log_lines_for(index: usize) -> Vec<String> {
+    (0..24)
+        .map(|line| {
+            if index == 0 {
+                format!("[info] pg-main baris {line} · berkas instance pertama")
+            } else {
+                format!("[info] valkey-cache baris {line} · berkas instance kedua")
+            }
         })
         .collect()
 }

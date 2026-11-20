@@ -40,7 +40,8 @@ Coverage totals are from `cargo llvm-cov -p dblocal-gui`. Layout-heavy files (`a
 1. `service.subscribe()` returns a `broadcast::Receiver<ServiceEvent>` (tokio).
 2. `service_bridge::spawn_bridge` runs a dedicated thread with a current-thread tokio runtime that forwards events into an unbounded `flume::Sender<UiEvent>`.
 3. The GPUI app spawns an async task: `while let Ok(ev) = rx.recv_async().await { view.update(...); cx.notify(); }`. It parks on the channel, so an idle app consumes no CPU.
-4. Log streaming is opt-in per opened instance via `watch_logs(id, true/false)`; the Logs tab renders through `uniform_list` over the `LogBuffer` ring.
+4. Log streaming is opt-in per opened instance via `watch_logs(id, true/false)`. Each open tab owns its own buffer in a `LogStore` keyed by `InstanceId`, so a line for instance B can never appear under instance A; closing the tab drops it. The Logs tab renders through `uniform_list` over that buffer, and lines are stored as `SharedString`, so a frame clones pointers, never text.
+5. **Resync on lag.** `broadcast` drops the oldest events of a slow receiver. When the bridge sees `RecvError::Lagged` it emits `UiEvent::Resync`; the workspace then re-reads `list_instances()` and the catalog, so a row can never stay "berjalan" after missed `InstanceChanged` events.
 
 ## Themes and contrast
 
@@ -83,6 +84,23 @@ Measured with `crates/gui/examples/measure` (release, strip + `lto=thin`) on Fed
 | Failure state | 1464 | danger panel `#b03730` present (651k pixels) |
 
 Centre-region mean luminance: dark **43.91**, light **241.70** (the test requires a gap > 10).
+
+## Wave 2 seam (must change before the production build ships)
+
+- **The production GUI links the mock today.** `crates/gui/Cargo.toml` has
+  `dblocal-core = { features = ["mock"] }` and `run_with_mock()` builds a
+  `MockService`. That is acceptable for W1 only. W2-B must:
+  1. Replace `run_with_mock()` with `run_with_service(Arc<LocalService>)` in
+     `dblocal_gui::run()`.
+  2. Gate the mock behind a `demo` feature so a release build does not compile
+     it, and keep `run_with_mock()` behind that feature for the render tests.
+- **Service calls run on the GPUI thread.** `refresh_instances`,
+  `create_instance`, `validate_spec`, `change_port` and the other trait calls
+  are synchronous and short, so calling them from the render/handler path is
+  fine for the mock (and the trait contract says they return quickly). W2-B
+  must keep them non-blocking: the real service must not do I/O on the caller's
+  thread, or these call sites must move to the bridge's task and report back
+  through `UiEvent`.
 
 ## Vulkan
 

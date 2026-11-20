@@ -166,7 +166,7 @@ pub(super) fn render(workspace: &Workspace, cx: &mut gpui::Context<Workspace>) -
                 .child(popover)
                 .child(gpui::div().text_color(theme.muted_foreground).child(
                     if workspace.tray_available() {
-                        strings::UI_RUNNING.to_owned()
+                        strings::UI_TRAY_ACTIVE.to_owned()
                     } else {
                         strings::UI_TRAY_UNAVAILABLE.to_owned()
                     },

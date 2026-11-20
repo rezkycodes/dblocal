@@ -50,6 +50,12 @@ pub enum UiEvent {
         /// Appended lines, oldest first.
         lines: Vec<String>,
     },
+    /// The service stream lagged and the UI may have missed changes.
+    ///
+    /// `broadcast` drops the oldest events of a slow receiver. After a lag the
+    /// visible state can be stale forever (a row stuck "berjalan"), so the
+    /// workspace re-reads `list_instances()` and the catalog when it sees this.
+    Resync,
     /// The service event stream ended.
     Closed,
 }
@@ -95,7 +101,12 @@ async fn forward(mut events: tokio::sync::broadcast::Receiver<ServiceEvent>, tx:
                 }
             }
             Err(RecvError::Lagged(skipped)) => {
-                tracing::warn!("service event stream lagged; dropped {skipped} events");
+                tracing::warn!(
+                    "service event stream lagged; dropped {skipped} events, requesting a resync"
+                );
+                if tx.send(UiEvent::Resync).is_err() {
+                    return;
+                }
             }
             Err(RecvError::Closed) => {
                 let _ = tx.send(UiEvent::Closed);
@@ -243,6 +254,39 @@ mod tests {
         .await
         .expect("bridge must deliver an event");
         assert!(received.is_some());
+    }
+
+    #[tokio::test]
+    async fn lagging_the_stream_emits_a_resync() {
+        // A 1-slot channel: send a burst without draining the receiver so the
+        // next `recv` reports `Lagged`, which must surface as `Resync`.
+        let (event_tx, event_rx) = tokio::sync::broadcast::channel::<ServiceEvent>(1);
+        let (ui_tx, ui_rx) = flume::unbounded::<UiEvent>();
+        for _ in 0..5 {
+            let _ = event_tx.send(ServiceEvent::CatalogUpdated {
+                status: CatalogStatus::Fresh,
+            });
+        }
+        drop(event_tx);
+
+        // `forward` returns once the broadcast channel is closed and drained.
+        let bridge = tokio::spawn(forward(event_rx, ui_tx));
+        bridge.await.expect("forward completes");
+
+        let events: Vec<UiEvent> = ui_rx.try_iter().collect();
+        let resyncs = events
+            .iter()
+            .filter(|event| matches!(event, UiEvent::Resync))
+            .count();
+        eprintln!("bridge lag test: {} events, {resyncs} Resync", events.len());
+        assert_eq!(resyncs, 1, "a lagged stream must emit exactly one Resync");
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event, UiEvent::CatalogUpdated)),
+            "the drain must still deliver the newest event"
+        );
+        assert!(matches!(events.last(), Some(UiEvent::Closed)));
     }
 
     #[test]

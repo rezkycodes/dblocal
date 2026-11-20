@@ -19,6 +19,7 @@ use gpui_component::{
 };
 
 use crate::format;
+use crate::logs::LogBuffer;
 
 use super::{InnerTab, Workspace};
 
@@ -213,10 +214,7 @@ impl Workspace {
         }
         let tabs = tabs.selected_index(self.selected_tab).on_click(cx.listener(
             |this, index: &usize, _window, cx| {
-                this.selected_tab = *index;
-                if let Some(tab) = this.open_tabs.get(*index).cloned() {
-                    this.selected_instance = Some(tab.instance);
-                }
+                this.select_tab(*index);
                 cx.notify();
             },
         ));
@@ -493,15 +491,20 @@ impl Workspace {
     pub(crate) fn render_logs(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme().clone();
         let mono = theme.mono_font_family.clone();
-        let lines: Vec<SharedString> = (0..self.logs.len())
-            .filter_map(|index| self.logs.line(index).map(SharedString::from))
-            .collect();
-        let count = lines.len();
-        let follow_label = if self.logs.is_following() {
+        let instance = self
+            .open_tabs
+            .get(self.selected_tab)
+            .map(|tab| tab.instance.clone());
+        let buffer = instance.as_ref().and_then(|id| self.logs.get(id));
+        let count = buffer.map(LogBuffer::len).unwrap_or(0);
+        let following = buffer.is_some_and(LogBuffer::is_following);
+        let lines = buffer.cloned().unwrap_or_default();
+        let follow_label = if following {
             strings::UI_LOGS_FOLLOWING
         } else {
             strings::UI_LOGS_PAUSED
         };
+        let scroll = self.log_scroll.clone();
 
         let body = if count == 0 {
             div()
@@ -514,17 +517,23 @@ impl Workspace {
             gpui::uniform_list("log-lines", count, move |range, _window, _cx| {
                 range
                     .map(|index| {
+                        let text = lines
+                            .line(index)
+                            .cloned()
+                            .unwrap_or_else(|| SharedString::from(""));
                         div()
                             .id(("log-line", index))
                             .h(px(18.))
                             .px_3()
                             .font_family(mono.clone())
                             .text_xs()
-                            .child(lines[index].clone())
+                            .child(text)
                     })
                     .collect::<Vec<_>>()
             })
+            .track_scroll(&scroll)
             .flex_1()
+            .h_full()
             .into_any_element()
         };
 
@@ -539,10 +548,29 @@ impl Workspace {
                     .border_b_1()
                     .border_color(theme.border)
                     .child(
-                        div()
-                            .text_xs()
-                            .text_color(theme.muted_foreground)
-                            .child(follow_label),
+                        h_flex()
+                            .gap_2()
+                            .items_center()
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(theme.muted_foreground)
+                                    .child(follow_label),
+                            )
+                            .child(
+                                Button::new("toggle-follow")
+                                    .label(if following {
+                                        strings::UI_LOGS_PAUSED
+                                    } else {
+                                        strings::UI_LOGS_FOLLOWING
+                                    })
+                                    .xsmall()
+                                    .compact()
+                                    .ghost()
+                                    .on_click(cx.listener(|this, _, _window, cx| {
+                                        this.toggle_follow(cx);
+                                    })),
+                            ),
                     )
                     .child(
                         Button::new("copy-logs")
@@ -557,7 +585,6 @@ impl Workspace {
             )
             .child(body)
     }
-
     // ----- Accessors used by submodules ----------------------------------
 }
 
@@ -652,7 +679,7 @@ fn render_failure(
         .child(div().text_xs().child(format!(
             "{}: {}",
             strings::UI_FAILURE_DIAGNOSIS,
-            failure.diagnosis.as_str()
+            crate::format::diagnosis_label(failure.diagnosis)
         )))
         .when_some(port_action, |this, action| {
             this.child(h_flex().gap_2().child(action))

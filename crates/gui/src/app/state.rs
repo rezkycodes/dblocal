@@ -4,10 +4,10 @@
 //! the visible collections is ordinary data handling. Keeping it here means it
 //! can be unit-tested without a window, an event loop, or a live service.
 
-use dblocal_core::model::DownloadProgress;
+use dblocal_core::model::{DownloadProgress, InstanceId};
 use dblocal_core::service::{InstanceView, OperationId, OperationStage, UserFacingError};
 
-use crate::logs::LogBuffer;
+use crate::logs::LogStore;
 
 /// One in-flight download the status bar tracks.
 #[derive(Debug, Clone)]
@@ -76,11 +76,12 @@ impl ShellState {
         }
     }
 
-    /// Applies appended log lines when the stream is the one being watched.
-    pub fn on_log_lines(&self, logs: &mut LogBuffer, instance: &str, lines: Vec<String>) {
-        if logs.watched() == Some(instance) {
-            logs.append(lines);
-        }
+    /// Appends live lines to the buffer of the instance they belong to.
+    ///
+    /// The store is keyed by `InstanceId`, so a line for instance B can never
+    /// land under an open tab for instance A.
+    pub fn on_log_lines(&self, logs: &mut LogStore, instance: &InstanceId, lines: Vec<String>) {
+        logs.append(instance, lines);
     }
 
     /// Replaces the instance list from a fresh read.
@@ -178,14 +179,27 @@ mod tests {
     }
 
     #[test]
-    fn log_lines_only_append_for_the_watched_instance() {
-        let mut logs = LogBuffer::new();
-        logs.set_watched(Some("pg".to_owned()));
+    fn log_lines_land_in_their_own_instance_buffer() {
+        use crate::logs::LogStore;
+        let mut logs = LogStore::new();
+        let pg = InstanceId::new();
+        let other = InstanceId::new();
+        logs.load(&pg, Vec::new());
+        logs.load(&other, Vec::new());
         let state = ShellState::default();
-        state.on_log_lines(&mut logs, "pg", vec!["a".to_owned()]);
-        assert_eq!(logs.len(), 1);
-        state.on_log_lines(&mut logs, "other", vec!["b".to_owned()]);
-        assert_eq!(logs.len(), 1, "an unwatched stream is ignored");
+        state.on_log_lines(&mut logs, &pg, vec!["a".to_owned()]);
+        assert_eq!(logs.get(&pg).expect("pg").len(), 1);
+        assert_eq!(logs.get(&other).expect("other").len(), 0);
+        state.on_log_lines(&mut logs, &other, vec!["b".to_owned()]);
+        // Neither instance sees the other's line.
+        assert_eq!(
+            logs.get(&pg).and_then(|b| b.line(0)).map(|s| s.as_ref()),
+            Some("a")
+        );
+        assert_eq!(
+            logs.get(&other).and_then(|b| b.line(0)).map(|s| s.as_ref()),
+            Some("b")
+        );
     }
 
     #[test]
