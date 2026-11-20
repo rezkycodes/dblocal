@@ -24,21 +24,73 @@ use crate::service::UriFormat;
 /// The listening socket is `<dir>/.s.PGSQL.<port>` (C-09).
 const UNIX_SOCKET_PATH_LIMIT: usize = 107;
 
+/// How PostgreSQL will expose a unix-domain socket for one instance.
+///
+/// DBLocal always connects over TCP loopback, so the unix socket is optional. On
+/// a deep home path the full `<dir>/.s.PGSQL.<port>` path can exceed the kernel's
+/// 107-byte `sun_path` limit; rather than failing instance creation we disable
+/// it and stay TCP-only (C-09).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SocketDir {
+    /// Unix sockets enabled at this directory.
+    Enabled(PathBuf),
+    /// Unix sockets disabled; `unix_socket_directories` is rendered empty.
+    Disabled,
+}
+
+impl SocketDir {
+    /// Path used for the socket, or `None` when unix sockets are disabled.
+    pub fn path(&self) -> Option<&Path> {
+        match self {
+            Self::Enabled(dir) => Some(dir),
+            Self::Disabled => None,
+        }
+    }
+
+    /// Value written to `unix_socket_directories`; empty disables the socket.
+    pub fn config_value(&self) -> String {
+        match self {
+            Self::Enabled(dir) => dir.display().to_string(),
+            Self::Disabled => String::new(),
+        }
+    }
+}
+
+/// Chooses the unix socket directory, falling back to TCP-only when too long.
+///
+/// This is the single place that applies the 107-byte check: an over-long path
+/// disables the unix socket instead of failing creation, and the choice is
+/// logged so a support log shows which path was taken.
+pub fn choose_socket_dir(dir: &Path, port: u16) -> SocketDir {
+    match validate_socket_path_len(dir, port) {
+        Ok(()) => SocketDir::Enabled(dir.to_path_buf()),
+        Err(err) => {
+            tracing::info!(
+                socket_dir = %dir.display(),
+                "unix socket path exceeds 107 bytes; disabling unix sockets and using TCP loopback only (C-09): {err}"
+            );
+            SocketDir::Disabled
+        }
+    }
+}
+
 /// PostgreSQL adapter.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct PostgresAdapter;
 
-/// Validates and creates the unix socket directory for a start.
+/// Prepares the socket directory for a start and returns the chosen plan.
 ///
 /// `spawn_command` cannot fail, so the service calls this before spawning: it
 /// re-checks `<run_dir>/sock/.s.PGSQL.<port>` against the 107-byte limit at
-/// start time as well as create time (C-09), and makes sure the directory the
-/// server writes its socket lock into exists and is writable.
-pub fn prepare_run(ctx: &RunContext) -> Result<PathBuf> {
-    let dir = socket_dir_for_run(&ctx.run_dir);
-    validate_socket_path_len(&dir, ctx.port.get())?;
-    ensure_socket_dir(&dir)?;
-    Ok(dir)
+/// start time as well as create time (C-09) and makes sure the directory the
+/// server writes its socket lock into exists and is writable. An over-long path
+/// yields [`SocketDir::Disabled`] (TCP-only) instead of an error.
+pub fn prepare_run(ctx: &RunContext) -> Result<SocketDir> {
+    let plan = choose_socket_dir(&socket_dir_for_run(&ctx.run_dir), ctx.port.get());
+    if let Some(dir) = plan.path() {
+        ensure_socket_dir(dir)?;
+    }
+    Ok(plan)
 }
 
 impl EngineAdapter for PostgresAdapter {
@@ -51,13 +103,15 @@ impl EngineAdapter for PostgresAdapter {
         let initdb = runtime_bin.join(exe_name("initdb"));
         let superuser = effective_superuser(ctx);
         let auth = auth_args(ctx.auth);
-        let socket_dir = socket_dir_for_init(ctx)?;
-        ensure_socket_dir(&socket_dir)?;
+        let socket_plan = socket_dir_plan_for_init(ctx);
+        if let Some(dir) = socket_plan.path() {
+            ensure_socket_dir(dir)?;
+        }
         let locale = select_locale()?;
         tracing::debug!(
             instance = %ctx.instance_name,
             locale = %locale,
-            socket_dir = %socket_dir.display(),
+            socket_dir = ?socket_plan.path(),
             "postgres initdb"
         );
 
@@ -91,7 +145,7 @@ impl EngineAdapter for PostgresAdapter {
 
         let outcome = cmd.output();
         let init_result = match outcome {
-            Ok(out) if out.status.success() => configure_after_init(ctx, &socket_dir),
+            Ok(out) if out.status.success() => configure_after_init(ctx, &socket_plan),
             Ok(out) => Err(initdb_failed(out.stdout, out.stderr, out.status.code())),
             Err(err) => Err(DblError::Engine {
                 reason: format!("failed to execute initdb: {err}"),
@@ -307,16 +361,14 @@ pub fn socket_dir_for_run(run_dir: &Path) -> PathBuf {
     run_dir.join("sock")
 }
 
-/// Computes and validates the unix socket directory for init.
-fn socket_dir_for_init(ctx: &InitContext) -> Result<PathBuf> {
+/// Computes the unix socket plan for init, disabling it when too long (C-09).
+fn socket_dir_plan_for_init(ctx: &InitContext) -> SocketDir {
     let run_dir = ctx
         .data_dir
         .parent()
         .map(|p| p.join(consts::DIR_RUN))
         .unwrap_or_else(|| ctx.data_dir.join(consts::DIR_RUN));
-    let dir = socket_dir_for_run(&run_dir);
-    validate_socket_path_len(&dir, ctx.port.get())?;
-    Ok(dir)
+    choose_socket_dir(&socket_dir_for_run(&run_dir), ctx.port.get())
 }
 
 /// Ensures the unix socket directory exists with restrictive permissions.
@@ -424,7 +476,7 @@ fn write_pwfile(data_dir: &Path, password: Option<&SecretString>) -> Result<Path
     Ok(path)
 }
 
-fn configure_after_init(ctx: &InitContext, socket_dir: &Path) -> Result<()> {
+fn configure_after_init(ctx: &InitContext, socket_plan: &SocketDir) -> Result<()> {
     let conf = ctx.data_dir.join("postgresql.conf");
     let mut file = OpenOptions::new()
         .append(true)
@@ -439,7 +491,7 @@ fn configure_after_init(ctx: &InitContext, socket_dir: &Path) -> Result<()> {
     writeln!(
         file,
         "unix_socket_directories = '{}'",
-        escape_single_quotes(&socket_dir.display().to_string())
+        escape_single_quotes(&socket_plan.config_value())
     )
     .ok();
     file.sync_all().map_err(|e| DblError::Engine {
@@ -537,15 +589,13 @@ pub fn diagnose_failure_text(output: &str) -> StartFailure {
     }
 
     // Socket directory problems: too-long path or missing socket dir/lock file.
-    // These are path/configuration issues surfaced in logs; classify as
-    // Unknown only when not a clear permission case, but they are recognized.
+    // These are recognized but have no honest StartFailure variant, so we
+    // return Unknown and keep the raw log tail for F-LOG-02.
     if output.contains("Unix-domain socket path") && output.contains("is too long") {
-        // Recognized socket-dir problem; no dedicated variant exists.
-        return StartFailure::PermissionDenied;
+        return StartFailure::Unknown;
     }
     if output.contains(".s.PGSQL.") && output.contains("No such file or directory") {
-        // Missing socket directory / lock file path.
-        return StartFailure::PermissionDenied;
+        return StartFailure::Unknown;
     }
 
     // Missing runtime/data directory or missing/corrupt binary.
@@ -557,18 +607,15 @@ pub fn diagnose_failure_text(output: &str) -> StartFailure {
 }
 
 fn is_binary_missing(output: &str) -> bool {
-    // pg_ctl pointing at a nonexistent data directory.
-    if output.contains("pg_ctl: directory \"") && output.contains("does not exist") {
-        return true;
-    }
-    // Shell/OS exec failures.
-    if output.contains("No such file or directory") {
-        return true;
-    }
+    // Only genuine exec/binary failures count. A nonexistent data directory
+    // ("pg_ctl: directory \"...\" does not exist") is not a missing binary, so
+    // it stays Unknown and keeps the raw tail for F-LOG-02.
     if output.contains("Exec format error") {
         return true;
     }
-    false
+    // Shell/OS exec failure, but not a socket-dir lock-file error (handled
+    // above as Unknown).
+    output.contains("No such file or directory") && !output.contains(".s.PGSQL.")
 }
 
 fn strip_password_env(cmd: &mut Command) {
@@ -591,271 +638,4 @@ fn is_auth_challenge(err: &tokio_postgres::Error) -> bool {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::engine::InitContext;
-    use crate::model::Port;
-    use std::ffi::OsString;
-    use tempfile::tempdir;
-
-    fn init_ctx(auth: AuthMode, password: Option<&str>) -> InitContext {
-        InitContext {
-            instance_name: "pg-test".into(),
-            runtime_dir: PathBuf::from("/tmp/rt"),
-            data_dir: PathBuf::from("/tmp/data"),
-            port: Port::new(41010).expect("port"),
-            superuser: "postgres".into(),
-            auth,
-            password: password.map(SecretString::from),
-        }
-    }
-
-    #[test]
-    fn auth_args_match_mode() {
-        let pw = auth_args(AuthMode::Password);
-        assert_eq!(pw.local, "scram-sha-256");
-        assert_eq!(pw.host, "scram-sha-256");
-        let none = auth_args(AuthMode::None);
-        assert_eq!(none.local, "trust");
-        assert_eq!(none.host, "trust");
-    }
-
-    #[test]
-    fn socket_path_limit_enforced() {
-        let short = Path::new("/tmp/s");
-        assert!(validate_socket_path_len(short, 41010).is_ok());
-        let long_dir = "/".to_owned() + &"a".repeat(120);
-        let err = validate_socket_path_len(Path::new(&long_dir), 41010).unwrap_err();
-        assert!(matches!(err, DblError::InvalidInput { .. }));
-    }
-
-    #[test]
-    fn socket_path_boundary() {
-        // Build a dir whose resulting socket path is exactly at the limit.
-        let port = 41010u16;
-        let suffix = format!("/.s.PGSQL.{port}");
-        let dir_len = UNIX_SOCKET_PATH_LIMIT - suffix.len();
-        let dir = PathBuf::from("/".to_owned() + &"s".repeat(dir_len.saturating_sub(1)));
-        assert!(validate_socket_path_len(&dir, port).is_ok());
-    }
-
-    #[test]
-    fn parse_postmaster_pid_happy_path() {
-        let contents = "3810050\n/tmp/data\n1795176359\n41060\n/tmp/sock\n127.0.0.1\n  2558019     32796\nready\n";
-        let id = parse_postmaster_pid(contents).expect("parse");
-        assert_eq!(id.pid, 3810050);
-        assert_eq!(id.data_dir, PathBuf::from("/tmp/data"));
-        assert_eq!(id.start_epoch, 1795176359);
-        assert_eq!(id.port, 41060);
-        assert_eq!(id.socket_dirs, "/tmp/sock");
-        assert_eq!(id.status.as_deref(), Some("ready"));
-    }
-
-    #[test]
-    fn parse_postmaster_pid_rejects_short_file() {
-        assert!(parse_postmaster_pid("1\n2\n3\n").is_err());
-        assert!(parse_postmaster_pid("abc\n/tmp\n1\n1\n/tmp\n127.0.0.1\n").is_err());
-    }
-
-    #[test]
-    fn read_postmaster_pid_from_file() {
-        let dir = tempdir().expect("tempdir");
-        let path = dir.path().join("postmaster.pid");
-        fs::write(&path, "42\n/d\n100\n5432\n/s\n127.0.0.1\n0 0\nready\n").expect("write");
-        let id = read_postmaster_pid(dir.path()).expect("read");
-        assert_eq!(id.pid, 42);
-    }
-
-    #[test]
-    fn locale_preference_order() {
-        let mut set = HashSet::new();
-        set.insert("C".to_owned());
-        set.insert("en_US.UTF-8".to_owned());
-        assert_eq!(pick_locale(&set), "C");
-        set.insert("C.utf8".to_owned());
-        assert_eq!(pick_locale(&set), "C.utf8");
-        set.insert("C.UTF-8".to_owned());
-        assert_eq!(pick_locale(&set), "C.UTF-8");
-    }
-
-    #[test]
-    fn parse_locale_list_trims() {
-        let set = parse_locale_list("C\nC.UTF-8\nen_US.UTF-8\n");
-        assert!(set.contains("C.UTF-8"));
-        assert_eq!(set.len(), 3);
-    }
-
-    #[test]
-    fn combined_output_merges_streams() {
-        let out = combined_output(b"out\n".to_vec(), b"err\n".to_vec());
-        assert!(out.contains("out"));
-        assert!(out.contains("err"));
-    }
-
-    #[test]
-    fn write_pwfile_creates_restricted_file() {
-        let dir = tempdir().expect("tempdir");
-        let data_dir = dir.path().join("data");
-        fs::create_dir_all(&data_dir).expect("data");
-        let pw = SecretString::from("s3cret");
-        let path = write_pwfile(&data_dir, Some(&pw)).expect("pwfile");
-        let contents = fs::read_to_string(&path).expect("read");
-        assert_eq!(contents, "s3cret\n");
-        #[cfg(unix)]
-        {
-            let mode = fs::metadata(&path).expect("meta").permissions().mode() & 0o777;
-            assert_eq!(mode, 0o600);
-        }
-        let _ = fs::remove_file(path);
-    }
-
-    #[test]
-    fn init_ctx_requires_password_when_auth_is_password() {
-        let ctx = init_ctx(AuthMode::Password, None);
-        assert!(ctx.with_password());
-        assert!(ctx.password.is_none());
-    }
-
-    #[test]
-    fn spawn_command_does_not_carry_password() {
-        let ctx = RunContext {
-            instance_name: "app".into(),
-            runtime_dir: PathBuf::from("/opt/pg"),
-            data_dir: PathBuf::from("/data"),
-            logs_dir: PathBuf::from("/logs"),
-            run_dir: PathBuf::from("/run"),
-            port: Port::new(41010).expect("port"),
-            superuser: "postgres".into(),
-            auth: AuthMode::Password,
-            credential: Some(Credential::new(
-                "postgres",
-                SecretString::from("top-secret"),
-            )),
-        };
-        let cmd = PostgresAdapter.spawn_command(&ctx);
-        let args: Vec<OsString> = cmd.get_args().map(|s| s.to_os_string()).collect();
-        for a in &args {
-            assert!(!a.to_string_lossy().contains("top-secret"));
-        }
-        for (k, v) in cmd.get_envs() {
-            if let Some(v) = v {
-                assert!(!v.to_string_lossy().contains("top-secret"));
-                assert_ne!(k.to_string_lossy(), "PGPASSWORD");
-            }
-        }
-        let prog = cmd.get_program().to_string_lossy();
-        assert!(prog.ends_with("pg_ctl") || prog.ends_with("pg_ctl.exe"));
-    }
-
-    #[test]
-    fn configure_after_init_writes_managed_settings() {
-        let dir = tempdir().expect("tempdir");
-        let data = dir.path().join("data");
-        fs::create_dir_all(&data).expect("data");
-        fs::write(data.join("postgresql.conf"), "# base\n").expect("conf");
-        let ctx = InitContext {
-            instance_name: "x".into(),
-            runtime_dir: PathBuf::from("/rt"),
-            data_dir: data.clone(),
-            port: Port::new(41010).expect("port"),
-            superuser: "postgres".into(),
-            auth: AuthMode::None,
-            password: None,
-        };
-        let sock = dir.path().join("run/sock");
-        configure_after_init(&ctx, &sock).expect("configure");
-        let text = fs::read_to_string(data.join("postgresql.conf")).expect("read");
-        assert!(text.contains("listen_addresses = '127.0.0.1'"));
-        assert!(text.contains("port = 41010"));
-        assert!(text.contains("unix_socket_directories = '"));
-    }
-
-    #[test]
-    fn log_path_is_under_logs_dir() {
-        let ctx = RunContext {
-            instance_name: "app".into(),
-            runtime_dir: PathBuf::from("/rt"),
-            data_dir: PathBuf::from("/d"),
-            logs_dir: PathBuf::from("/logs"),
-            run_dir: PathBuf::from("/run"),
-            port: Port::new(41010).expect("port"),
-            superuser: "postgres".into(),
-            auth: AuthMode::None,
-            credential: None,
-        };
-        assert_eq!(log_path(&ctx), PathBuf::from("/logs/postgres.log"));
-    }
-
-    #[test]
-    fn escape_single_quotes_doubles() {
-        assert_eq!(escape_single_quotes("a'b"), "a''b");
-    }
-
-    // ---- Table-driven diagnosis: every verbatim failure text from spike ----
-
-    fn cases() -> Vec<(&'static str, StartFailure)> {
-        vec![
-            // Port in use (spike 11.1)
-            (
-                "LOG:  could not bind IPv4 address \"127.0.0.1\": Address already in use\nHINT:  Is another postmaster already running on port 41100? If not, wait a few seconds and retry.\nWARNING:  could not create listen socket for \"127.0.0.1\"\nFATAL:  could not create any TCP/IP sockets\nLOG:  database system is shut down\n",
-                StartFailure::PortInUse,
-            ),
-            (
-                "HINT:  Is another postmaster already running on port 41100? If not, wait a few seconds and retry.",
-                StartFailure::PortInUse,
-            ),
-            // Wrong-major data dir (spike 11.2)
-            (
-                "FATAL:  database files are incompatible with server\nDETAIL:  The data directory was initialized by PostgreSQL version 17, which is not compatible with this version 18.7.\n",
-                StartFailure::DataDirVersionMismatch,
-            ),
-            // Permission denied (spike 11.3)
-            (
-                "pg_ctl: could not open PID file \"/tmp/d/postmaster.pid\": Permission denied",
-                StartFailure::PermissionDenied,
-            ),
-            (
-                "FATAL:  could not create lock file \"postmaster.pid\": Permission denied",
-                StartFailure::PermissionDenied,
-            ),
-            // Socket dir missing (spike 11.5) - path problem, recognized
-            (
-                "FATAL:  could not create lock file \"/tmp/s5/.s.PGSQL.41130.lock\": No such file or directory",
-                StartFailure::PermissionDenied,
-            ),
-            // Socket path too long (spike 11.5)
-            (
-                "LOG:  Unix-domain socket path \"/tmp/very/long/.s.PGSQL.41000\" is too long (maximum 107 bytes)\nFATAL:  could not create any Unix-domain sockets\n",
-                StartFailure::PermissionDenied,
-            ),
-            // Missing/corrupt binary contexts (spike 11.4)
-            (
-                "pg_ctl: directory \"/tmp/nodir\" does not exist",
-                StartFailure::BinaryMissing,
-            ),
-            (
-                "/bin/sh: line 1: /tmp/missing: No such file or directory",
-                StartFailure::BinaryMissing,
-            ),
-            (
-                "bash: ./postgres: Exec format error",
-                StartFailure::BinaryMissing,
-            ),
-        ]
-    }
-
-    #[test]
-    fn diagnose_spike_verbatim_texts() {
-        for (text, expected) in cases() {
-            assert_eq!(diagnose_failure_text(text), expected, "text: {text:?}");
-        }
-    }
-
-    #[test]
-    fn diagnose_unknown_for_unrelated_text() {
-        assert_eq!(
-            diagnose_failure_text("something completely different\n"),
-            StartFailure::Unknown
-        );
-    }
-}
+mod tests;

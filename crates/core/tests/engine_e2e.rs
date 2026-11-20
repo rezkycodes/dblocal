@@ -98,6 +98,19 @@ fn wait_tcp_gone(port: u16, timeout: Duration) -> bool {
     false
 }
 
+/// Fails loudly when a port is already bound, so a stale engine from an earlier
+/// run is never mistaken for a product bug.
+fn require_port_free(port: u16) {
+    if TcpStream::connect_timeout(
+        &format!("127.0.0.1:{port}").parse().unwrap(),
+        Duration::from_millis(150),
+    )
+    .is_ok()
+    {
+        panic!("port {port} is already in use before the test started");
+    }
+}
+
 fn wait_pid_gone(pid: u32, timeout: Duration) -> bool {
     let deadline = Instant::now() + timeout;
     while Instant::now() < deadline {
@@ -338,6 +351,8 @@ fn postgres_18_17_side_by_side_full_cycle() {
     let pw17 = "e2e-pw-17-secret";
     let port18 = 41200u16;
     let port17 = 41201u16;
+    require_port_free(port18);
+    require_port_free(port17);
 
     PostgresAdapter
         .initialize(&pg_init_ctx(
@@ -520,6 +535,8 @@ fn valkey_jammy_and_noble_full_cycle() {
     let tmp = tempfile::tempdir().expect("tempdir");
     extract_tar_gz(&ja, tmp.path());
     extract_tar_gz(&na, tmp.path());
+    require_port_free(41210);
+    require_port_free(41211);
 
     for (variant, port) in [("jammy", 41210u16), ("noble", 41211u16)] {
         let rt = vk_runtime(tmp.path(), "9.2.0", variant);
@@ -582,6 +599,127 @@ fn valkey_jammy_and_noble_full_cycle() {
         assert!(wait_tcp_gone(port, Duration::from_secs(10)));
         eprintln!("valkey {variant} e2e OK");
     }
+}
+
+#[test]
+#[ignore = "e2e: requires cached engine binaries; run with DBLOCAL_E2E=1 cargo test -p dblocal-core --test engine_e2e -- --ignored --nocapture"]
+fn postgres_long_path_disables_unix_socket_and_stays_tcp_only() {
+    require_e2e();
+    let cache = cache_dir();
+    let archive = cache.join(PG18_ARCHIVE);
+    assert!(archive.is_file(), "missing {}", archive.display());
+
+    let tmp = tempfile::tempdir().expect("tempdir");
+    extract_tar_gz(&archive, tmp.path());
+    let runtime = pg_runtime(tmp.path(), "18.7.0");
+
+    // Build a deliberately deep instance path so that the full
+    // <run>/sock/.s.PGSQL.<port> path exceeds the kernel's 107-byte limit.
+    let deep = tmp
+        .path()
+        .join("d".repeat(30))
+        .join("e".repeat(30))
+        .join("f".repeat(40));
+    fs::create_dir_all(&deep).expect("deep base");
+    let inst = deep.join("pglong");
+    let data = inst.join("data");
+    let logs = inst.join("logs");
+    let run = inst.join("run");
+    fs::create_dir_all(&logs).expect("logs");
+    fs::create_dir_all(&run).expect("run");
+
+    let socket_path = run.join("sock").join(".s.PGSQL.41203");
+    assert!(
+        socket_path.as_os_str().len() > 107,
+        "fixture must exceed 107 bytes, got {} ({})",
+        socket_path.as_os_str().len(),
+        socket_path.display()
+    );
+
+    let port = 41203u16;
+    require_port_free(port);
+    let password = "e2e-long-path-secret";
+    PostgresAdapter
+        .initialize(&pg_init_ctx(
+            &runtime,
+            &data,
+            port,
+            AuthMode::Password,
+            Some(password),
+        ))
+        .expect("init under a long path must not fail");
+
+    let conf = fs::read_to_string(data.join("postgresql.conf")).expect("conf");
+    assert!(
+        conf.contains("unix_socket_directories = ''"),
+        "expected unix sockets disabled in postgresql.conf:\n{conf}"
+    );
+    assert!(
+        conf.contains("listen_addresses = '127.0.0.1'"),
+        "TCP loopback must still be configured"
+    );
+
+    pg_start(&runtime, &data, &logs, &run, port);
+    assert!(
+        wait_tcp(port, Duration::from_secs(15)),
+        "postgres (long path) did not listen; log:\n{}",
+        read_log_tail(&logs.join("postgres.log"), 80)
+    );
+
+    // select 1 over TCP proves the server is healthy without any unix socket.
+    let health = PostgresAdapter
+        .health_check(&pg_run_ctx(
+            &runtime,
+            &data,
+            &logs,
+            &run,
+            port,
+            AuthMode::Password,
+            Some(password),
+        ))
+        .expect("health over TCP");
+    assert!(matches!(health, dblocal_core::engine::Health::Ready));
+    let version = pg_version(&runtime, port, password);
+    assert!(version.contains("18.7"), "unexpected version: {version}");
+    eprintln!("long-path postgres version over TCP: {version}");
+
+    assert!(
+        !socket_path.exists(),
+        "a unix socket file must not exist when sockets are disabled: {}",
+        socket_path.display()
+    );
+    assert!(
+        !run.join("sock").exists(),
+        "the socket directory should not even be created"
+    );
+
+    let pid = read_postmaster_pid(&data).expect("pidfile").pid;
+    pg_stop(&runtime, &data, &logs, &run, port, password);
+    assert!(
+        wait_tcp_gone(port, Duration::from_secs(20)),
+        "long-path postgres still listening"
+    );
+    assert!(wait_pid_gone(pid, Duration::from_secs(20)), "pid alive");
+
+    // Restart works TCP-only too.
+    pg_start(&runtime, &data, &logs, &run, port);
+    assert!(wait_tcp(port, Duration::from_secs(15)), "did not restart");
+    let health = PostgresAdapter
+        .health_check(&pg_run_ctx(
+            &runtime,
+            &data,
+            &logs,
+            &run,
+            port,
+            AuthMode::Password,
+            Some(password),
+        ))
+        .expect("health after restart");
+    assert!(matches!(health, dblocal_core::engine::Health::Ready));
+    assert!(!socket_path.exists(), "no unix socket after restart");
+    pg_stop(&runtime, &data, &logs, &run, port, password);
+    assert!(wait_tcp_gone(port, Duration::from_secs(20)));
+    eprintln!("postgres long-path TCP-only e2e OK");
 }
 
 #[test]

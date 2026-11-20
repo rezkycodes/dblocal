@@ -46,9 +46,23 @@ Spike refs: README C-06..C-09, `docs/spikes/engines/postgres.md`.
     raw `initdb` output is returned in the engine error.
   - Post-init `postgresql.conf` appends: `listen_addresses = '127.0.0.1'`,
     `port = <port>`, `unix_socket_directories = '<run_dir>/sock'`.
-  - The unix socket directory `<run_dir>/sock` is created `0700` and the full
-    path `<dir>/.s.PGSQL.<port>` is validated to be <= 107 bytes at init time
-    (C-09). `validate_socket_path_len` is also available to callers at start time.
+  - **Unix socket is optional (C-09).** DBLocal only ever connects over TCP
+    `127.0.0.1`, so the unix socket exists only as a convenience. `choose_socket_dir`
+    is the single gate: if the full `<run_dir>/sock/.s.PGSQL.<port>` path is within
+    the kernel's 107-byte `sun_path` limit it returns `SocketDir::Enabled(dir)` and
+    the directory is created `0700`; otherwise it returns `SocketDir::Disabled`,
+    logs which path was taken (no secrets), and continues TCP-only. An over-long
+    home path therefore never fails instance creation:
+
+    | Path length | `unix_socket_directories` | Behaviour |
+    |---|---|---|
+    | `<= 107` bytes | `'<run_dir>/sock'` | unix socket created, dir `0700` |
+    | `> 107` bytes | `''` (empty) | unix sockets disabled, TCP loopback only |
+
+    Both post-init and start (`prepare_run`) apply the same rule, so a create under
+    a short path and a later start under a longer one stay consistent with each
+    other. `validate_socket_path_len` remains the pure length check the chooser
+    uses.
 
 - **Start command:** `bin/pg_ctl -D <data_dir> -l <logs_dir>/postgres.log -w
   -t <START_TIMEOUT_SECS> start`. `spawn_command` returns this command; it never
@@ -79,17 +93,21 @@ Spike refs: README C-06..C-09, `docs/spikes/engines/postgres.md`.
     - `DB_USERNAME=<superuser>`
     - `DB_PASSWORD=<password>`
 
-- **Diagnosis mapping (substring markers):**
+- **Diagnosis mapping (substring markers):** every case without an honest
+  variant maps to `StartFailure::Unknown` so the GUI shows the raw log lines
+  instead of a misleading fix.
   - `StartFailure::PortInUse`: `could not bind IPv4 address`,
-    `Is another postmaster already running on port`,
-    `could not create any TCP/IP sockets` with `Address already in use`.
+    `Is another postmaster already running on port`, `could not create any TCP/IP sockets`
+    with `Address already in use`.
   - `StartFailure::DataDirVersionMismatch`: `database files are incompatible with server`,
     `initialized by PostgreSQL version`.
-  - `StartFailure::PermissionDenied`: `Permission denied`, unix socket path too
-    long / missing `.s.PGSQL.*` lock file (`No such file or directory`).
-  - `StartFailure::BinaryMissing`: `pg_ctl: directory "..." does not exist`,
-    exec `No such file or directory`, `Exec format error`.
-  - `StartFailure::Unknown`: anything else (raw tail kept by caller).
+  - `StartFailure::PermissionDenied`: `Permission denied` only.
+  - `StartFailure::BinaryMissing`: exec `Exec format error`, shell exec
+    `No such file or directory` that is not a socket lock-file error.
+  - `StartFailure::Unknown`: unix socket path too long, a missing
+    `.s.PGSQL.*` lock file, `pg_ctl: directory "..." does not exist` (a missing
+    data directory is not a missing binary), and anything unrecognized. The raw
+    tail is kept by the caller.
 
 ## Valkey (`engine::valkey`)
 
@@ -135,15 +153,17 @@ Spike refs: README C-03, C-10..C-12, `docs/spikes/engines/valkey.md`.
     - `REDIS_PASSWORD=<password>`
 
 - **Diagnosis mapping (substring markers):** Valkey writes some fatal causes
-  only to `logfile` (C-10), so callers must pass the log tail.
-  - `StartFailure::PortInUse`: `Address already in use`,
-    `Failed listening on port`, `Could not create server TCP listening socket`.
-  - `StartFailure::PermissionDenied`: `Can't open or create append-only dir`,
-    `Permission denied`, `FATAL CONFIG FILE ERROR` with `No such file or directory`
-    (e.g. missing `dir`), other `No such file or directory`.
-  - `StartFailure::Unknown`: other `FATAL CONFIG FILE ERROR` cases (bad directive,
-    wrong value type, port out of range) and anything unrecognized. The raw tail
-    is preserved by the caller.
+  only to `logfile` (C-10), so callers must pass the log tail. Cases with no
+  honest variant map to `StartFailure::Unknown` and keep the raw tail.
+  - `StartFailure::PortInUse`: `Address already in use` (spike 6.1) only.
+  - `StartFailure::PermissionDenied`: `Permission denied` / `permission denied`,
+    including `Can't open or create append-only dir ...: Permission denied` (6.7).
+  - `StartFailure::Unknown`: a generic bind failure such as
+    `Could not create server TCP listening socket ...: Cannot assign requested address`
+    plus `Failed listening on port ... aborting` (6.5, not a clash); every
+    `FATAL CONFIG FILE ERROR` case (bad directive, wrong value type, port out of
+    range, missing `dir`); `Can't open or create append-only dir ...: Not a directory`;
+    and anything unrecognized.
 
 ## Host glibc detection (`engine::glibc`, C-03)
 
@@ -166,17 +186,20 @@ Valkey Linux binaries are not self-contained. `jammy` requires `GLIBC_2.34`,
   `AuthenticationFailed` as `Health::Ready`. A connect-time credential rejection
   during `shutdown` (not health) is reported as an engine error, because the
   command could not be issued.
-- **Valkey diagnosis (unavailable listen address):** a bind failure caused by
-  `Cannot assign requested address` shares the `Failed listening on port` /
-  socket-creation markers and is classified as `StartFailure::PortInUse`
-  (cannot listen on the requested endpoint). The raw tail distinguishes the
-  reason.
-- **Socket-dir / long-path diagnosis:** the spike records these as
-  "socket-dir/configuration issue" (README 3.1/3.3). `StartFailure` has no
-  dedicated socket-dir variant, so recognized socket-dir problems (too-long unix
-  socket path, missing `.s.PGSQL.*` lock/dir) are classified as
-  `PermissionDenied` rather than `Unknown`, keeping them actionable. The raw
-  log tail carries the precise cause.
+- **Honest diagnosis (review round 1, F1):** every recognized cause with no
+  matching `StartFailure` variant now maps to `Unknown` and the raw tail stays
+  with the caller, so the GUI shows the log lines instead of a wrong fix.
+  Specifically, PostgreSQL unix-socket-path-too-long, a missing `.s.PGSQL.*`
+  lock file, and `pg_ctl: directory "..." does not exist`; and Valkey generic
+  bind failures (`Cannot assign requested address`), missing-`dir`
+  config errors, and append-only `Not a directory`. `PortInUse` is reserved for
+  real address-in-use text; `PermissionDenied` for real `Permission denied`.
+- **Long home path (review round 1, F2):** PostgreSQL no longer fails creation
+  when `<run>/sock/.s.PGSQL.<port>` exceeds 107 bytes. `choose_socket_dir`
+  disables the unix socket instead and the server runs TCP-only. The
+  `postgres_long_path_disables_unix_socket_and_stays_tcp_only` e2e test proves it
+  with the real 18.7 binary: `pg_ctl start -w` returns, `select 1` works over
+  TCP, no socket file exists, and stop/restart succeed.
 - **PostgreSQL `initdb` locale:** `select_locale()` consults `locale -a` on the
   host; if unavailable it falls back to the preference chain which resolves to
   `C`, matching the spike's "fallback `C.utf8`, then `C`" intent. The runtime's

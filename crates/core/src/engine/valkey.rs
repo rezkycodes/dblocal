@@ -345,34 +345,23 @@ fn classify_redis_connect(err: &redis::RedisError) -> DblError {
 pub fn diagnose_failure_text(output: &str) -> StartFailure {
     let lower = output.to_ascii_lowercase();
 
-    if output.contains("Address already in use")
-        || output.contains("Failed listening on port")
-        || lower.contains("could not create server tcp listening socket")
-    {
+    // Port genuinely occupied (spike 6.1). A generic bind failure such as
+    // "Cannot assign requested address" or a bare "Failed listening" has no
+    // honest variant, so it falls through to Unknown with the raw tail.
+    if output.contains("Address already in use") {
         return StartFailure::PortInUse;
     }
 
-    if output.contains("Can't open or create append-only dir") {
-        return StartFailure::PermissionDenied;
-    }
-
+    // Only a real "permission denied" (including the append-only directory
+    // case, spike 6.7) is an honest PermissionDenied. A missing directory
+    // ("No such file or directory") or an append-only path that is "Not a
+    // directory" has no honest variant, so it stays Unknown with the raw tail.
     if output.contains("Permission denied") || lower.contains("permission denied") {
         return StartFailure::PermissionDenied;
     }
 
-    // Bad configuration: unknown directive, wrong value type, directory does
-    // not exist. There is no dedicated variant, so the actionable "fix the
-    // config/dir" case maps to the path/permission family when a path is
-    // involved and to Unknown otherwise; the raw tail stays in the log.
-    if output.contains("FATAL CONFIG FILE ERROR") {
-        if output.contains("No such file or directory") {
-            return StartFailure::PermissionDenied;
-        }
+    if output.contains("Can't open or create append-only dir") {
         return StartFailure::Unknown;
-    }
-
-    if output.contains("No such file or directory") {
-        return StartFailure::PermissionDenied;
     }
 
     StartFailure::Unknown
@@ -554,11 +543,11 @@ mod tests {
                 "<M>:M 20 Nov 2026 20:17:08.351 # Warning: Could not create server TCP listening socket 127.0.0.1:41501: bind: Address already in use\n<M>:M 20 Nov 2026 20:17:08.351 # Failed listening on port 41501 (tcp), aborting.\n",
                 StartFailure::PortInUse,
             ),
-            // 6.5 bind to unavailable address (listening failure, not a clash:
-            // still the same "cannot listen" family)
+            // 6.5 bind to unavailable address: not "port in use", so no honest
+            // variant; Unknown keeps the raw tail.
             (
                 "<M>:M ... # Warning: Could not create server TCP listening socket 10.255.255.1:41502: bind: Cannot assign requested address\n<M>:M ... # Failed listening on port 41502 (tcp), aborting.\n",
-                StartFailure::PortInUse,
+                StartFailure::Unknown,
             ),
             // 6.2 bad config: unknown directive
             (
@@ -575,19 +564,20 @@ mod tests {
                 "*** FATAL CONFIG FILE ERROR (Version 9.2.0) ***\nReading the configuration file, at line 3\n>>> 'port 99999'\nargument must be between 0 and 65535 inclusive\n",
                 StartFailure::Unknown,
             ),
-            // 6.6 missing data directory
+            // 6.6 missing data directory: not a permission problem; Unknown.
             (
                 "*** FATAL CONFIG FILE ERROR (Version 9.2.0) ***\nReading the configuration file, at line 7\n>>> 'dir /tmp/work/does-not-exist'\nNo such file or directory\n",
-                StartFailure::PermissionDenied,
+                StartFailure::Unknown,
             ),
-            // 6.7 append-only dir unusable (log-only cause)
+            // 6.7 append-only dir: Permission denied is honest; "Not a
+            // directory" is not, so it stays Unknown.
             (
                 "<M>:M ... * Server initialized\n<M>:M ... # Can't open or create append-only dir appendonlydir: Permission denied\n",
                 StartFailure::PermissionDenied,
             ),
             (
                 "<M>:M ... * Server initialized\n<M>:M ... # Can't open or create append-only dir appendonlydir: Not a directory\n",
-                StartFailure::PermissionDenied,
+                StartFailure::Unknown,
             ),
         ]
     }
