@@ -451,17 +451,30 @@ impl Workspace {
                 form.auth,
             )
         });
-        match spec {
-            Ok(spec) => match self.service.create_instance(spec) {
-                Ok(op) => {
-                    self.downloads.push(ActiveDownload {
-                        operation: op,
-                        title: format!("{} {}", form.engine.display_name(), form.version),
-                        progress: DownloadProgress::new(0, 1, 0, None),
-                    });
-                }
-                Err(err) => self.report_error(&err),
-            },
+        let spec = match spec {
+            Ok(spec) => spec,
+            Err(err) => {
+                self.report_error(&err);
+                cx.notify();
+                return;
+            }
+        };
+        // The service is the authority the CLI also goes through, so the form
+        // cannot submit anything `dblocal create` would reject.
+        if let Err(err) = self.service.validate_spec(&spec) {
+            self.create = Some(form);
+            self.report_error(&err);
+            cx.notify();
+            return;
+        }
+        match self.service.create_instance(spec) {
+            Ok(op) => {
+                self.downloads.push(ActiveDownload {
+                    operation: op,
+                    title: format!("{} {}", form.engine.display_name(), form.version),
+                    progress: DownloadProgress::new(0, 1, 0, None),
+                });
+            }
             Err(err) => self.report_error(&err),
         }
         cx.notify();
@@ -687,6 +700,38 @@ impl Workspace {
             }
             _ => None,
         };
+    }
+
+    /// Next free port for an instance's engine, falling back to its port + 1.
+    pub(crate) fn instance_port_proposal(&self, id: &InstanceId) -> u16 {
+        let engine = self.instance(id).map(|view| view.engine);
+        engine
+            .and_then(|engine| self.service.suggest_port(engine).ok())
+            .map(|port| port.get())
+            .or_else(|| {
+                self.instance(id)
+                    .map(|view| view.port.get().saturating_add(1))
+            })
+            .unwrap_or(0)
+    }
+
+    /// Moves an instance to another port and clears its failure (`F-PRT-02` AC2).
+    pub(crate) fn move_to_port(&mut self, id: &InstanceId, port: u16, cx: &mut Context<Self>) {
+        let Some(port) = Port::new(port).ok() else {
+            self.toast = Some(SharedString::from(strings::UI_VALIDATE_PORT_LOW));
+            cx.notify();
+            return;
+        };
+        match self.service.change_port(id, port) {
+            Ok(()) => {
+                self.refresh_instances();
+                if let Some(err) = self.service.start_instance(id).err() {
+                    self.report_error(&err);
+                }
+            }
+            Err(err) => self.report_error(&err),
+        }
+        cx.notify();
     }
 
     pub(crate) fn is_revealed(&self, id: &InstanceId) -> bool {

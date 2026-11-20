@@ -368,7 +368,7 @@ impl Workspace {
         );
 
         if let Some(failure) = &view.failure {
-            sections = sections.child(render_failure(failure, cx));
+            sections = sections.child(render_failure(failure, view, cx));
         }
 
         sections = sections.child(
@@ -588,8 +588,34 @@ fn info_row(label: &str, value: String, muted: Hsla) -> impl IntoElement {
         .child(div().text_sm().flex_1().min_w_0().child(value))
 }
 
-fn render_failure(failure: &FailureInfo, cx: &mut Context<Workspace>) -> impl IntoElement {
-    let theme = cx.theme();
+fn render_failure(
+    failure: &FailureInfo,
+    view: &InstanceView,
+    cx: &mut Context<Workspace>,
+) -> impl IntoElement {
+    let theme = cx.theme().clone();
+    let id_port = view.id.clone();
+    // F-LOG-02 AC1: a known cause becomes an action. Port in use offers the
+    // one-click "move to <port>" that `F-PRT-02` AC1 requires.
+    let port_action = if failure.diagnosis == dblocal_core::model::StartFailure::PortInUse {
+        Some(
+            Button::new(SharedString::from(format!("move-port-{}", view.id)))
+                .label(format!(
+                    "{} {}",
+                    strings::UI_CHANGE_PORT,
+                    view.port.get() + 1
+                ))
+                .small()
+                .compact()
+                .primary()
+                .on_click(cx.listener(move |this, _, _window, cx| {
+                    let next = this.instance_port_proposal(&id_port);
+                    this.move_to_port(&id_port, next, cx);
+                })),
+        )
+    } else {
+        None
+    };
     let mut column = v_flex().gap_1();
     for line in &failure.log_tail {
         column = column.child(
@@ -628,6 +654,9 @@ fn render_failure(failure: &FailureInfo, cx: &mut Context<Workspace>) -> impl In
             strings::UI_FAILURE_DIAGNOSIS,
             failure.diagnosis.as_str()
         )))
+        .when_some(port_action, |this, action| {
+            this.child(h_flex().gap_2().child(action))
+        })
         .child(div().text_xs().child(strings::UI_FAILURE_LOG_TAIL))
         .child(column)
 }
