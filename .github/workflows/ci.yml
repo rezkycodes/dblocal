@@ -1,0 +1,73 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # The task brief asked for ubuntu-24.04, ubuntu-24.04-arm, macos-14, an
+        # Intel macOS runner and windows-latest. macos-14 was fully retired on
+        # 2026-11-02 (actions/runner-images#13518, verified 2026-11-20), so the
+        # macOS entries below use the currently available labels:
+        # macos-15 (arm64) and macos-15-intel (x86_64).
+        # See docs/release/RELEASING.md "Runner label notes".
+        os:
+          - ubuntu-24.04
+          - ubuntu-24.04-arm
+          - macos-15
+          - macos-15-intel
+          - windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # refs/heads/stable
+        with:
+          toolchain: stable
+          components: clippy, rustfmt
+
+      - name: Install Linux GPUI build dependencies
+        if: runner.os == 'Linux'
+        shell: bash
+        # Dependency list comes from Zed's script/linux at commit a19e1944
+        # (see scripts/install-linux-deps.sh header for the exact reference).
+        run: bash scripts/install-linux-deps.sh
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+
+      - name: Run workspace CI task
+        run: cargo xtask ci
+
+      - name: Install cargo-deny and cargo-audit
+        uses: taiki-e/install-action@75a7c0f87bd666af3cdb75c5b9e9d03ab6044e6f # v2.90.6
+        with:
+          tool: cargo-deny,cargo-audit
+
+      - name: cargo deny
+        # -A license-not-encountered: the allowlist is a policy set for the full
+        # DBLocal dependency graph; not every licence appears in every resolved
+        # graph (and no workspace/Cargo.lock exists yet in Wave 0).
+        run: cargo deny check -A license-not-encountered licenses bans sources advisories
+
+      - name: cargo audit
+        run: cargo audit --deny warnings

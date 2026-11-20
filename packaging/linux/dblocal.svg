@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- DBLocal icon: original artwork, GPL-3.0-only like the rest of the project.
+     A terminal-free "local server" glyph: a stacked-disk database cylinder on a
+     rounded desktop tile, with a small status dot for the running instance. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128" role="img" aria-label="DBLocal">
+  <title>DBLocal</title>
+  <defs>
+    <linearGradient id="tile" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#2f3b52"/>
+      <stop offset="1" stop-color="#1d2534"/>
+    </linearGradient>
+    <linearGradient id="disk" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#7fd4c1"/>
+      <stop offset="1" stop-color="#3fae98"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Application tile -->
+  <rect x="4" y="4" width="120" height="120" rx="26" ry="26" fill="url(#tile)"/>
+  <rect x="4" y="4" width="120" height="120" rx="26" ry="26" fill="none" stroke="#0e1219" stroke-opacity="0.55" stroke-width="2"/>
+
+  <!-- Database cylinder: three stacked plates -->
+  <g>
+    <ellipse cx="64" cy="44" rx="30" ry="11" fill="#9fe8da"/>
+    <path d="M34 44v10c0 6 13.4 11 30 11s30-5 30-11V44c0 6-13.4 11-30 11S34 50 34 44z" fill="url(#disk)"/>
+    <ellipse cx="64" cy="62" rx="30" ry="11" fill="#9fe8da"/>
+    <path d="M34 62v10c0 6 13.4 11 30 11s30-5 30-11V62c0 6-13.4 11-30 11S34 68 34 62z" fill="url(#disk)"/>
+    <ellipse cx="64" cy="80" rx="30" ry="11" fill="#9fe8da"/>
+    <path d="M34 80v10c0 6 13.4 11 30 11s30-5 30-11V80c0 6-13.4 11-30 11S34 86 34 80z" fill="url(#disk)"/>
+  </g>
+
+  <!-- "Local" marker: a small filled circle at the bottom right, not colour-only
+       information because the window and tray always pair it with a text label. -->
+  <circle cx="93" cy="93" r="11" fill="#2f3b52" stroke="#9fe8da" stroke-width="2"/>
+  <circle cx="93" cy="93" r="5" fill="#7ee787"/>
+</svg>

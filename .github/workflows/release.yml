@@ -1,0 +1,397 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build-linux:
+    name: build (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            target: linux-x86_64
+            rust_target: x86_64-unknown-linux-gnu
+          - os: ubuntu-24.04-arm
+            target: linux-aarch64
+            rust_target: aarch64-unknown-linux-gnu
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # refs/heads/stable
+        with:
+          toolchain: stable
+          targets: ${{ matrix.rust_target }}
+
+      - name: Install Linux GPUI build dependencies
+        shell: bash
+        # Dependency list comes from Zed's script/linux at commit a19e1944
+        # (see scripts/install-linux-deps.sh header for the exact reference).
+        run: bash scripts/install-linux-deps.sh
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+
+      - name: Build release binary
+        shell: bash
+        run: cargo build --release -p dblocal-cli --target ${{ matrix.rust_target }}
+
+      - name: Package .tar.gz and .AppImage
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+          RUST_TARGET: ${{ matrix.rust_target }}
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME}"
+          bin="target/${RUST_TARGET}/release/dblocal"
+          test -x "$bin" || { echo "Expected binary not found: $bin" >&2; exit 1; }
+
+          out="dist/${TARGET}"
+          mkdir -p "$out/stage"
+          cp "$bin" "$out/stage/dblocal"
+          chmod +x "$out/stage/dblocal"
+
+          tarball="dblocal-${version}-${TARGET}.tar.gz"
+          tar -C "$out/stage" -czf "$out/${tarball}" dblocal
+
+          appimage="dblocal-${version}-${TARGET}.AppImage"
+          bash packaging/appimage/build-appimage.sh "$bin" "$out/${appimage}"
+
+          rm -rf "$out/stage"
+          ls -lh "$out"
+
+      - name: Upload Linux artifacts
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: dist-${{ matrix.target }}
+          path: dist/${{ matrix.target }}/*
+          if-no-files-found: error
+
+  build-macos-arch:
+    name: build (macos-${{ matrix.arch }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-15
+            arch: aarch64
+            rust_target: aarch64-apple-darwin
+          # Intel macOS runner requested as "macos-14 or an Intel macOS runner";
+          # macos-14 is retired (actions/runner-images#13518, verified 2026-11-20).
+          - os: macos-15-intel
+            arch: x86_64
+            rust_target: x86_64-apple-darwin
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # refs/heads/stable
+        with:
+          toolchain: stable
+          targets: ${{ matrix.rust_target }}
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+
+      - name: Build release binary
+        shell: bash
+        run: cargo build --release -p dblocal-cli --target ${{ matrix.rust_target }}
+
+      - name: Stage binary
+        shell: bash
+        env:
+          RUST_TARGET: ${{ matrix.rust_target }}
+          ARCH: ${{ matrix.arch }}
+        run: |
+          set -euo pipefail
+          bin="target/${RUST_TARGET}/release/dblocal"
+          test -x "$bin" || { echo "Expected binary not found: $bin" >&2; exit 1; }
+          mkdir -p dist/arch
+          cp "$bin" "dist/arch/dblocal-${ARCH}"
+
+      - name: Upload arch binary
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: macos-bin-${{ matrix.arch }}
+          path: dist/arch/dblocal-${{ matrix.arch }}
+          if-no-files-found: error
+
+  build-macos-universal:
+    name: build (macos-universal dmg)
+    runs-on: macos-15
+    needs: build-macos-arch
+    env:
+      APPLE_CERTIFICATE_P12_BASE64: ${{ secrets.APPLE_CERTIFICATE_P12_BASE64 }}
+      APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+      APPLE_NOTARIZE_KEY_ID: ${{ secrets.APPLE_NOTARIZE_KEY_ID }}
+      APPLE_NOTARIZE_ISSUER_ID: ${{ secrets.APPLE_NOTARIZE_ISSUER_ID }}
+      APPLE_NOTARIZE_KEY_P8_BASE64: ${{ secrets.APPLE_NOTARIZE_KEY_P8_BASE64 }}
+      APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Download aarch64 binary
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: macos-bin-aarch64
+          path: dist/arch
+
+      - name: Download x86_64 binary
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: macos-bin-x86_64
+          path: dist/arch
+
+      - name: Create universal binary, .tar.gz and .dmg
+        id: dmg
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME}"
+          mkdir -p dist/macos-universal
+
+          lipo -create \
+            dist/arch/dblocal-aarch64 \
+            dist/arch/dblocal-x86_64 \
+            -output dist/macos-universal/dblocal
+          chmod +x dist/macos-universal/dblocal
+          lipo -info dist/macos-universal/dblocal
+
+          # Portable tarball for curl-based installs (used by packaging/install.sh).
+          tarball="dist/macos-universal/dblocal-${version}-macos-universal.tar.gz"
+          tar -C dist/macos-universal -czf "$tarball" dblocal
+
+          # Minimal .app bundle so the .dmg is mountable and usable. Icon and
+          # full bundle metadata are refined once the GUI crate exists.
+          app="dist/macos-universal/DBLocal.app"
+          mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
+          cp dist/macos-universal/dblocal "$app/Contents/MacOS/dblocal"
+          cp packaging/linux/dblocal.svg "$app/Contents/Resources/dblocal.svg"
+          cat > "$app/Contents/Info.plist" <<'PLIST'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>CFBundleName</key><string>DBLocal</string>
+            <key>CFBundleDisplayName</key><string>DBLocal</string>
+            <key>CFBundleIdentifier</key><string>dev.dblocal.app</string>
+            <key>CFBundleExecutable</key><string>dblocal</string>
+            <key>CFBundlePackageType</key><string>APPL</string>
+            <key>CFBundleVersion</key><string>0.1.0</string>
+            <key>CFBundleShortVersionString</key><string>0.1.0</string>
+            <key>LSMinimumSystemVersion</key><string>13.0</string>
+          </dict>
+          </plist>
+          PLIST
+
+          dmg="dist/macos-universal/dblocal-${version}-macos-universal.dmg"
+          hdiutil create -volname "DBLocal" -srcfolder "$app" -ov -format UDZO "$dmg"
+          echo "dmg=${dmg}" >> "$GITHUB_OUTPUT"
+          echo "app=${app}" >> "$GITHUB_OUTPUT"
+
+      - name: Sign and notarize .app/.dmg (if Apple secrets present)
+        shell: bash
+        env:
+          DMG_PATH: ${{ steps.dmg.outputs.dmg }}
+          APP_PATH: ${{ steps.dmg.outputs.app }}
+        run: |
+          set -euo pipefail
+          have_signing=true
+          for v in APPLE_CERTIFICATE_P12_BASE64 APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY; do
+            if [ -z "${!v:-}" ]; then have_signing=false; fi
+          done
+          have_notary=true
+          for v in APPLE_NOTARIZE_KEY_ID APPLE_NOTARIZE_ISSUER_ID APPLE_NOTARIZE_KEY_P8_BASE64 APPLE_TEAM_ID; do
+            if [ -z "${!v:-}" ]; then have_notary=false; fi
+          done
+
+          if [ "$have_signing" != "true" ] || [ "$have_notary" != "true" ]; then
+            echo "::warning title=Unsigned macOS artifact::Apple Developer ID signing/notarization secrets are absent. Producing an UNSIGNED .dmg (D-20). Set APPLE_CERTIFICATE_P12_BASE64, APPLE_CERTIFICATE_PASSWORD, APPLE_SIGNING_IDENTITY, APPLE_NOTARIZE_KEY_ID, APPLE_NOTARIZE_ISSUER_ID, APPLE_NOTARIZE_KEY_P8_BASE64 and APPLE_TEAM_ID to enable signing."
+            echo "UNSIGNED_DMG=1" >> "$GITHUB_ENV"
+            exit 0
+          fi
+
+          keychain="$RUNNER_TEMP/build.keychain-db"
+          keychain_pass="$(openssl rand -hex 24)"
+          security create-keychain -p "$keychain_pass" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$keychain_pass" "$keychain"
+
+          cert_p12="$RUNNER_TEMP/cert.p12"
+          echo "$APPLE_CERTIFICATE_P12_BASE64" | base64 --decode > "$cert_p12"
+          security import "$cert_p12" -k "$keychain" -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign -T /usr/bin/security
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$keychain_pass" "$keychain"
+          security list-keychains -d user -s "$keychain" login.keychain-db
+
+          codesign --force --options runtime --timestamp --sign "$APPLE_SIGNING_IDENTITY" "$APP_PATH/Contents/MacOS/dblocal"
+          codesign --force --options runtime --timestamp --sign "$APPLE_SIGNING_IDENTITY" "$APP_PATH"
+          codesign --verify --deep --strict --verbose=2 "$APP_PATH"
+
+          key_p8="$RUNNER_TEMP/AuthKey.p8"
+          echo "$APPLE_NOTARIZE_KEY_P8_BASE64" | base64 --decode > "$key_p8"
+          # Recreate DMG from the signed app bundle.
+          rm -f "$DMG_PATH"
+          hdiutil create -volname "DBLocal" -srcfolder "$APP_PATH" -ov -format UDZO "$DMG_PATH"
+          codesign --force --timestamp --sign "$APPLE_SIGNING_IDENTITY" "$DMG_PATH"
+
+          xcrun notarytool submit "$DMG_PATH" \
+            --key "$key_p8" \
+            --key-id "$APPLE_NOTARIZE_KEY_ID" \
+            --issuer "$APPLE_NOTARIZE_ISSUER_ID" \
+            --team-id "$APPLE_TEAM_ID" \
+            --wait
+          xcrun stapler staple "$DMG_PATH"
+          xcrun stapler validate "$DMG_PATH" || true
+          spctl -a -vv "$DMG_PATH" || true
+          echo "UNSIGNED_DMG=0" >> "$GITHUB_ENV"
+
+      - name: Upload macOS artifacts
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: dist-macos-universal
+          path: |
+            dist/macos-universal/dblocal-*-macos-universal.dmg
+            dist/macos-universal/dblocal-*-macos-universal.tar.gz
+          if-no-files-found: error
+
+  build-windows:
+    name: build (windows-x86_64)
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # refs/heads/stable
+        with:
+          toolchain: stable
+          targets: x86_64-pc-windows-msvc
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+
+      - name: Build release binary
+        shell: bash
+        run: cargo build --release -p dblocal-cli --target x86_64-pc-windows-msvc
+
+      - name: Package .zip
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME}"
+          bin="target/x86_64-pc-windows-msvc/release/dblocal.exe"
+          test -f "$bin" || { echo "Expected binary not found: $bin" >&2; exit 1; }
+          mkdir -p dist/windows-x86_64/stage
+          cp "$bin" dist/windows-x86_64/stage/dblocal.exe
+          (cd dist/windows-x86_64/stage && 7z a -tzip "../dblocal-${version}-windows-x86_64.zip" dblocal.exe)
+          rm -rf dist/windows-x86_64/stage
+          ls -lh dist/windows-x86_64
+
+      - name: Upload Windows artifact
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: dist-windows-x86_64
+          path: dist/windows-x86_64/dblocal-*-windows-x86_64.zip
+          if-no-files-found: error
+
+  release:
+    name: Checksums, provenance and release
+    runs-on: ubuntu-24.04
+    needs:
+      - build-linux
+      - build-macos-universal
+      - build-windows
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          path: release
+          pattern: dist-*
+          merge-multiple: true
+
+      - name: Generate checksums and enforce size gate
+        shell: bash
+        working-directory: release
+        run: |
+          set -euo pipefail
+          echo "Artifacts:"
+          ls -lh
+          echo
+
+          # Size gate (F-PKG-01 AC2): fail if any artifact is over 60 MB.
+          limit=$((60 * 1024 * 1024))
+          failed=0
+          for f in ./*; do
+            [ -f "$f" ] || continue
+            size=$(stat -c%s "$f")
+            if [ "$size" -gt "$limit" ]; then
+              echo "::error file=$f::Artifact exceeds 60 MB size gate (${size} bytes): $f"
+              failed=1
+            fi
+          done
+          if [ "$failed" -ne 0 ]; then
+            exit 1
+          fi
+
+          # checksums.txt uses bare filenames (no "./" prefix) so that
+          # `sha256sum -c checksums.txt` and packaging/install.sh both work when
+          # run from the directory the artifacts were downloaded into.
+          # Build the list explicitly so checksums.txt can never hash itself.
+          : > files.list
+          for f in ./*; do
+            [ -f "$f" ] || continue
+            case "$f" in
+              ./checksums.txt|./files.list) continue ;;
+            esac
+            printf '%s\n' "$f" >> files.list
+          done
+          xargs sha256sum -- < files.list | sed 's#  \./#  #' > checksums.txt
+          rm -f files.list
+          echo "checksums.txt:"
+          cat checksums.txt
+
+      - name: Generate build provenance attestations
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: release/*
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3 # v3.0.4
+        with:
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: |
+            release/*
+          body: |
+            ## DBLocal ${{ github.ref_name }}
+
+            Phase 1 release artifacts: `.AppImage` and `.tar.gz` (Linux x86_64/aarch64), `.dmg` (macOS universal), `.zip` (Windows x86_64), plus `checksums.txt` and GitHub build provenance attestations.
+
+            - **Windows (v1):** unsigned. Expect a SmartScreen "Unknown publisher" prompt — see `docs/install/windows-smartscreen.md` and verify checksums before running.
+            - **macOS:** signed + notarized with Apple Developer ID when secrets are configured; otherwise an unsigned `.dmg` is produced with a loud workflow warning (D-20).
+            - **Phase 2 packages** (`.deb`, `.rpm`, `.msi`) are not built by this workflow; see `docs/release/RELEASING.md`.
+
+            Verify integrity before installing:
+            ```sh
+            sha256sum -c checksums.txt --ignore-missing
+            # or: shasum -a 256 -c checksums.txt
+            ```

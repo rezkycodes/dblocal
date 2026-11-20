@@ -1,0 +1,18 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=DBLocal
+GenericName=Local Database Manager
+Comment=Install and run local PostgreSQL, MySQL, MariaDB and Valkey servers without containers
+Comment[id]=Pasang dan jalankan server PostgreSQL, MySQL, MariaDB, dan Valkey lokal tanpa container
+Exec=dblocal
+TryExec=dblocal
+Icon=dblocal
+Terminal=false
+Categories=Development;Database;
+Keywords=database;postgres;postgresql;mysql;mariadb;valkey;redis;local;development;
+StartupNotify=true
+StartupWMClass=dblocal
+# Local database servers only; DBLocal never runs as root and never binds
+# beyond 127.0.0.1 / ::1.
+X-GNOME-UsesNotifications=true
