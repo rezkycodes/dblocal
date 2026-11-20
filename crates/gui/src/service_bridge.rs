@@ -8,7 +8,7 @@
 use std::sync::Arc;
 use std::thread;
 
-use dblocal_core::model::DownloadProgress;
+use dblocal_core::model::{DownloadProgress, InstanceId};
 use dblocal_core::service::{
     DblService, InstanceView, OperationId, OperationStage, ServiceEvent, UserFacingError,
 };
@@ -50,6 +50,10 @@ pub enum UiEvent {
         /// Appended lines, oldest first.
         lines: Vec<String>,
     },
+    /// An instance no longer exists; drop its row, tab and log buffer.
+    InstanceRemoved(InstanceId),
+    /// A stop escalated to a forced kill; tell the user it was forced.
+    StopForced(InstanceId),
     /// The service stream lagged and the UI may have missed changes.
     ///
     /// `broadcast` drops the oldest events of a slow receiver. After a lag the
@@ -129,6 +133,8 @@ pub fn translate(event: ServiceEvent) -> Option<UiEvent> {
         ServiceEvent::OperationFinished { id, result } => {
             Some(UiEvent::OperationFinished { id, result })
         }
+        ServiceEvent::InstanceRemoved { id } => Some(UiEvent::InstanceRemoved(id)),
+        ServiceEvent::StopForced { id } => Some(UiEvent::StopForced(id)),
         ServiceEvent::CatalogUpdated { .. } => Some(UiEvent::CatalogUpdated),
         ServiceEvent::LogLines { id, lines } => Some(UiEvent::LogLines {
             instance: id.to_string(),
@@ -205,6 +211,19 @@ mod tests {
             result: Err(UserFacingError::new("DBL-1005", "busy")),
         });
         assert!(matches!(finished, Some(UiEvent::OperationFinished { .. })));
+    }
+
+    #[test]
+    fn translate_maps_removal_and_forced_stop() {
+        let id = InstanceId::new();
+        assert!(matches!(
+            translate(ServiceEvent::InstanceRemoved { id: id.clone() }),
+            Some(UiEvent::InstanceRemoved(removed)) if removed == id
+        ));
+        assert!(matches!(
+            translate(ServiceEvent::StopForced { id: id.clone() }),
+            Some(UiEvent::StopForced(forced)) if forced == id
+        ));
     }
 
     #[test]

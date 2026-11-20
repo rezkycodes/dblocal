@@ -229,6 +229,16 @@ impl Workspace {
                     }
                 }
             }
+            UiEvent::InstanceRemoved(id) => {
+                // The instance is gone: drop its row, any open tab and its logs.
+                self.state.instances.retain(|view| view.id != id);
+                self.close_tab_by_instance(&id);
+                self.logs.close(&id);
+            }
+            UiEvent::StopForced(id) => {
+                self.toast = Some(SharedString::from(strings::UI_TOAST_STOP_FORCED));
+                self.load_logs_for(&id);
+            }
             UiEvent::Resync => {
                 // D: a lagged stream may have skipped InstanceChanged events,
                 // so re-read the truth rather than trusting the delta stream.

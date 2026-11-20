@@ -315,3 +315,7 @@ pub const DIAGNOSIS_PERMISSION_DENIED: &str = "Izin ditolak pada path data";
 pub const DIAGNOSIS_BINARY_MISSING: &str = "Biner engine hilang atau rusak";
 /// Start diagnosis: nothing the app recognises (see the log).
 pub const DIAGNOSIS_UNKNOWN: &str = "Penyebab tidak dikenali, lihat log";
+
+/// Toast shown when a stop had to escalate to a forced kill (F-INS-03 AC3).
+pub const UI_TOAST_STOP_FORCED: &str =
+    "Instance dihentikan paksa karena tidak berhenti tepat waktu";
