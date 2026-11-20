@@ -1063,11 +1063,20 @@ pub fn run() {
             gpui_component::init(cx);
             crate::theme::init(cx);
 
-            cx.bind_keys([
+            // `secondary-` is not accepted by gpui-pre 0.3.12's keystroke parser,
+            // so the platform modifier is chosen here instead.
+            #[cfg(target_os = "macos")]
+            let palette_keys = [
+                KeyBinding::new("cmd-k", OpenCommandPalette, Some("SpikeRoot")),
+                KeyBinding::new("cmd-shift-p", OpenCommandPalette, Some("SpikeRoot")),
+            ];
+            #[cfg(not(target_os = "macos"))]
+            let palette_keys = [
                 KeyBinding::new("ctrl-k", OpenCommandPalette, Some("SpikeRoot")),
                 KeyBinding::new("ctrl-shift-p", OpenCommandPalette, Some("SpikeRoot")),
-                KeyBinding::new("secondary-k", OpenCommandPalette, Some("SpikeRoot")),
-                KeyBinding::new("secondary-shift-p", OpenCommandPalette, Some("SpikeRoot")),
+            ];
+            cx.bind_keys(palette_keys);
+            cx.bind_keys([
                 KeyBinding::new("escape", CloseOverlay, Some("SpikeRoot")),
                 KeyBinding::new("down", PaletteDown, Some("SpikeRoot")),
                 KeyBinding::new("up", PaletteUp, Some("SpikeRoot")),
