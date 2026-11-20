@@ -8,6 +8,7 @@
 mod actions;
 mod bootstrap;
 mod create_dialog;
+mod create_submit;
 mod delete_dialog;
 mod palette;
 mod preview;
@@ -15,14 +16,12 @@ mod state;
 mod status_bar;
 mod title_bar;
 mod views;
+mod workspace_api;
 
 use std::sync::Arc;
 use std::time::Instant;
 
-use dblocal_core::model::{
-    AuthMode, CatalogStatus, DeleteMode, DownloadProgress, EngineKey, InstanceId, InstanceSpec,
-    Port,
-};
+use dblocal_core::model::{AuthMode, CatalogStatus, DeleteMode, EngineKey, InstanceId, Port};
 use dblocal_core::service::{CatalogView, DblService, InstanceView, UriFormat, UserFacingError};
 use dblocal_core::strings;
 use gpui::{
@@ -34,7 +33,6 @@ use gpui_component::{
     notification::Notification,
 };
 
-use crate::format::{self, PaletteAction};
 use crate::logs::LogBuffer;
 use crate::service_bridge::{self, UiEvent};
 
@@ -83,13 +81,7 @@ pub struct CreateForm {
     pub port_input: Option<Entity<InputState>>,
 }
 
-/// Why a create submission was rejected, and whether the form stays open.
-pub enum SubmitError {
-    /// A field-level validation failure with its user message.
-    Invalid(String, bool),
-    /// The service rejected the spec or the operation.
-    Service(dblocal_core::DblError, bool),
-}
+pub use create_submit::{CreateDraft, SubmitError, Submitted};
 
 /// The main workspace entity.
 pub struct Workspace {
@@ -383,102 +375,37 @@ impl Workspace {
         let Some(form) = self.create.take() else {
             return;
         };
-        // The fields live on `InputState`; read them once, then run the pure
-        // submission core so the logic is unit-testable without a window.
-        let name = form
-            .name_input
-            .as_ref()
-            .map(|input| input.read(cx).value().to_string())
-            .unwrap_or_default();
-        let port_text = form
-            .port_input
-            .as_ref()
-            .map(|input| input.read(cx).value().to_string())
-            .unwrap_or_default();
-        match self.submit_draft(&form, &name, &port_text) {
-            Ok(()) => {}
-            Err(SubmitError::Invalid(message, keep_form)) => {
-                if keep_form {
-                    self.create = Some(form);
-                }
+        // Read the entity-backed fields once, then hand plain strings to the
+        // pure core.
+        let draft = CreateDraft {
+            engine: form.engine,
+            version: form.version.clone(),
+            auth: form.auth,
+            name: form
+                .name_input
+                .as_ref()
+                .map(|input| input.read(cx).value().to_string())
+                .unwrap_or_default(),
+            port_text: form
+                .port_input
+                .as_ref()
+                .map(|input| input.read(cx).value().to_string())
+                .unwrap_or_default(),
+        };
+        match create_submit::submit(self.service.as_ref(), &draft, &self.state.instances) {
+            Ok(submitted) => {
+                self.state.downloads.push(submitted.download);
+            }
+            Err(create_submit::SubmitError::Invalid(message)) => {
+                self.create = Some(form);
                 self.toast = Some(SharedString::from(message));
             }
-            Err(SubmitError::Service(err, keep_form)) => {
-                if keep_form {
-                    self.create = Some(form);
-                }
+            Err(create_submit::SubmitError::Service(err)) => {
+                self.create = Some(form);
                 self.report_error(&err);
             }
         }
         cx.notify();
-    }
-
-    /// The pure core of create submission: validate, build a spec, ask the
-    /// service, start the operation. Returns `Ok` when the instance was
-    /// submitted, or an error carrying whether the form should stay open.
-    pub(crate) fn submit_draft(
-        &mut self,
-        form: &CreateForm,
-        name: &str,
-        port_text: &str,
-    ) -> std::result::Result<(), SubmitError> {
-        let validation = format::validate_form(name, port_text, &self.state.instances);
-        if !validation.is_valid() {
-            let message = validation
-                .conflict
-                .or(validation.name_error)
-                .or(validation.port_error)
-                .unwrap_or_else(|| strings::ERR_INVALID_INPUT.to_owned());
-            return Err(SubmitError::Invalid(message, true));
-        }
-        let port = if port_text.trim().is_empty() {
-            None
-        } else {
-            match port_text
-                .trim()
-                .parse::<u16>()
-                .ok()
-                .and_then(|value| Port::new(value).ok())
-            {
-                Some(port) => Some(port),
-                None => {
-                    return Err(SubmitError::Invalid(
-                        strings::UI_VALIDATE_PORT_LOW.to_owned(),
-                        true,
-                    ));
-                }
-            }
-        };
-        let spec =
-            dblocal_core::model::InstanceName::new(name.to_owned()).and_then(|instance_name| {
-                InstanceSpec::new(
-                    instance_name,
-                    form.engine,
-                    form.version.clone(),
-                    port,
-                    form.auth,
-                )
-            });
-        let spec = match spec {
-            Ok(spec) => spec,
-            Err(err) => return Err(SubmitError::Service(err, true)),
-        };
-        // The service is the authority the CLI also goes through, so the form
-        // cannot submit anything `dblocal create` would reject.
-        if let Err(err) = self.service.validate_spec(&spec) {
-            return Err(SubmitError::Service(err, true));
-        }
-        match self.service.create_instance(spec) {
-            Ok(op) => {
-                self.state.downloads.push(ActiveDownload {
-                    operation: op,
-                    title: format!("{} {}", form.engine.display_name(), form.version),
-                    progress: DownloadProgress::new(0, 1, 0, None),
-                });
-                Ok(())
-            }
-            Err(err) => Err(SubmitError::Service(err, true)),
-        }
     }
 
     fn open_delete_dialog(&mut self, id: InstanceId, window: &mut Window, cx: &mut Context<Self>) {
@@ -543,225 +470,6 @@ impl Workspace {
 
     fn running_count(&self) -> usize {
         self.state.running_count()
-    }
-
-    // ----- Accessors used by submodules ----------------------------------
-
-    pub(crate) fn instances(&self) -> &[InstanceView] {
-        &self.state.instances
-    }
-
-    pub(crate) fn catalog(&self) -> &CatalogView {
-        &self.catalog
-    }
-
-    pub(crate) fn downloads(&self) -> &[ActiveDownload] {
-        &self.state.downloads
-    }
-
-    pub(crate) fn toggle_palette(&mut self) {
-        self.palette_open = !self.palette_open;
-        self.palette_query.clear();
-    }
-
-    pub(crate) fn set_palette_open(&mut self, open: bool) {
-        self.palette_open = open;
-        self.palette_query.clear();
-    }
-
-    pub(crate) fn command_state(&self) -> &Entity<CommandState> {
-        &self.command_state
-    }
-
-    pub(crate) fn palette_actions(&self) -> Vec<PaletteAction> {
-        let items = format::palette_items(&self.state.instances);
-        format::filter_palette(&items, &self.palette_query)
-            .into_iter()
-            .map(|item| item.action.clone())
-            .collect()
-    }
-
-    pub(crate) fn palette_labels(&self) -> Vec<String> {
-        let items = format::palette_items(&self.state.instances);
-        format::filter_palette(&items, &self.palette_query)
-            .into_iter()
-            .map(|item| item.label.clone())
-            .collect()
-    }
-
-    pub(crate) fn run_palette_action(
-        &mut self,
-        index: usize,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let actions = self.palette_actions();
-        let Some(action) = actions.get(index).cloned() else {
-            self.palette_open = false;
-            return;
-        };
-        self.palette_open = false;
-        match action {
-            PaletteAction::NewInstance => self.open_create_dialog(window, cx),
-            PaletteAction::Open(value) => {
-                if let Ok(id) = value.parse::<InstanceId>() {
-                    self.open_tab(id, cx);
-                }
-            }
-            PaletteAction::Start(value) => {
-                if let Ok(id) = value.parse::<InstanceId>() {
-                    self.start_instance(id);
-                }
-            }
-            PaletteAction::Stop(value) => {
-                if let Ok(id) = value.parse::<InstanceId>() {
-                    self.stop_instance(id);
-                }
-            }
-            PaletteAction::CopyUri(value) => {
-                if let Ok(id) = value.parse::<InstanceId>() {
-                    self.copy_uri(id, UriFormat::Uri, window, cx);
-                }
-            }
-        }
-        cx.notify();
-    }
-
-    pub(crate) fn create_form(&self) -> Option<&CreateForm> {
-        self.create.as_ref()
-    }
-
-    pub(crate) fn delete_target_name(&self, _cx: &App) -> Option<String> {
-        let id = self.delete_target.as_ref()?;
-        Some(
-            self.instance(id)
-                .map(|view| view.name.clone())
-                .unwrap_or_else(|| id.to_string()),
-        )
-    }
-
-    pub(crate) fn delete_confirmation_ok(&self, cx: &App) -> bool {
-        self.delete_confirmation_matches(cx)
-    }
-
-    pub(crate) fn delete_mode(&self) -> DeleteMode {
-        self.delete_mode
-    }
-
-    pub(crate) fn set_delete_mode(&mut self, mode: DeleteMode) {
-        self.delete_mode = mode;
-    }
-
-    pub(crate) fn delete_size(&self) -> u64 {
-        self.delete_size
-    }
-
-    pub(crate) fn delete_name_input(&self) -> Option<&Entity<InputState>> {
-        self.delete_name_input.as_ref()
-    }
-
-    pub(crate) fn submit_create_action(&mut self, cx: &mut Context<Self>) {
-        self.submit_create(cx);
-    }
-
-    pub(crate) fn cancel_create_action(&mut self) {
-        self.cancel_create();
-    }
-
-    pub(crate) fn confirm_delete_action(&mut self, cx: &mut Context<Self>) {
-        self.confirm_delete(cx);
-    }
-
-    pub(crate) fn close_modals_action(&mut self) {
-        self.close_modals();
-    }
-
-    pub(crate) fn choose_engine_action(&mut self, engine: EngineKey) {
-        self.choose_engine(engine);
-    }
-
-    pub(crate) fn choose_version_action(&mut self, version: String) {
-        self.choose_version(version);
-    }
-
-    pub(crate) fn choose_auth_action(&mut self, auth: AuthMode) {
-        self.choose_auth(auth);
-    }
-
-    /// Overrides the cached catalog status for preview renders.
-    pub(crate) fn set_catalog_status_for_preview(
-        &mut self,
-        status: dblocal_core::model::CatalogStatus,
-    ) {
-        self.catalog.status = status;
-        self.catalog.banner = match status {
-            dblocal_core::model::CatalogStatus::Fresh => None,
-            dblocal_core::model::CatalogStatus::Stale => Some(strings::CATALOG_STALE.to_owned()),
-            dblocal_core::model::CatalogStatus::Offline => {
-                Some(strings::CATALOG_OFFLINE.to_owned())
-            }
-            _ => None,
-        };
-    }
-
-    /// Next free port for an instance's engine, falling back to its port + 1.
-    pub(crate) fn instance_port_proposal(&self, id: &InstanceId) -> u16 {
-        let engine = self.instance(id).map(|view| view.engine);
-        engine
-            .and_then(|engine| self.service.suggest_port(engine).ok())
-            .map(|port| port.get())
-            .or_else(|| {
-                self.instance(id)
-                    .map(|view| view.port.get().saturating_add(1))
-            })
-            .unwrap_or(0)
-    }
-
-    /// Moves an instance to another port and clears its failure (`F-PRT-02` AC2).
-    pub(crate) fn move_to_port(&mut self, id: &InstanceId, port: u16, cx: &mut Context<Self>) {
-        let Some(port) = Port::new(port).ok() else {
-            self.toast = Some(SharedString::from(strings::UI_VALIDATE_PORT_LOW));
-            cx.notify();
-            return;
-        };
-        match self.service.change_port(id, port) {
-            Ok(()) => {
-                self.refresh_instances();
-                if let Some(err) = self.service.start_instance(id).err() {
-                    self.report_error(&err);
-                }
-            }
-            Err(err) => self.report_error(&err),
-        }
-        cx.notify();
-    }
-
-    pub(crate) fn is_revealed(&self, id: &InstanceId) -> bool {
-        self.revealed.contains(id)
-    }
-
-    pub(crate) fn toggle_reveal(&mut self, id: &InstanceId) {
-        if self.revealed.contains(id) {
-            self.revealed.remove(id);
-        } else {
-            self.revealed.insert(id.clone());
-        }
-    }
-
-    pub(crate) fn running_count_value(&self) -> usize {
-        self.running_count()
-    }
-
-    pub(crate) fn version(&self) -> &'static str {
-        self.version
-    }
-
-    pub(crate) fn tray_available(&self) -> bool {
-        self.tray_available
-    }
-
-    pub(crate) fn open_new_instance(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.open_create_dialog(window, cx);
     }
 }
 
