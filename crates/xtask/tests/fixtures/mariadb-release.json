@@ -1,0 +1,45 @@
+{
+  "release_id": "11.8.10",
+  "files": [
+    {
+      "file_name": "mariadb-11.8.10-linux-systemd-x86_64.tar.gz",
+      "os": "Linux",
+      "cpu": "x86_64",
+      "file_download_url": "https://example.test/mariadb/mariadb-11.8.10-linux-systemd-x86_64.tar.gz",
+      "size": 413068258,
+      "checksum": {
+        "sha256sum": "15ca40274597af84fa8f89f8248b37740c5a712c003df80b4c7b32a4486e2027"
+      }
+    },
+    {
+      "file_name": "mariadb-11.8.10-winx64.zip",
+      "os": "Windows",
+      "cpu": "x86_64",
+      "file_download_url": "https://example.test/mariadb/mariadb-11.8.10-winx64.zip",
+      "size": 99027722,
+      "checksum": {
+        "sha256sum": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      }
+    },
+    {
+      "file_name": "mariadb-11.8.10-winx64.msi",
+      "os": "Windows",
+      "cpu": "x86_64",
+      "file_download_url": "https://example.test/mariadb/mariadb-11.8.10-winx64.msi",
+      "size": 90214400,
+      "checksum": {
+        "sha256sum": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      }
+    },
+    {
+      "file_name": "mariadb-11.8.10-source.tar.gz",
+      "os": "Source",
+      "cpu": "x86_64",
+      "file_download_url": "https://example.test/mariadb/mariadb-11.8.10-source.tar.gz",
+      "size": 12345,
+      "checksum": {
+        "sha256sum": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      }
+    }
+  ]
+}

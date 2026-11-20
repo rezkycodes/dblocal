@@ -1,11 +1,16 @@
 //! Developer tasks, run through `cargo xtask`.
 
+mod catalog;
+
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 
 /// Exit code for a failed task.
 const EXIT_FAILED: u8 = 1;
+
+/// The same failed exit code, as an [`ExitCode`], for submodules.
+pub(crate) const EXIT_FAILED_CODE: ExitCode = ExitCode::FAILURE;
 
 /// Build, packaging and CI helpers.
 #[derive(Debug, Parser)]
@@ -20,8 +25,11 @@ struct Xtask {
 enum Task {
     /// Runs fmt check, clippy and tests, exactly as CI does.
     Ci,
-    /// Rebuilds the bundled engine catalog.
-    Catalog,
+    /// Builds or validates the bundled engine catalog.
+    Catalog {
+        #[command(subcommand)]
+        command: catalog::CatalogCommand,
+    },
 }
 
 fn main() -> ExitCode {
@@ -35,10 +43,7 @@ fn main() -> ExitCode {
 
     match xtask.task {
         Task::Ci => ci(),
-        Task::Catalog => {
-            println!("not implemented");
-            ExitCode::from(EXIT_FAILED)
-        }
+        Task::Catalog { command } => catalog::run(command),
     }
 }
 
@@ -76,5 +81,5 @@ fn ci() -> ExitCode {
         }
     }
     println!("xtask ci: all gates passed");
-    ExitCode::from(0)
+    ExitCode::SUCCESS
 }
