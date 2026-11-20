@@ -65,6 +65,10 @@ pub struct Artifact {
 
 impl Artifact {
     /// Builds an artifact, rejecting entries that cannot be installed.
+    ///
+    /// AGENTS.md invariants 3, 6 and 8: a catalog entry is only installable
+    /// when it carries a SHA-256, a real size and an HTTPS URL. Anything else
+    /// is rejected here rather than at download time.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         id: impl Into<String>,
@@ -84,13 +88,26 @@ impl Artifact {
                 reason: "must be 64 lowercase hex characters".to_owned(),
             });
         }
+        let url = url.into();
+        if !is_https_url(&url) {
+            return Err(DblError::InvalidInput {
+                field: "url",
+                reason: "must be an absolute https URL".to_owned(),
+            });
+        }
+        if size_bytes == 0 {
+            return Err(DblError::InvalidInput {
+                field: "size_bytes",
+                reason: "must be greater than zero".to_owned(),
+            });
+        }
         Ok(Self {
             id: id.into(),
             engine,
             version: version.into(),
             os,
             arch,
-            url: url.into(),
+            url,
             sha256,
             size_bytes,
             format,
@@ -162,6 +179,17 @@ fn is_sha256_hex(value: &str) -> bool {
         && value
             .bytes()
             .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+}
+
+/// Whether `value` is an absolute URL whose scheme is exactly `https`.
+///
+/// Compared case-sensitively and without a scheme allowlist elsewhere: the only
+/// acceptable transport is TLS (AGENTS.md invariant 6).
+fn is_https_url(value: &str) -> bool {
+    let Some((scheme, rest)) = value.split_once("://") else {
+        return false;
+    };
+    scheme == "https" && !rest.is_empty() && !rest.contains(char::is_whitespace)
 }
 
 /// One released version of one engine.
@@ -541,6 +569,73 @@ mod tests {
             ArchiveFormat::TarGz,
         );
         assert!(ok.is_ok());
+    }
+
+    #[test]
+    fn artifact_rejects_non_https_schemes() {
+        for url in [
+            "http://example.test/pg.tar.gz",
+            "file:///etc/passwd",
+            "ftp://example.test/pg.tar.gz",
+            "example.test/pg.tar.gz",
+            "https://",
+            "",
+            "HTTPS://example.test/pg.tar.gz",
+            "https://example.test/pg file.tar.gz",
+        ] {
+            let result = Artifact::new(
+                "a1",
+                EngineKey::Postgresql,
+                "18.7",
+                Os::Linux,
+                Arch::X86_64,
+                url,
+                sha(),
+                10,
+                ArchiveFormat::TarGz,
+            );
+            match result {
+                Err(DblError::InvalidInput { field, .. }) => {
+                    assert_eq!(field, "url", "wrong field rejected for {url}");
+                }
+                other => panic!("expected url rejection for {url:?}, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn artifact_rejects_zero_size() {
+        let result = Artifact::new(
+            "a1",
+            EngineKey::Postgresql,
+            "18.7",
+            Os::Linux,
+            Arch::X86_64,
+            "https://example.test/pg.tar.gz",
+            sha(),
+            0,
+            ArchiveFormat::TarGz,
+        );
+        match result {
+            Err(DblError::InvalidInput { field, .. }) => assert_eq!(field, "size_bytes"),
+            other => panic!("expected size_bytes rejection, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn artifact_accepts_a_well_formed_entry() {
+        let artifact = Artifact::new(
+            "a1",
+            EngineKey::Postgresql,
+            "18.7",
+            Os::Linux,
+            Arch::X86_64,
+            "https://example.test/pg-18.7.tar.gz",
+            sha(),
+            1,
+            ArchiveFormat::TarGz,
+        );
+        assert!(artifact.is_ok());
     }
 
     #[test]
