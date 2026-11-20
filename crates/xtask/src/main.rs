@@ -9,6 +9,9 @@ use clap::{Parser, Subcommand};
 /// Exit code for a failed task.
 const EXIT_FAILED: u8 = 1;
 
+/// The same failed exit code, as an [`ExitCode`], for submodules.
+pub(crate) const EXIT_FAILED_CODE: ExitCode = ExitCode::FAILURE;
+
 /// Build, packaging and CI helpers.
 #[derive(Debug, Parser)]
 #[command(name = "xtask", about = "DBLocal developer tasks")]

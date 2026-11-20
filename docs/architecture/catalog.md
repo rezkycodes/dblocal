@@ -27,10 +27,12 @@ Each document records:
 - `versions`: released engine versions, grouped per engine and sorted newest
   first, with `major_line` and `eol`.
 - `artifacts`: one downloadable build per `(engine, version, os, arch)` target
-  (and per `variant` when the same target has more than one compatible build,
-  as Valkey does with `jammy`/`noble`). Every artifact carries an absolute
+  (and per `variant` when the same target has more than one compatible build;
+  the schema carries `variant`/`min_glibc` for that, and the runtime selection
+  that uses it is `select_artifact`). Every artifact carries an absolute
   HTTPS `url`, a 64-character lowercase `sha256`, a non-zero `size_bytes`,
   an archive `format`, and optional `strip_prefix`, `min_glibc` and `variant`.
+  Wave 1 publishes Valkey `jammy` only; see `catalog/README.md` for why.
 
 Combinations with no artifact are reported as unavailable on that platform.
 They are never hidden and never treated as an error.
@@ -53,8 +55,18 @@ A corrupt bundled file is a build-time test failure, not a runtime panic.
 
 `cargo xtask catalog build --output catalog/engines.json` assembles the file
 from upstream sources, verifies checksums, and writes the document
-deterministically (stable ordering, explicit `generated_at`, trailing
-newline). It never writes a partial file.
+deterministically (stable ordering, trailing newline). It never writes a
+partial file.
+
+Trust boundaries:
+
+- Requests are HTTPS-only and follow at most five redirect hops that stay on
+  HTTPS; an `https` -> `http` redirect fails the build.
+- Every request pins `Accept-Encoding: identity`, and each Valkey artifact is
+  re-read under `gzip` and must describe the same object (same sidecar, same
+  `HEAD` size) or the build fails naming the artifact.
+- `generated_at` is today's UTC date only when the document actually changed;
+  otherwise the existing stamp is kept, so a no-op refresh is a no-op diff.
 
 Offline fixture tests exercise the PostgreSQL, Valkey, MariaDB and MySQL
 source paths without touching the network or downloading large archives.

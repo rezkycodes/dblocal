@@ -263,20 +263,6 @@
       "variant": "jammy"
     },
     {
-      "id": "valkey-9.2.0-linux-aarch64-noble",
-      "engine": "valkey",
-      "version": "9.2.0",
-      "os": "linux",
-      "arch": "aarch64",
-      "url": "https://download.valkey.io/releases/valkey-9.2.0-noble-arm64.tar.gz",
-      "sha256": "08aa213891f216ef64daea441363570d0793e1a0d06b0fa64ce67e1a055c058f",
-      "size_bytes": 46430275,
-      "format": "tar.gz",
-      "strip_prefix": "valkey-9.2.0-noble-arm64",
-      "min_glibc": "2.38",
-      "variant": "noble"
-    },
-    {
       "id": "valkey-9.2.0-linux-x86_64-jammy",
       "engine": "valkey",
       "version": "9.2.0",
@@ -289,20 +275,6 @@
       "strip_prefix": "valkey-9.2.0-jammy-x86_64",
       "min_glibc": "2.34",
       "variant": "jammy"
-    },
-    {
-      "id": "valkey-9.2.0-linux-x86_64-noble",
-      "engine": "valkey",
-      "version": "9.2.0",
-      "os": "linux",
-      "arch": "x86_64",
-      "url": "https://download.valkey.io/releases/valkey-9.2.0-noble-x86_64.tar.gz",
-      "sha256": "871066be4353d97ea8adaa9d6646b41ca94c3def37c57777946fae76e465741c",
-      "size_bytes": 45651721,
-      "format": "tar.gz",
-      "strip_prefix": "valkey-9.2.0-noble-x86_64",
-      "min_glibc": "2.38",
-      "variant": "noble"
     }
   ]
 }

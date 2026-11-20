@@ -1,10 +1,11 @@
 use std::path::Path;
+use std::time::SystemTime;
 
 use dblocal_core::catalog::{CatalogArtifact, CatalogDocument, CatalogVersion, validate_document};
 
 use super::sources::{
     self, CATALOG_SOURCE_URL, HttpSource, MysqlBuild, Source, WAVE_ONE_POSTGRESQL, WAVE_ONE_VALKEY,
-    assemble,
+    WAVE_ONE_VARIANTS, assemble,
 };
 
 /// Which engines to fetch from upstream.
@@ -39,35 +40,87 @@ impl BuildSelection {
 }
 
 /// Builds the bundled catalog and writes it atomically.
+///
+/// `generated_at` is honest without daily churn: it is today's UTC date only
+/// when the rest of the document actually changed, otherwise the existing
+/// file's stamp is kept (finding B4).
 pub fn run(output: &Path) -> Result<String, String> {
+    run_at(output, SystemTime::now())
+}
+
+/// [`run`] with an injectable clock, so the date behaviour is testable.
+pub fn run_at(output: &Path, now: SystemTime) -> Result<String, String> {
+    build_and_write(&http_source()?, &BuildSelection::wave_one(), output, now)
+}
+
+/// Builds the production HTTP source, reading `GITHUB_TOKEN` if present.
+pub fn http_source() -> Result<HttpSource, String> {
     let token = std::env::var("GITHUB_TOKEN")
         .ok()
         .filter(|value| !value.is_empty());
-    let source = HttpSource::new(token).map_err(|err| err.to_string())?;
-    write_built(
-        &source,
-        &BuildSelection::wave_one(),
-        Some("2026-11-20T00:00:00Z".to_owned()),
-        output,
-    )
+    HttpSource::new(token).map_err(|err| err.to_string())
 }
 
-/// Fetches, validates and writes the catalog through an injected source.
-///
-/// Split from [`run`] so the whole write pipeline can be exercised offline with
-/// recorded fixtures while `run` only wires up the real HTTP client.
-pub fn write_built(
+/// Builds, stamps and writes, keeping an existing `generated_at` when nothing
+/// else changed.
+pub fn build_and_write(
     source: &dyn Source,
     selection: &BuildSelection,
-    generated_at: Option<String>,
     output: &Path,
+    now: SystemTime,
 ) -> Result<String, String> {
-    let document = build(source, selection, generated_at)?;
+    let mut document = build(source, selection, None)?;
+    let today = format!("{}T00:00:00Z", utc_date(now));
+    document.generated_at = Some(match read_stamp_if_unchanged(output, &document) {
+        Some(existing) => existing,
+        None => today,
+    });
     validate_document(&document)
         .map_err(|err| format!("generated catalog failed validation: {err}"))?;
     write_atomic(output, &document)
         .map_err(|err| format!("could not write {}: {err}", output.display()))?;
     Ok(render_summary(&document))
+}
+
+/// Returns the existing file's stamp when only the stamp and fetch time differ.
+fn read_stamp_if_unchanged(output: &Path, fresh: &CatalogDocument) -> Option<String> {
+    let text = std::fs::read_to_string(output).ok()?;
+    let existing: CatalogDocument = serde_json::from_str(&text).ok()?;
+    let stamp = existing.generated_at.clone()?;
+    // Compare everything except `generated_at`.
+    let same_versions = existing.versions == fresh.versions;
+    let same_artifacts = existing.artifacts == fresh.artifacts;
+    let same_meta =
+        existing.schema_version == fresh.schema_version && existing.source_url == fresh.source_url;
+    (same_versions && same_artifacts && same_meta).then_some(stamp)
+}
+
+/// Formats `time` as a UTC `YYYY-MM-DD` date.
+///
+/// Small civil-date conversion; avoids pulling a date crate into a build tool.
+pub fn utc_date(time: SystemTime) -> String {
+    let secs = time
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map(|age| age.as_secs())
+        .unwrap_or_default();
+    let days = (secs / 86_400) as i64;
+    let (year, month, day) = civil_from_days(days);
+    format!("{year:04}-{month:02}-{day:02}")
+}
+
+/// Howard Hinnant's `civil_from_days`: days since 1970-01-01 to `(y, m, d)`.
+fn civil_from_days(days: i64) -> (i64, u32, u32) {
+    let z = days + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
+    let year = if m <= 2 { y + 1 } else { y };
+    (year, m, d)
 }
 
 /// Assembles a catalog for the chosen engines from the given source.
@@ -99,8 +152,9 @@ pub fn build(
     }
 
     if let Some(version) = &selection.valkey {
-        let (v, a) =
-            sources::valkey_from_sidecars(version, source).map_err(|err| err.to_string())?;
+        let variants: Vec<&str> = WAVE_ONE_VARIANTS.to_vec();
+        let (v, a) = sources::valkey_from_sidecars(version, &variants, source)
+            .map_err(|err| err.to_string())?;
         versions.extend(v);
         artifacts.extend(a);
     }
@@ -180,10 +234,13 @@ mod tests {
     use super::*;
     use serde_json::Value;
     use std::collections::BTreeMap;
+    use std::time::Duration;
 
     struct FixtureSource {
         text: BTreeMap<String, String>,
+        text_by_encoding: BTreeMap<(String, String), String>,
         bytes: BTreeMap<String, Vec<u8>>,
+        sizes: BTreeMap<(String, String), u64>,
     }
 
     impl FixtureSource {
@@ -196,13 +253,21 @@ mod tests {
                     .expect("postgres sidecars"),
             )
             .expect("parse sidecars");
-            let vk_sidecars: BTreeMap<String, String> = serde_json::from_str(
+            let vk_sidecars: BTreeMap<String, BTreeMap<String, String>> = serde_json::from_str(
                 &std::fs::read_to_string(format!("{base}/valkey-sidecars.json"))
                     .expect("valkey sidecars"),
             )
             .expect("parse sidecars");
 
+            let vk_heads: BTreeMap<String, BTreeMap<String, u64>> = serde_json::from_str(
+                &std::fs::read_to_string(format!("{base}/valkey-heads.json"))
+                    .expect("valkey heads"),
+            )
+            .expect("parse heads");
+
             let mut text = BTreeMap::new();
+            let mut text_by_encoding = BTreeMap::new();
+            let mut sizes = BTreeMap::new();
             text.insert(
                 "https://api.github.com/repos/theseus-rs/postgresql-binaries/releases?per_page=100"
                     .to_owned(),
@@ -211,16 +276,29 @@ mod tests {
             for (path, content) in pg_sidecars {
                 text.insert(format!("https://example.test{path}"), content);
             }
-            for (path, content) in vk_sidecars {
+            for (path, encs) in vk_sidecars {
                 let url = format!(
                     "https://download.valkey.io/releases{}",
                     path.strip_prefix("/valkey").expect("prefix")
                 );
-                text.insert(url, content);
+                for (enc, body) in encs {
+                    text_by_encoding.insert((url.clone(), enc), body);
+                }
+            }
+            for (path, encs) in vk_heads {
+                let url = format!(
+                    "https://download.valkey.io/releases{}",
+                    path.strip_prefix("/valkey").expect("prefix")
+                );
+                for (enc, size) in encs {
+                    sizes.insert((url.clone(), enc), size);
+                }
             }
             Self {
                 text,
+                text_by_encoding,
                 bytes: BTreeMap::new(),
+                sizes,
             }
         }
 
@@ -240,31 +318,50 @@ mod tests {
     }
 
     impl Source for FixtureSource {
-        fn get_text(&self, url: &str) -> Result<String, sources::SourceError> {
-            self.text
-                .get(url)
-                .cloned()
-                .ok_or_else(|| sources::SourceError::new(format!("fixture has no text for {url}")))
-        }
-
         fn get_bytes(&self, url: &str) -> Result<Vec<u8>, sources::SourceError> {
             self.bytes
                 .get(url)
                 .cloned()
                 .ok_or_else(|| sources::SourceError::new(format!("fixture has no bytes for {url}")))
         }
+
+        fn get_text_with(
+            &self,
+            url: &str,
+            accept_encoding: &str,
+        ) -> Result<String, sources::SourceError> {
+            if let Some(body) = self
+                .text_by_encoding
+                .get(&(url.to_owned(), accept_encoding.to_owned()))
+            {
+                return Ok(body.clone());
+            }
+            self.text
+                .get(url)
+                .cloned()
+                .ok_or_else(|| sources::SourceError::new(format!("fixture has no text for {url}")))
+        }
+
+        fn head_size(&self, url: &str, accept_encoding: &str) -> Result<u64, sources::SourceError> {
+            self.sizes
+                .get(&(url.to_owned(), accept_encoding.to_owned()))
+                .copied()
+                .ok_or_else(|| {
+                    sources::SourceError::new(format!("fixture has no HEAD size for {url}"))
+                })
+        }
     }
 
     #[test]
-    fn write_built_writes_a_valid_file_with_a_trailing_newline() {
+    fn build_and_write_writes_a_valid_file_with_a_trailing_newline() {
         let source = FixtureSource::wave_one();
         let dir = tempfile::tempdir().expect("tempdir");
         let output = dir.path().join("nested/catalog/engines.json");
-        let summary = write_built(
+        let summary = build_and_write(
             &source,
             &BuildSelection::wave_one(),
-            Some("2026-11-20T00:00:00Z".to_owned()),
             &output,
+            SystemTime::UNIX_EPOCH + Duration::from_secs(1_795_132_800),
         )
         .expect("write");
         assert!(summary.contains("postgresql\t18.7.0\t6\t"));
@@ -284,6 +381,67 @@ mod tests {
     }
 
     #[test]
+    fn generated_at_is_kept_when_the_document_is_unchanged() {
+        // Failing-first for B4: run() used to hard-code a date, so every future
+        // build claimed the same day and a no-op refresh churned the file.
+        let source = FixtureSource::wave_one();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let output = dir.path().join("catalog/engines.json");
+        let now = SystemTime::UNIX_EPOCH + Duration::from_secs(1_800_000_000); // 2027-01-15
+
+        // First write: no existing file, so today's UTC date is used.
+        build_and_write(&source, &BuildSelection::wave_one(), &output, now).expect("first");
+        let first: CatalogDocument =
+            serde_json::from_str(&std::fs::read_to_string(&output).expect("read")).expect("parse");
+        assert_eq!(first.generated_at.as_deref(), Some("2027-01-15T00:00:00Z"));
+
+        // Same upstream data, later day: keep the original stamp, no churn.
+        let later = now + Duration::from_secs(7 * 24 * 60 * 60);
+        build_and_write(&source, &BuildSelection::wave_one(), &output, later).expect("second");
+        let second: CatalogDocument =
+            serde_json::from_str(&std::fs::read_to_string(&output).expect("read")).expect("parse");
+        assert_eq!(second.generated_at.as_deref(), Some("2027-01-15T00:00:00Z"));
+        assert_eq!(first.artifacts, second.artifacts);
+    }
+
+    #[test]
+    fn generated_at_moves_forward_when_the_document_changes() {
+        let source = FixtureSource::wave_one();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let output = dir.path().join("catalog/engines.json");
+        let first_now = SystemTime::UNIX_EPOCH + Duration::from_secs(1_800_000_000); // 2027-01-15
+        build_and_write(&source, &BuildSelection::wave_one(), &output, first_now).expect("first");
+
+        // A different selection changes the document, so the stamp must move.
+        let narrower = BuildSelection {
+            postgresql: vec!["18.7.0".to_owned()],
+            valkey: None,
+            mariadb: Vec::new(),
+            mysql: Vec::new(),
+        };
+        let later = SystemTime::UNIX_EPOCH + Duration::from_secs(1_800_000_000 + 86_400);
+        build_and_write(&source, &narrower, &output, later).expect("second");
+        let document: CatalogDocument =
+            serde_json::from_str(&std::fs::read_to_string(&output).expect("read")).expect("parse");
+        assert_eq!(
+            document.generated_at.as_deref(),
+            Some("2027-01-16T00:00:00Z")
+        );
+        assert_eq!(document.versions.len(), 1);
+    }
+
+    #[test]
+    fn utc_date_conversion_is_exact() {
+        assert_eq!(utc_date(SystemTime::UNIX_EPOCH), "1970-01-01");
+        // 2026-11-20T00:00:00Z
+        let stamp = SystemTime::UNIX_EPOCH + Duration::from_secs(1_795_132_800);
+        assert_eq!(utc_date(stamp), "2026-11-20");
+        // 2028-02-29 is a leap day.
+        let leap = SystemTime::UNIX_EPOCH + Duration::from_secs(1_835_395_200);
+        assert_eq!(utc_date(leap), "2028-02-29");
+    }
+
+    #[test]
     fn wave_one_build_is_deterministic_and_valid() {
         let source = FixtureSource::wave_one();
         let document = build(
@@ -294,7 +452,8 @@ mod tests {
         .expect("build wave one");
         dblocal_core::catalog::validate_document(&document).expect("valid");
         assert_eq!(document.versions.len(), 4);
-        assert_eq!(document.artifacts.len(), 22);
+        // Wave 1 publishes Valkey jammy only: 18 PostgreSQL + 2 Valkey.
+        assert_eq!(document.artifacts.len(), 20);
 
         let json = serde_json::to_string_pretty(&document).expect("encode");
         let again = build(
@@ -329,7 +488,7 @@ mod tests {
             "postgresql\t18.7.0\t6\t",
             "postgresql\t17.12.0\t6\t",
             "postgresql\t16.16.0\t6\t",
-            "valkey\t9.2.0\t4\t",
+            "valkey\t9.2.0\t2\t",
         ] {
             assert!(summary.contains(needle), "missing {needle} in {summary}");
         }
@@ -394,119 +553,5 @@ mod tests {
 }
 
 #[cfg(test)]
-mod local_server_tests {
-    use super::*;
-    use std::io::{Read, Write};
-    use std::net::TcpListener;
-    use std::thread;
-
-    struct EphemeralSource {
-        base: String,
-    }
-
-    impl Source for EphemeralSource {
-        fn get_text(&self, url: &str) -> Result<String, sources::SourceError> {
-            let bytes = self.get_bytes(url)?;
-            String::from_utf8(bytes)
-                .map_err(|err| sources::SourceError::new(format!("{url} is not UTF-8: {err}")))
-        }
-
-        fn get_bytes(&self, url: &str) -> Result<Vec<u8>, sources::SourceError> {
-            let mapped = if url.starts_with(
-                "https://api.github.com/repos/theseus-rs/postgresql-binaries/releases?per_page=100",
-            ) {
-                format!("{}/postgres-releases.json", self.base)
-            } else if let Some(path) = url.strip_prefix("https://example.test/pg/") {
-                format!("{}/pg/{path}", self.base)
-            } else if let Some(path) = url.strip_prefix("https://download.valkey.io/releases/") {
-                format!("{}/valkey/{path}", self.base)
-            } else {
-                return Err(sources::SourceError::new(format!(
-                    "no local mapping for {url}"
-                )));
-            };
-
-            let client = reqwest::blocking::Client::new();
-            let response = client
-                .get(&mapped)
-                .send()
-                .map_err(|err| sources::SourceError::new(format!("GET {mapped} failed: {err}")))?;
-            if !response.status().is_success() {
-                return Err(sources::SourceError::new(format!(
-                    "GET {mapped} returned HTTP {}",
-                    response.status().as_u16()
-                )));
-            }
-            response.bytes().map(|bytes| bytes.to_vec()).map_err(|err| {
-                sources::SourceError::new(format!("GET {mapped} body failed: {err}"))
-            })
-        }
-    }
-
-    fn serve_fixtures() -> String {
-        let base = format!("{}/tests/fixtures", env!("CARGO_MANIFEST_DIR"));
-        let releases = std::fs::read(format!("{base}/postgres-releases.json")).expect("releases");
-        let pg_sidecars: std::collections::BTreeMap<String, String> = serde_json::from_str(
-            &std::fs::read_to_string(format!("{base}/postgres-sidecars.json"))
-                .expect("pg sidecars"),
-        )
-        .expect("parse pg sidecars");
-        let vk_sidecars: std::collections::BTreeMap<String, String> = serde_json::from_str(
-            &std::fs::read_to_string(format!("{base}/valkey-sidecars.json")).expect("vk sidecars"),
-        )
-        .expect("parse vk sidecars");
-
-        let mut routes: std::collections::BTreeMap<String, Vec<u8>> =
-            std::collections::BTreeMap::new();
-        routes.insert("/postgres-releases.json".to_owned(), releases);
-        for (path, body) in pg_sidecars {
-            routes.insert(path, body.into_bytes());
-        }
-        for (path, body) in vk_sidecars {
-            routes.insert(path, body.into_bytes());
-        }
-
-        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
-        let port = listener.local_addr().expect("addr").port();
-        thread::spawn(move || {
-            for mut stream in listener.incoming().flatten() {
-                let mut buf = [0u8; 4096];
-                let read = stream.read(&mut buf).unwrap_or(0);
-                let request = String::from_utf8_lossy(&buf[..read]);
-                let path = request
-                    .lines()
-                    .next()
-                    .and_then(|line| line.split_whitespace().nth(1))
-                    .unwrap_or("/");
-                let (status, body) = routes
-                    .get(path)
-                    .map(|body| ("200 OK", body.clone()))
-                    .unwrap_or_else(|| ("404 Not Found", b"missing".to_vec()));
-                let response = format!(
-                    "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-                    body.len()
-                );
-                let _ = stream.write_all(response.as_bytes());
-                let _ = stream.write_all(&body);
-            }
-        });
-        format!("http://127.0.0.1:{port}")
-    }
-
-    #[test]
-    fn build_reads_recorded_fixtures_from_a_local_server_on_port_0() {
-        let base = serve_fixtures();
-        let source = EphemeralSource { base };
-        let selection = BuildSelection {
-            postgresql: vec!["18.7.0".to_owned()],
-            valkey: Some("9.2.0".to_owned()),
-            mariadb: Vec::new(),
-            mysql: Vec::new(),
-        };
-        let document = build(&source, &selection, Some("2026-11-20T00:00:00Z".to_owned()))
-            .expect("build from local fixtures");
-        dblocal_core::catalog::validate_document(&document).expect("valid");
-        assert_eq!(document.versions.len(), 2);
-        assert_eq!(document.artifacts.len(), 10);
-    }
-}
+#[path = "local_server_tests.rs"]
+mod local_server_tests;

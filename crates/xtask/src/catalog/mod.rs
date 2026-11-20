@@ -4,7 +4,7 @@ mod build;
 mod sources;
 mod validate;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use clap::Subcommand;
@@ -26,15 +26,24 @@ pub enum CatalogCommand {
 }
 
 pub fn run(command: CatalogCommand) -> ExitCode {
+    run_with(command, build::run)
+}
+
+/// [`run`] with the build step injected, so both dispatch arms are testable
+/// offline (the real builder needs the network).
+pub fn run_with(
+    command: CatalogCommand,
+    build: impl FnOnce(&Path) -> Result<String, String>,
+) -> ExitCode {
     match command {
-        CatalogCommand::Build { output } => match build::run(&output) {
+        CatalogCommand::Build { output } => match build(&output) {
             Ok(summary) => {
                 print!("{summary}");
                 ExitCode::SUCCESS
             }
             Err(err) => {
                 eprintln!("xtask catalog build: {err}");
-                ExitCode::from(1)
+                crate::EXIT_FAILED_CODE
             }
         },
         CatalogCommand::Validate { file } => {
@@ -46,7 +55,7 @@ pub fn run(command: CatalogCommand) -> ExitCode {
                 }
                 Err(err) => {
                     eprintln!("xtask catalog validate: {err}");
-                    ExitCode::from(1)
+                    crate::EXIT_FAILED_CODE
                 }
             }
         }
@@ -83,6 +92,28 @@ mod tests {
             CatalogCommand::Validate { file } => assert!(file.is_none()),
             other => panic!("unexpected {other:?}"),
         }
+    }
+
+    #[test]
+    fn build_subcommand_reports_success_and_failure() {
+        let ok = run_with(
+            CatalogCommand::Build {
+                output: PathBuf::from("out.json"),
+            },
+            |path| {
+                assert_eq!(path, Path::new("out.json"));
+                Ok("summary".to_owned())
+            },
+        );
+        assert_eq!(ok, ExitCode::SUCCESS);
+
+        let failed = run_with(
+            CatalogCommand::Build {
+                output: PathBuf::from("out.json"),
+            },
+            |_| Err("upstream down".to_owned()),
+        );
+        assert_eq!(failed, ExitCode::FAILURE);
     }
 
     #[test]

@@ -7,14 +7,18 @@ use std::io::{Read, Write};
 
 struct MapSource {
     text: BTreeMap<String, String>,
+    text_by_encoding: BTreeMap<(String, String), String>,
     bytes: BTreeMap<String, Vec<u8>>,
+    sizes: BTreeMap<(String, String), u64>,
 }
 
 impl MapSource {
     fn new() -> Self {
         Self {
             text: BTreeMap::new(),
+            text_by_encoding: BTreeMap::new(),
             bytes: BTreeMap::new(),
+            sizes: BTreeMap::new(),
         }
     }
 
@@ -23,25 +27,52 @@ impl MapSource {
         self
     }
 
+    fn with_text_enc(mut self, url: &str, accept_encoding: &str, body: impl Into<String>) -> Self {
+        self.text_by_encoding
+            .insert((url.to_owned(), accept_encoding.to_owned()), body.into());
+        self
+    }
+
     fn with_bytes(mut self, url: &str, body: Vec<u8>) -> Self {
         self.bytes.insert(url.to_owned(), body);
+        self
+    }
+
+    fn with_size(mut self, url: &str, accept_encoding: &str, size: u64) -> Self {
+        self.sizes
+            .insert((url.to_owned(), accept_encoding.to_owned()), size);
         self
     }
 }
 
 impl Source for MapSource {
-    fn get_text(&self, url: &str) -> Result<String, SourceError> {
+    fn get_bytes(&self, url: &str) -> Result<Vec<u8>, SourceError> {
+        self.bytes
+            .get(url)
+            .cloned()
+            .ok_or_else(|| SourceError::new(format!("no bytes fixture for {url}")))
+    }
+
+    fn get_text_with(&self, url: &str, accept_encoding: &str) -> Result<String, SourceError> {
+        if let Some(body) = self
+            .text_by_encoding
+            .get(&(url.to_owned(), accept_encoding.to_owned()))
+        {
+            return Ok(body.clone());
+        }
         self.text
             .get(url)
             .cloned()
             .ok_or_else(|| SourceError::new(format!("no text fixture for {url}")))
     }
 
-    fn get_bytes(&self, url: &str) -> Result<Vec<u8>, SourceError> {
-        self.bytes
-            .get(url)
-            .cloned()
-            .ok_or_else(|| SourceError::new(format!("no bytes fixture for {url}")))
+    fn head_size(&self, url: &str, accept_encoding: &str) -> Result<u64, SourceError> {
+        self.sizes
+            .get(&(url.to_owned(), accept_encoding.to_owned()))
+            .copied()
+            .ok_or_else(|| {
+                SourceError::new(format!("no HEAD fixture for {url} [{accept_encoding}]"))
+            })
     }
 }
 
@@ -114,30 +145,84 @@ fn postgresql_fixture_yields_six_targets_per_version() {
     }
 }
 
-#[test]
-fn valkey_maps_arm64_and_records_glibc_floors() {
-    let sidecars: BTreeMap<String, String> =
+fn load_valkey_source() -> MapSource {
+    let sidecars: BTreeMap<String, BTreeMap<String, String>> =
         serde_json::from_str(&read_fixture("valkey-sidecars.json")).expect("sidecars");
+    let heads: BTreeMap<String, BTreeMap<String, u64>> =
+        serde_json::from_str(&read_fixture("valkey-heads.json")).expect("heads");
     let mut source = MapSource::new();
-    for (path, body) in sidecars {
+    for (path, encs) in sidecars {
         let url = format!(
             "https://download.valkey.io/releases{}",
             path.strip_prefix("/valkey").expect("prefix")
         );
-        source = source.with_text(&url, body);
+        for (enc, body) in encs {
+            source = source.with_text_enc(&url, &enc, body);
+        }
     }
-    let (versions, artifacts) = valkey_from_sidecars(WAVE_ONE_VALKEY, &source).expect("valkey");
+    for (path, encs) in heads {
+        let url = format!(
+            "https://download.valkey.io/releases{}",
+            path.strip_prefix("/valkey").expect("prefix")
+        );
+        for (enc, size) in encs {
+            source = source.with_size(&url, &enc, size);
+        }
+    }
+    source
+}
+
+#[test]
+fn valkey_maps_arm64_reads_size_from_head_and_records_glibc_floors() {
+    // Failing-first for B2: this used to take hard-coded sizes and one sidecar
+    // fetch, so it could not read or cross-check the real upstream size.
+    let source = load_valkey_source();
+    let (versions, artifacts) =
+        valkey_from_sidecars(WAVE_ONE_VALKEY, &WAVE_ONE_VARIANTS, &source).expect("valkey");
     assert_eq!(versions.len(), 1);
-    assert_eq!(artifacts.len(), 4);
+    assert_eq!(artifacts.len(), 2);
     for artifact in &artifacts {
         assert!(artifact.min_glibc.is_some(), "{}", artifact.id);
         assert!(artifact.variant.is_some(), "{}", artifact.id);
+        assert!(artifact.size_bytes > 0, "{}", artifact.id);
     }
     assert!(
         artifacts
             .iter()
             .any(|artifact| artifact.arch == "aarch64" && artifact.url.contains("arm64"))
     );
+    let jammy_x86 = artifacts
+        .iter()
+        .find(|artifact| artifact.variant.as_deref() == Some("jammy") && artifact.arch == "x86_64")
+        .expect("jammy x86_64");
+    assert_eq!(jammy_x86.size_bytes, 46_759_925);
+}
+
+#[test]
+fn valkey_wave_one_selection_is_jammy_only() {
+    let source = load_valkey_source();
+    let (_, artifacts) =
+        valkey_from_sidecars(WAVE_ONE_VALKEY, &WAVE_ONE_VARIANTS, &source).expect("valkey");
+    assert_eq!(artifacts.len(), 2);
+    assert!(
+        artifacts
+            .iter()
+            .all(|artifact| artifact.variant.as_deref() == Some("jammy"))
+    );
+}
+
+#[test]
+fn valkey_fails_when_identity_and_gzip_objects_differ() {
+    // B2 failing-first: noble-x86_64 disagrees across encodings in the recorded
+    // upstream fixture, so the builder must refuse to pin it.
+    let source = load_valkey_source();
+    let err = valkey_from_sidecars(WAVE_ONE_VALKEY, &["noble"], &source)
+        .expect_err("encoding mismatch must fail");
+    assert!(
+        err.to_string()
+            .contains("inconsistent across Accept-Encoding")
+    );
+    assert!(err.to_string().contains("valkey-9.2.0-linux-x86_64-noble"));
 }
 
 #[test]
@@ -446,6 +531,176 @@ fn md5_vector_matches_rfc1321() {
 }
 
 #[test]
+fn json_errors_convert_to_source_errors() {
+    let err: SourceError = serde_json::from_str::<serde_json::Value>("nope")
+        .expect_err("invalid")
+        .into();
+    assert!(err.to_string().contains("invalid JSON from upstream"));
+}
+
+#[test]
+fn https_enforcement_covers_every_transport_method() {
+    let source = HttpSource::new(None).expect("client");
+    for url in ["http://example.test/x", "file:///etc/passwd"] {
+        assert!(source.get_bytes(url).is_err());
+        assert!(source.get_text_with(url, "identity").is_err());
+        assert!(source.head_size(url, "identity").is_err());
+    }
+}
+
+#[test]
+fn head_reports_a_non_success_status() {
+    let source = HttpSource::for_loopback().expect("client");
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+    let port = listener.local_addr().expect("addr").port();
+    let handle = std::thread::spawn(move || {
+        if let Some(mut stream) = listener.incoming().flatten().next() {
+            let mut buf = [0u8; 2048];
+            let _ = stream.read(&mut buf);
+            let _ = stream.write_all(
+                b"HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+            );
+        }
+    });
+    let err = source
+        .head(&format!("http://127.0.0.1:{port}/x"), "identity")
+        .expect_err("500 must fail");
+    assert!(err.to_string().contains("returned HTTP 500"));
+    let _ = handle.join();
+}
+
+#[test]
+fn github_token_is_attached_only_for_the_api_host() {
+    let token = HttpSource::new(Some("secret-token".to_owned())).expect("client");
+    let api = token
+        .build_request(
+            reqwest::Method::GET,
+            "https://api.github.com/repos/x/y",
+            None,
+        )
+        .expect("request")
+        .build()
+        .expect("build");
+    assert!(api.headers().contains_key(reqwest::header::AUTHORIZATION));
+
+    let other = token
+        .build_request(reqwest::Method::GET, "https://example.test/x", None)
+        .expect("request")
+        .build()
+        .expect("build");
+    assert!(!other.headers().contains_key(reqwest::header::AUTHORIZATION));
+    assert_eq!(
+        other
+            .headers()
+            .get(reqwest::header::ACCEPT_ENCODING)
+            .and_then(|value| value.to_str().ok()),
+        Some("identity")
+    );
+}
+
+#[test]
+fn a_redirect_to_plain_http_fails_the_builder_request() {
+    let source = HttpSource::for_loopback().expect("client");
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+    let port = listener.local_addr().expect("addr").port();
+    let handle = std::thread::spawn(move || {
+        if let Some(mut stream) = listener.incoming().flatten().next() {
+            let mut buf = [0u8; 2048];
+            let _ = stream.read(&mut buf);
+            let _ = stream.write_all(
+                b"HTTP/1.1 302 Found\r\nLocation: http://127.0.0.1:1/x\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+            );
+        }
+    });
+    let err = source
+        .request(
+            reqwest::Method::GET,
+            &format!("http://127.0.0.1:{port}/x"),
+            None,
+        )
+        .expect_err("http redirect must be refused");
+    assert!(err.to_string().contains("redirect"), "{err}");
+    let _ = handle.join();
+}
+
+#[test]
+fn redirect_policy_refuses_non_https_and_long_chains() {
+    // B1 for xtask: the builder client must never follow a redirect off TLS.
+    let https = url::Url::parse("https://example.test/a.tar.gz").expect("url");
+    let plain = url::Url::parse("http://example.test/a.tar.gz").expect("url");
+    assert!(allow_redirect(0, &plain).is_err());
+    assert!(allow_redirect(MAX_REDIRECTS, &https).is_ok());
+    assert!(allow_redirect(MAX_REDIRECTS + 1, &https).is_err());
+}
+
+#[test]
+fn http_source_wraps_non_utf8_bodies() {
+    let source = HttpSource::for_loopback().expect("client");
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+    let port = listener.local_addr().expect("addr").port();
+    let handle = std::thread::spawn(move || {
+        if let Some(mut stream) = listener.incoming().flatten().next() {
+            let mut buf = [0u8; 2048];
+            let _ = stream.read(&mut buf);
+            let _ = stream.write_all(
+                b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n\xff\xfe",
+            );
+        }
+    });
+    let bytes = source
+        .request(
+            reqwest::Method::GET,
+            &format!("http://127.0.0.1:{port}/x"),
+            None,
+        )
+        .expect("raw bytes");
+    assert!(String::from_utf8(bytes).is_err());
+    let _ = handle.join();
+}
+
+#[test]
+fn http_source_reports_a_missing_content_length_on_head() {
+    let source = HttpSource::for_loopback().expect("client");
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+    let port = listener.local_addr().expect("addr").port();
+    let handle = std::thread::spawn(move || {
+        if let Some(mut stream) = listener.incoming().flatten().next() {
+            let mut buf = [0u8; 2048];
+            let _ = stream.read(&mut buf);
+            let _ = stream.write_all(b"HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n");
+        }
+    });
+    let err = source
+        .head(&format!("http://127.0.0.1:{port}/x"), "identity")
+        .expect_err("missing Content-Length must be an error");
+    assert!(err.to_string().contains("no Content-Length"));
+    let _ = handle.join();
+}
+
+#[test]
+fn http_source_head_size_reads_the_declared_length() {
+    let source = HttpSource::for_loopback().expect("client");
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+    let port = listener.local_addr().expect("addr").port();
+    let handle = std::thread::spawn(move || {
+        if let Some(mut stream) = listener.incoming().flatten().next() {
+            let mut buf = [0u8; 2048];
+            let _ = stream.read(&mut buf);
+            let _ = stream.write_all(
+                b"HTTP/1.1 200 OK\r\nContent-Length: 12345\r\nConnection: close\r\n\r\n",
+            );
+        }
+    });
+    assert_eq!(
+        source
+            .head(&format!("http://127.0.0.1:{port}/x"), "identity")
+            .expect("size"),
+        12345
+    );
+    let _ = handle.join();
+}
+
+#[test]
 fn http_source_rejects_non_https_and_handles_local_responses() {
     let source = HttpSource::new(None).expect("client");
     let err = source
@@ -453,7 +708,7 @@ fn http_source_rejects_non_https_and_handles_local_responses() {
         .expect_err("http must be rejected");
     assert!(err.to_string().contains("non-HTTPS"));
 
-    let source_with_token = HttpSource::new(Some("secret-token".to_owned())).expect("client");
+    let source_with_token = HttpSource::for_loopback().expect("client");
     let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
     let port = listener.local_addr().expect("addr").port();
     let handle = std::thread::spawn(move || {
@@ -481,10 +736,14 @@ fn http_source_rejects_non_https_and_handles_local_responses() {
     let base = format!("http://127.0.0.1:{port}");
     assert_eq!(
         source_with_token
-            .request(&format!("{base}/ok"))
+            .request(reqwest::Method::GET, &format!("{base}/ok"), None)
             .expect("ok"),
         b"ok"
     );
-    assert!(source_with_token.request(&format!("{base}/bad")).is_err());
+    assert!(
+        source_with_token
+            .request(reqwest::Method::GET, &format!("{base}/bad"), None)
+            .is_err()
+    );
     let _ = handle.join();
 }

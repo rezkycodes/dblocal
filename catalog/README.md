@@ -24,8 +24,23 @@ that fails validation is never published and never replaces a good cache.
 
 - PostgreSQL 18.7.0, 17.12.0 and 16.16.0 from
   `theseus-rs/postgresql-binaries`, for all six `(os, arch)` targets.
-- Valkey 9.2.0 from `download.valkey.io`, for Linux `x86_64` and `aarch64`,
-  in both the `jammy` (glibc >= 2.34) and `noble` (glibc >= 2.38) builds.
+- Valkey 9.2.0 from `download.valkey.io`, for Linux `x86_64` and `aarch64`, in
+  the **`jammy`** build only (glibc >= 2.34).
+
+### Why Valkey `noble` is not published yet
+
+`download.valkey.io` (CloudFront) has been observed serving **two different
+objects for the same `noble` URL depending on `Accept-Encoding`**: a stale
+cached object for `identity` and a fresh one for `gzip`, each with its own
+matching `.sha256` sidecar. Pinning either hash would fail verification on every
+install the moment the cache flips.
+
+The builder now reads the sidecar and the `HEAD` size under both encodings and
+fails the build if they differ, so `noble` is excluded until upstream settles.
+Nothing is lost: `jammy` has the lowest glibc floor (2.34) and runs wherever
+`noble` (2.38) does, and its objects agree across encodings. Re-enabling `noble`
+is a data change to `WAVE_ONE_VARIANTS` in `sources/valkey.rs` once the objects
+agree; the `min_glibc` selection code and its tests stay in place.
 
 MySQL and MariaDB source adapters are implemented and covered by fixture tests,
 but their real artifacts are generated in a later wave (MySQL upstream does not

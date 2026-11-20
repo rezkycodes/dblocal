@@ -1,6 +1,18 @@
 {
-  "/valkey/valkey-9.2.0-jammy-arm64.tar.gz.sha256": "03c5cd1383adb6e189b2c579da01c6999e3dc096f9e9b0518bbaaf0ddb56d1cf  valkey-9.2.0-jammy-arm64.tar.gz\n",
-  "/valkey/valkey-9.2.0-jammy-x86_64.tar.gz.sha256": "27ea653c549c604840f1c676e3d08818ac06019a1a2f353a8ccbb7aabd4edb66  valkey-9.2.0-jammy-x86_64.tar.gz\n",
-  "/valkey/valkey-9.2.0-noble-arm64.tar.gz.sha256": "08aa213891f216ef64daea441363570d0793e1a0d06b0fa64ce67e1a055c058f  valkey-9.2.0-noble-arm64.tar.gz\n",
-  "/valkey/valkey-9.2.0-noble-x86_64.tar.gz.sha256": "871066be4353d97ea8adaa9d6646b41ca94c3def37c57777946fae76e465741c  valkey-9.2.0-noble-x86_64.tar.gz\n"
+  "/valkey/valkey-9.2.0-jammy-x86_64.tar.gz.sha256": {
+    "identity": "27ea653c549c604840f1c676e3d08818ac06019a1a2f353a8ccbb7aabd4edb66  valkey-9.2.0-jammy-x86_64.tar.gz\n",
+    "gzip": "27ea653c549c604840f1c676e3d08818ac06019a1a2f353a8ccbb7aabd4edb66  valkey-9.2.0-jammy-x86_64.tar.gz\n"
+  },
+  "/valkey/valkey-9.2.0-jammy-arm64.tar.gz.sha256": {
+    "identity": "03c5cd1383adb6e189b2c579da01c6999e3dc096f9e9b0518bbaaf0ddb56d1cf  valkey-9.2.0-jammy-arm64.tar.gz\n",
+    "gzip": "03c5cd1383adb6e189b2c579da01c6999e3dc096f9e9b0518bbaaf0ddb56d1cf  valkey-9.2.0-jammy-arm64.tar.gz\n"
+  },
+  "/valkey/valkey-9.2.0-noble-x86_64.tar.gz.sha256": {
+    "identity": "871066be4353d97ea8adaa9d6646b41ca94c3def37c57777946fae76e465741c  valkey-9.2.0-noble-x86_64.tar.gz\n",
+    "gzip": "2f635057853b081a23ce429ba06f236f5668a39dd9f4626383746df24e714d77  valkey-9.2.0-noble-x86_64.tar.gz\n"
+  },
+  "/valkey/valkey-9.2.0-noble-arm64.tar.gz.sha256": {
+    "identity": "08aa213891f216ef64daea441363570d0793e1a0d06b0fa64ce67e1a055c058f  valkey-9.2.0-noble-arm64.tar.gz\n",
+    "gzip": "08aa213891f216ef64daea441363570d0793e1a0d06b0fa64ce67e1a055c058f  valkey-9.2.0-noble-arm64.tar.gz\n"
+  }
 }
