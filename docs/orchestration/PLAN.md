@@ -63,5 +63,5 @@ Launch order (machine load): F, B, C, D first; A and E when slots free; G after 
 | W1-C | review round 1 sent (ctx_72de8ffd93bc) | Verified: gates green, 182 tests, deny ok, no temp-dir leak, redirect policy and 21 attack tests good. Findings: C1 body never bounded by declared size (disk-fill), C2 no explicit Accept-Encoding: identity / Content-Encoding check (CDN serves different bytes), C3 proxy comment. `downloads/` dir accepted; coordinator adds `DblPaths::downloads()` after merge |
 | W1-G | **running** | Started after W0-C merge, with the W0-C review fixes in its spec |
 | W1-A | **running** | Started after the W1-B merge (store builds on `main` with the merged catalog) |
-| W1-E | spec written | Held until another slot frees (load 13.9 at launch, 6 GB RAM available) |
+| W1-E | **running** | Started after the W1-F merge (load 1.3, 9 GB RAM available) |
 | W1-G | spec waits for W0-C | |
