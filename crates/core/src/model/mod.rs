@@ -5,6 +5,7 @@
 
 mod artifacts;
 mod entity;
+mod failure;
 mod scalar;
 mod state;
 
@@ -16,6 +17,7 @@ pub use entity::{
     ArchivedData, CredentialBackend, CredentialRef, DeleteMode, Instance, InstanceSpec,
     PortAllocation,
 };
+pub use failure::StartFailure;
 pub use scalar::{AuthMode, EngineKey, Family, InstanceId, InstanceName, Port};
 pub use state::{InstanceEvent, InstanceStatus};
 
