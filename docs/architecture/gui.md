@@ -14,8 +14,12 @@ Owner: W1-G. This document describes the `crates/gui` shell built against `dbloc
 | Module | Responsibility | Tests | Line coverage |
 |---|---|---|---|
 | `lib.rs` | Public `run()`, the GUI-availability seam, `verify_theme_contrast` | unit | 57% (entry/seam) |
-| `app.rs` | Window bootstrap, `Workspace` entity, event pump, element tree | layout + render | 57% (layout) |
+| `app.rs` | `Workspace` entity, window wiring, event pump | layout + render | 40% (layout) |
 | `app/actions.rs` | Actions and key bindings | layout | 46% (layout) |
+| `app/state.rs` | Pure event reduction over `ShellState` | unit, thorough | 99.2% |
+| `app/views.rs` | Element tree (sidebar, tabs, overview, logs) | layout + render | 72% (layout) |
+| `app/preview.rs` | Preview constructors for headless renders | render | 95% |
+| `app/bootstrap.rs` | Process bootstrap and window creation | layout | 20% (entry) |
 | `app/title_bar.rs` | Client-side title bar | render | 94% |
 | `app/status_bar.rs` | Running count, catalog freshness, downloads popover, version | layout | 44% (layout) |
 | `app/palette.rs` | Command palette on `gpui_component::command::Command` | layout | 70% (layout) |
