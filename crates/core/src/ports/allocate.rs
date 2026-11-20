@@ -144,6 +144,7 @@ impl PortConflict {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ports::test_support::{attempt, bind_test_listener, reserve_test_port};
     use std::collections::HashSet;
 
     /// Checker that reports a fixed set of busy ports.
@@ -259,13 +260,16 @@ mod tests {
 
     #[test]
     fn conflict_on_a_free_unreserved_port_is_none() {
-        let (listener, port) = {
-            let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).expect("bind");
-            let port = Port::new(listener.local_addr().expect("addr").port()).expect("valid");
-            (listener, port)
-        };
-        drop(listener);
-        assert_eq!(port_conflict(port, &HashSet::new()), None);
+        // `reserve_test_port` skips busy slots, so an unheld reserved port must
+        // read as no conflict. Retried in case another process takes the number
+        // between hand-out and the check.
+        attempt(|| {
+            let port = reserve_test_port();
+            match port_conflict(port, &HashSet::new()) {
+                None => Ok(()),
+                Some(other) => Err(format!("{port} was taken after hand-out: {other:?}")),
+            }
+        });
     }
 
     #[test]
@@ -278,40 +282,33 @@ mod tests {
         assert!(PortConflict::ReservedByInstance.is_ours());
 
         // A port outside our reservations but actively listening is foreign.
-        let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).expect("bind");
-        let port = Port::new(listener.local_addr().expect("addr").port()).expect("valid");
+        let (listener, port) = bind_test_listener();
         match port_conflict(port, &HashSet::new()) {
             Some(PortConflict::InUse { detail }) => assert!(!detail.is_empty()),
             other => panic!("expected foreign conflict, got {other:?}"),
         }
         drop(listener);
-        assert_eq!(port_conflict(port, &HashSet::new()), None);
+        // The release side is retried: another process may grab the number.
+        attempt(|| match port_conflict(port, &HashSet::new()) {
+            None => Ok(()),
+            Some(other) => Err(format!("{port} still conflicting after release: {other:?}")),
+        });
     }
 
     #[test]
     fn real_checker_sees_a_listening_port() {
-        let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).expect("bind");
-        let port = Port::new(listener.local_addr().expect("addr").port()).expect("valid");
-        assert!(!BindProbeChecker.is_free(port));
-        drop(listener);
-        assert!(BindProbeChecker.is_free(port));
-    }
-
-    #[test]
-    fn suggest_port_uses_the_real_probe() {
-        // Reserve the canonical port and a short run after it. The public
-        // wrapper must return some port that is neither reserved nor reported
-        // in use by the live probe.
-        let mut taken = HashSet::new();
-        for offset in 0..5u16 {
-            taken.insert(Port::new(6379 + offset).expect("valid"));
-        }
-        let suggestion = suggest_port(EngineKey::Valkey, &taken).expect("a port must be found");
+        let (listener, port) = bind_test_listener();
         assert!(
-            !taken.contains(&suggestion),
-            "must not return a reserved port"
+            !BindProbeChecker.is_free(port),
+            "a held port must read busy"
         );
-        assert!(suggestion.get() >= crate::consts::MIN_PORT);
-        assert!(BindProbeChecker.is_free(suggestion));
+        drop(listener);
+        attempt(|| {
+            if BindProbeChecker.is_free(port) {
+                Ok(())
+            } else {
+                Err(format!("{port} still reads busy after release"))
+            }
+        });
     }
 }

@@ -86,12 +86,38 @@ audited `pre_exec(setsid)` was required.
 
 1. Validate before the first signal: `Absent -> NotRunning`, `Reused|Unknown ->
    Refused`.
-2. Send a polite stop (Unix `SIGTERM`; Windows termination via `sysinfo` kill),
+2. Re-validate immediately before acting, binding the observation once so the
+   `Refused { state }` we return is the state that caused the refusal.
+3. Send a polite stop (Unix `SIGTERM`; Windows termination via `sysinfo` kill),
    poll until the identity no longer matches or the grace period elapses.
-3. Re-validate: kill **only** if still `Match`. If the PID was recycled during
+4. Re-validate: kill **only** if still `Match`. If the PID was recycled during
    the wait, return `Refused` and send nothing.
-4. After escalation wait for confirmation; report `Forced` (the "kill paksa"
+5. After escalation wait for confirmation; report `Forced` (the "kill paksa"
    case, `F-INS-03` AC3) or an error if it somehow survives `SIGKILL`.
+
+A process that exits on its own between the last validation and `kill(2)` makes
+the kernel answer `ESRCH`. That is the normal "already gone" race, not an I/O
+failure: the sender's `ESRCH` is classified as gone and the outcome comes from the
+wait instead — `NotRunning` if the stop signal never landed, `Graceful` if the
+process exited during the grace period and the forced kill therefore hit nothing.
+`was_forced()` is only true when a `SIGKILL` actually reached the process, so the
+UI never shows "kill paksa" for a kill that never happened. Any other signal
+error (for example `EPERM`) is still returned to the caller.
+
+### Residual race (accepted)
+
+Between the final `validate` and the `kill(2)` that follows it there is an
+unavoidable window, because the kernel has no "signal this process only if it is
+still that process" operation in the portable API we use. Closing it by
+construction requires the PID to wrap all the way around inside that window *and*
+the newly created process to have the same executable path *and* a start time
+within the ±2 s tolerance — and the identity check would then have to consider it
+a match. We accept that residual risk: it needs a PID wrap in microseconds plus a
+byte-identical executable, which is not a realistic attack surface for a local
+developer tool. A Linux implementation using `pidfd_open` +
+`pidfd_send_signal` would remove the window entirely (the pidfd pins the process
+identity), and it is recorded here as a possible later hardening rather than
+part of this task.
 
 Signals go through the `SignalSender` trait so the escalation/re-validation
 logic is unit-tested without real processes. The default Unix sender uses
@@ -119,11 +145,32 @@ the running process.
 
 ## Tests and evidence
 
-- Unit tests cover port probing/allocation (ephemeral listeners, reserved/busy
+- **Ports in tests come from a reserved range, never `bind(:0)`.** The kernel
+  hands out ephemeral ports (32768-60999 on this host) from one pool shared with
+  every other process and recycles a just-released number immediately, so a test
+  that binds `:0`, drops the listener and then expects `Free` races its own
+  shard's other tests and any unrelated server on the machine. `ports::test_support`
+  (`#[cfg(test)]`) hands out sequential ports in **20000-29999** — below the
+  ephemeral range, above the privileged one — from an `AtomicU16` with a
+  per-process starting offset, skipping any port already bound on `127.0.0.1` or
+  `::1`. Entry points: `reserve_test_port()`, `bind_test_listener()`,
+  `bind_v6_test_listener()` (which re-checks the v4 side after binding `::1`).
+  No test in this worktree binds a port below 20000.
+- **A reserved number can still be taken by another process**, because this
+  machine runs other listeners in that range and concurrent worktrees may run
+  this suite. A test therefore never asserts on one particular number twice:
+  `test_support::attempt` retries an acquire-then-act closure, and a busy slot is
+  skipped rather than failed. A genuine regression still panics with the last real
+  reason. Evidence: **100 consecutive `cargo test -p dblocal-core --lib` runs,
+  0 failures** on the final code.
+- Unit tests cover port probing/allocation (reserved-range listeners, reserved/busy
   skips, bounded exhaustion), identity classification (match/absent/reused/unknown,
-  tolerance, deleted-suffix), reconcile table, terminate escalation/refusal, log
-  tail/follow/rotation (including a 50 MB tail and a 16 MB single-line file), and
-  spawn error/log handling.
+  tolerance, deleted-suffix), reconcile table, terminate escalation/refusal and the
+  `ESRCH` race (`a_process_that_exits_before_the_signal_is_not_running`,
+  `a_kill_that_races_an_exit_is_graceful_not_forced`,
+  `a_refusal_reports_the_state_that_caused_it`), log tail/follow/rotation
+  (including a 50 MB tail and a 16 MB single-line file), and spawn error/log
+  handling.
 - Real-process evidence (Unix), in `process/evidence.rs` and `process/spawn.rs`:
   - **Survival:** `spawn_detached(/bin/sleep 30)`, drop every handle, wait, and
     the child still validates as `Match`; a second test has a helper process

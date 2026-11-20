@@ -89,19 +89,35 @@ pub fn terminate_with(
 
     // Re-validate immediately before acting: the window between the check above
     // and the first signal is small, but a fast PID recycle is exactly the case
-    // invariant 7 exists for.
-    if probe.validate(identity) != ProcessState::Match {
-        return Ok(TerminateOutcome::Refused {
-            state: probe.validate(identity),
-        });
+    // invariant 7 exists for. Bind the observation once so the state we report
+    // is the state that made us refuse.
+    let state = probe.validate(identity);
+    if state != ProcessState::Match {
+        return Ok(TerminateOutcome::Refused { state });
     }
 
-    signals.terminate(identity.pid())?;
+    let delivered = match signals.terminate(identity.pid()) {
+        Ok(()) => true,
+        // The engine exited between the check above and `kill(2)`. That is not
+        // an I/O failure: nothing is left to stop.
+        Err(err) if is_process_gone(&err) => false,
+        Err(err) => return Err(err),
+    };
     match wait_for_exit(identity, probe, grace) {
-        Exit::Gone => return Ok(TerminateOutcome::Graceful),
+        // Let the wait decide: a signal we could not deliver means the process
+        // was already gone, which is `NotRunning`, not a graceful stop.
+        Exit::Gone if delivered => return Ok(TerminateOutcome::Graceful),
+        Exit::Gone => return Ok(TerminateOutcome::NotRunning),
         // We cannot prove the process is still ours, so escalating would risk
         // signalling an unreadable PID.
         Exit::Unverifiable => {
+            return Ok(TerminateOutcome::Refused {
+                state: ProcessState::Unknown,
+            });
+        }
+        // The kernel said the PID does not exist, so the probe must not be
+        // believed either: never act on a contradicted observation.
+        Exit::StillOurs if !delivered => {
             return Ok(TerminateOutcome::Refused {
                 state: ProcessState::Unknown,
             });
@@ -121,9 +137,17 @@ pub fn terminate_with(
             });
         }
     }
-    signals.kill(identity.pid())?;
+    let killed = match signals.kill(identity.pid()) {
+        Ok(()) => true,
+        Err(err) if is_process_gone(&err) => false,
+        Err(err) => return Err(err),
+    };
     match wait_for_exit(identity, probe, KILL_CONFIRM) {
-        Exit::Gone => Ok(TerminateOutcome::Forced),
+        Exit::Gone if killed => Ok(TerminateOutcome::Forced),
+        // It exited on its own in the instant between the final validation and
+        // the forced kill, or the PID vanished before `kill(2)` delivered. No
+        // forced kill reached it, so do not claim one in the UI.
+        Exit::Gone => Ok(TerminateOutcome::Graceful),
         Exit::Unverifiable => Ok(TerminateOutcome::Refused {
             state: ProcessState::Unknown,
         }),
@@ -131,6 +155,38 @@ pub fn terminate_with(
             reason: format!("process {} survived SIGKILL", identity.pid()),
         }),
     }
+}
+
+/// `true` when a failed signal means "no such process".
+///
+/// The engine can exit between our validation and `kill(2)`, which makes the
+/// kernel answer `ESRCH`. That is a normal race, not an error: the caller turns
+/// it into `NotRunning`/`Graceful` instead of surfacing `DblError::Io`.
+fn is_process_gone(err: &DblError) -> bool {
+    match err {
+        DblError::Io { source } => source.raw_os_error().is_some_and(is_gone_errno),
+        _ => false,
+    }
+}
+
+#[cfg(unix)]
+fn is_gone_errno(errno: i32) -> bool {
+    errno == nix::errno::Errno::ESRCH as i32
+}
+
+/// Windows reports a vanished process as `ERROR_INVALID_PARAMETER` or
+/// `ERROR_NOT_FOUND` depending on the API used; `sysinfo` returns `false`
+/// instead of an errno, so this arm only matters for an injected sender.
+#[cfg(windows)]
+fn is_gone_errno(errno: i32) -> bool {
+    const ERROR_INVALID_PARAMETER: i32 = 87;
+    const ERROR_NOT_FOUND: i32 = 1168;
+    errno == ERROR_INVALID_PARAMETER || errno == ERROR_NOT_FOUND
+}
+
+#[cfg(not(any(unix, windows)))]
+fn is_gone_errno(_errno: i32) -> bool {
+    false
 }
 
 /// What the process table showed while waiting for an exit.
@@ -181,6 +237,11 @@ mod signals {
     use crate::error::Result;
 
     /// POSIX signals: SIGTERM first, SIGKILL when the grace period expires.
+    ///
+    /// `ESRCH` means the process is already gone. Reporting it as an error would
+    /// surface a normal exit race as `DblError::Io`, so it is treated as a
+    /// successful "nothing left to signal" and the caller's wait decides the
+    /// outcome.
     pub(super) struct UnixSignals;
 
     impl SignalSender for UnixSignals {
@@ -198,9 +259,13 @@ mod signals {
             field: "pid",
             reason: "does not fit in a pid_t".to_owned(),
         })?;
-        kill(Pid::from_raw(raw), signal).map_err(|err| crate::DblError::Io {
-            source: std::io::Error::from_raw_os_error(err as i32),
-        })
+        match kill(Pid::from_raw(raw), signal) {
+            Ok(()) => Ok(()),
+            Err(nix::errno::Errno::ESRCH) => Ok(()),
+            Err(err) => Err(crate::DblError::Io {
+                source: std::io::Error::from_raw_os_error(err as i32),
+            }),
+        }
     }
 }
 
@@ -488,5 +553,155 @@ mod tests {
                 state: ProcessState::Unknown
             }
         );
+    }
+
+    /// The error a POSIX `kill(2)` returns for a PID that no longer exists.
+    fn esrch() -> DblError {
+        let errno = nix::errno::Errno::ESRCH as i32;
+        DblError::Io {
+            source: std::io::Error::from_raw_os_error(errno),
+        }
+    }
+
+    #[test]
+    fn a_process_that_exits_before_the_signal_is_not_running() {
+        // The engine exits between our validation and `kill(2)`: the kernel
+        // answers ESRCH. That is "already gone", not `DblError::Io`.
+        let probe = FakeProbe::new();
+        probe.set(17, process(17));
+        struct Vanished<'a> {
+            probe: &'a FakeProbe,
+        }
+        impl SignalSender for Vanished<'_> {
+            fn terminate(&self, pid: u32) -> Result<()> {
+                self.probe.remove(pid);
+                Err(esrch())
+            }
+            fn kill(&self, _pid: u32) -> Result<()> {
+                panic!("must not escalate after the process vanished");
+            }
+        }
+        let outcome = terminate_with(
+            &identity(17),
+            Duration::from_millis(50),
+            &probe,
+            &Vanished { probe: &probe },
+        )
+        .expect("an ESRCH race must not surface as an I/O error");
+        assert_eq!(outcome, TerminateOutcome::NotRunning);
+        assert!(!outcome.signalled());
+        assert!(!outcome.was_forced());
+    }
+
+    #[test]
+    fn a_kill_that_races_an_exit_is_graceful_not_forced() {
+        // SIGTERM is ignored, the process exits by itself during the grace
+        // period, and the forced kill then hits a dead PID. The UI must not say
+        // "kill paksa" for a signal that never landed.
+        let probe = FakeProbe::new();
+        probe.set(18, process(18));
+        let signals = RecordingSignals::default();
+        struct ExitsLate<'a> {
+            probe: &'a FakeProbe,
+            signals: &'a RecordingSignals,
+        }
+        impl SignalSender for ExitsLate<'_> {
+            fn terminate(&self, pid: u32) -> Result<()> {
+                self.signals.terminate(pid)
+            }
+            fn kill(&self, pid: u32) -> Result<()> {
+                // Record the attempt first; `DblError` has no `PartialEq`, so
+                // assert on `is_ok` instead of comparing results.
+                assert!(self.signals.kill(pid).is_ok(), "kill attempt recorded");
+                // The process exited just before the signal arrived, so the
+                // kernel answers ESRCH.
+                self.probe.remove(pid);
+                Err(esrch())
+            }
+        }
+        let outcome = terminate_with(
+            &identity(18),
+            Duration::from_millis(20),
+            &probe,
+            &ExitsLate {
+                probe: &probe,
+                signals: &signals,
+            },
+        )
+        .expect("terminate");
+        assert_eq!(outcome, TerminateOutcome::Graceful);
+        assert!(!outcome.was_forced(), "no forced kill actually happened");
+        assert_eq!(signals.killed(), vec![18], "the kill was attempted");
+    }
+
+    #[test]
+    fn a_refusal_reports_the_state_that_caused_it() {
+        // The second validation must bind one observation: with a probe that
+        // changes its answer per call, the reported state has to be the one the
+        // decision was made on, not a later, different one.
+        struct ScriptedProbe {
+            states: Mutex<std::collections::VecDeque<ProcessState>>,
+            calls: Mutex<usize>,
+        }
+        impl ProcessProbe for ScriptedProbe {
+            fn observe(&self, _pid: u32) -> ProcessObservation {
+                unreachable!("validate is overridden")
+            }
+            fn validate(&self, _identity: &ProcessIdentity) -> ProcessState {
+                let mut calls = self.calls.lock().expect("calls lock");
+                *calls += 1;
+                self.states
+                    .lock()
+                    .expect("states lock")
+                    .pop_front()
+                    .expect("scripted state")
+            }
+        }
+        let probe = ScriptedProbe {
+            states: Mutex::new(
+                [
+                    ProcessState::Match,
+                    ProcessState::Reused,
+                    ProcessState::Unknown,
+                ]
+                .into_iter()
+                .collect(),
+            ),
+            calls: Mutex::new(0),
+        };
+        let signals = RecordingSignals::default();
+        let outcome = terminate_with(&identity(19), Duration::from_millis(20), &probe, &signals)
+            .expect("terminate");
+        assert_eq!(
+            outcome,
+            TerminateOutcome::Refused {
+                state: ProcessState::Reused
+            },
+            "the reported state must be the bound decision, not a later probe"
+        );
+        assert_eq!(*probe.calls.lock().expect("calls lock"), 2);
+        assert!(signals.terminated().is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_unix_sender_treats_esrch_as_delivered() {
+        // `kill(2)` against a PID above `pid_max` cannot reach a process, so this
+        // only exercises the errno mapping. No process is signalled, and the
+        // "already gone" answer must not surface as an I/O error.
+        super::signals::UnixSignals
+            .kill(999_999_999)
+            .expect("ESRCH from the sender must be treated as nothing to signal");
+    }
+
+    #[test]
+    fn other_signal_errors_are_still_errors() {
+        let denied = DblError::Io {
+            source: std::io::Error::from(std::io::ErrorKind::PermissionDenied),
+        };
+        assert!(!is_process_gone(&denied));
+        assert!(!is_process_gone(&DblError::Engine {
+            reason: "boom".to_owned()
+        }));
     }
 }

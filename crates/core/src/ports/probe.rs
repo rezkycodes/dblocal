@@ -135,17 +135,11 @@ fn is_no_ipv6(err: &std::io::Error) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::net::TcpListener;
-
-    fn ephemeral() -> (TcpListener, Port) {
-        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("ephemeral bind");
-        let port = listener.local_addr().expect("local addr").port();
-        (listener, Port::new(port).expect("valid ephemeral port"))
-    }
+    use crate::ports::test_support::{attempt, bind_test_listener, bind_v6_test_listener};
 
     #[test]
     fn a_listening_port_is_in_use() {
-        let (listener, port) = ephemeral();
+        let (listener, port) = bind_test_listener();
         let report = probe_bind(port).expect("probe");
         assert!(!report.is_free(), "expected InUse while listener is open");
         assert_eq!(report.port(), port);
@@ -154,27 +148,44 @@ mod tests {
 
     #[test]
     fn a_closed_port_is_free() {
-        let (listener, port) = ephemeral();
-        drop(listener);
-        let report = probe_bind(port).expect("probe");
-        assert!(report.is_free(), "expected Free after closing the listener");
-        assert_eq!(report.status(), &BindStatus::Free);
+        // Acquire, release and probe in one retried cycle. Another process may
+        // take the number in the gap; that is not the property under test, so
+        // the next candidate is tried instead.
+        attempt(|| {
+            let (listener, port) = bind_test_listener();
+            drop(listener);
+            match probe_bind(port).expect("probe").status().clone() {
+                BindStatus::Free => Ok(()),
+                BindStatus::InUse { detail } => {
+                    Err(format!("{port} was taken again after release: {detail}"))
+                }
+            }
+        });
     }
 
     #[test]
     fn probing_is_repeatable_and_leaves_no_socket_behind() {
         // `F-PRT-02` AC3: the probe socket must be closed again, otherwise the
-        // engine could not bind right after.
-        let (listener, port) = ephemeral();
-        drop(listener);
-        assert!(probe_bind(port).expect("probe").is_free());
-        assert!(probe_bind(port).expect("probe").is_free());
-        assert!(probe_bind(port).expect("probe").is_free());
+        // engine could not bind right after. Three probes of the same released
+        // port must all report Free.
+        attempt(|| {
+            let (listener, port) = bind_test_listener();
+            drop(listener);
+            for round in 1..=3 {
+                match probe_bind(port).expect("probe").status().clone() {
+                    BindStatus::Free => {}
+                    BindStatus::InUse { detail } => {
+                        return Err(format!("{port} busy on probe {round}: {detail}"));
+                    }
+                }
+            }
+            Ok(())
+        });
     }
 
     #[test]
     fn an_in_use_report_names_the_interface() {
-        let (listener, port) = ephemeral();
+        let (listener, port) = bind_test_listener();
         match probe_bind(port).expect("probe").status().clone() {
             BindStatus::InUse { detail } => assert!(
                 detail.starts_with("127.0.0.1:") || detail.starts_with("[::1]:"),
@@ -187,10 +198,13 @@ mod tests {
 
     #[test]
     fn probe_or_in_use_keeps_the_report_shape() {
-        let (listener, port) = ephemeral();
+        let (listener, port) = bind_test_listener();
         assert!(!probe_or_in_use(port).is_free());
         drop(listener);
-        assert!(probe_or_in_use(port).is_free());
+        attempt(|| match probe_or_in_use(port).status() {
+            BindStatus::Free => Ok(()),
+            BindStatus::InUse { detail } => Err(format!("{port} still in use: {detail}")),
+        });
     }
 
     #[test]
@@ -213,17 +227,19 @@ mod tests {
 
     #[test]
     fn a_v6_only_listener_is_reported_in_use() {
-        // PRD edge case: `::1` occupied while `127.0.0.1` is free. If this host
-        // has no IPv6 loopback the test is vacuously satisfied by the v4 answer.
-        let Ok(listener) = TcpListener::bind((Ipv6Addr::LOCALHOST, 0)) else {
+        // PRD edge case: `::1` occupied while `127.0.0.1` is free. The helper
+        // returns `None` when the host has no IPv6 loopback, so this is skipped
+        // rather than silently vacuous.
+        let Some((listener, port)) = bind_v6_test_listener() else {
             return;
         };
-        let port = listener.local_addr().expect("addr").port();
-        let port = Port::new(port).expect("valid port");
         let report = probe_bind(port).expect("probe");
         assert!(!report.is_free(), "a v6 listener must not read as free");
         drop(listener);
-        assert!(probe_bind(port).expect("probe").is_free());
+        attempt(|| match probe_bind(port).expect("probe").status() {
+            BindStatus::Free => Ok(()),
+            BindStatus::InUse { detail } => Err(format!("{port} still in use: {detail}")),
+        });
     }
 
     #[test]

@@ -6,6 +6,9 @@
 mod allocate;
 mod probe;
 
+#[cfg(test)]
+pub(crate) mod test_support;
+
 pub use allocate::{
     BindProbeChecker, MAX_SCAN, PortChecker, PortConflict, PortSuggestion, port_conflict,
     suggest_port, suggest_port_with,

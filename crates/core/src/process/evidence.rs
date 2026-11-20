@@ -57,29 +57,39 @@ fn a_grandchild_survives_its_parent_exiting() {
     let pidfile = dir.path().join("engine.pid");
     let log = dir.path().join("helper.log");
     let mut helper = Command::new("/bin/sh");
+    // The helper stays alive briefly after writing the pidfile. `spawn_detached`
+    // records an identity by observing the live process, and a shell that exits
+    // within a couple of milliseconds can legitimately be gone before the first
+    // observation — that is a property of the launcher, not of the survival
+    // guarantee this test is about.
     helper.args([
         "-c",
-        &format!("/bin/sleep 30 & echo $! > {}", pidfile.display()),
+        &format!(
+            "/bin/sleep 30 >/dev/null 2>&1 & echo $! > {}; sleep 0.3",
+            pidfile.display()
+        ),
     ]);
     let helper_identity = spawn_detached(helper, &log).expect("spawn helper");
 
-    // Wait until the helper wrote the PID and exited.
+    let probe = SysinfoProbe::new();
+    // Wait until the helper has both written the PID and actually exited, so the
+    // grandchild is genuinely reparented before we validate it.
     let deadline = std::time::Instant::now() + Duration::from_secs(10);
     let pid = loop {
         let parsed = std::fs::read_to_string(&pidfile)
             .ok()
             .and_then(|text| text.trim().parse::<u32>().ok())
             .filter(|pid| *pid > 0);
-        if let Some(pid) = parsed {
+        let helper_gone = probe.validate(&helper_identity) != ProcessState::Match;
+        if let Some(pid) = parsed.filter(|_| helper_gone) {
             break pid;
         }
         assert!(
             std::time::Instant::now() < deadline,
-            "helper never wrote a pid"
+            "helper never wrote a pid and exited"
         );
         std::thread::sleep(Duration::from_millis(20));
     };
-    let probe = SysinfoProbe::new();
     assert_ne!(
         probe.validate(&helper_identity),
         ProcessState::Match,
