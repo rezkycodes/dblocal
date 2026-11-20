@@ -56,6 +56,6 @@ Launch order (machine load): F, B, C, D first; A and E when slots free; G after 
 | W0-A | round 2 in progress | R1 verified (gates, 95.64% coverage, M1-M4 correct). Open: M5 `zip` default features pull `bzip2` (only crate `cargo deny` rejects) |
 | W0-B | **merged** (952afaa) | Findings verified independently (MySQL 832 MB, no SHA-256; MariaDB Linux/Windows x64 only; Valkey Linux only). Reviewer found MySQL `-minimal` 79.8 MB. Recorded as D-24 |
 | W0-C | running | Redirected to Zed-style UI (D-23); waiting for go/no-go and widget coverage table |
-| W0-D | round 1 fixes in progress | Verified clean except `install.sh` D1-D5 (running-binary upgrade, TLS fallback, trap, extraction scope, tag validation) |
+| W0-D | **merged** | Round 2 re-verified: 52/52 tests (12 fail on the old installer, so they are not vacuous), hostile `DBLOCAL_RELEASE_BASE_URL` values rejected with 0 curl calls, shellcheck clean. Not run on GitHub: `release.yml`, `valkey-build.yml` |
 | W1-A..F | specs written | Start after W0-A merges |
 | W1-G | spec waits for W0-C | |
