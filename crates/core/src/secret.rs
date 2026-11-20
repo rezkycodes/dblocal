@@ -9,6 +9,9 @@ use zeroize::{Zeroize, Zeroizing};
 /// There is deliberately no `Serialize` implementation. Callers must ask for
 /// [`SecretString::expose`] explicitly, which makes every use of the raw value
 /// easy to audit. The backing buffer is zeroed on drop.
+///
+/// Do not use `==`/`PartialEq` to compare secrets from untrusted input; the
+/// derived comparison is not constant-time.
 #[derive(Clone, PartialEq, Eq)]
 pub struct SecretString(Zeroizing<String>);
 
