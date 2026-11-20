@@ -56,10 +56,52 @@ is ever written to disk.
   - **Retryable**: connect/DNS/timeout errors, connection reset, unexpected EOF, write I/O
     failures, HTTP `5xx`, `408 Request Timeout` and `429 Too Many Requests`.
   - **Fatal**: any other `4xx` (a `404` is a fact, not a blip), a checksum mismatch, URL-policy
-    rejection, and cancellation.
+    rejection, cancellation, a body longer than the catalog allows, and a content encoding other
+    than `identity`.
 
   Retryable attempts are retried up to `MAX_RETRIES` with exponential backoff between
   `INITIAL_BACKOFF` and `MAX_BACKOFF` (total attempts = 1 + `MAX_RETRIES`).
+
+### Body size is bounded by the catalog (C1)
+
+The declared `size_bytes` bounds what is written, not just what is checked at the end:
+
+- **Before writing**, a response whose declared length contradicts the catalog fails fatally. On a
+  `206` the full size comes from the `Content-Range` total; on a `200` it comes from
+  `Content-Length`. The error names the server's declared size and the catalog's expected size, and
+  nothing is written.
+- **While streaming**, the first chunk that would take the written total past `expected_size` stops
+  the transfer, deletes the `.part` and its `.etag` sidecar, and fails fatally with an "oversized
+  response body" error naming the expected size and "at least" the bytes seen. It is checked before
+  the write, so a rogue server or middlebox cannot fill the disk: the loop stops within one chunk of
+  the limit rather than draining the connection. This is not retryable — a longer body is a
+  server-side fact, not a transient fault — and the `size * 3` preflight cannot help against an
+  endless body, so this guard is what does.
+- **A clean early EOF** (no transport error, fewer bytes than expected) is a *truncation*: the
+  `.part` is kept and the retry loop resumes from it with `Range`, instead of reporting a checksum
+  mismatch for bytes that never arrived. A body of exactly the expected size with the wrong digest
+  is still a fatal `ChecksumMismatch` that deletes the `.part`.
+
+### Content encoding is identity (C2)
+
+Catalog digests are computed over the **raw published bytes**. The Valkey CDN serves two different
+objects for the same URL depending on `Accept-Encoding`, so:
+
+- Every request (initial, resumed with `Range`, and the re-issued request after a restart) sends
+  `Accept-Encoding: identity`.
+- A response carrying a `Content-Encoding` other than absent or `identity` is rejected fatally
+  **before any body byte is written**, with an error that names the header value and states that
+  artifacts must be fetched as identity. It is not retried.
+- `reqwest`'s decompression features are **not** enabled, so the body is never transparently
+  decoded; a test asserts the workspace `reqwest` line has no `gzip`/`brotli`/`zstd`/`deflate`
+  feature.
+
+### Proxies (C3)
+
+`HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` are honoured (reqwest's default). That is deliberate:
+corporate users behind a proxy need it, and it breaks no invariant — TLS and the HTTPS-only policy
+still apply to every host dialled through the proxy.
+
 - Cancellation is polled between chunks and inside the backoff sleep. On cancel the `.part` and
   `.etag` are deleted and `DblError::Cancelled` is returned, so `F-RTM-01 AC4` (< 1 s) holds even
   mid-stream.
@@ -218,6 +260,19 @@ All tests run offline against an in-process TCP server on `127.0.0.1:0`.
 | Symlink with no target, absolute target | `UnsafeArchive` |
 | Empty archive with `strip_prefix` | `InvalidInput { field: "strip_prefix" }` |
 | Empty archive without `strip_prefix` | empty runtime tree, success |
+| Overlong chunked body (no `Content-Length`) | fatal "oversized response body", `.part`+`.etag` deleted, one attempt, stops within one chunk of the limit |
+| Overlong body on a resumed transfer | same, fatal |
+| `Content-Length` larger than the catalog | fatal before writing, names both sizes, no `.part` |
+| `Content-Range` total larger than the catalog (206) | fatal before writing |
+| Oversized declared length on a resumed transfer | fatal before writing |
+| Clean early EOF (short chunked body) | retried as a truncation, resumes, identical hash |
+| Clean early EOF on the first response only | one short response then one resume, identical hash |
+| Complete body with wrong digest | fatal `ChecksumMismatch`, `.part` deleted, not retried |
+| `Content-Encoding: gzip` (server ignores identity) | fatal before writing, names the encoding, no `.part`, not retried |
+| `Content-Encoding: gzip` on a resumed transfer | fatal before writing |
+| `Content-Encoding: identity` explicit | accepted and verified |
+| Server that gzips unless `identity` is requested | identity request gets raw bytes, hash matches |
+| `reqwest` features in the workspace manifest | no `gzip`/`brotli`/`zstd`/`deflate` decompression |
 
 ## Notes and deviations
 

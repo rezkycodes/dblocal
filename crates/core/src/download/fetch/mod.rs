@@ -1,5 +1,6 @@
 //! Resumable HTTPS download with progress, retries and cancellation.
 
+mod guard;
 mod session;
 
 use std::path::{Path, PathBuf};

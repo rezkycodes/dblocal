@@ -8,6 +8,7 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
+mod bounds;
 mod download_flow;
 mod extraction;
 mod finalisation;
@@ -49,6 +50,32 @@ struct ServeConfig {
     lie_about_content_range: bool,
     /// Close the connection without writing any response on the first request.
     drop_first: bool,
+    /// Stream this many extra body bytes past the declared size (an endless or
+    /// overlong body). `None` serves exactly `body`.
+    extra_bytes: Option<usize>,
+    /// Advertise `Content-Length: <body.len() + extra>` instead of the real
+    /// length, simulating a server that promises more than it will send, or
+    /// more than the catalog expects.
+    advertise_extra_length: Option<u64>,
+    /// Send the body with no `Content-Length` (chunked framing) and stop after
+    /// only this many bytes: a complete response whose body ends early.
+    clean_short_body_to: Option<usize>,
+    /// On the first request only, send a complete chunked body of this many
+    /// bytes (a clean short response); later requests behave normally.
+    short_first_to: Option<usize>,
+    /// Send the whole payload with chunked framing and no `Content-Length`, so
+    /// an overlong body cannot be rejected from a length header and the streamed
+    /// guard has to catch it.
+    chunked: bool,
+    /// Add `Accept-Encoding: identity` handling: gzip the body unless the request
+    /// already asks for identity.
+    gzip_unless_identity: bool,
+    /// Always answer with `Content-Encoding: gzip` and a gzip body, even when the
+    /// request asked for identity (a server that ignores the request).
+    always_gzip: bool,
+    /// Emit `Content-Encoding: identity` explicitly (legal and equivalent to
+    /// omitting the header).
+    explicit_identity_encoding: bool,
 }
 
 impl ServeConfig {
@@ -62,6 +89,14 @@ impl ServeConfig {
             fail_first: Some((0, 500)),
             lie_about_content_range: false,
             drop_first: false,
+            extra_bytes: None,
+            advertise_extra_length: None,
+            clean_short_body_to: None,
+            short_first_to: None,
+            chunked: false,
+            gzip_unless_identity: false,
+            always_gzip: false,
+            explicit_identity_encoding: false,
         }
     }
 
@@ -77,6 +112,56 @@ impl ServeConfig {
 
     fn with_drop_first(mut self) -> Self {
         self.drop_first = true;
+        self
+    }
+
+    /// Serve `body` followed by `extra` more bytes, so the stream is longer than
+    /// the catalog's expected size.
+    fn with_extra_bytes(mut self, extra: usize) -> Self {
+        self.extra_bytes = Some(extra);
+        self
+    }
+
+    /// Advertise a `Content-Length` larger than the real body.
+    fn with_advertised_extra_length(mut self, extra: u64) -> Self {
+        self.advertise_extra_length = Some(extra);
+        self
+    }
+
+    /// Send the body without `Content-Length` and close after `n` bytes.
+    fn with_clean_short_body_to(mut self, n: usize) -> Self {
+        self.clean_short_body_to = Some(n);
+        self
+    }
+
+    /// Answer the first request with a complete chunked body of only `n` bytes;
+    /// later requests behave normally.
+    fn with_short_first(mut self, n: usize) -> Self {
+        self.short_first_to = Some(n);
+        self
+    }
+
+    /// Frame the payload as chunked with no `Content-Length` at all.
+    fn with_chunked(mut self) -> Self {
+        self.chunked = true;
+        self
+    }
+
+    /// gzip the body unless the request asks for `Accept-Encoding: identity`.
+    fn with_gzip_unless_identity(mut self) -> Self {
+        self.gzip_unless_identity = true;
+        self
+    }
+
+    /// Always gzip and mark `Content-Encoding: gzip`, ignoring what was asked.
+    fn with_always_gzip(mut self) -> Self {
+        self.always_gzip = true;
+        self
+    }
+
+    /// Send `Content-Encoding: identity` explicitly.
+    fn with_explicit_identity_encoding(mut self) -> Self {
+        self.explicit_identity_encoding = true;
         self
     }
 }
@@ -147,7 +232,7 @@ async fn serve(
 
     let range = parse_range_start(&req);
     let mut headers = Vec::new();
-    let (status, payload) = match (range, cfg.ignore_range) {
+    let (status, mut payload) = match (range, cfg.ignore_range) {
         (Some(start), false) if start < cfg.body.len() => {
             let slice = cfg.body[start..].to_vec();
             headers.push("Accept-Ranges: bytes".to_owned());
@@ -156,11 +241,13 @@ async fn serve(
             } else {
                 start
             };
+            let advertised_total =
+                (cfg.body.len() as u64).saturating_add(cfg.advertise_extra_length.unwrap_or(0));
             headers.push(format!(
                 "Content-Range: bytes {}-{}/{}",
                 reported_start,
                 cfg.body.len() - 1,
-                cfg.body.len()
+                advertised_total
             ));
             (206u16, slice)
         }
@@ -177,7 +264,47 @@ async fn serve(
             (200u16, cfg.body.clone())
         }
     };
-    headers.push(format!("Content-Length: {}", payload.len()));
+
+    // --- content encoding ---------------------------------------------------
+    // A server that "gzips unless identity is requested" models the Valkey CDN:
+    // two different objects for the same URL depending on `Accept-Encoding`.
+    let asked_identity = request_accepts_identity(&req);
+    let gzip_body = cfg.always_gzip || (cfg.gzip_unless_identity && !asked_identity);
+    if gzip_body {
+        payload = gzip_bytes(&payload);
+        headers.push("Content-Encoding: gzip".to_owned());
+    } else if cfg.explicit_identity_encoding {
+        headers.push("Content-Encoding: identity".to_owned());
+    }
+
+    // --- overlong bodies ----------------------------------------------------
+    if let Some(extra) = cfg.extra_bytes {
+        payload.extend(std::iter::repeat_n(0xABu8, extra));
+    }
+
+    // --- length headers ----------------------------------------------------
+    // A "clean early EOF" must not advertise a length at all; otherwise the
+    // client would (correctly) see a transport truncation instead. The same is
+    // true for the first-response-only short body.
+    let short_body_limit = cfg
+        .clean_short_body_to
+        .or_else(|| (hit == 0).then_some(cfg.short_first_to).flatten());
+    let tolerate_short = short_body_limit.is_some();
+    if cfg.chunked {
+        headers.push("Transfer-Encoding: chunked".to_owned());
+    } else if !tolerate_short {
+        // On a `206` the length header must describe only the bytes in this
+        // response, so `advertise_extra_length` is carried by the `Content-Range`
+        // total above instead; anything else would be a transport-level lie.
+        let advertised = if status == 206 {
+            payload.len() as u64
+        } else {
+            (payload.len() as u64).saturating_add(cfg.advertise_extra_length.unwrap_or(0))
+        };
+        headers.push(format!("Content-Length: {advertised}"));
+    } else {
+        headers.push("Transfer-Encoding: chunked".to_owned());
+    }
     if let Some(etag) = &cfg.etag {
         headers.push(format!("ETag: {etag}"));
     }
@@ -203,9 +330,67 @@ async fn serve(
         stream.flush().await?;
         return Ok(());
     }
+
+    if cfg.chunked {
+        // Chunked framing of the entire payload: a complete response with no
+        // declared length, so only the streamed size guard can reject it.
+        let mut framed = Vec::new();
+        for chunk in payload.chunks(4096) {
+            framed.extend_from_slice(format!("{:x}\r\n", chunk.len()).as_bytes());
+            framed.extend_from_slice(chunk);
+            framed.extend_from_slice(b"\r\n");
+        }
+        framed.extend_from_slice(b"0\r\n\r\n");
+        stream.write_all(&framed).await?;
+        stream.flush().await?;
+        return Ok(());
+    }
+
+    if let Some(short_to) = short_body_limit {
+        // Chunked framing with a final zero-length chunk: a *complete* response
+        // whose body merely stops early. This is not a transport error, which is
+        // exactly the case the retry logic must classify as a truncation.
+        let send = short_to.min(payload.len());
+        let mut framed = Vec::new();
+        if send > 0 {
+            framed.extend_from_slice(format!("{send:x}\r\n").as_bytes());
+            framed.extend_from_slice(&payload[..send]);
+            framed.extend_from_slice(b"\r\n");
+        }
+        framed.extend_from_slice(b"0\r\n\r\n");
+        stream.write_all(&framed).await?;
+        stream.flush().await?;
+        return Ok(());
+    }
+
     stream.write_all(&payload).await?;
     stream.flush().await?;
     Ok(())
+}
+
+fn gzip_bytes(data: &[u8]) -> Vec<u8> {
+    let mut out = Vec::new();
+    {
+        let mut enc = flate2::write::GzEncoder::new(&mut out, flate2::Compression::fast());
+        enc.write_all(data).expect("gzip write");
+        enc.finish().expect("gzip finish");
+    }
+    out
+}
+
+fn request_accepts_identity(req: &str) -> bool {
+    for line in req.lines() {
+        let Some((name, value)) = line.split_once(':') else {
+            continue;
+        };
+        if !name.eq_ignore_ascii_case("accept-encoding") {
+            continue;
+        }
+        return value
+            .split(',')
+            .any(|token| token.trim().eq_ignore_ascii_case("identity"));
+    }
+    false
 }
 
 async fn read_request_head(stream: &mut tokio::net::TcpStream) -> std::io::Result<String> {

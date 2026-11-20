@@ -615,7 +615,7 @@ async fn download_creates_missing_parent_directories() {
 }
 
 #[tokio::test]
-async fn empty_response_body_fails_checksum_and_deletes_part() {
+async fn empty_response_body_fails_and_deletes_part() {
     let server = start_server(ServeConfig {
         etag: Some("\"e\"".to_owned()),
         ..ServeConfig::normal(Vec::new())
@@ -637,9 +637,14 @@ async fn empty_response_body_fails_checksum_and_deletes_part() {
     )
     .await
     .expect_err("empty body cannot match");
+    // A body shorter than the catalog says is refused before any byte is written
+    // (review round 1, C1), so this is now a size error rather than something we
+    // only discover at checksum time.
+    assert!(matches!(err, crate::DblError::Network { .. }), "{err:?}");
+    let message = err.to_string();
     assert!(
-        matches!(err, crate::DblError::ChecksumMismatch { .. }),
-        "{err:?}"
+        message.contains("declares 0 bytes") && message.contains("expects 14 bytes"),
+        "error must name both sizes: {message}"
     );
     assert!(!part.exists());
 }

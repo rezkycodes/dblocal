@@ -4,7 +4,9 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 
 use reqwest::StatusCode;
-use reqwest::header::{CONTENT_LENGTH, CONTENT_RANGE, ETAG, HeaderMap, IF_RANGE, RANGE};
+use reqwest::header::{
+    ACCEPT_ENCODING, CONTENT_LENGTH, CONTENT_RANGE, ETAG, HeaderMap, IF_RANGE, RANGE,
+};
 use tokio::io::AsyncWriteExt;
 
 use crate::model::Artifact;
@@ -12,6 +14,7 @@ use crate::model::DownloadProgress;
 use crate::{DblError, Result};
 
 use super::super::verify::{StreamingHasher, hash_prefix, verify_or_reject};
+use super::guard::{body_exceeds_expected, ensure_declared_length, ensure_identity_encoding};
 use super::*;
 
 /// Downloads `artifact` to `part_path`, resuming when possible, verifying the
@@ -79,7 +82,11 @@ pub(super) async fn download_from_url_impl(
         let outcome = download_once(&client, &transfer, part_path, options, &progress).await;
         match outcome {
             Ok(()) => return Ok(()),
-            Err(AttemptError { error, retryable }) => {
+            Err(AttemptError {
+                error,
+                retryable,
+                truncated,
+            }) => {
                 if matches!(error, DblError::Cancelled { .. }) {
                     cleanup_part(part_path).await;
                     return Err(error);
@@ -91,8 +98,9 @@ pub(super) async fn download_from_url_impl(
                         attempt,
                         max = options.max_retries,
                         delay_ms = delay.as_millis() as u64,
+                        truncated,
                         error = %error,
-                        "download attempt failed, retrying"
+                        "download attempt ended early, resuming from the partial file"
                     );
                     sleep_or_cancel(&options.cancel, delay, part_path).await?;
                     // loop: download_once resumes from whatever `.part` we have
@@ -115,9 +123,10 @@ fn build_client(policy: &UrlPolicy) -> Result<reqwest::Client> {
             let policy = policy.clone();
             move |attempt| redirect_action(&policy, attempt)
         }));
-    // Ensure no system proxy surprises for loopback tests; production can still
-    // honour env proxies via defaults if desired, but we keep behaviour explicit.
-    // (default reqwest enables system proxy; leave as-is for production.)
+    // Proxy behaviour is reqwest's default: `HTTP_PROXY` / `HTTPS_PROXY` /
+    // `NO_PROXY` are honoured, so users behind a corporate proxy work without
+    // extra configuration. Documented in `docs/architecture/download.md`; TLS and
+    // the HTTPS-only policy still apply to every host dialled through a proxy.
     let client = builder.build().map_err(|e| DblError::Network {
         reason: format!("failed to build HTTP client: {e}"),
     })?;
@@ -157,6 +166,20 @@ async fn download_once(
     let (mut offset, mut hasher, stored_etag) =
         resume_state(part_path).await.map_err(AttemptError::fatal)?;
 
+    // A `.part` bigger than the catalog allows can only come from a stale run
+    // (the catalog changed the artifact's size between attempts). It is not a
+    // resume point, so discard it and start clean rather than reporting the
+    // resumed bytes as an oversized body.
+    if offset > transfer.expected_size {
+        emit_restart(
+            progress,
+            "partial file is larger than the catalog size; restarting",
+        );
+        (offset, hasher) = restart_clean(part_path)
+            .await
+            .map_err(AttemptError::fatal)?;
+    }
+
     let mut req = client.get(transfer.url.clone());
     if offset > 0 {
         req = req.header(RANGE, format!("bytes={offset}-"));
@@ -164,6 +187,7 @@ async fn download_once(
             req = req.header(IF_RANGE, etag.as_str());
         }
     }
+    let req = with_identity_encoding(req);
 
     let resp = send_request(req).await?;
     let status = resp.status();
@@ -210,6 +234,8 @@ async fn download_once(
             )
             .await;
         }
+        ensure_identity_encoding(resp.headers(), part_path).await?;
+        ensure_declared_length(status, resp.headers(), transfer.expected_size, part_path).await?;
         // Persist ETag from this response if present (helps subsequent resumes).
         save_etag_from_response(resp.headers(), part_path).await;
         return stream_response(
@@ -235,6 +261,8 @@ async fn download_once(
                 .await
                 .map_err(AttemptError::fatal)?;
         }
+        ensure_identity_encoding(resp.headers(), part_path).await?;
+        ensure_declared_length(status, resp.headers(), transfer.expected_size, part_path).await?;
         save_etag_from_response(resp.headers(), part_path).await;
         return stream_response(
             resp,
@@ -264,12 +292,14 @@ async fn download_fresh(
     hasher: StreamingHasher,
 ) -> Result<(), AttemptError> {
     // Re-issue a plain GET after a clean restart.
-    let req = client.get(transfer.url.clone());
+    let req = with_identity_encoding(client.get(transfer.url.clone()));
     let resp = send_request(req).await?;
     let status = resp.status();
     if !status.is_success() {
         return Err(status_attempt_error(status, transfer.url));
     }
+    ensure_identity_encoding(resp.headers(), part_path).await?;
+    ensure_declared_length(status, resp.headers(), transfer.expected_size, part_path).await?;
     save_etag_from_response(resp.headers(), part_path).await;
     stream_response(
         resp,
@@ -291,6 +321,16 @@ async fn send_request(builder: reqwest::RequestBuilder) -> Result<reqwest::Respo
         .send()
         .await
         .map_err(|e| AttemptError::retryable(map_reqwest_error(e)))
+}
+
+/// Asks the server for the raw published bytes.
+///
+/// Catalog digests are computed over the identity encoding. Without this header
+/// a CDN may serve a gzip-compressed object (the Valkey CDN does exactly that),
+/// which this client — with no `reqwest` decompression feature enabled — would
+/// hash as-is and reject with a confusing checksum error.
+fn with_identity_encoding(request: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+    request.header(ACCEPT_ENCODING, "identity")
 }
 
 /// Inputs for one streaming pass over a response body.
@@ -360,11 +400,22 @@ async fn stream_response(
         if chunk.is_empty() {
             continue;
         }
+        // C1: bound the body by the size the catalog declared. Checked before
+        // the write so a rogue stream cannot grow the `.part` past the limit.
+        let next = downloaded.saturating_add(chunk.len() as u64);
+        if next > transfer.expected_size {
+            drop(file);
+            cleanup_part(part_path).await;
+            return Err(AttemptError::fatal(body_exceeds_expected(
+                next,
+                transfer.expected_size,
+            )));
+        }
         hasher.update(&chunk);
         file.write_all(&chunk)
             .await
             .map_err(|source| AttemptError::retryable(DblError::Io { source }))?;
-        downloaded = downloaded.saturating_add(chunk.len() as u64);
+        downloaded = next;
         bytes_since_report = bytes_since_report.saturating_add(chunk.len() as u64);
 
         let now = Instant::now();
@@ -403,6 +454,18 @@ async fn stream_response(
         &started,
         downloaded.saturating_sub(offset),
     );
+
+    // C1.3: a body that stops early without a transport error is a truncation.
+    // Keep the `.part` so the retry loop resumes from it; do not report a
+    // checksum mismatch for bytes we never received.
+    if downloaded < transfer.expected_size {
+        return Err(AttemptError::truncated(DblError::Network {
+            reason: format!(
+                "response body ended early: expected {} bytes, received {downloaded}",
+                transfer.expected_size
+            ),
+        }));
+    }
 
     let actual = hasher.finalize_hex();
     verify_or_reject(transfer.label, transfer.expected_sha256, &actual, part_path)
@@ -446,7 +509,7 @@ async fn restart_clean(part_path: &Path) -> Result<(u64, StreamingHasher)> {
     Ok((0, StreamingHasher::new()))
 }
 
-async fn cleanup_part(part_path: &Path) {
+pub(super) async fn cleanup_part(part_path: &Path) {
     let _ = tokio::fs::remove_file(part_path).await;
     let _ = tokio::fs::remove_file(etag_sidecar_path(part_path)).await;
 }
@@ -582,25 +645,41 @@ fn backoff_delay(options: &DownloadOptions, attempt: u32) -> Duration {
 ///
 /// Transport failures (connect, timeout, reset, unexpected EOF) are retryable;
 /// protocol failures (an unexpected HTTP status, a checksum mismatch, a
-/// cancellation) are not. Without this distinction a 404 would be retried five
+/// cancellation, a body longer than the catalog promised, a content encoding we
+/// did not ask for) are not. Without this distinction a 404 would be retried five
 /// times and a bad digest would be retried instead of reported.
-struct AttemptError {
-    error: DblError,
-    retryable: bool,
+#[derive(Debug)]
+pub(super) struct AttemptError {
+    pub(super) error: DblError,
+    pub(super) retryable: bool,
+    /// The attempt ended with a complete-but-short body. The retry loop uses this
+    /// to resume from the `.part` instead of treating the short read as a bad
+    /// digest.
+    truncated: bool,
 }
 
 impl AttemptError {
-    fn retryable(error: DblError) -> Self {
+    pub(super) fn retryable(error: DblError) -> Self {
         Self {
             error,
             retryable: true,
+            truncated: false,
         }
     }
 
-    fn fatal(error: DblError) -> Self {
+    pub(super) fn fatal(error: DblError) -> Self {
         Self {
             error,
             retryable: false,
+            truncated: false,
+        }
+    }
+
+    fn truncated(error: DblError) -> Self {
+        Self {
+            error,
+            retryable: true,
+            truncated: true,
         }
     }
 }
@@ -634,5 +713,9 @@ fn status_attempt_error(status: StatusCode, url: &reqwest::Url) -> AttemptError 
     let retryable = status.is_server_error()
         || status == StatusCode::REQUEST_TIMEOUT
         || status == StatusCode::TOO_MANY_REQUESTS;
-    AttemptError { error, retryable }
+    AttemptError {
+        error,
+        retryable,
+        truncated: false,
+    }
 }
