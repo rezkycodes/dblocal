@@ -28,6 +28,12 @@ under `crates/core/src/process.rs`, `crates/core/src/process/**`,
   interface is free. `AddrNotAvailable`/`Unsupported` for IPv6 are treated as
   "no IPv6 loopback", not as a conflict. `probe_or_in_use` folds unexpected
   errors into `InUse` so callers degrade conservatively.
+  - **No `SO_REUSEADDR`.** `std::net::TcpListener::bind` sets `SO_REUSEADDR` on
+    Unix (verified in this toolchain's std source), which would make a busy port
+    look free. The probe therefore creates the socket through
+    `tokio::net::TcpSocket` (`socket2` underneath, already a core dependency),
+    binds with default options, and drops it. On Windows the platform default is
+    `SO_EXCLUSIVEADDRUSE` semantics, which is the behaviour the PRD asks for.
 - `suggest_port(engine, reserved) -> Result<Port>` starts at the engine's
   canonical port (5432/3306/3307/6379), steps upward, skipping ports in
   `reserved` (other DBLocal instances) and ports reported busy by the live

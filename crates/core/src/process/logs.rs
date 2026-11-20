@@ -34,30 +34,48 @@ pub fn tail_lines(path: &Path, n: usize) -> Result<Vec<String>> {
     }
 
     const CHUNK: u64 = 8 * 1024;
-    let mut remaining = len;
-    let mut collected: Vec<u8> = Vec::new();
+    // A whole file of newlines would let the backward scan run to the start; a
+    // real log line is tiny, so bounding the window keeps a pathological file
+    // from costing a full read without changing any realistic result.
+    const MAX_WINDOW: u64 = 8 * 1024 * 1024;
+    let mut window = 0u64;
+    let mut cursor = len;
     let mut newline_count = 0usize;
+    let mut start = 0u64;
+    let mut found_start = false;
+    let mut buf = vec![0u8; usize::try_from(CHUNK).unwrap_or(usize::MAX)];
 
-    while remaining > 0 {
-        let read_len = std::cmp::min(CHUNK, remaining);
-        remaining -= read_len;
-        file.seek(SeekFrom::Start(remaining))?;
-        let mut buf = vec![0u8; usize::try_from(read_len).unwrap_or(usize::MAX)];
-        file.read_exact(&mut buf)?;
-        newline_count += buf.iter().filter(|b| **b == b'\n').count();
-        // Prepend: we are walking backwards, so this chunk comes before what we
-        // already collected.
-        let mut joined = buf;
-        joined.append(&mut collected);
-        collected = joined;
-        // One newline separates two lines; the first byte(s) before the first
-        // newline in the buffer might be the start of the Nth-from-end line, so
-        // keep scanning until we have strictly more than `n` breaks.
-        if newline_count > n {
+    // Walk backwards counting newlines without copying, then read the window
+    // once. Prepending each chunk instead would be quadratic in file size.
+    while cursor > 0 && window < MAX_WINDOW {
+        let read_len = std::cmp::min(CHUNK, cursor);
+        cursor -= read_len;
+        window += read_len;
+        let read_len_usize = usize::try_from(read_len).unwrap_or(usize::MAX);
+        file.seek(SeekFrom::Start(cursor))?;
+        file.read_exact(&mut buf[..read_len_usize])?;
+        for index in (0..read_len_usize).rev() {
+            if buf[index] == b'\n' {
+                newline_count += 1;
+                // `n` trailing lines need `n` newlines counted backwards from
+                // the final byte (a trailing newline ends the last line).
+                if newline_count > n {
+                    start = cursor + index as u64 + 1;
+                    found_start = true;
+                    break;
+                }
+            }
+        }
+        if found_start {
             break;
         }
     }
 
+    let read_len = len - start;
+    let read_len_usize = usize::try_from(read_len).unwrap_or(usize::MAX);
+    let mut collected = vec![0u8; read_len_usize];
+    file.seek(SeekFrom::Start(start))?;
+    file.read_exact(&mut collected)?;
     Ok(decode_last_lines(&collected, n))
 }
 
@@ -71,6 +89,12 @@ fn decode_last_lines(bytes: &[u8], n: usize) -> Vec<String> {
     }
     lines.into_iter().map(str::to_owned).collect()
 }
+
+/// How many bytes one [`LogFollower::poll`] may consume.
+///
+/// Keeps a follower that was idle for a long time from allocating the whole
+/// file; the next poll picks up where this one stopped.
+pub const POLL_READ_LIMIT: u64 = 1024 * 1024;
 
 /// Poll-based follower for the "live" log view (`F-LOG-01` AC1).
 ///
@@ -108,7 +132,9 @@ impl LogFollower {
     /// Returns every complete line appended since the last poll.
     ///
     /// A line is "complete" once a newline has arrived. A missing file is not
-    /// an error: the follower keeps waiting.
+    /// an error: the follower keeps waiting. At most [`POLL_READ_LIMIT`] bytes
+    /// are consumed per poll, so a long-idle follower cannot allocate the whole
+    /// file in one call; callers poll again for the rest.
     pub fn poll(&mut self) -> Result<Vec<String>> {
         let mut file = match File::open(&self.path) {
             Ok(file) => file,
@@ -125,7 +151,8 @@ impl LogFollower {
             return Ok(Vec::new());
         }
         file.seek(SeekFrom::Start(self.offset))?;
-        let to_read = usize::try_from(len - self.offset).unwrap_or(usize::MAX);
+        let available = len - self.offset;
+        let to_read = usize::try_from(available.min(POLL_READ_LIMIT)).unwrap_or(usize::MAX);
         let mut chunk = vec![0u8; to_read];
         let read = file.read(&mut chunk)?;
         chunk.truncate(read);
@@ -446,6 +473,50 @@ mod tests {
         writer.join().expect("writer");
         assert!(result.is_ok());
         assert_eq!(seen, vec!["arrived"]);
+    }
+
+    #[test]
+    fn follower_reads_a_large_backlog_in_bounded_chunks() {
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("backlog.log");
+        let mut file = File::create(&path).expect("create");
+        let line = "0123456789abcdef\n";
+        let target = (POLL_READ_LIMIT as usize) * 2 + 1024;
+        let mut written = 0usize;
+        while written < target {
+            file.write_all(line.as_bytes()).expect("write");
+            written += line.len();
+        }
+        drop(file);
+
+        let mut follower = LogFollower::new(&path, true).expect("follower");
+        let first = follower.poll().expect("poll");
+        assert!(!first.is_empty());
+        let second = follower.poll().expect("poll");
+        let third = follower.poll().expect("poll");
+        let total = first.len() + second.len() + third.len();
+        assert_eq!(total, written / line.len());
+        assert!(follower.poll().expect("poll").is_empty());
+    }
+
+    #[test]
+    fn tail_on_a_single_line_giant_file_stays_bounded() {
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("oneline.log");
+        let mut file = File::create(&path).expect("create");
+        let chunk = vec![b'a'; 1024 * 1024];
+        for _ in 0..16 {
+            file.write_all(&chunk).expect("write");
+        }
+        file.flush().expect("flush");
+        let start = std::time::Instant::now();
+        let lines = tail_lines(&path, 1).expect("tail");
+        assert_eq!(lines.len(), 1);
+        assert!(
+            start.elapsed() < Duration::from_secs(2),
+            "tail took {:?}",
+            start.elapsed()
+        );
     }
 
     #[test]

@@ -103,25 +103,59 @@ fn observe_spawned(
     pid: u32,
     program: &std::ffi::OsStr,
 ) -> Result<ProcessIdentity> {
-    // The child exists at least for an instant after spawn returns. A single
-    // observation is normally enough; a short retry absorbs the race between
-    // spawn and /proc visibility on busy systems.
-    for attempt in 0..20u32 {
+    // The child may briefly report the parent's executable between fork and
+    // exec. Wait until we have seen the same post-exec executable twice in a
+    // row (not our own binary), which means exec finished and the identity is
+    // stable. If the process exits early, return the last observation we saw so
+    // a short-lived helper can still be accounted for.
+    const ATTEMPTS: u32 = 200;
+    let own_exe = std::env::current_exe().ok();
+    let mut last: Option<(Option<PathBuf>, Option<SystemTime>)> = None;
+    let mut previous: Option<(Option<PathBuf>, Option<SystemTime>)> = None;
+
+    for attempt in 0..ATTEMPTS {
         match probe.observe(pid) {
             ProcessObservation::Found { exe, started_at } => {
-                let exe = exe.unwrap_or_else(|| PathBuf::from(program));
-                let started_at = started_at.unwrap_or_else(SystemTime::now);
-                return ProcessIdentity::new(pid, exe, started_at);
-            }
-            ProcessObservation::Missing if attempt < 19 => {
-                std::thread::sleep(std::time::Duration::from_millis(10));
+                let pre_exec = match (&exe, &own_exe) {
+                    (Some(observed), Some(own)) => observed == own,
+                    _ => false,
+                };
+                let settled = !pre_exec
+                    && previous.as_ref().is_some_and(|(prev_exe, prev_start)| {
+                        *prev_exe == exe && *prev_start == started_at
+                    });
+                if settled {
+                    let exe = exe.unwrap_or_else(|| PathBuf::from(program));
+                    let started_at = started_at.unwrap_or_else(SystemTime::now);
+                    return ProcessIdentity::new(pid, exe, started_at);
+                }
+                previous = Some((exe.clone(), started_at));
+                last = Some((exe, started_at));
+                if attempt + 1 < ATTEMPTS {
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+                }
             }
             ProcessObservation::Missing => {
-                return Err(DblError::Engine {
-                    reason: format!("engine process {pid} exited immediately after spawn"),
-                });
+                if let Some((exe, started_at)) = last {
+                    let exe = exe.unwrap_or_else(|| PathBuf::from(program));
+                    let started_at = started_at.unwrap_or_else(SystemTime::now);
+                    return ProcessIdentity::new(pid, exe, started_at);
+                }
+                if attempt + 1 < ATTEMPTS {
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+                } else {
+                    return Err(DblError::Engine {
+                        reason: format!("engine process {pid} exited immediately after spawn"),
+                    });
+                }
             }
         }
+    }
+
+    if let Some((exe, started_at)) = last {
+        let exe = exe.unwrap_or_else(|| PathBuf::from(program));
+        let started_at = started_at.unwrap_or_else(SystemTime::now);
+        return ProcessIdentity::new(pid, exe, started_at);
     }
     Err(DblError::Engine {
         reason: format!("engine process {pid} could not be observed after spawn"),
