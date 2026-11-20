@@ -28,6 +28,8 @@ pub const STATUS_POLL_SECS: u64 = 2;
 pub const CATALOG_TTL_HOURS: u64 = 24;
 /// Largest catalog body accepted from the refresh source, in bytes (4 MiB).
 pub const CATALOG_MAX_BODY_BYTES: u64 = 4 * 1024 * 1024;
+/// Busy timeout applied to every state-database connection, in milliseconds.
+pub const STORE_BUSY_TIMEOUT_MS: u32 = 5_000;
 
 /// Maximum size of a single instance log file before it is rotated.
 pub const LOG_MAX_BYTES: u64 = 10 * 1024 * 1024;

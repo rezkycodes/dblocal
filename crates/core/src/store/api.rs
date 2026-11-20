@@ -15,12 +15,13 @@ use std::os::unix::fs::PermissionsExt;
 use rusqlite::{Connection, OptionalExtension, params};
 
 use crate::DblError;
+use crate::consts::STORE_BUSY_TIMEOUT_MS;
 use crate::model::{CredentialBackend, CredentialRef, InstanceId};
 use crate::paths::DblPaths;
 
 use super::error::map_sql;
 use super::migrations::apply;
-use super::schema::{STORE_BUSY_TIMEOUT_MS, WAL_SWITCH_ATTEMPTS, WAL_SWITCH_BACKOFF_MS};
+use super::schema::{WAL_SWITCH_ATTEMPTS, WAL_SWITCH_BACKOFF_MS};
 
 /// Synchronous persistence for DBLocal state.
 ///
