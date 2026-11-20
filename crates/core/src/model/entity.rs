@@ -14,18 +14,21 @@ pub struct InstanceSpec {
     name: InstanceName,
     engine: EngineKey,
     version: String,
-    port: Port,
+    port: Option<Port>,
     auth: AuthMode,
     autostart: bool,
 }
 
 impl InstanceSpec {
     /// Builds a spec, validating the version tag at the boundary.
+    ///
+    /// `port` is `None` when the caller wants the service to allocate one, as
+    /// `dblocal create` does without `--port` (PRD `F-PRT-01`).
     pub fn new(
         name: InstanceName,
         engine: EngineKey,
         version: impl Into<String>,
-        port: Port,
+        port: Option<Port>,
         auth: AuthMode,
     ) -> crate::Result<Self> {
         let version = version.into();
@@ -52,8 +55,8 @@ impl InstanceSpec {
     pub fn version(&self) -> &str {
         &self.version
     }
-    /// Port to bind.
-    pub const fn port(&self) -> Port {
+    /// Port to bind, or `None` to let the service allocate one.
+    pub const fn port(&self) -> Option<Port> {
         self.port
     }
     /// Authentication mode chosen at create time.
@@ -65,8 +68,8 @@ impl InstanceSpec {
         self.autostart
     }
 
-    /// Returns a copy with a different port.
-    pub fn with_port(mut self, port: Port) -> Self {
+    /// Returns a copy with a different port, or `None` to re-allocate.
+    pub fn with_port(mut self, port: Option<Port>) -> Self {
         self.port = port;
         self
     }
@@ -109,7 +112,12 @@ impl Instance {
             name: spec.name.clone(),
             engine: spec.engine,
             version: spec.version.clone(),
-            port: spec.port,
+            // A persisted instance always has a port. The real service resolves
+            // an automatic allocation before it gets here; canonical ports keep
+            // the no-allocation path total and deterministic.
+            port: spec
+                .port
+                .unwrap_or_else(|| Port::assume_valid(spec.engine.canonical_port())),
             status,
             auth: spec.auth,
             superuser: spec.engine.default_superuser().to_owned(),
@@ -440,7 +448,7 @@ mod tests {
             InstanceName::new("app-dev").expect("valid name"),
             EngineKey::Postgresql,
             "18.7",
-            Port::new(5432).expect("valid port"),
+            Some(Port::new(5432).expect("valid port")),
             AuthMode::Password,
         )
         .expect("valid spec")
@@ -452,7 +460,7 @@ mod tests {
             InstanceName::new("app-dev").expect("valid name"),
             EngineKey::Valkey,
             "../etc",
-            Port::new(6379).expect("valid port"),
+            Some(Port::new(6379).expect("valid port")),
             AuthMode::None,
         );
         assert!(err.is_err());
@@ -461,9 +469,9 @@ mod tests {
     #[test]
     fn builders_return_new_values() {
         let base = spec();
-        let moved = base.clone().with_port(Port::new(5433).expect("valid port"));
-        assert_eq!(base.port().get(), 5432);
-        assert_eq!(moved.port().get(), 5433);
+        let moved = base.clone().with_port(Some(Port::new(5433).expect("valid port")));
+        assert_eq!(base.port().map(Port::get), Some(5432));
+        assert_eq!(moved.port().map(Port::get), Some(5433));
         assert!(!base.autostart());
         assert!(base.clone().with_autostart(true).autostart());
     }
@@ -527,7 +535,7 @@ mod tests {
         assert_eq!(spec.name().as_str(), "app-dev");
         assert_eq!(spec.engine(), EngineKey::Postgresql);
         assert_eq!(spec.version(), "18.7");
-        assert_eq!(spec.port().get(), 5432);
+        assert_eq!(spec.port().map(Port::get), Some(5432));
         assert_eq!(spec.auth(), AuthMode::Password);
 
         let id = InstanceId::new();

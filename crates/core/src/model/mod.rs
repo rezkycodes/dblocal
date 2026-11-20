@@ -3,21 +3,22 @@
 //! Every type here is an immutable value type. Fields are private; updates
 //! return a new value through `with_*` methods.
 
-mod artifacts;
+mod artifact;
+mod catalog;
 mod entity;
 mod failure;
+mod runtime;
 mod scalar;
 mod state;
 
-pub use artifacts::{
-    ArchiveFormat, Artifact, CatalogSnapshot, CatalogStatus, DownloadProgress, EngineVersion,
-    Runtime, RuntimeState,
-};
+pub use artifact::{ArchiveFormat, Artifact};
+pub use catalog::{CatalogSnapshot, CatalogStatus, EngineVersion};
 pub use entity::{
     ArchivedData, CredentialBackend, CredentialRef, DeleteMode, Instance, InstanceSpec,
     PortAllocation,
 };
 pub use failure::StartFailure;
+pub use runtime::{DownloadProgress, Runtime, RuntimeState};
 pub use scalar::{AuthMode, EngineKey, Family, InstanceId, InstanceName, Port};
 pub use state::{InstanceEvent, InstanceStatus};
 

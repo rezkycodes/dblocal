@@ -237,6 +237,15 @@ impl Port {
         }
     }
 
+    /// Wraps a port that is already known to be valid.
+    ///
+    /// Only for compile-time constants such as the canonical ports, which are
+    /// all above [`crate::consts::MIN_PORT`] by construction.
+    pub(crate) const fn assume_valid(value: u16) -> Self {
+        debug_assert!(value >= consts::MIN_PORT && value <= consts::MAX_PORT);
+        Self(value)
+    }
+
     /// Raw port number.
     pub const fn get(self) -> u16 {
         self.0

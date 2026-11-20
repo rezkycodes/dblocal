@@ -2,23 +2,25 @@
 
 use std::fmt;
 
+use zeroize::{Zeroize, Zeroizing};
+
 /// Secret material that redacts itself on every formatting path.
 ///
-/// There is deliberately no `Serialize` implementation and no `Clone`-free
-/// access: callers must ask for [`SecretString::expose`] explicitly, which
-/// makes every use of the raw value easy to audit.
+/// There is deliberately no `Serialize` implementation. Callers must ask for
+/// [`SecretString::expose`] explicitly, which makes every use of the raw value
+/// easy to audit. The backing buffer is zeroed on drop.
 #[derive(Clone, PartialEq, Eq)]
-pub struct SecretString(String);
+pub struct SecretString(Zeroizing<String>);
 
 impl SecretString {
     /// Wraps a value that is already secret.
     pub fn new(value: impl Into<String>) -> Self {
-        Self(value.into())
+        Self(Zeroizing::new(value.into()))
     }
 
     /// Returns the raw value. Every call site is an audit point.
     pub fn expose(&self) -> &str {
-        &self.0
+        self.0.as_str()
     }
 
     /// Length in bytes, safe to log for diagnostics.
@@ -46,13 +48,19 @@ impl fmt::Display for SecretString {
 
 impl From<String> for SecretString {
     fn from(value: String) -> Self {
-        Self(value)
+        Self(Zeroizing::new(value))
     }
 }
 
 impl From<&str> for SecretString {
     fn from(value: &str) -> Self {
-        Self(value.to_owned())
+        Self(Zeroizing::new(value.to_owned()))
+    }
+}
+
+impl Zeroize for SecretString {
+    fn zeroize(&mut self) {
+        self.0.zeroize();
     }
 }
 
@@ -92,5 +100,13 @@ mod tests {
         assert_eq!(secret.expose(), CANARY);
         assert_eq!(secret.len(), CANARY.len());
         assert!(!secret.is_empty());
+    }
+
+    #[test]
+    fn zeroize_clears_the_backing_buffer() {
+        let mut secret = SecretString::from(CANARY);
+        secret.zeroize();
+        assert_eq!(secret.expose(), "");
+        assert!(secret.is_empty());
     }
 }

@@ -7,16 +7,21 @@
 #[cfg(feature = "mock")]
 pub mod mock;
 
+mod error;
+mod view;
+
 use std::fmt;
 
 use tokio::sync::broadcast;
 
 use crate::error::Result;
 use crate::model::{
-    CatalogSnapshot, DeleteMode, DownloadProgress, EngineKey, Instance, InstanceId, InstanceSpec,
-    InstanceStatus, Port,
+    ArchivedData, DeleteMode, DownloadProgress, EngineKey, InstanceId, InstanceSpec, Port, Runtime,
 };
 use crate::secret::SecretString;
+
+pub use error::UserFacingError;
+pub use view::{CatalogView, EngineEntry, FailureInfo, InstanceView, VersionEntry};
 
 /// Identifier of a long-running operation, such as an install or a start.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -89,54 +94,17 @@ pub enum UriFormat {
     DotEnv,
 }
 
-/// What the GUI and CLI need to render one row in the instance list.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct InstanceView {
-    /// Stable identifier.
-    pub id: InstanceId,
-    /// User-visible name.
-    pub name: String,
-    /// Engine.
-    pub engine: EngineKey,
-    /// Engine version tag.
-    pub version: String,
-    /// Bound port.
-    pub port: Port,
-    /// Lifecycle status.
-    pub status: InstanceStatus,
-}
-
-impl InstanceView {
-    /// Builds a view from a domain instance.
-    pub fn from_instance(instance: &Instance) -> Self {
-        Self {
-            id: instance.id().clone(),
-            name: instance.name().to_string(),
-            engine: instance.engine(),
-            version: instance.version().to_owned(),
-            port: instance.port(),
-            status: instance.status(),
-        }
-    }
-}
-
-/// A read model of the engine catalog, ready for rendering.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CatalogView {
-    /// The snapshot currently in use.
-    pub snapshot: CatalogSnapshot,
-}
-
 /// Event stream emitted by a [`DblService`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ServiceEvent {
-    /// One instance changed in a way the UI must reflect.
+    /// One instance changed and its full view is ready to re-render.
+    ///
+    /// Carrying the whole [`InstanceView`] keeps the UI from having to fetch the
+    /// row again after every status change.
     InstanceChanged {
-        /// Instance that changed.
-        id: InstanceId,
-        /// New status.
-        status: InstanceStatus,
+        /// The instance after the change.
+        view: InstanceView,
     },
     /// A long-running operation moved to a new stage.
     OperationProgress {
@@ -152,19 +120,28 @@ pub enum ServiceEvent {
         /// Latest sample.
         progress: DownloadProgress,
     },
-    /// A long-running operation finished.
+    /// A long-running operation finished, successfully or not.
     OperationFinished {
         /// Operation that finished.
         id: OperationId,
-        /// Whether it succeeded.
-        success: bool,
-        /// Friendly message, safe to show to the user.
-        message: String,
+        /// Outcome, carrying a stable code and an optional start diagnosis.
+        result: Result<(), UserFacingError>,
     },
     /// The catalog was refreshed or its freshness changed.
     CatalogUpdated {
         /// Freshness of the snapshot now in use.
         status: crate::model::CatalogStatus,
+    },
+    /// New lines arrived for an instance being watched.
+    ///
+    /// Only emitted while a watcher is enabled through
+    /// [`DblService::watch_logs`]: live logs are opt-in so an idle GUI does no
+    /// extra file I/O (PRD `F-LOG-01` AC1).
+    LogLines {
+        /// Instance the lines belong to.
+        id: InstanceId,
+        /// Appended lines, oldest first.
+        lines: Vec<String>,
     },
 }
 
@@ -177,8 +154,20 @@ pub trait DblService: Send + Sync + 'static {
     /// Lists every instance, in a stable order.
     fn list_instances(&self) -> Result<Vec<InstanceView>>;
 
-    /// Returns the current catalog view.
+    /// Returns the catalog read model, already filtered for this platform.
     fn catalog(&self) -> Result<CatalogView>;
+
+    /// Refreshes the catalog in the background, ignoring the TTL when `force`.
+    fn refresh_catalog(&self, force: bool) -> Result<OperationId>;
+
+    /// Validates a spec before the UI submits it.
+    ///
+    /// A port owned by another instance reports that instance by name, which
+    /// PRD `F-PRT-01` AC3 requires the form to show.
+    fn validate_spec(&self, spec: &InstanceSpec) -> Result<()>;
+
+    /// Proposes the next free port for an engine, `5432`/`5433`/... in order.
+    fn suggest_port(&self, engine: EngineKey) -> Result<Port>;
 
     /// Starts creating an instance. Progress arrives as events.
     fn create_instance(&self, spec: InstanceSpec) -> Result<OperationId>;
@@ -192,6 +181,15 @@ pub trait DblService: Send + Sync + 'static {
     /// Deletes an instance, archiving or purging its data.
     fn delete_instance(&self, id: &InstanceId, mode: DeleteMode) -> Result<OperationId>;
 
+    /// Moves an instance to another port and releases the old allocation.
+    fn change_port(&self, id: &InstanceId, port: Port) -> Result<()>;
+
+    /// Current size of an instance's data directory, for the delete dialog.
+    fn data_size(&self, id: &InstanceId) -> Result<u64>;
+
+    /// Toggles whether an instance starts with the app.
+    fn set_autostart(&self, id: &InstanceId, enabled: bool) -> Result<()>;
+
     /// Cancels a long-running operation, if it can still be cancelled.
     fn cancel_operation(&self, id: &OperationId) -> Result<()>;
 
@@ -202,6 +200,26 @@ pub trait DblService: Send + Sync + 'static {
     /// Returns the last `lines` of an instance log.
     fn tail_logs(&self, id: &InstanceId, lines: usize) -> Result<Vec<String>>;
 
+    /// Enables or disables live log streaming for one instance.
+    ///
+    /// When enabled the service emits [`ServiceEvent::LogLines`] as new lines
+    /// are appended. Enabling twice is idempotent; disabling an instance that
+    /// was never watched is a no-op. This is the smallest API that satisfies
+    /// `F-LOG-01` AC1 without the UI polling.
+    fn watch_logs(&self, id: &InstanceId, enabled: bool) -> Result<()>;
+
+    /// Lists every installed runtime.
+    fn list_runtimes(&self) -> Result<Vec<Runtime>>;
+
+    /// Removes an installed runtime, refusing while an instance still uses it.
+    fn remove_runtime(&self, runtime: &str) -> Result<()>;
+
+    /// Lists data directories kept by "delete, keep data".
+    fn list_archives(&self) -> Result<Vec<ArchivedData>>;
+
+    /// Permanently deletes one archive.
+    fn purge_archive(&self, archive: &str) -> Result<()>;
+
     /// Subscribes to the service event stream.
     fn subscribe(&self) -> broadcast::Receiver<ServiceEvent>;
 }
@@ -209,21 +227,24 @@ pub trait DblService: Send + Sync + 'static {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{AuthMode, EngineKey, InstanceName, InstanceStatus, Port};
+    use crate::model::{AuthMode, EngineKey, Instance, InstanceName, InstanceStatus};
     use std::time::SystemTime;
 
-    #[test]
-    fn view_reflects_the_instance() {
-        let spec = InstanceSpec::new(
+    fn spec() -> InstanceSpec {
+        InstanceSpec::new(
             InstanceName::new("app-dev").expect("valid"),
             EngineKey::Postgresql,
             "18.7",
-            Port::new(5432).expect("valid"),
+            Some(Port::new(5432).expect("valid")),
             AuthMode::Password,
         )
-        .expect("valid spec");
+        .expect("valid spec")
+    }
+
+    #[test]
+    fn view_reflects_the_instance() {
         let instance = Instance::new(
-            &spec,
+            &spec(),
             InstanceId::new(),
             InstanceStatus::Stopped,
             SystemTime::UNIX_EPOCH,
@@ -247,5 +268,51 @@ mod tests {
     #[test]
     fn uri_format_defaults_to_uri() {
         assert_eq!(UriFormat::default(), UriFormat::Uri);
+    }
+
+    #[test]
+    fn operation_finished_preserves_the_error_code() {
+        let failure = ServiceEvent::OperationFinished {
+            id: OperationId::new("op-2"),
+            result: Err(crate::DblError::PortInUse { port: 5432 }.into()),
+        };
+        match failure {
+            ServiceEvent::OperationFinished { result, .. } => {
+                let err = result.expect_err("must be an error");
+                assert_eq!(err.code, "DBL-1005");
+                assert!(!err.message.is_empty());
+                assert!(err.diagnosis.is_none());
+            }
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+
+    #[test]
+    fn instance_changed_carries_the_full_view() {
+        let instance = Instance::new(
+            &spec(),
+            InstanceId::new(),
+            InstanceStatus::Running,
+            SystemTime::UNIX_EPOCH,
+        );
+        let event = ServiceEvent::InstanceChanged {
+            view: InstanceView::from_instance(&instance),
+        };
+        match event {
+            ServiceEvent::InstanceChanged { view } => {
+                assert_eq!(view.status, InstanceStatus::Running);
+                assert_eq!(view.name, "app-dev");
+            }
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+
+    #[test]
+    fn log_lines_event_is_shape_only() {
+        let event = ServiceEvent::LogLines {
+            id: InstanceId::new(),
+            lines: vec!["a".into()],
+        };
+        assert!(matches!(event, ServiceEvent::LogLines { .. }));
     }
 }
