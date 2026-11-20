@@ -34,11 +34,28 @@ For each finished worker: read the report, check `git diff --stat`, re-run the g
 branch, read the code against the PRD acceptance criteria and AGENTS.md invariants, then merge or send
 fixes back with `orchestration send`. Findings go into the status table below.
 
+## Ownership (Wave 1)
+
+| Task | Branch | Owns |
+|---|---|---|
+| W1-A | `w1-store` | `core/src/store*`, `docs/architecture/store.md` |
+| W1-B | `w1-catalog` | `core/src/catalog*`, `crates/xtask/**`, `catalog/**` (additive fields in `model/catalog.rs`, `model/artifact.rs`) |
+| W1-C | `w1-download` | `core/src/download*` (fetch, verify, extract) |
+| W1-D | `w1-process` | `core/src/process*`, `core/src/ports*` |
+| W1-E | `w1-secrets` | `core/src/secrets*`, plus the `keyring` dependency lines |
+| W1-F | `w1-engines` | `core/src/engine/{postgres,valkey,uri,glibc}*` (URI building moved here from W1-E) |
+| W1-G | `w1-gui-shell` | `crates/gui/**`, `core/src/service/mock.rs`, `core/src/strings.rs` (only W1-G edits strings in Wave 1) |
+
+Launch order (machine load): F, B, C, D first; A and E when slots free; G after W0-C reports.
+`strings.rs` is shared and append-only, so only W1-G edits it in this wave; core workers return typed errors.
+
 ## Status
 
 | Task | Status | Notes |
 |---|---|---|
-| W0-A | not started | |
-| W0-B | not started | |
-| W0-C | not started | |
-| W0-D | not started | |
+| W0-A | round 2 in progress | R1 verified (gates, 95.64% coverage, M1-M4 correct). Open: M5 `zip` default features pull `bzip2` (only crate `cargo deny` rejects) |
+| W0-B | **merged** (952afaa) | Findings verified independently (MySQL 832 MB, no SHA-256; MariaDB Linux/Windows x64 only; Valkey Linux only). Reviewer found MySQL `-minimal` 79.8 MB. Recorded as D-24 |
+| W0-C | running | Redirected to Zed-style UI (D-23); waiting for go/no-go and widget coverage table |
+| W0-D | round 1 fixes in progress | Verified clean except `install.sh` D1-D5 (running-binary upgrade, TLS fallback, trap, extraction scope, tag validation) |
+| W1-A..F | specs written | Start after W0-A merges |
+| W1-G | spec waits for W0-C | |
