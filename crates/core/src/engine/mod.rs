@@ -4,10 +4,17 @@
 //! engines only through this trait, so adding a new engine never changes
 //! orchestration code.
 
+pub mod glibc;
 mod mariadb;
 mod mysql;
 mod postgres;
+pub mod uri;
 mod valkey;
+
+pub use postgres::{
+    PostgresAdapter, PostmasterIdentity, parse_postmaster_pid, read_postmaster_pid,
+};
+pub use valkey::{ConfigParams, ServerIdentity, ValkeyAdapter, parse_pidfile, read_pidfile};
 
 use std::path::PathBuf;
 use std::process::Command;
@@ -15,6 +22,7 @@ use std::process::Command;
 use crate::error::{DblError, Result};
 use crate::model::{AuthMode, EngineKey, Port, StartFailure};
 use crate::secret::SecretString;
+use crate::service::UriFormat;
 
 /// Environment in which `initdb` (or its equivalent) runs.
 ///
@@ -170,8 +178,14 @@ pub trait EngineAdapter: Send + Sync {
     /// to be logged as a forced kill.
     fn shutdown(&self, ctx: &RunContext) -> Result<()>;
 
-    /// Builds a connection URI, redacted in its `Display` form by the caller.
-    fn connection_uri(&self, ctx: &RunContext, credential: &Credential) -> SecretString;
+    /// Builds a connection URI or `.env` block, redacted in its `Display`
+    /// form by the caller.
+    fn connection_uri(
+        &self,
+        ctx: &RunContext,
+        credential: &Credential,
+        format: UriFormat,
+    ) -> SecretString;
 
     /// Classifies raw start output so the UI can offer a fix (PRD `F-LOG-02`).
     ///
@@ -226,17 +240,26 @@ impl EngineAdapter for StubAdapter {
         Err(self.not_implemented())
     }
 
-    fn connection_uri(&self, _ctx: &RunContext, _credential: &Credential) -> SecretString {
-        // A URI must embed the password, so it is always a secret.
-        SecretString::new(format!("{}://", self.engine.as_str()))
+    fn connection_uri(
+        &self,
+        _ctx: &RunContext,
+        _credential: &Credential,
+        format: UriFormat,
+    ) -> SecretString {
+        match format {
+            UriFormat::Uri => SecretString::new(format!("{}://", self.engine.as_str())),
+            UriFormat::DotEnv => SecretString::new(String::new()),
+        }
     }
 }
 
-/// Returns the stub adapter for an engine.
-///
-/// Wave 1 workers replace this with real per-engine implementations.
+/// Returns the adapter for an engine.
 pub fn adapter_for(engine: EngineKey) -> Box<dyn EngineAdapter> {
-    Box::new(StubAdapter::new(engine))
+    match engine {
+        EngineKey::Postgresql => Box::new(postgres::PostgresAdapter),
+        EngineKey::Valkey => Box::new(valkey::ValkeyAdapter),
+        EngineKey::Mysql | EngineKey::Mariadb => Box::new(StubAdapter::new(engine)),
+    }
 }
 
 #[cfg(test)]
@@ -271,8 +294,8 @@ mod tests {
     }
 
     #[test]
-    fn stubs_answer_not_implemented() {
-        for engine in EngineKey::ALL {
+    fn mysql_and_mariadb_remain_stubs() {
+        for engine in [EngineKey::Mysql, EngineKey::Mariadb] {
             let adapter = adapter_for(engine);
             let (init, run) = ctx();
             assert_eq!(adapter.key(), engine);
@@ -281,8 +304,6 @@ mod tests {
                 adapter.initialize(&init),
                 Err(DblError::NotImplemented(_))
             ));
-            // `spawn_command` is infallible by contract; stubs surface failure
-            // through the fallible probes below.
             assert_eq!(
                 adapter.spawn_command(&run).get_program(),
                 std::ffi::OsStr::new("dblocal-stub")
@@ -298,10 +319,19 @@ mod tests {
             assert!(adapter.admin_ops().is_none());
             assert_eq!(
                 adapter.diagnose_start_failure("address already in use", Some(1)),
-                StartFailure::Unknown,
-                "stubs default to Unknown; adapters will override"
+                StartFailure::Unknown
             );
         }
+    }
+
+    #[test]
+    fn postgres_and_valkey_are_real_adapters() {
+        let pg = adapter_for(EngineKey::Postgresql);
+        assert_eq!(pg.key(), EngineKey::Postgresql);
+        assert!(pg.admin_ops().is_none());
+        let vk = adapter_for(EngineKey::Valkey);
+        assert_eq!(vk.key(), EngineKey::Valkey);
+        assert!(vk.admin_ops().is_none());
     }
 
     #[test]
@@ -354,14 +384,37 @@ mod tests {
 
     #[test]
     fn stub_uri_is_redacted() {
-        let adapter = adapter_for(EngineKey::Valkey);
+        let adapter = adapter_for(EngineKey::Mysql);
         let (_, run) = ctx();
-        let cred = Credential::new("default", SecretString::from("top-secret"));
-        let uri = adapter.connection_uri(&run, &cred);
+        let cred = Credential::new("root", SecretString::from("top-secret"));
+        let uri = adapter.connection_uri(&run, &cred, UriFormat::Uri);
         assert!(!format!("{uri}").contains("top-secret"));
         assert!(!format!("{uri:?}").contains("top-secret"));
-        assert!(uri.expose().starts_with("valkey://"));
+        assert!(uri.expose().starts_with("mysql://"));
         // Sanity: the type only, never logged.
         let _ = Path::new(uri.expose());
+    }
+
+    #[test]
+    fn real_adapters_render_uris_and_dotenv() {
+        let (_, run) = ctx();
+        let cred = Credential::new("postgres", SecretString::from("s3cr:et"));
+        let pg = adapter_for(EngineKey::Postgresql);
+        let uri = pg.connection_uri(&run, &cred, UriFormat::Uri);
+        assert!(uri.expose().starts_with("postgresql://postgres:"));
+        let env = pg.connection_uri(&run, &cred, UriFormat::DotEnv);
+        assert!(env.expose().contains("DATABASE_URL="));
+        assert!(env.expose().contains("DB_USERNAME=postgres"));
+
+        let run_vk = RunContext {
+            port: Port::new(6379).expect("valid"),
+            ..run
+        };
+        let vk = adapter_for(EngineKey::Valkey);
+        let cred_vk = Credential::new("default", SecretString::from("pw"));
+        let uri = vk.connection_uri(&run_vk, &cred_vk, UriFormat::Uri);
+        assert!(uri.expose().starts_with("redis://default:"));
+        let env = vk.connection_uri(&run_vk, &cred_vk, UriFormat::DotEnv);
+        assert!(env.expose().contains("REDIS_URL="));
     }
 }
