@@ -57,6 +57,8 @@ Launch order (machine load): F, B, C, D first; A and E when slots free; G after 
 | W0-B | **merged** (952afaa) | Findings verified independently (MySQL 832 MB, no SHA-256; MariaDB Linux/Windows x64 only; Valkey Linux only). Reviewer found MySQL `-minimal` 79.8 MB. Recorded as D-24 |
 | W0-C | running | Redirected to Zed-style UI (D-23); waiting for go/no-go and widget coverage table |
 | W0-D | **merged** | Round 2 re-verified: 52/52 tests (12 fail on the old installer, so they are not vacuous), hostile `DBLOCAL_RELEASE_BASE_URL` values rejected with 0 curl calls, shellcheck clean. Not run on GitHub: `release.yml`, `valkey-build.yml` |
-| W1-F, W1-B, W1-C, W1-D | **running** | Started on `main` b1d3650: dispatches ctx_fb9d3c8383b9, ctx_1a5eac8f62e4, ctx_9ce0cedac8e3, ctx_70ebe54160ea |
+| W1-B | review round 1 sent (ctx_d4fcc2c8916b) | Verified: gates, 94% coverage, 20/22 artifacts match upstream. Found: B1 redirect https->http on catalog refresh, B2 Valkey sizes hard-coded and CloudFront serving two different noble objects by `Accept-Encoding`, B3 ship jammy only, B4 constant `generated_at`, B5 two files < 80%, B6 `blocking` feature leaks into core |
+| W1-F | restarted (ctx_53c861124d59) | First worker stalled after asking a question; restarted with the decisions in the spec |
+| W1-C, W1-D | running | |
 | W1-A, W1-E | spec written | Start when a slot frees |
 | W1-G | spec waits for W0-C | |
