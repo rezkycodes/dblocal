@@ -1,15 +1,22 @@
 //! TCP bind probing for port availability (`F-PRT-02`).
 //!
-//! The probe performs a **real** bind on loopback only — `127.0.0.1` and, when
-//! the host can bind it, `::1` — with **no** `SO_REUSEADDR`. Reuse lets a bind
-//! succeed while another listener owns the port (PRD `F-PRT` edge case, W0-B),
-//! which would defeat the check. The socket is closed before returning
-//! (`F-PRT-02` AC3) so the engine can bind immediately afterwards.
+//! The probe answers one question: **would the engine's own bind succeed?** That
+//! is not the same as "is the port unused", because every engine we manage sets
+//! `SO_REUSEADDR` before `listen`:
 //!
-//! Implementation note: `std::net::TcpListener::bind` sets `SO_REUSEADDR` on
-//! Unix. To avoid it we construct the socket through `tokio::net::TcpSocket`
-//! (which wraps `socket2` and never sets reuse unless asked) and bind it
-//! directly. `tokio` is already a core dependency.
+//! - Measured on this machine: once a server closed a connection first, its port
+//!   sits in `TIME_WAIT` for ~60 s. A bind **without** the option fails with
+//!   `EADDRINUSE`; a bind **with** it succeeds. PostgreSQL, MySQL and Valkey all
+//!   set it, so an engine starts fine on such a port. Reporting `InUse` there
+//!   would block Stop→Start for a minute and break `F-INS-03` / `F-PRT-02`.
+//! - An *active* listener still refuses a reuse-enabled bind on Linux and macOS
+//!   (only `TIME_WAIT` is let through), so the probe stays honest about real
+//!   conflicts.
+//!
+//! The socket is still closed before returning (`F-PRT-02` AC3), so the engine
+//! can bind immediately afterwards. On Windows the option means something else —
+//! it lets a bind win over an *active* listener, which would make the probe lie
+//! in the opposite direction — so it is deliberately not set there.
 
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 
@@ -109,12 +116,19 @@ pub fn probe_or_in_use(port: Port) -> BindReport {
     })
 }
 
-/// Creates a socket, binds it with default options (no reuse), then closes it.
+/// Creates a socket, configures it like the engines do, binds it, then closes it.
+///
+/// `SO_REUSEADDR` is set on Unix so a `TIME_WAIT` port reads `Free`, which is
+/// what an engine needs (see the module docs). It is deliberately absent on
+/// Windows, where the same flag would let the probe bind over an *active*
+/// listener.
 fn bind_addr(addr: SocketAddr) -> std::io::Result<()> {
     let socket = match addr {
         SocketAddr::V4(_) => tokio::net::TcpSocket::new_v4()?,
         SocketAddr::V6(_) => tokio::net::TcpSocket::new_v6()?,
     };
+    #[cfg(unix)]
+    socket.set_reuseaddr(true)?;
     socket.bind(addr)?;
     // Dropping the socket closes it immediately.
     drop(socket);
@@ -246,5 +260,98 @@ mod tests {
     fn privileged_ports_cannot_even_be_constructed() {
         assert!(Port::new(80).is_err());
         assert!(Port::new(1023).is_err());
+    }
+
+    /// Outcome of trying to reproduce the `TIME_WAIT` state.
+    #[cfg(unix)]
+    enum TimeWait {
+        /// The kernel created the state; the port is ours to assert on.
+        Created(Port),
+        /// This kernel did not leave a `TIME_WAIT` entry, so the test proves
+        /// nothing here and must say so out loud.
+        NotCreated,
+    }
+
+    /// Binds the way an engine does and produces a `TIME_WAIT` port.
+    ///
+    /// The sequence is the one that bites in production: the server accepts a
+    /// connection and closes it first, so the server side carries `TIME_WAIT`.
+    /// The precondition is explicit — a plain bind *without* `SO_REUSEADDR` must
+    /// fail on that port — which proves the kernel really created the state.
+    #[cfg(unix)]
+    fn port_in_time_wait() -> TimeWait {
+        use crate::ports::test_support::{bind_engine_v4, bind_plain_v4};
+
+        let (listener, port) = bind_engine_v4().expect("engine-style listener");
+        let addr = std::net::SocketAddr::from((Ipv4Addr::LOCALHOST, port.get()));
+
+        // Blocking sockets on purpose: the scenario is a plain accept/close, and
+        // it must not need a reactor that the assertion itself does not use.
+        let Ok(client) = std::net::TcpStream::connect(addr) else {
+            return TimeWait::NotCreated;
+        };
+        let Ok((accepted, _)) = listener.accept() else {
+            return TimeWait::NotCreated;
+        };
+        // The server closes first. That is what leaves `TIME_WAIT` on the server
+        // side, the state a restarted engine has to reuse.
+        drop(accepted);
+        drop(client);
+        drop(listener);
+
+        match bind_plain_v4(port) {
+            Err(err) if err.kind() == std::io::ErrorKind::AddrInUse => TimeWait::Created(port),
+            // Either a plain bind succeeded (no TIME_WAIT) or it failed for an
+            // unrelated reason; in both cases this run proves nothing.
+            _ => TimeWait::NotCreated,
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_port_in_time_wait_after_the_server_closed_first_is_free() {
+        attempt(|| {
+            let port = match port_in_time_wait() {
+                TimeWait::Created(port) => port,
+                TimeWait::NotCreated => {
+                    eprintln!(
+                        "skipping: this kernel left no TIME_WAIT entry for the closed \
+                         connection, so the probe has nothing to be wrong about here"
+                    );
+                    return Ok(());
+                }
+            };
+            match probe_bind(port).expect("probe").status().clone() {
+                BindStatus::Free => Ok(()),
+                BindStatus::InUse { detail } => Err(format!(
+                    "{port} is in TIME_WAIT and an engine (SO_REUSEADDR) can bind it, \
+                     but the probe reported InUse: {detail}"
+                )),
+            }
+        });
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_active_listener_that_set_reuseaddr_is_still_in_use() {
+        // Models an engine that is currently listening: `SO_REUSEADDR` does not
+        // let a bind win over an active listener, so the probe must say InUse.
+        let (listener, port) =
+            crate::ports::test_support::bind_engine_v4().expect("engine-style listener");
+        let report = probe_bind(port).expect("probe");
+        assert!(
+            !report.is_free(),
+            "an actively listening engine must read InUse: {report:?}"
+        );
+
+        if let Some((v6, v6_port)) = crate::ports::test_support::bind_engine_v6() {
+            let report = probe_bind(v6_port).expect("probe");
+            assert!(
+                !report.is_free(),
+                "an actively listening engine on ::1 must read InUse: {report:?}"
+            );
+            drop(v6);
+        }
+        drop(listener);
     }
 }

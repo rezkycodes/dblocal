@@ -148,6 +148,52 @@ pub fn attempt<T>(mut action: impl FnMut() -> Result<T, String>) -> T {
     panic!("gave up after {ATTEMPTS} attempts in {FIRST_TEST_PORT}-{LAST_TEST_PORT}: {last}");
 }
 
+/// Binds `127.0.0.1` the way every engine does.
+///
+/// PostgreSQL, MySQL and Valkey all set `SO_REUSEADDR` before `listen`, which is
+/// why they can take a port whose last connection is still in `TIME_WAIT`.
+/// `std::net::TcpListener::bind` sets that option on Unix (see the std source),
+/// so it models an engine listener exactly; on Windows it deliberately does not,
+/// which matches the platform behaviour the probe has there.
+pub fn bind_engine_v4() -> Option<(TcpListener, Port)> {
+    for _ in 0..ATTEMPTS {
+        let port = next_candidate();
+        if let Ok(listener) = TcpListener::bind((Ipv4Addr::LOCALHOST, port.get())) {
+            return Some((listener, port));
+        }
+    }
+    None
+}
+
+/// Binds `[::1]` the way an engine does, on a port whose IPv4 side stays free.
+///
+/// Returns `None` when the host has no IPv6 loopback.
+pub fn bind_engine_v6() -> Option<(TcpListener, Port)> {
+    for _ in 0..ATTEMPTS {
+        let port = next_candidate();
+        if !v4_free(port) {
+            continue;
+        }
+        if let Ok(listener) = TcpListener::bind((Ipv6Addr::LOCALHOST, port.get())) {
+            return Some((listener, port));
+        }
+    }
+    None
+}
+
+/// Binds `127.0.0.1` **without** `SO_REUSEADDR` and closes immediately.
+///
+/// This is the control socket for the `TIME_WAIT` test: it is what `bind(2)`
+/// does for a caller that does not opt in, so it fails while a closed connection
+/// still holds the local port.
+pub fn bind_plain_v4(port: Port) -> std::io::Result<()> {
+    let addr = std::net::SocketAddr::from((Ipv4Addr::LOCALHOST, port.get()));
+    let socket = tokio::net::TcpSocket::new_v4()?;
+    socket.bind(addr)?;
+    drop(socket);
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

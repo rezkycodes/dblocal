@@ -15,9 +15,9 @@ under `crates/core/src/process.rs`, `crates/core/src/process/**`,
   null, stdout/stderr are appended to the instance log, the child is put in its
   own process group, and the parent drops every handle.
 - **Loopback-only, real bind probes (`F-PRT-01..02`, invariant 1 edge cases).**
-  Port checks bind on `127.0.0.1` and `::1` when present with default socket
-  options (no `SO_REUSEADDR`), close the socket before returning, and treat a
-  foreign listener as `InUse`.
+  Port checks bind on `127.0.0.1` and `::1` when present the way an engine does
+  (`SO_REUSEADDR` on Unix, plain bind on Windows), close the socket before
+  returning, and treat a foreign listener as `InUse`.
 - **Log data is opaque (`F-LOG-01`, invariant 5).** Tail/follow/rotate never
   parse and never log line contents; secrets must not reach engine logs.
 
@@ -28,12 +28,27 @@ under `crates/core/src/process.rs`, `crates/core/src/process/**`,
   interface is free. `AddrNotAvailable`/`Unsupported` for IPv6 are treated as
   "no IPv6 loopback", not as a conflict. `probe_or_in_use` folds unexpected
   errors into `InUse` so callers degrade conservatively.
-  - **No `SO_REUSEADDR`.** `std::net::TcpListener::bind` sets `SO_REUSEADDR` on
-    Unix (verified in this toolchain's std source), which would make a busy port
-    look free. The probe therefore creates the socket through
-    `tokio::net::TcpSocket` (`socket2` underneath, already a core dependency),
-    binds with default options, and drops it. On Windows the platform default is
-    `SO_EXCLUSIVEADDRUSE` semantics, which is the behaviour the PRD asks for.
+  - **It answers "would the engine's bind succeed?", not "is the port unused".**
+    Every engine we manage sets `SO_REUSEADDR` before `listen`. Measured on this
+    machine: after a server closes a connection first, its port stays in
+    `TIME_WAIT` for ~60 s, where a bind **without** the option fails `EADDRINUSE`
+    but a bind **with** it succeeds. A probe that omits the option would report
+    `InUse` for a port the engine can actually take, so Stop→Start within a
+    minute (or Restart after a config change, or any instance whose health check
+    was closed by the server) would be refused with a false "port in use",
+    breaking `F-INS-03` and `F-PRT-02`. The probe therefore sets
+    `SO_REUSEADDR` on Unix via `tokio::net::TcpSocket::set_reuseaddr(true)`
+    before `bind`.
+  - **An active listener still counts as `InUse`.** On Linux and macOS a
+    reuse-enabled bind is only allowed through `TIME_WAIT`; a genuinely
+    listening socket keeps the port, so the probe does not go blind:
+    `an_active_listener_that_set_reuseaddr_is_still_in_use` pins that, for both
+    loopback families. The earlier "no `SO_REUSEADDR`" rule was simply wrong on
+    Unix — it was more conservative than the engines and blocked them.
+  - **Windows is the exception.** There `SO_REUSEADDR` lets a bind win over an
+    *active* listener, which would make the probe lie in the opposite direction,
+    so it is deliberately **not** set and the plain bind is kept. That path is
+    compiled, not run — see the platform note below.
 - `suggest_port(engine, reserved) -> Result<Port>` starts at the engine's
   canonical port (5432/3306/3307/6379), steps upward, skipping ports in
   `reserved` (other DBLocal instances) and ports reported busy by the live
@@ -154,15 +169,24 @@ the running process.
   ephemeral range, above the privileged one — from an `AtomicU16` with a
   per-process starting offset, skipping any port already bound on `127.0.0.1` or
   `::1`. Entry points: `reserve_test_port()`, `bind_test_listener()`,
-  `bind_v6_test_listener()` (which re-checks the v4 side after binding `::1`).
-  No test in this worktree binds a port below 20000.
+  `bind_v6_test_listener()` (which re-checks the v4 side after binding `::1`),
+  and the engine-shaped `bind_engine_v4()`/`bind_engine_v6()` used by the
+  `SO_REUSEADDR` tests. No test in this worktree binds a port below 20000.
+- **The probe is tested against the state that actually blocked engines.**
+  `a_port_in_time_wait_after_the_server_closed_first_is_free` connects a client,
+  closes the **accepted** side first and asserts a precondition that a plain
+  bind (no `SO_REUSEADDR`) fails on that port — proving the kernel really created
+  `TIME_WAIT` — then requires `probe_bind` to report `Free`. It skipped with an
+  explicit message on kernels that leave no `TIME_WAIT` entry.
+  `an_active_listener_that_set_reuseaddr_is_still_in_use` is the guard against
+  over-correcting: a live engine listener must still read `InUse`, for IPv4 and,
+  when the host has IPv6, IPv6.
 - **A reserved number can still be taken by another process**, because this
   machine runs other listeners in that range and concurrent worktrees may run
   this suite. A test therefore never asserts on one particular number twice:
   `test_support::attempt` retries an acquire-then-act closure, and a busy slot is
   skipped rather than failed. A genuine regression still panics with the last real
-  reason. Evidence: **100 consecutive `cargo test -p dblocal-core --lib` runs,
-  0 failures** on the final code.
+  reason.
 - Unit tests cover port probing/allocation (reserved-range listeners, reserved/busy
   skips, bounded exhaustion), identity classification (match/absent/reused/unknown,
   tolerance, deleted-suffix), reconcile table, terminate escalation/refusal and the
