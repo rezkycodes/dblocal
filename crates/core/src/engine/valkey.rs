@@ -187,6 +187,29 @@ pub fn logfile_path(logs_dir: &Path) -> PathBuf {
     logs_dir.join("valkey.log")
 }
 
+/// Ensures the directories the server needs exist at start time.
+///
+/// `spawn_command` cannot fail; the service can call this before spawning to get
+/// a clear error when the instance layout is damaged.
+pub fn prepare_run(ctx: &RunContext) -> Result<()> {
+    fs::create_dir_all(&ctx.data_dir).map_err(|e| DblError::Engine {
+        reason: format!(
+            "cannot create data directory {}: {e}",
+            ctx.data_dir.display()
+        ),
+    })?;
+    fs::create_dir_all(&ctx.run_dir).map_err(|e| DblError::Engine {
+        reason: format!("cannot create run directory {}: {e}", ctx.run_dir.display()),
+    })?;
+    fs::create_dir_all(&ctx.logs_dir).map_err(|e| DblError::Engine {
+        reason: format!(
+            "cannot create logs directory {}: {e}",
+            ctx.logs_dir.display()
+        ),
+    })?;
+    Ok(())
+}
+
 /// Returns `data_dir`'s sibling directory `leaf` (`run`, `logs`).
 pub fn sibling_dir(data_dir: &Path, leaf: &str) -> PathBuf {
     match data_dir.parent() {

@@ -12,9 +12,13 @@ pub mod uri;
 mod valkey;
 
 pub use postgres::{
-    PostgresAdapter, PostmasterIdentity, parse_postmaster_pid, read_postmaster_pid,
+    PostgresAdapter, PostmasterIdentity, parse_postmaster_pid, prepare_run as prepare_postgres_run,
+    read_postmaster_pid,
 };
-pub use valkey::{ConfigParams, ServerIdentity, ValkeyAdapter, parse_pidfile, read_pidfile};
+pub use valkey::{
+    ConfigParams, ServerIdentity, ValkeyAdapter, parse_pidfile, prepare_run as prepare_valkey_run,
+    read_pidfile,
+};
 
 use std::path::PathBuf;
 use std::process::Command;

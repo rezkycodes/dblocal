@@ -28,6 +28,19 @@ const UNIX_SOCKET_PATH_LIMIT: usize = 107;
 #[derive(Debug, Clone, Copy, Default)]
 pub struct PostgresAdapter;
 
+/// Validates and creates the unix socket directory for a start.
+///
+/// `spawn_command` cannot fail, so the service calls this before spawning: it
+/// re-checks `<run_dir>/sock/.s.PGSQL.<port>` against the 107-byte limit at
+/// start time as well as create time (C-09), and makes sure the directory the
+/// server writes its socket lock into exists and is writable.
+pub fn prepare_run(ctx: &RunContext) -> Result<PathBuf> {
+    let dir = socket_dir_for_run(&ctx.run_dir);
+    validate_socket_path_len(&dir, ctx.port.get())?;
+    ensure_socket_dir(&dir)?;
+    Ok(dir)
+}
+
 impl EngineAdapter for PostgresAdapter {
     fn key(&self) -> EngineKey {
         EngineKey::Postgresql
