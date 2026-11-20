@@ -122,12 +122,28 @@ the running process.
 - Unit tests cover port probing/allocation (ephemeral listeners, reserved/busy
   skips, bounded exhaustion), identity classification (match/absent/reused/unknown,
   tolerance, deleted-suffix), reconcile table, terminate escalation/refusal, log
-  tail/follow/rotation (including a 50 MB tail), and spawn error/log handling.
-- Real-process evidence (Unix): detached `sleep` survives dropped handles and is
-  still `Match`; a live unrelated identity is detected as `Reused` and a dead
-  one as not-`Match`; `terminate` refuses a mismatched identity while the real
-  process stays alive; the mixed reconcile table is exercised end to end.
-- Platform note: **Windows and macOS code paths compile conceptually but are
-  not executed here**; this environment is Linux x86_64 and the real-process
-  evidence tests are `#[cfg(unix)]`. Windows uses `sysinfo` for termination and
-  `creation_flags` for detachment; macOS follows the Unix path.
+  tail/follow/rotation (including a 50 MB tail and a 16 MB single-line file), and
+  spawn error/log handling.
+- Real-process evidence (Unix), in `process/evidence.rs` and `process/spawn.rs`:
+  - **Survival:** `spawn_detached(/bin/sleep 30)`, drop every handle, wait, and
+    the child still validates as `Match`; a second test has a helper process
+    start the future engine and exit, so the engine is *reparented* and still
+    matches — the exact post-quit shape of `F-INS-03` AC2.
+  - **PID reuse:** after killing a recorded `sleep`, its identity no longer
+    matches; a live PID that belongs to a different executable is `Reused`.
+  - **No signal on mismatch:** `terminate` on an identity pointing at the real
+    PID but a different executable sends nothing, and the process is asserted
+    alive afterwards.
+  - **Reconcile table:** adopted / absent / reused / missing-pidfile in one pass.
+- A subtlety worth knowing: `spawn()` returns before the child finishes `exec`,
+  so an immediate `/proc/<pid>/exe` read can report the *parent* binary. Spawn
+  therefore records the identity only once two consecutive observations agree
+  and the executable is not our own.
+- Platform note: this worktree is Linux x86_64. The real-process evidence is
+  `#[cfg(unix)]`, so macOS follows the same Unix path but was not executed here.
+  **Windows was not executed**: the whole crate cannot cross-build in this
+  container (`liblzma-sys` needs a mingw/msvc C toolchain), so the Windows-only
+  pieces — the `sysinfo` kill path in `terminate` and the `creation_flags`
+  detachment in `spawn` — were type-checked in isolation against
+  `x86_64-pc-windows-gnu` in a scratch crate, and both compile. Windows runtime
+  behaviour still needs a real Windows runner.
