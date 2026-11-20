@@ -152,7 +152,10 @@ pub(super) fn render(workspace: &Workspace, cx: &mut Context<Workspace>) -> AnyE
         .child(field(strings::UI_FIELD_VERSION, version_rows))
         .child(field(
             strings::UI_FIELD_NAME,
-            Input::new(&form.name_input).small(),
+            form.name_input
+                .as_ref()
+                .map(|input| Input::new(input).small().into_any_element())
+                .unwrap_or_else(|| div().into_any_element()),
         ))
         .child(
             v_flex()
@@ -162,7 +165,12 @@ pub(super) fn render(workspace: &Workspace, cx: &mut Context<Workspace>) -> AnyE
                         .text_xs()
                         .child(format!("{}   ({suggested})", strings::UI_FIELD_PORT)),
                 )
-                .child(Input::new(&form.port_input).small()),
+                .child(
+                    form.port_input
+                        .as_ref()
+                        .map(|input| Input::new(input).small().into_any_element())
+                        .unwrap_or_else(|| div().into_any_element()),
+                ),
         )
         .child(field(strings::UI_FIELD_AUTH, auth_row));
 

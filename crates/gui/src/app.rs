@@ -87,10 +87,19 @@ pub struct CreateForm {
     pub auth: AuthMode,
     /// Suggested port for the engine, refreshed on open.
     pub suggested_port: Option<Port>,
-    /// Name field state.
-    pub name_input: Entity<InputState>,
-    /// Port field state.
-    pub port_input: Entity<InputState>,
+    /// Name field state. `None` only in headless tests, which drive
+    /// [`Workspace::submit_draft`] with explicit strings.
+    pub name_input: Option<Entity<InputState>>,
+    /// Port field state; see [`CreateForm::name_input`].
+    pub port_input: Option<Entity<InputState>>,
+}
+
+/// Why a create submission was rejected, and whether the form stays open.
+pub enum SubmitError {
+    /// A field-level validation failure with its user message.
+    Invalid(String, bool),
+    /// The service rejected the spec or the operation.
+    Service(dblocal_core::DblError, bool),
 }
 
 /// The main workspace entity.
@@ -106,6 +115,9 @@ pub struct Workspace {
     create: Option<CreateForm>,
     delete_target: Option<InstanceId>,
     delete_name_input: Option<Entity<InputState>>,
+    /// Text typed into the delete confirmation, mirrored so the pure check has
+    /// one source and the tests need no window.
+    delete_typed_name: Option<String>,
     delete_mode: DeleteMode,
     delete_size: u64,
     palette_open: bool,
@@ -149,6 +161,7 @@ impl Workspace {
             create: None,
             delete_target: None,
             delete_name_input: None,
+            delete_typed_name: None,
             delete_mode: DeleteMode::ArchiveData,
             delete_size: 0,
             palette_open: false,
@@ -362,8 +375,8 @@ impl Workspace {
             version,
             auth: AuthMode::Password,
             suggested_port: suggested.or(port),
-            name_input,
-            port_input,
+            name_input: Some(name_input),
+            port_input: Some(port_input),
         });
         cx.notify();
     }
@@ -409,20 +422,53 @@ impl Workspace {
         let Some(form) = self.create.take() else {
             return;
         };
-        let name = form.name_input.read(cx).value().to_string();
-        let port_text = form.port_input.read(cx).value().to_string();
-        let validation = format::validate_form(&name, &port_text, &self.instances);
+        // The fields live on `InputState`; read them once, then run the pure
+        // submission core so the logic is unit-testable without a window.
+        let name = form
+            .name_input
+            .as_ref()
+            .map(|input| input.read(cx).value().to_string())
+            .unwrap_or_default();
+        let port_text = form
+            .port_input
+            .as_ref()
+            .map(|input| input.read(cx).value().to_string())
+            .unwrap_or_default();
+        match self.submit_draft(&form, &name, &port_text) {
+            Ok(()) => {}
+            Err(SubmitError::Invalid(message, keep_form)) => {
+                if keep_form {
+                    self.create = Some(form);
+                }
+                self.toast = Some(SharedString::from(message));
+            }
+            Err(SubmitError::Service(err, keep_form)) => {
+                if keep_form {
+                    self.create = Some(form);
+                }
+                self.report_error(&err);
+            }
+        }
+        cx.notify();
+    }
+
+    /// The pure core of create submission: validate, build a spec, ask the
+    /// service, start the operation. Returns `Ok` when the instance was
+    /// submitted, or an error carrying whether the form should stay open.
+    pub(crate) fn submit_draft(
+        &mut self,
+        form: &CreateForm,
+        name: &str,
+        port_text: &str,
+    ) -> std::result::Result<(), SubmitError> {
+        let validation = format::validate_form(name, port_text, &self.instances);
         if !validation.is_valid() {
-            self.create = Some(form);
-            self.toast = Some(SharedString::from(
-                validation
-                    .conflict
-                    .or(validation.name_error)
-                    .or(validation.port_error)
-                    .unwrap_or_else(|| strings::ERR_INVALID_INPUT.to_owned()),
-            ));
-            cx.notify();
-            return;
+            let message = validation
+                .conflict
+                .or(validation.name_error)
+                .or(validation.port_error)
+                .unwrap_or_else(|| strings::ERR_INVALID_INPUT.to_owned());
+            return Err(SubmitError::Invalid(message, true));
         }
         let port = if port_text.trim().is_empty() {
             None
@@ -431,41 +477,35 @@ impl Workspace {
                 .trim()
                 .parse::<u16>()
                 .ok()
-                .and_then(|v| Port::new(v).ok())
+                .and_then(|value| Port::new(value).ok())
             {
                 Some(port) => Some(port),
                 None => {
-                    self.create = Some(form);
-                    self.toast = Some(SharedString::from(strings::UI_VALIDATE_PORT_LOW));
-                    cx.notify();
-                    return;
+                    return Err(SubmitError::Invalid(
+                        strings::UI_VALIDATE_PORT_LOW.to_owned(),
+                        true,
+                    ));
                 }
             }
         };
-        let spec = dblocal_core::model::InstanceName::new(name.clone()).and_then(|instance_name| {
-            InstanceSpec::new(
-                instance_name,
-                form.engine,
-                form.version.clone(),
-                port,
-                form.auth,
-            )
-        });
+        let spec =
+            dblocal_core::model::InstanceName::new(name.to_owned()).and_then(|instance_name| {
+                InstanceSpec::new(
+                    instance_name,
+                    form.engine,
+                    form.version.clone(),
+                    port,
+                    form.auth,
+                )
+            });
         let spec = match spec {
             Ok(spec) => spec,
-            Err(err) => {
-                self.report_error(&err);
-                cx.notify();
-                return;
-            }
+            Err(err) => return Err(SubmitError::Service(err, true)),
         };
         // The service is the authority the CLI also goes through, so the form
         // cannot submit anything `dblocal create` would reject.
         if let Err(err) = self.service.validate_spec(&spec) {
-            self.create = Some(form);
-            self.report_error(&err);
-            cx.notify();
-            return;
+            return Err(SubmitError::Service(err, true));
         }
         match self.service.create_instance(spec) {
             Ok(op) => {
@@ -474,10 +514,10 @@ impl Workspace {
                     title: format!("{} {}", form.engine.display_name(), form.version),
                     progress: DownloadProgress::new(0, 1, 0, None),
                 });
+                Ok(())
             }
-            Err(err) => self.report_error(&err),
+            Err(err) => Err(SubmitError::Service(err, true)),
         }
-        cx.notify();
     }
 
     fn open_delete_dialog(&mut self, id: InstanceId, window: &mut Window, cx: &mut Context<Self>) {
@@ -499,10 +539,11 @@ impl Workspace {
             .instance(id)
             .map(|v| v.name.clone())
             .unwrap_or_default();
-        self.delete_name_input
-            .as_ref()
-            .map(|input| input.read(cx).value().as_ref() == expected.as_str())
-            .unwrap_or(false)
+        if let Some(input) = self.delete_name_input.as_ref() {
+            input.read(cx).value().as_ref() == expected.as_str()
+        } else {
+            self.delete_typed_name.as_deref() == Some(expected.as_str())
+        }
     }
 
     fn confirm_delete(&mut self, cx: &mut Context<Self>) {
