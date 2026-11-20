@@ -75,6 +75,10 @@ impl InstanceStatus {
             (Self::Stopping, InstanceEvent::ShutdownClean) => Self::Stopped,
             (Self::Stopping, InstanceEvent::ShutdownTimedOut) => Self::Failed,
             (Self::Stopped | Self::Failed, InstanceEvent::DeleteRequested) => Self::Deleting,
+            (Self::Starting | Self::Running | Self::Stopping, InstanceEvent::ReconciledAbsent) => {
+                Self::Stopped
+            }
+            (Self::Provisioning | Self::Initializing, InstanceEvent::Interrupted) => Self::Failed,
             _ => {
                 return Err(DblError::InvalidTransition {
                     from: self.as_str(),
@@ -127,6 +131,22 @@ pub enum InstanceEvent {
     ShutdownTimedOut,
     /// Delete requested by the user.
     DeleteRequested,
+    /// Startup reconciliation found no engine process for this instance.
+    ///
+    /// This is the normal result after a reboot or logout: engines do not
+    /// survive a session (D-09), so a pidfile from the previous session either
+    /// points at a dead PID or at a PID reused by a foreign process. PRD
+    /// `F-INS-04` AC2 says such an instance is "ditandai stopped", so this is
+    /// recovery, not a crash.
+    ///
+    /// Valid from `starting`, `running` and `stopping`.
+    ReconciledAbsent,
+    /// The application died in the middle of `provisioning` or `initializing`.
+    ///
+    /// Without this event an instance interrupted mid-operation would stay in
+    /// a non-terminal status forever. PRD `F-INS-04` requires the next launch
+    /// to surface it as `failed` so the user can retry or delete it.
+    Interrupted,
 }
 
 impl InstanceEvent {
@@ -147,6 +167,8 @@ impl InstanceEvent {
             Self::ShutdownClean => "stopped",
             Self::ShutdownTimedOut => "failed",
             Self::DeleteRequested => "deleting",
+            Self::ReconciledAbsent => "stopped",
+            Self::Interrupted => "failed",
         }
     }
 }
@@ -172,7 +194,7 @@ mod tests {
         Deleting,
     ];
 
-    const ALL_EVENTS: [InstanceEvent; 14] = [
+    const ALL_EVENTS: [InstanceEvent; 16] = [
         InstanceEvent::CreateWithDownload,
         InstanceEvent::CreateWithRuntime,
         InstanceEvent::DownloadVerified,
@@ -187,6 +209,8 @@ mod tests {
         InstanceEvent::ShutdownClean,
         InstanceEvent::ShutdownTimedOut,
         InstanceEvent::DeleteRequested,
+        InstanceEvent::ReconciledAbsent,
+        InstanceEvent::Interrupted,
     ];
 
     /// Every arrow in the PRD `F-INS` diagram, with its mermaid label.
@@ -249,6 +273,37 @@ mod tests {
             ),
             (Stopped, E::DeleteRequested, Deleting, "stopped -> deleting"),
             (Failed, E::DeleteRequested, Deleting, "failed -> deleting"),
+            // PRD clarifications of F-INS-04: crash and reboot recovery.
+            (
+                Starting,
+                E::ReconciledAbsent,
+                Stopped,
+                "starting -> stopped (reconciled absent)",
+            ),
+            (
+                Running,
+                E::ReconciledAbsent,
+                Stopped,
+                "running -> stopped (reconciled absent)",
+            ),
+            (
+                Stopping,
+                E::ReconciledAbsent,
+                Stopped,
+                "stopping -> stopped (reconciled absent)",
+            ),
+            (
+                Provisioning,
+                E::Interrupted,
+                Failed,
+                "provisioning -> failed (interrupted)",
+            ),
+            (
+                Initializing,
+                E::Interrupted,
+                Failed,
+                "initializing -> failed (interrupted)",
+            ),
         ]
     }
 
@@ -281,6 +336,31 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn killing_a_process_observed_alive_still_fails() {
+        // `ProcessExited` and `ReconciledAbsent` differ on purpose: a death
+        // observed while the app is watching is a failure (F-INS-03 AC4),
+        // while the same absence found at startup is normal recovery.
+        assert_eq!(
+            Running.apply(InstanceEvent::ProcessExited).ok(),
+            Some(Failed)
+        );
+        assert_eq!(
+            Running.apply(InstanceEvent::ReconciledAbsent).ok(),
+            Some(Stopped)
+        );
+        assert!(matches!(
+            Stopped.apply(InstanceEvent::ProcessExited),
+            Err(DblError::InvalidTransition { .. })
+        ));
+    }
+
+    #[test]
+    fn recovery_events_have_stable_hints() {
+        assert_eq!(InstanceEvent::ReconciledAbsent.target_hint(), "stopped");
+        assert_eq!(InstanceEvent::Interrupted.target_hint(), "failed");
     }
 
     #[test]
