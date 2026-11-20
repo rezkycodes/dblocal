@@ -55,6 +55,10 @@ If this file and the PRD disagree, the PRD wins, except for the "PRD corrections
 1. Pin `gpui-pre =0.3.12` and `gpui-component =0.10.0` (see table).
 2. One binary named `dblocal`, built by `crates/cli`. Without arguments it opens the GUI
    (`dblocal_gui::run()`); with a subcommand it runs the CLI. `crates/gui` is a library.
+3. The UI is **Zed-style** (decision D-23, supersedes the DBDelve reference): docks, a tabbed centre pane, a status bar,
+   a command palette. Read `docs/design/UI-DIRECTION.md` before touching any GUI code. Contrast of at least 4.5:1 is enforced
+   by a test; Zed's own muted greys fail it and must be lightened. Zed's `ui` and `theme` crates are GPL-3.0-or-later and not
+   dependencies; write our own code and treat the Apache-2.0 GPUI examples as an API reference.
 
 ## 3. Hard invariants (PRD §9, §10). Violating any of these fails review.
 

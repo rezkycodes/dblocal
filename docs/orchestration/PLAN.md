@@ -14,6 +14,11 @@ worktree and branch per worker. Rule: **no worker edits a path another worker ow
 | 3 | Phase 2 | MySQL/MariaDB adapters · database and user admin · open-in-client · CLI · deb/rpm/msi · self-update | Phase 2 definition of done |
 | 4 | Phase 3 | config editor · autostart · accessibility and polish | Phase 3 definition of done |
 
+## UI direction
+
+Decision D-23: the GUI is Zed-style. W1-G and every GUI-facing task starts from `docs/design/UI-DIRECTION.md`. W0-C's findings decide which
+`gpui-component` widgets cover the layout and which parts we build on raw GPUI.
+
 ## Ownership (Wave 0)
 
 | Task | Branch | Owns |

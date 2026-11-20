@@ -1,9 +1,10 @@
 # W0-C — GPUI and tray spike
 
 Branch: `w0-gpui-spike`. Read first: AGENTS.md, then PRD §6 `F-SPK-01`, `F-SPK-04`, `F-TRY`, §9 architecture rules 1-2,
-decisions D-04, D-06 and open questions OPEN-02, OPEN-03. The reference look is DBDelve
-(https://github.com/ShayanAbbas1/dbdelve): GPU-accelerated, dark teal, dense, no Electron or webview. **Do not copy its code**;
-reading how it uses GPUI is fine.
+decisions D-04, D-06, **D-23** and open questions OPEN-02, OPEN-03. The reference look is the **Zed IDE** (see
+`docs/design/UI-DIRECTION.md`, which you must read first): docks, a tabbed centre pane, a status bar, a command palette, dark and light themes.
+The reference for how to build it is https://github.com/zed-industries/zed/tree/main/crates/gpui/examples. **Do not copy Zed or DBDelve
+source files**; reading how they use GPUI is fine.
 
 ## Goal
 
