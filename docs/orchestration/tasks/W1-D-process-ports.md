@@ -16,7 +16,7 @@ ever signalling it, reconcile after a crash, probe ports for real, and tail logs
 
 ### Ports (F-PRT-01, F-PRT-02)
 
-- `probe_bind(port)`: a **real** bind on `127.0.0.1` (and `::1` when the host has IPv6), no `SO_REUSEADDR`, closed before returning. Reports `Free` or `InUse`
+- `probe_bind(port)`: a **real** bind on `127.0.0.1` (and `::1` when the host has IPv6), closed before returning. **Unix: set `SO_REUSEADDR`** (corrected in review round 2: the engines set it, and without it a port in TIME_WAIT after a stop is falsely reported `InUse` for about 60 s; an active listener still blocks the bind). **Windows: do not set it** (it would let a bind succeed over an active listener). Reports `Free` or `InUse`
   (and ideally who, best effort).
 - `suggest_port(engine, reserved: &HashSet<Port>)`: canonical port first, then +1 upward until it is neither reserved by another DBLocal instance nor in use.
   Bounded search with a typed error when exhausted.
