@@ -7,8 +7,6 @@ license.workspace = true
 
 [features]
 default = []
-# Exposes the preview constructors the headless render tests drive.
-test-support = ["gpui/test-support"]
 # The X11 backend additionally needs the `libxkbcommon-x11` development package
 # (Fedora: libxkbcommon-x11-devel, Debian: libxkbcommon-x11-dev). Wayland is the
 # default on this host; see docs/dev/linux-build-deps.md.

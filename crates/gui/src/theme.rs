@@ -41,7 +41,70 @@ pub fn init(cx: &mut App) {
         tracing::error!("could not register the DBLocal themes: {err}");
     }
     sync_to_system(cx);
+    apply_explicit_fonts(cx);
     log_resolved_fonts(cx);
+}
+
+/// The sane UI font stack, in preference order.
+///
+/// `.SystemUIFont` is kept as the final fallback (W0-C recommended shipping the
+/// system font). On Linux GPUI maps `.SystemUIFont` through a stack that
+/// includes Windows and macOS families; if a host happens to have `Segoe UI`
+/// installed under `~/.local/share/fonts` — as this review machine does —
+/// `.SystemUIFont` resolves to it, which is not the intended Linux look.
+/// Naming an installed desktop family explicitly avoids that silent
+/// substitution while still following a system font.
+pub const UI_FONT_STACK: [&str; 8] = [
+    "Adwaita Sans",
+    "Cantarell",
+    "Noto Sans",
+    "Ubuntu",
+    "DejaVu Sans",
+    "Liberation Sans",
+    "FreeSans",
+    ".SystemUIFont",
+];
+
+/// The monospace stack used for logs, URIs and ports.
+pub const MONO_FONT_STACK: [&str; 7] = [
+    "Adwaita Mono",
+    "Noto Sans Mono",
+    "JetBrains Mono",
+    "Source Code Pro",
+    "DejaVu Sans Mono",
+    "Liberation Mono",
+    ".SystemUIFont",
+];
+
+/// Returns the first family of `stack` that is installed, if any.
+pub fn first_installed(stack: &[&str], installed: &[String]) -> Option<SharedString> {
+    stack
+        .iter()
+        .find(|candidate| installed.iter().any(|name| name == *candidate))
+        .map(|family| SharedString::from((*family).to_owned()))
+}
+
+/// Sets explicit UI and mono families from the installed fonts on Linux.
+///
+/// Windows and macOS keep their native system font.
+fn apply_explicit_fonts(cx: &mut App) {
+    if !cfg!(target_os = "linux") {
+        return;
+    }
+    let installed = cx.text_system().all_font_names();
+    if installed.is_empty() {
+        return;
+    }
+    let ui = first_installed(&UI_FONT_STACK, &installed);
+    let mono = first_installed(&MONO_FONT_STACK, &installed);
+    Theme::update(cx, |theme| {
+        if let Some(ui) = ui {
+            theme.font_family = ui;
+        }
+        if let Some(mono) = mono {
+            theme.mono_font_family = mono;
+        }
+    });
 }
 
 /// Installs one registered theme by name (used by tests and the theme toggle).
@@ -111,6 +174,40 @@ mod tests {
         assert!(merged.contains(LIGHT_THEME));
         let value: serde_json::Value = serde_json::from_str(&merged).expect("valid json");
         assert_eq!(value["themes"].as_array().expect("themes").len(), 2);
+    }
+
+    #[test]
+    fn font_stacks_pick_the_first_installed_family() {
+        let installed: Vec<String> =
+            vec!["Segoe UI".into(), "Noto Sans".into(), "DejaVu Sans".into()];
+        assert_eq!(
+            first_installed(&UI_FONT_STACK, &installed),
+            Some(SharedString::from("Noto Sans"))
+        );
+        let mono: Vec<String> = vec!["Noto Sans Mono".into()];
+        assert_eq!(
+            first_installed(&MONO_FONT_STACK, &mono),
+            Some(SharedString::from("Noto Sans Mono"))
+        );
+    }
+
+    #[test]
+    fn font_stacks_fall_back_to_the_system_font() {
+        let installed: Vec<String> = vec![".SystemUIFont".into()];
+        assert_eq!(
+            first_installed(&UI_FONT_STACK, &installed),
+            Some(SharedString::from(".SystemUIFont"))
+        );
+        assert!(first_installed(&UI_FONT_STACK, &[]).is_none());
+    }
+
+    #[test]
+    fn windows_font_is_never_preferred_over_a_linux_family() {
+        // Even when Segoe UI is installed (this review host has it under
+        // ~/.local/share/fonts), a desktop family earlier in the stack wins.
+        let installed: Vec<String> = vec!["Segoe UI".into(), "Cantarell".into()];
+        let picked = first_installed(&UI_FONT_STACK, &installed).expect("family");
+        assert_eq!(picked, SharedString::from("Cantarell"));
     }
 
     #[test]

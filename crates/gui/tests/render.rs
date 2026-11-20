@@ -4,6 +4,7 @@
 //! view off-screen and assert on sampled pixels and distinct-colour counts, as
 //! W0-C did. Run with `cargo test -p dblocal-gui --test render`.
 
+#![allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
 use std::collections::HashSet;
 use std::sync::Arc;
 

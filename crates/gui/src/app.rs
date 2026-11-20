@@ -484,7 +484,7 @@ impl Workspace {
             .unwrap_or_default();
         self.delete_name_input
             .as_ref()
-            .map(|input| input.read(cx).value().to_string() == expected)
+            .map(|input| input.read(cx).value().as_ref() == expected.as_str())
             .unwrap_or(false)
     }
 
@@ -1352,9 +1352,11 @@ pub fn appearance_is_dark(appearance: WindowAppearance) -> bool {
     )
 }
 
-#[cfg(any(test, feature = "test-support"))]
 impl Workspace {
     /// Builds a preview populated from a seeded mock service.
+    ///
+    /// Preview constructors drive the headless render tests and let reviewers
+    /// exercise every shell state without a live session.
     pub fn preview(
         service: Arc<dyn DblService>,
         window: &mut Window,
@@ -1468,7 +1470,7 @@ pub fn demo_log_lines() -> Vec<String> {
         .map(|index| match index % 4 {
             0 => format!("[info] baris log contoh {index}"),
             1 => format!("[debug] health check ok ({index}ms)"),
-            2 => format!("[info] listening on 127.0.0.1 only"),
+            2 => "[info] listening on 127.0.0.1 only".to_string(),
             _ => format!("[debug] checkpoint complete: wrote {index} buffers"),
         })
         .collect()

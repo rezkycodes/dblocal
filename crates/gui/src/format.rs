@@ -146,11 +146,11 @@ pub fn download_row(
     speed: u64,
     eta_secs: Option<u64>,
 ) -> DownloadRow {
-    let percent = if total == 0 {
-        0
-    } else {
-        ((done.saturating_mul(100) / total).min(100)) as u8
-    };
+    let percent = done
+        .saturating_mul(100)
+        .checked_div(total)
+        .map(|value| value.min(100) as u8)
+        .unwrap_or(0);
     DownloadRow {
         title: format!("{} {}", engine.display_name(), version),
         percent,
