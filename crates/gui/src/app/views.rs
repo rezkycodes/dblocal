@@ -27,7 +27,7 @@ impl Workspace {
 
     pub(crate) fn render_sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme().clone();
-        let groups = format::group_by_engine(&self.instances);
+        let groups = format::group_by_engine(&self.state.instances);
         let mut body = v_flex().gap_3().p_2();
         if groups.is_empty() {
             body = body.child(

@@ -23,10 +23,16 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) -> Self {
         let mut workspace = Self::new(service, window, cx);
-        if let Some(first) = workspace.instances.first().map(|view| view.id.clone()) {
+        if let Some(first) = workspace
+            .state
+            .instances
+            .first()
+            .map(|view| view.id.clone())
+        {
             workspace.open_tab(first, cx);
         }
         let failure_id = workspace
+            .state
             .instances
             .iter()
             .find(|view| view.status == InstanceStatus::Failed)
@@ -93,7 +99,12 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) -> Self {
         let mut workspace = Self::preview(service, window, cx);
-        if let Some(id) = workspace.instances.first().map(|view| view.id.clone()) {
+        if let Some(id) = workspace
+            .state
+            .instances
+            .first()
+            .map(|view| view.id.clone())
+        {
             workspace.open_delete_dialog(id, window, cx);
         }
         workspace
@@ -117,7 +128,12 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) -> Self {
         let mut workspace = Self::preview(service, window, cx);
-        if let Some(id) = workspace.instances.first().map(|view| view.id.clone()) {
+        if let Some(id) = workspace
+            .state
+            .instances
+            .first()
+            .map(|view| view.id.clone())
+        {
             workspace.revealed.insert(id);
         }
         workspace
@@ -140,6 +156,7 @@ impl Workspace {
             ],
         };
         if let Some(view) = workspace
+            .state
             .instances
             .iter_mut()
             .find(|view| view.status == InstanceStatus::Failed)

@@ -11,6 +11,7 @@ mod create_dialog;
 mod delete_dialog;
 mod palette;
 mod preview;
+mod state;
 mod status_bar;
 mod title_bar;
 mod views;
@@ -22,9 +23,7 @@ use dblocal_core::model::{
     AuthMode, CatalogStatus, DeleteMode, DownloadProgress, EngineKey, InstanceId, InstanceSpec,
     Port,
 };
-use dblocal_core::service::{
-    CatalogView, DblService, InstanceView, OperationId, OperationStage, UriFormat, UserFacingError,
-};
+use dblocal_core::service::{CatalogView, DblService, InstanceView, UriFormat, UserFacingError};
 use dblocal_core::strings;
 use gpui::{
     App, AppContext as _, ClipboardItem, Context, Entity, FocusHandle, Focusable, IntoElement,
@@ -41,6 +40,7 @@ use crate::service_bridge::{self, UiEvent};
 
 pub use actions::{ROOT_CONTEXT, palette_hint};
 pub use bootstrap::{appearance_is_dark, run_with_service};
+pub use state::{ActiveDownload, ShellState};
 
 /// Opens the GUI on the in-memory mock service.
 pub fn run_with_mock() -> dblocal_core::Result<()> {
@@ -63,17 +63,6 @@ pub struct OpenTab {
     pub instance: InstanceId,
     /// Active inner tab.
     pub inner: InnerTab,
-}
-
-/// One in-flight download the status bar tracks.
-#[derive(Debug, Clone)]
-pub struct ActiveDownload {
-    /// Operation that owns it.
-    pub operation: OperationId,
-    /// Display title, e.g. `PostgreSQL 17.4`.
-    pub title: String,
-    /// Latest sample.
-    pub progress: DownloadProgress,
 }
 
 /// What the create dialog currently has selected.
@@ -106,7 +95,7 @@ pub enum SubmitError {
 pub struct Workspace {
     service: Arc<dyn DblService>,
     events: flume::Receiver<UiEvent>,
-    instances: Vec<InstanceView>,
+    state: ShellState,
     catalog: CatalogView,
     open_tabs: Vec<OpenTab>,
     selected_tab: usize,
@@ -123,8 +112,7 @@ pub struct Workspace {
     palette_open: bool,
     palette_query: String,
     command_state: Entity<CommandState>,
-    downloads: Vec<ActiveDownload>,
-    last_failure: Option<UserFacingError>,
+    last_failure_mirror: Option<UserFacingError>,
     toast: Option<SharedString>,
     tray_available: bool,
     version: &'static str,
@@ -152,7 +140,11 @@ impl Workspace {
         let mut workspace = Self {
             service,
             events,
-            instances,
+            state: ShellState {
+                instances,
+                downloads: Vec::new(),
+                last_failure: None,
+            },
             catalog,
             open_tabs: Vec::new(),
             selected_tab: 0,
@@ -167,8 +159,7 @@ impl Workspace {
             palette_open: false,
             palette_query: String::new(),
             command_state,
-            downloads: Vec::new(),
-            last_failure: None,
+            last_failure_mirror: None,
             toast: None,
             tray_available: false,
             version: env!("CARGO_PKG_VERSION"),
@@ -204,73 +195,43 @@ impl Workspace {
 
     fn refresh_instances(&mut self) {
         if let Ok(instances) = self.service.list_instances() {
-            self.instances = instances;
+            self.state.replace_instances(instances);
         }
     }
 
     fn apply_event(&mut self, event: UiEvent) {
         match event {
-            UiEvent::InstanceChanged(view) => self.upsert_instance(view),
-            UiEvent::OperationProgress { id, stage } => self.on_progress(id, stage),
-            UiEvent::DownloadProgress { id, progress } => self.on_download(id, progress),
-            UiEvent::OperationFinished { id, result } => self.on_finished(id, result),
+            UiEvent::InstanceChanged(view) => self.state.upsert_instance(view),
+            UiEvent::OperationProgress { id, stage } => self.state.on_progress(&id, stage),
+            UiEvent::DownloadProgress { id, progress } => {
+                self.state
+                    .on_download(id, progress, strings::UI_DOWNLOADS.to_owned());
+            }
+            UiEvent::OperationFinished { id, result } => {
+                self.state.on_finished(&id, result.clone());
+                if let Err(err) = result {
+                    self.toast = Some(SharedString::from(format!(
+                        "{} — {}",
+                        err.code, err.message
+                    )));
+                    self.last_failure_mirror = Some(err);
+                }
+                self.refresh_instances();
+            }
             UiEvent::CatalogUpdated => {
                 if let Ok(catalog) = self.service.catalog() {
                     self.catalog = catalog;
                 }
             }
             UiEvent::LogLines { instance, lines } => {
-                if self.logs.watched() == Some(instance.as_str()) {
-                    self.logs.append(lines);
-                }
+                self.state.on_log_lines(&mut self.logs, &instance, lines);
             }
             UiEvent::Closed => {}
         }
     }
 
-    fn upsert_instance(&mut self, view: InstanceView) {
-        match self
-            .instances
-            .iter_mut()
-            .find(|existing| existing.id == view.id)
-        {
-            Some(existing) => *existing = view,
-            None => self.instances.push(view),
-        }
-    }
-
-    fn on_progress(&mut self, id: OperationId, stage: OperationStage) {
-        if matches!(stage, OperationStage::Done | OperationStage::Failed) {
-            self.downloads.retain(|download| download.operation != id);
-        }
-    }
-
-    fn on_download(&mut self, id: OperationId, progress: DownloadProgress) {
-        if let Some(download) = self.downloads.iter_mut().find(|d| d.operation == id) {
-            download.progress = progress;
-        } else {
-            self.downloads.push(ActiveDownload {
-                operation: id,
-                title: strings::UI_DOWNLOADS.to_owned(),
-                progress,
-            });
-        }
-    }
-
-    fn on_finished(&mut self, id: OperationId, result: Result<(), UserFacingError>) {
-        self.downloads.retain(|download| download.operation != id);
-        if let Err(err) = result {
-            self.toast = Some(SharedString::from(format!(
-                "{} — {}",
-                err.code, err.message
-            )));
-            self.last_failure = Some(err);
-        }
-        self.refresh_instances();
-    }
-
     fn instance(&self, id: &InstanceId) -> Option<&InstanceView> {
-        self.instances.iter().find(|view| &view.id == id)
+        self.state.instances.iter().find(|view| &view.id == id)
     }
 
     fn open_tab(&mut self, id: InstanceId, cx: &mut Context<Self>) {
@@ -324,7 +285,7 @@ impl Workspace {
             "{} — {}",
             facing.code, facing.message
         )));
-        self.last_failure = Some(facing);
+        self.last_failure_mirror = Some(facing);
     }
 
     fn copy_uri(
@@ -461,7 +422,7 @@ impl Workspace {
         name: &str,
         port_text: &str,
     ) -> std::result::Result<(), SubmitError> {
-        let validation = format::validate_form(name, port_text, &self.instances);
+        let validation = format::validate_form(name, port_text, &self.state.instances);
         if !validation.is_valid() {
             let message = validation
                 .conflict
@@ -509,7 +470,7 @@ impl Workspace {
         }
         match self.service.create_instance(spec) {
             Ok(op) => {
-                self.downloads.push(ActiveDownload {
+                self.state.downloads.push(ActiveDownload {
                     operation: op,
                     title: format!("{} {}", form.engine.display_name(), form.version),
                     progress: DownloadProgress::new(0, 1, 0, None),
@@ -581,13 +542,13 @@ impl Workspace {
     }
 
     fn running_count(&self) -> usize {
-        format::running_count(&self.instances)
+        self.state.running_count()
     }
 
     // ----- Accessors used by submodules ----------------------------------
 
     pub(crate) fn instances(&self) -> &[InstanceView] {
-        &self.instances
+        &self.state.instances
     }
 
     pub(crate) fn catalog(&self) -> &CatalogView {
@@ -595,7 +556,7 @@ impl Workspace {
     }
 
     pub(crate) fn downloads(&self) -> &[ActiveDownload] {
-        &self.downloads
+        &self.state.downloads
     }
 
     pub(crate) fn toggle_palette(&mut self) {
@@ -613,7 +574,7 @@ impl Workspace {
     }
 
     pub(crate) fn palette_actions(&self) -> Vec<PaletteAction> {
-        let items = format::palette_items(&self.instances);
+        let items = format::palette_items(&self.state.instances);
         format::filter_palette(&items, &self.palette_query)
             .into_iter()
             .map(|item| item.action.clone())
@@ -621,7 +582,7 @@ impl Workspace {
     }
 
     pub(crate) fn palette_labels(&self) -> Vec<String> {
-        let items = format::palette_items(&self.instances);
+        let items = format::palette_items(&self.state.instances);
         format::filter_palette(&items, &self.palette_query)
             .into_iter()
             .map(|item| item.label.clone())
