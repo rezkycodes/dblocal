@@ -29,7 +29,7 @@ Prototype: `spikes/gpui/` (standalone `[workspace]`, pins `gpui-pre =0.3.12`, `g
 Rendered numerically (no image viewer; compositor capture denied):
 - Dark (`zed-shell-dark.png`, 2200x1440): 936 colours; samples title/sidebar `rgba(33,37,43,255)` = `#21252b`, centre `rgba(40,44,52,255)` = `#282c34`, status `rgba(33,37,43,255)`.
 - Light (`zed-shell-light.png`, 2200x1440): 961 colours; samples title/sidebar `rgba(240,240,240,255)` = `#f0f0f0`, centre `rgba(250,250,250,255)` = `#fafafa`, status `rgba(240,240,240,255)`.
-- Centre-luminance check (test): dark 241.45 vs light 241.45 in the earlier broken render became distinct after `Theme::apply_config` (the saved frames now carry the correct palettes; `renders_zed_style_shell_dark_and_light` passes and asserts the themes differ).
+- Centre-region mean luminance, printed by `renders_zed_style_shell_dark_and_light`: dark **42.93**, light **241.45** (the assertion requires a gap > 10). Samples logged by the test: dark title/sidebar `rgba(33,37,43,255)`, dark centre `rgba(40,44,52,255)`, light title/sidebar `rgba(240,240,240,255)`, light centre `rgba(250,250,250,255)`.
 
 ## 2. Contrast (WCAG 4.5:1, enforced)
 

@@ -364,3 +364,70 @@ pub fn hex_to_hsla(hex: &str) -> Hsla {
     };
     gpui::rgba(((r as u32) << 24) | ((g as u32) << 16) | ((b as u32) << 8) | a as u32).into()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gpui_component::theme::ThemeRegistry;
+
+    #[test]
+    fn theme_set_loads_into_registry() {
+        let mut registry = ThemeRegistry::default();
+        registry
+            .load_themes_from_str(THEME_SET_JSON)
+            .expect("theme set must load");
+        let themes = registry.themes();
+        assert!(
+            themes.contains_key(&SharedString::from(DARK_THEME)),
+            "dark theme missing"
+        );
+        assert!(
+            themes.contains_key(&SharedString::from(LIGHT_THEME)),
+            "light theme missing"
+        );
+        let dark = themes.get(&SharedString::from(DARK_THEME)).unwrap();
+        let light = themes.get(&SharedString::from(LIGHT_THEME)).unwrap();
+        assert!(dark.mode.is_dark());
+        assert!(!light.mode.is_dark());
+    }
+
+    #[test]
+    fn theme_json_contains_expected_core_tokens() {
+        // The JSON is the contract: both themes must declare the core surface and
+        // text tokens the shell reads, in both modes.
+        for token in [
+            "\"background\"",
+            "\"foreground\"",
+            "\"border\"",
+            "\"sidebar.background\"",
+            "\"tab.active.background\"",
+            "\"title_bar.background\"",
+            "\"status_bar.background\"",
+            "\"muted.foreground\"",
+        ] {
+            assert!(
+                THEME_SET_JSON.matches(token).count() >= 2,
+                "token {token} must appear for both themes"
+            );
+        }
+        assert!(THEME_SET_JSON.contains(DARK_THEME));
+        assert!(THEME_SET_JSON.contains(LIGHT_THEME));
+    }
+
+    #[test]
+    fn hex_to_hsla_handles_six_and_eight_digit_forms() {
+        let opaque = hex_to_hsla("#282c34");
+        let prefixed = hex_to_hsla("282c34");
+        assert_eq!(opaque, prefixed);
+        assert_eq!(opaque.a, 1.0);
+        let translucent = hex_to_hsla("#282c3480");
+        assert!((translucent.a - 0.5).abs() < 0.01);
+    }
+
+    #[test]
+    fn hex_to_hsla_preserves_lightness_order() {
+        let dark = hex_to_hsla("#21252b");
+        let light = hex_to_hsla("#fafafa");
+        assert!(light.l > dark.l, "light background must be lighter");
+    }
+}

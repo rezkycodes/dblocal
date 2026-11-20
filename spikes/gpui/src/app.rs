@@ -178,6 +178,34 @@ pub struct AppState {
 }
 
 impl AppState {
+    /// Preview with the command palette open, for render coverage.
+    pub fn preview_with_palette(cx: &mut Context<Self>) -> Self {
+        let mut state = Self::preview(cx);
+        state.command_palette_open = true;
+        state.palette_selected = 2;
+        state
+    }
+
+    /// Preview on the Logs inner tab with a failed instance selected.
+    pub fn preview_with_logs(cx: &mut Context<Self>) -> Self {
+        let mut state = Self::preview(cx);
+        state.inner_tab = InnerTab::Logs;
+        state.open_tabs = vec![3];
+        state.selected_tab = 0;
+        state.selected_sidebar = Some(3);
+        state
+    }
+
+    /// Preview with every tab closed, exercising the welcome state.
+    pub fn preview_welcome(cx: &mut Context<Self>) -> Self {
+        let mut state = Self::preview(cx);
+        state.open_tabs.clear();
+        state.selected_sidebar = None;
+        state.tray_available = false;
+        state.download_progress = 100.0;
+        state
+    }
+
     /// Preview state for headless screenshot/test rendering.
     pub fn preview(cx: &mut Context<Self>) -> Self {
         Self {

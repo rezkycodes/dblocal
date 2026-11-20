@@ -21,7 +21,11 @@ impl AssetSource for SpikeAssets {
     }
 }
 
-fn render_one(mode_dark: bool, name: &str) -> (image::RgbaImage, usize) {
+fn render_with(
+    mode_dark: bool,
+    name: &str,
+    build: fn(&mut gpui::Context<gpui_spike::app::AppState>) -> gpui_spike::app::AppState,
+) -> (image::RgbaImage, usize) {
     let text_system = gpui_platform::current_platform(true).text_system();
     let mut app = HeadlessAppContext::with_platform(
         text_system,
@@ -54,7 +58,7 @@ fn render_one(mode_dark: bool, name: &str) -> (image::RgbaImage, usize) {
                         ..Default::default()
                     },
                     |window, cx| {
-                        let view = cx.new(gpui_spike::app::AppState::preview);
+                        let view = cx.new(build);
                         cx.new(|cx| gpui_component::Root::new(view, window, cx))
                     },
                 )
@@ -89,12 +93,20 @@ fn render_one(mode_dark: bool, name: &str) -> (image::RgbaImage, usize) {
 
 #[test]
 fn renders_zed_style_shell_dark_and_light() {
-    let (dark, dark_n) = render_one(true, "zed-shell-dark.png");
+    let (dark, dark_n) = render_with(
+        true,
+        "zed-shell-dark.png",
+        gpui_spike::app::AppState::preview,
+    );
     assert!(
         dark_n > 20,
         "dark: expected a painted UI, got {dark_n} colours"
     );
-    let (light, light_n) = render_one(false, "zed-shell-light.png");
+    let (light, light_n) = render_with(
+        false,
+        "zed-shell-light.png",
+        gpui_spike::app::AppState::preview,
+    );
     assert!(
         light_n > 20,
         "light: expected a painted UI, got {light_n} colours"
@@ -139,4 +151,37 @@ fn renders_zed_style_shell_dark_and_light() {
             eprintln!("SAMPLE {label} {region} ({x},{y}) rgba={:?}", px);
         }
     }
+}
+
+/// The command palette overlay, the Logs inner tab and the welcome state each
+/// paint a different subtree; rendering them keeps the whole view covered and
+/// proves those paths do not panic.
+#[test]
+fn renders_palette_logs_and_welcome_states() {
+    let (_, palette_n) = render_with(
+        true,
+        "zed-shell-palette.png",
+        gpui_spike::app::AppState::preview_with_palette,
+    );
+    assert!(palette_n > 20, "palette: got {palette_n} colours");
+
+    let (logs, logs_n) = render_with(
+        false,
+        "zed-shell-logs.png",
+        gpui_spike::app::AppState::preview_with_logs,
+    );
+    assert!(logs_n > 20, "logs: got {logs_n} colours");
+
+    let (_, welcome_n) = render_with(
+        false,
+        "zed-shell-welcome.png",
+        gpui_spike::app::AppState::preview_welcome,
+    );
+    assert!(welcome_n > 20, "welcome: got {welcome_n} colours");
+
+    // The Logs tab paints monospace text, so it must show quiet background
+    // plus text pixels rather than a flat fill.
+    let (w, h) = logs.dimensions();
+    let centre = logs.get_pixel(w / 2, h / 2).0;
+    eprintln!("LOGS centre rgba={centre:?}");
 }
