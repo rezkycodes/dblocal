@@ -24,7 +24,7 @@ nix = { version = "0.32", features = ["signal", "process"] }
 percent-encoding = "2"
 rand = "0.10"
 redis = "1.8"
-reqwest = { version = "0.13", default-features = false, features = ["rustls", "stream", "json"] }
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "stream", "json", "blocking"] }
 rusqlite = { version = "0.43", features = ["bundled"] }
 semver = { version = "1", features = ["serde"] }
 serde = { version = "1", features = ["derive"] }

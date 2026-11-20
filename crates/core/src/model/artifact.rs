@@ -59,6 +59,7 @@ pub struct Artifact {
     format: ArchiveFormat,
     strip_prefix: Option<String>,
     min_glibc: Option<String>,
+    variant: Option<String>,
 }
 
 impl Artifact {
@@ -111,6 +112,7 @@ impl Artifact {
             format,
             strip_prefix: None,
             min_glibc: None,
+            variant: None,
         })
     }
 
@@ -158,6 +160,10 @@ impl Artifact {
     pub fn min_glibc(&self) -> Option<&str> {
         self.min_glibc.as_deref()
     }
+    /// Upstream build variant, for example Valkey's `jammy` or `noble`.
+    pub fn variant(&self) -> Option<&str> {
+        self.variant.as_deref()
+    }
 
     /// Returns a copy with a strip prefix.
     pub fn with_strip_prefix(mut self, prefix: impl Into<String>) -> Self {
@@ -168,6 +174,12 @@ impl Artifact {
     /// Returns a copy with a minimum glibc requirement.
     pub fn with_min_glibc(mut self, version: impl Into<String>) -> Self {
         self.min_glibc = Some(version.into());
+        self
+    }
+
+    /// Returns a copy with an upstream build variant.
+    pub fn with_variant(mut self, variant: impl Into<String>) -> Self {
+        self.variant = Some(variant.into());
         self
     }
 }
@@ -333,6 +345,25 @@ mod tests {
         assert_eq!(artifact.format(), ArchiveFormat::TarGz);
         assert_eq!(artifact.strip_prefix(), Some("pgsql/"));
         assert_eq!(artifact.min_glibc(), Some("2.28"));
+        assert_eq!(artifact.variant(), None);
         assert_eq!(ArchiveFormat::TarGz.as_str(), "tar.gz");
+    }
+
+    #[test]
+    fn artifact_variant_builder() {
+        let artifact = Artifact::new(
+            "v1",
+            EngineKey::Valkey,
+            "9.2.0",
+            Os::Linux,
+            Arch::X86_64,
+            "https://example.test/valkey.tar.gz",
+            sha(),
+            10,
+            ArchiveFormat::TarGz,
+        )
+        .expect("valid artifact")
+        .with_variant("jammy");
+        assert_eq!(artifact.variant(), Some("jammy"));
     }
 }
