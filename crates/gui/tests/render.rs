@@ -214,6 +214,9 @@ fn renders_palette_logs_create_and_failure() {
     let (_, create_n) = render(true, "shell-create.png", Workspace::preview_create);
     assert!(create_n > 40, "create modal render too flat: {create_n}");
 
+    let (_, delete_n) = render(false, "shell-delete.png", Workspace::preview_delete);
+    assert!(delete_n > 40, "delete modal render too flat: {delete_n}");
+
     let (failure, failure_n) = render(false, "shell-failure.png", Workspace::preview_failure);
     assert!(failure_n > 40, "failure render too flat: {failure_n}");
 

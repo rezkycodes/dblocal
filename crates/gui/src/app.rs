@@ -1426,6 +1426,19 @@ impl Workspace {
         workspace
     }
 
+    /// Preview with the delete modal open on the first instance.
+    pub fn preview_delete(
+        service: Arc<dyn DblService>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let mut workspace = Self::preview(service, window, cx);
+        if let Some(id) = workspace.instances.first().map(|view| view.id.clone()) {
+            workspace.open_delete_dialog(id, window, cx);
+        }
+        workspace
+    }
+
     /// Preview focused on a failed instance, exercising the diagnosis panel.
     pub fn preview_failure(
         service: Arc<dyn DblService>,

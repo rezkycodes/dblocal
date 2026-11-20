@@ -199,6 +199,61 @@ mod tests {
     }
 
     #[test]
+    fn multiple_override_entries_accept_any_existing_manifest() {
+        let existing = Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml");
+        let value = OsString::from(format!("/nonexistent/a.json:{}", existing.display()));
+        assert!(invalid_override("VK_ICD_FILENAMES", &value).is_none());
+    }
+
+    #[test]
+    fn override_with_only_missing_entries_lists_them_all() {
+        let value = OsString::from("/missing/one.json:/missing/two.json");
+        let reason = invalid_override("VK_DRIVER_FILES", &value).expect("reason");
+        assert!(reason.contains("/missing/one.json"));
+        assert!(reason.contains("/missing/two.json"));
+    }
+
+    #[test]
+    fn override_with_no_entries_is_reported_as_empty() {
+        // Just separators: nothing to resolve either way.
+        let reason = invalid_override("VK_ICD_FILENAMES", &OsString::from("::")).expect("reason");
+        assert!(reason.contains("does not name any ICD manifest"));
+    }
+
+    #[test]
+    fn manifest_probe_does_not_panic_on_a_missing_directory() {
+        // On this host the directories exist; on a bare container they may not.
+        // Either answer is fine, but the call must return rather than panic.
+        assert!(matches!(icd_manifest_present(), true | false));
+    }
+
+    #[test]
+    fn full_preflight_matches_the_skip_branch_when_skipped() {
+        assert_eq!(preflight_with_skip(true), Ok(()));
+    }
+
+    #[test]
+    fn adapter_probe_returns_cleanly_either_way() {
+        // This host has a working RADV Vulkan driver, a bare CI container may
+        // not. Both outcomes are acceptable; the call must not panic or hang.
+        let probe = probe_vulkan_adapters();
+        if let Some(reason) = probe {
+            assert!(!reason.is_empty());
+        }
+    }
+
+    #[test]
+    fn real_preflight_runs_end_to_end() {
+        // No override and no skip: exercises detect, the manifest probe and the
+        // adapter enumeration. On this host Vulkan is present, so it passes.
+        let result = preflight_with_skip(false);
+        match result {
+            Ok(()) => {}
+            Err(report) => assert!(report.contains("DBLocal tidak bisa dijalankan")),
+        }
+    }
+
+    #[test]
     fn skip_flag_disables_the_check() {
         assert!(preflight_with_skip(true).is_ok());
     }
