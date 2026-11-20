@@ -277,15 +277,16 @@ fn pg_start(runtime: &Path, data: &Path, logs: &Path, run: &Path, port: u16) {
     }
 }
 
-fn pg_stop(
-    runtime: &Path,
-    data: &Path,
-    logs: &Path,
-    run: &Path,
-    port: u16,
-    password: &str,
-) {
-    let ctx = pg_run_ctx(runtime, data, logs, run, port, AuthMode::Password, Some(password));
+fn pg_stop(runtime: &Path, data: &Path, logs: &Path, run: &Path, port: u16, password: &str) {
+    let ctx = pg_run_ctx(
+        runtime,
+        data,
+        logs,
+        run,
+        port,
+        AuthMode::Password,
+        Some(password),
+    );
     PostgresAdapter.shutdown(&ctx).expect("pg_ctl stop");
 }
 
@@ -427,13 +428,25 @@ fn postgres_18_17_side_by_side_full_cycle() {
         wait_tcp_gone(port17, Duration::from_secs(20)),
         "pg17 still listening"
     );
-    assert!(wait_pid_gone(id18.pid, Duration::from_secs(20)), "pg18 pid alive");
-    assert!(wait_pid_gone(id17.pid, Duration::from_secs(20)), "pg17 pid alive");
+    assert!(
+        wait_pid_gone(id18.pid, Duration::from_secs(20)),
+        "pg18 pid alive"
+    );
+    assert!(
+        wait_pid_gone(id17.pid, Duration::from_secs(20)),
+        "pg17 pid alive"
+    );
 
     pg_start(&rt18, &d18, &l18, &r18, port18);
     pg_start(&rt17, &d17, &l17, &r17, port17);
-    assert!(wait_tcp(port18, Duration::from_secs(15)), "pg18 did not restart");
-    assert!(wait_tcp(port17, Duration::from_secs(15)), "pg17 did not restart");
+    assert!(
+        wait_tcp(port18, Duration::from_secs(15)),
+        "pg18 did not restart"
+    );
+    assert!(
+        wait_tcp(port17, Duration::from_secs(15)),
+        "pg17 did not restart"
+    );
     let h18b = PostgresAdapter
         .health_check(&pg_run_ctx(
             &rt18,
@@ -513,7 +526,13 @@ fn valkey_jammy_and_noble_full_cycle() {
         let (_, data, logs, run) = mk_instance(tmp.path(), &format!("vk-{variant}"));
         let pw = format!("vk-{variant}-secret-pw");
         ValkeyAdapter
-            .initialize(&vk_init_ctx(&rt, &data, port, AuthMode::Password, Some(&pw)))
+            .initialize(&vk_init_ctx(
+                &rt,
+                &data,
+                port,
+                AuthMode::Password,
+                Some(&pw),
+            ))
             .expect("init valkey");
 
         let mut guard = vk_start(&rt, &data, &logs, &run, port, &pw);
@@ -543,7 +562,10 @@ fn valkey_jammy_and_noble_full_cycle() {
             wait_tcp_gone(port, Duration::from_secs(10)),
             "valkey still listening"
         );
-        assert!(wait_pid_gone(pid, Duration::from_secs(10)), "valkey pid alive");
+        assert!(
+            wait_pid_gone(pid, Duration::from_secs(10)),
+            "valkey pid alive"
+        );
 
         let mut guard2 = vk_start(&rt, &data, &logs, &run, port, &pw);
         assert!(
