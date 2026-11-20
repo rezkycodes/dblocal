@@ -765,3 +765,71 @@ fn latest_database_is_untouched_and_data_survives() {
         assert_eq!(store.list_instances().expect("list").len(), 1);
     }
 }
+
+#[test]
+fn transition_status_is_a_compare_and_set() {
+    let store = Store::open_in_memory().expect("store");
+    let inst = instance("app-dev", 5432, InstanceStatus::Stopped);
+    store.insert_instance(&inst).expect("insert");
+    let id = inst.id().clone();
+
+    // The matching transition applies and reports true.
+    assert!(
+        store
+            .transition_status(&id, InstanceStatus::Stopped, InstanceStatus::Starting)
+            .expect("cas")
+    );
+    assert_eq!(
+        store.get_instance(&id).expect("get").expect("row").status(),
+        InstanceStatus::Starting
+    );
+
+    // A second identical call now loses: the row is no longer in `Stopped`.
+    assert!(
+        !store
+            .transition_status(&id, InstanceStatus::Stopped, InstanceStatus::Starting)
+            .expect("cas")
+    );
+    assert_eq!(
+        store.get_instance(&id).expect("get").expect("row").status(),
+        InstanceStatus::Starting,
+        "the losing transition must not change the row"
+    );
+
+    // An unknown id reports false rather than an error.
+    assert!(
+        !store
+            .transition_status(
+                &InstanceId::new(),
+                InstanceStatus::Stopped,
+                InstanceStatus::Starting
+            )
+            .expect("cas")
+    );
+}
+
+#[test]
+fn two_connections_racing_a_transition_let_exactly_one_win() {
+    // Two `Store` handles over one database file model the GUI and a CLI. The
+    // compare-and-set is the cross-process lock, so exactly one must win.
+    let dir = tempdir().expect("tempdir");
+    let paths = DblPaths::with_root(dir.path());
+    let first = Store::open(&paths).expect("first");
+    let inst = instance("app-dev", 5432, InstanceStatus::Stopped);
+    first.insert_instance(&inst).expect("insert");
+    let id = inst.id().clone();
+    let second = Store::open(&paths).expect("second");
+
+    let a = first
+        .transition_status(&id, InstanceStatus::Stopped, InstanceStatus::Starting)
+        .expect("first cas");
+    let b = second
+        .transition_status(&id, InstanceStatus::Stopped, InstanceStatus::Starting)
+        .expect("second cas");
+    assert_ne!(a, b, "exactly one connection wins the transition");
+    assert!(a || b);
+    assert_eq!(
+        first.get_instance(&id).expect("get").expect("row").status(),
+        InstanceStatus::Starting
+    );
+}

@@ -210,6 +210,36 @@ impl Store {
             .map_err(map_sql)?;
         ensure_affected(affected, "instance", id.as_str())
     }
+
+    /// Compares and sets the status in one atomic statement.
+    ///
+    /// Returns `true` when the row existed and its status matched `from`, so
+    /// the update was applied. Returns `false` on any mismatch or if the row is
+    /// gone. This is the cross-process lock primitive used by the service.
+    pub fn transition_status(
+        &self,
+        id: &InstanceId,
+        from: InstanceStatus,
+        to: InstanceStatus,
+    ) -> crate::Result<bool> {
+        self.conn
+            .execute_batch("BEGIN IMMEDIATE")
+            .map_err(map_sql)?;
+        let result = self.conn.execute(
+            "UPDATE instances SET status = ?1 WHERE id = ?2 AND status = ?3",
+            params![to.as_str(), id.as_str(), from.as_str()],
+        );
+        match result {
+            Ok(affected) => {
+                self.conn.execute_batch("COMMIT").map_err(map_sql)?;
+                Ok(affected == 1)
+            }
+            Err(err) => {
+                let _ = self.conn.execute_batch("ROLLBACK");
+                Err(map_sql(err))
+            }
+        }
+    }
 }
 
 fn instance_conflict(err: rusqlite::Error) -> DblError {

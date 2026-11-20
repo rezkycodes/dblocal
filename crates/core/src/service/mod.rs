@@ -10,6 +10,10 @@ pub mod mock;
 mod error;
 mod view;
 
+pub use crate::instance::{
+    LocalService, ProcessTerminator, RuntimeSource, SecretAccess, ServiceOptions, Terminator,
+};
+
 use std::fmt;
 
 use tokio::sync::broadcast;
