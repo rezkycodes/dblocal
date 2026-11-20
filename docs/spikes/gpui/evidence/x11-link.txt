@@ -1,0 +1,24 @@
+# X11 backend build on this host (2026-11-20)
+# cmd: CARGO_TARGET_DIR=$HOME/.cache/dblocal-target-gui cargo build --features x11
+# Result: COMPILES, FAILS TO LINK.
+
+cargo check --features x11   -> Finished `dev` profile (4.95s)   [PASS]
+cargo build --features x11   -> FAILED                               [FAIL]
+
+  rust-lld: error: unable to find library -lxkbcommon-x11
+  collect2: error: ld returned 1 exit status
+
+# Diagnosis
+$ pkg-config --exists xkbcommon-x11 ; echo $?
+1
+$ ls /usr/lib64/libxkbcommon-x11*
+/usr/lib64/libxkbcommon-x11.so.0
+/usr/lib64/libxkbcommon-x11.so.0.13.1
+$ rpm -q --whatprovides 'libxkbcommon-x11.so.0()(64bit)'
+libxkbcommon-x11-1.13.1-2.fc44.x86_64
+
+# Only the runtime SONAME is installed; the linker needs the dev package, which
+# provides /usr/lib64/libxkbcommon-x11.so. That is the exact package a user needs:
+#   Fedora: sudo dnf install libxkbcommon-x11-devel
+#   Ubuntu: sudo apt install libxkbcommon-x11-dev
+# X11 support therefore stays behind the `x11` Cargo feature and is untested here.
