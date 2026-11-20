@@ -52,6 +52,8 @@ pub const APP_LOG_FILE: &str = "app.log";
 
 /// Sub-directory holding installed engine runtimes.
 pub const DIR_RUNTIMES: &str = "runtimes";
+/// Sub-directory holding in-flight `.part` downloads.
+pub const DIR_DOWNLOADS: &str = "downloads";
 /// Sub-directory holding instances.
 pub const DIR_INSTANCES: &str = "instances";
 /// Sub-directory holding archived data directories.

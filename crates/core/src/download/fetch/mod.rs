@@ -13,12 +13,9 @@ use crate::model::DownloadProgress;
 use crate::paths::DblPaths;
 use crate::{DblError, Result};
 
-/// Directory name under the DBLocal root that holds `.part` downloads.
-///
-/// `DblPaths` does not currently expose a downloads directory; this module owns
-/// the layout choice and keeps it inside the DBLocal root so it shares the same
-/// filesystem as runtimes (required for predictable disk accounting).
-pub const DOWNLOADS_DIR_NAME: &str = "downloads";
+/// Directory name under the DBLocal root that holds `.part` downloads. The
+/// layout lives in `consts` and `DblPaths::downloads_dir`.
+pub const DOWNLOADS_DIR_NAME: &str = crate::consts::DIR_DOWNLOADS;
 
 /// Maximum number of HTTP redirects followed for a download.
 pub const MAX_REDIRECTS: usize = 5;
@@ -210,7 +207,7 @@ impl DownloadOptions {
 
 /// Computes the downloads directory path under the DBLocal root.
 pub fn downloads_dir(paths: &DblPaths) -> PathBuf {
-    paths.root().join(DOWNLOADS_DIR_NAME)
+    paths.downloads_dir()
 }
 
 /// Computes the `.part` file path for an arbitrary label.
