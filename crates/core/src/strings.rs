@@ -49,6 +49,9 @@ pub const CATALOG_STALE: &str = "Katalog mungkin tidak terbaru";
 /// Shown when the catalog could not be refreshed at all.
 pub const CATALOG_OFFLINE: &str = "Katalog offline, memakai data terakhir";
 
+/// Shown when an engine has no installable artifacts for the current platform.
+pub const CATALOG_ENGINE_UNAVAILABLE_PLATFORM: &str = "Tidak tersedia di platform ini.";
+
 // --- Instance and credential strings ----------------------------------------
 
 /// Badge for an instance created without a password.

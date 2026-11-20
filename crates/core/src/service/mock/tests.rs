@@ -1,0 +1,512 @@
+//! Behavioural tests for the in-memory service.
+//!
+//! Every operation is awaited through the broadcast channel rather than a
+//! clock, so the tests prove the same event flow the GUI consumes.
+
+use std::time::Duration;
+
+use tokio::sync::broadcast::{self, error::RecvError};
+
+use crate::model::{
+    AuthMode, CatalogStatus, DeleteMode, EngineKey, InstanceName, InstanceSpec, InstanceStatus,
+    Port,
+};
+use crate::service::{DblService, OperationStage, ServiceEvent, UriFormat};
+
+fn spec(name: &str, engine: EngineKey, version: &str, port: u16) -> InstanceSpec {
+    InstanceSpec::new(
+        InstanceName::new(name).expect("valid name"),
+        engine,
+        version,
+        Some(Port::new(port).expect("valid port")),
+        AuthMode::Password,
+    )
+    .expect("valid spec")
+}
+
+fn no_port_spec(name: &str, engine: EngineKey, version: &str) -> InstanceSpec {
+    InstanceSpec::new(
+        InstanceName::new(name).expect("valid name"),
+        engine,
+        version,
+        None,
+        AuthMode::None,
+    )
+    .expect("valid spec")
+}
+
+/// Collects events until `OperationFinished` arrives, with a hard timeout so a
+/// stuck task fails the test instead of hanging the suite.
+async fn drain_until_finished(
+    rx: &mut broadcast::Receiver<ServiceEvent>,
+) -> Result<(), crate::service::UserFacingError> {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        match tokio::time::timeout(remaining, rx.recv()).await {
+            Ok(Ok(ServiceEvent::OperationFinished { result, .. })) => return result,
+            Ok(Ok(_)) => continue,
+            Ok(Err(RecvError::Lagged(_))) => continue,
+            Ok(Err(RecvError::Closed)) => panic!("event channel closed"),
+            Err(_) => panic!("timed out waiting for OperationFinished"),
+        }
+    }
+}
+
+#[tokio::test]
+async fn create_with_installed_runtime_goes_straight_to_stopped() {
+    let service = super::MockService::deterministic();
+    let mut rx = service.subscribe();
+    // Postgres 17.4 is pre-installed by the mock.
+    let spec = spec("app-dev", EngineKey::Postgresql, "17.4", 5432);
+    let op = service.create_instance(spec).expect("create accepted");
+    drain_until_finished(&mut rx)
+        .await
+        .expect("create must succeed");
+    service.cancel_operation(&op).expect("operation exists");
+
+    let views = service.list_instances().expect("list");
+    let view = views.iter().find(|v| v.name == "app-dev").expect("created");
+    assert_eq!(view.status, InstanceStatus::Stopped);
+    assert_eq!(view.port.get(), 5432);
+    assert_eq!(view.auth, AuthMode::Password);
+    assert!(view.credential_backend.is_some());
+}
+
+#[tokio::test]
+async fn create_without_runtime_downloads_and_reports_progress() {
+    let service = super::MockService::deterministic();
+    let mut rx = service.subscribe();
+    // MySQL 8.4.4 is not pre-installed.
+    let spec = spec("mysql-shop", EngineKey::Mysql, "8.4.4", 3306);
+    service.create_instance(spec).expect("create accepted");
+
+    let mut stages = Vec::new();
+    let mut saw_progress = false;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        match tokio::time::timeout(remaining, rx.recv()).await {
+            Ok(Ok(ServiceEvent::OperationProgress { stage, .. })) => stages.push(stage),
+            Ok(Ok(ServiceEvent::DownloadProgress { progress, .. })) => {
+                saw_progress = true;
+                assert!(progress.bytes_total > 0);
+                assert!(progress.eta.is_some());
+                assert!((0.0..=1.0).contains(&progress.fraction()));
+            }
+            Ok(Ok(ServiceEvent::OperationFinished { .. })) => break,
+            Ok(Ok(_)) => continue,
+            Ok(Err(RecvError::Lagged(_))) => continue,
+            Ok(Err(RecvError::Closed)) => panic!("closed"),
+            Err(_) => panic!("timed out"),
+        }
+    }
+    assert!(saw_progress, "download progress must be emitted");
+    assert!(stages.contains(&OperationStage::Downloading));
+    assert!(stages.contains(&OperationStage::Verifying));
+    assert!(stages.contains(&OperationStage::Extracting));
+    assert!(stages.contains(&OperationStage::Initializing));
+
+    let view = service
+        .list_instances()
+        .expect("list")
+        .into_iter()
+        .find(|v| v.name == "mysql-shop")
+        .expect("created");
+    assert_eq!(view.status, InstanceStatus::Stopped);
+}
+
+#[tokio::test]
+async fn start_then_stop_moves_through_running() {
+    let service = super::MockService::deterministic();
+    let id = service.seed_instance(
+        spec("pg-main", EngineKey::Postgresql, "17.4", 5432),
+        InstanceStatus::Stopped,
+    );
+
+    let mut rx = service.subscribe();
+    service.start_instance(&id).expect("start accepted");
+    drain_until_finished(&mut rx).await.expect("start ok");
+    let view = service
+        .list_instances()
+        .expect("list")
+        .into_iter()
+        .find(|v| v.id == id)
+        .expect("instance");
+    assert_eq!(view.status, InstanceStatus::Running);
+    assert!(view.failure.is_none());
+
+    service.stop_instance(&id).expect("stop accepted");
+    drain_until_finished(&mut rx).await.expect("stop ok");
+    let view = service
+        .list_instances()
+        .expect("list")
+        .into_iter()
+        .find(|v| v.id == id)
+        .expect("instance");
+    assert_eq!(view.status, InstanceStatus::Stopped);
+}
+
+#[tokio::test]
+async fn stopping_a_stopped_instance_is_an_invalid_transition() {
+    let service = super::MockService::deterministic();
+    let id = service.seed_instance(
+        spec("pg-idle", EngineKey::Postgresql, "17.4", 5432),
+        InstanceStatus::Stopped,
+    );
+    let err = service.stop_instance(&id).expect_err("cannot stop");
+    assert_eq!(err.code(), "DBL-1004");
+}
+
+#[tokio::test]
+async fn port_in_use_failure_surfaces_a_code_and_diagnosis() {
+    let service = super::MockService::deterministic();
+    let mut rx = service.subscribe();
+    service.push_failure(super::ScriptedFailure::PortInUse { port: 5432 });
+    service
+        .create_instance(spec("conflict", EngineKey::Postgresql, "17.4", 5432))
+        .expect("accepted");
+
+    let err = drain_until_finished(&mut rx)
+        .await
+        .expect_err("must fail with port in use");
+    assert_eq!(err.code, "DBL-1005");
+    assert_eq!(err.diagnosis, Some(crate::model::StartFailure::PortInUse));
+
+    let view = service
+        .list_instances()
+        .expect("list")
+        .into_iter()
+        .find(|v| v.name == "conflict")
+        .expect("instance");
+    assert_eq!(view.status, InstanceStatus::Failed);
+    let failure = view.failure.expect("failure detail");
+    assert_eq!(failure.code, "DBL-1005");
+    assert_eq!(failure.diagnosis, crate::model::StartFailure::PortInUse);
+    assert!(!failure.log_tail.is_empty());
+}
+
+#[tokio::test]
+async fn download_failure_marks_the_instance_failed() {
+    let service = super::MockService::deterministic();
+    let mut rx = service.subscribe();
+    service.push_failure(super::ScriptedFailure::DownloadFailed);
+    service
+        .create_instance(spec("broken-dl", EngineKey::Mariadb, "11.4.2", 3307))
+        .expect("accepted");
+    let err = drain_until_finished(&mut rx)
+        .await
+        .expect_err("download must fail");
+    assert_eq!(err.code, "DBL-3002");
+    let view = service
+        .list_instances()
+        .expect("list")
+        .into_iter()
+        .find(|v| v.name == "broken-dl")
+        .expect("instance");
+    assert_eq!(view.status, InstanceStatus::Failed);
+}
+
+#[tokio::test]
+async fn start_timeout_failure_is_reported() {
+    let service = super::MockService::deterministic();
+    let id = service.seed_instance(
+        spec("slow-start", EngineKey::Valkey, "8.1.0", 6379),
+        InstanceStatus::Stopped,
+    );
+    let mut rx = service.subscribe();
+    service.push_failure(super::ScriptedFailure::StartTimeout);
+    service.start_instance(&id).expect("accepted");
+    let err = drain_until_finished(&mut rx)
+        .await
+        .expect_err("start must time out");
+    assert_eq!(err.code, "DBL-4001");
+    let view = service
+        .list_instances()
+        .expect("list")
+        .into_iter()
+        .find(|v| v.id == id)
+        .expect("instance");
+    assert_eq!(view.status, InstanceStatus::Failed);
+}
+
+#[tokio::test]
+async fn delete_archives_or_purges() {
+    let service = super::MockService::deterministic();
+    let archived_id = service.seed_instance(
+        spec("keep-data", EngineKey::Postgresql, "17.4", 5432),
+        InstanceStatus::Stopped,
+    );
+    let purged_id = service.seed_instance(
+        spec("drop-data", EngineKey::Postgresql, "17.4", 5433),
+        InstanceStatus::Stopped,
+    );
+    let mut rx = service.subscribe();
+
+    service
+        .delete_instance(&archived_id, DeleteMode::ArchiveData)
+        .expect("delete accepted");
+    drain_until_finished(&mut rx).await.expect("archive delete");
+    service
+        .delete_instance(&purged_id, DeleteMode::PurgeData)
+        .expect("delete accepted");
+    drain_until_finished(&mut rx).await.expect("purge delete");
+
+    assert!(service.list_instances().expect("list").is_empty());
+    let archives = service.list_archives().expect("archives");
+    assert_eq!(archives.len(), 1, "only the archive-mode delete keeps data");
+    assert_eq!(archives[0].instance_name().as_str(), "keep-data");
+    service
+        .purge_archive(archives[0].id())
+        .expect("purge archive");
+    assert!(service.list_archives().expect("archives").is_empty());
+}
+
+#[tokio::test]
+async fn validate_spec_rejects_duplicate_names_and_ports() {
+    let service = super::MockService::deterministic();
+    service.seed_instance(
+        spec("taken", EngineKey::Postgresql, "17.4", 5432),
+        InstanceStatus::Stopped,
+    );
+    let duplicate_name = service
+        .validate_spec(&spec("taken", EngineKey::Postgresql, "17.4", 5433))
+        .expect_err("name taken");
+    assert_eq!(duplicate_name.code(), "DBL-1003");
+    let duplicate_port = service
+        .validate_spec(&spec("fresh", EngineKey::Postgresql, "17.4", 5432))
+        .expect_err("port taken");
+    assert_eq!(duplicate_port.code(), "DBL-1001");
+    assert!(duplicate_port.to_string().contains("taken"));
+    service
+        .validate_spec(&spec("fresh", EngineKey::Postgresql, "17.4", 5500))
+        .expect("free name and port");
+}
+
+#[tokio::test]
+async fn suggest_port_skips_allocated_ports() {
+    let service = super::MockService::deterministic();
+    assert_eq!(
+        service
+            .suggest_port(EngineKey::Postgresql)
+            .expect("suggest")
+            .get(),
+        5432
+    );
+    service.seed_instance(
+        spec("first", EngineKey::Postgresql, "17.4", 5432),
+        InstanceStatus::Stopped,
+    );
+    assert_eq!(
+        service
+            .suggest_port(EngineKey::Postgresql)
+            .expect("suggest")
+            .get(),
+        5433
+    );
+}
+
+#[tokio::test]
+async fn connection_uri_and_dotenv_are_secret_bearing() {
+    let service = super::MockService::deterministic();
+    let id = service.seed_instance(
+        spec("uri-test", EngineKey::Postgresql, "17.4", 5432),
+        InstanceStatus::Running,
+    );
+    let uri = service
+        .connection_uri(&id, UriFormat::Uri)
+        .expect("uri")
+        .expose()
+        .to_owned();
+    assert!(uri.starts_with("postgresql://"));
+    assert!(uri.contains("127.0.0.1:5432"));
+
+    let env = service
+        .connection_uri(&id, UriFormat::DotEnv)
+        .expect("env")
+        .expose()
+        .to_owned();
+    assert!(env.contains("DB_CONNECTION=postgresql"));
+    assert!(env.contains("DB_PASSWORD="));
+}
+
+#[tokio::test]
+async fn no_auth_instance_has_no_password() {
+    let service = super::MockService::deterministic();
+    let id = service.seed_instance(
+        no_port_spec("trusted", EngineKey::Postgresql, "17.4"),
+        InstanceStatus::Stopped,
+    );
+    let uri = service
+        .connection_uri(&id, UriFormat::Uri)
+        .expect("uri")
+        .expose()
+        .to_owned();
+    assert!(!uri.contains(":hunter2"));
+    assert!(uri.starts_with("postgresql://postgres@"));
+    let view = service
+        .list_instances()
+        .expect("list")
+        .into_iter()
+        .find(|v| v.id == id)
+        .expect("instance");
+    assert_eq!(view.auth, AuthMode::None);
+    assert!(view.credential_backend.is_none());
+}
+
+#[tokio::test]
+async fn logs_stream_only_while_watched() {
+    let service = super::MockService::deterministic();
+    let id = service.seed_instance(
+        spec("log-test", EngineKey::Postgresql, "17.4", 5432),
+        InstanceStatus::Stopped,
+    );
+    let mut rx = service.subscribe();
+
+    service.start_instance(&id).expect("start");
+    drain_until_finished(&mut rx).await.expect("start ok");
+
+    service.watch_logs(&id, true).expect("watch");
+    service.stop_instance(&id).expect("stop");
+    let mut saw_lines = false;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        match tokio::time::timeout(remaining, rx.recv()).await {
+            Ok(Ok(ServiceEvent::LogLines { id: line_id, lines })) => {
+                assert_eq!(line_id, id);
+                assert!(!lines.is_empty());
+                saw_lines = true;
+            }
+            Ok(Ok(ServiceEvent::OperationFinished { .. })) => break,
+            Ok(Ok(_)) => continue,
+            Ok(Err(RecvError::Lagged(_))) => continue,
+            Ok(Err(RecvError::Closed)) => panic!("closed"),
+            Err(_) => panic!("timed out"),
+        }
+    }
+    assert!(saw_lines, "watched instance must stream log lines");
+
+    let tail = service.tail_logs(&id, 100).expect("tail");
+    assert!(!tail.is_empty());
+    let short = service.tail_logs(&id, 1).expect("tail 1");
+    assert_eq!(short.len(), 1);
+}
+
+#[tokio::test]
+async fn catalog_reports_every_freshness_with_its_banner() {
+    let service = super::MockService::deterministic();
+    let fresh = service.catalog().expect("catalog");
+    assert_eq!(fresh.status, CatalogStatus::Fresh);
+    assert!(fresh.banner.is_none());
+
+    service.set_catalog_status(CatalogStatus::Stale);
+    let stale = service.catalog().expect("catalog");
+    assert_eq!(stale.status, CatalogStatus::Stale);
+    assert_eq!(stale.banner.as_deref(), Some(crate::strings::CATALOG_STALE));
+
+    service.set_catalog_status(CatalogStatus::Offline);
+    let offline = service.catalog().expect("catalog");
+    assert_eq!(offline.status, CatalogStatus::Offline);
+    assert_eq!(
+        offline.banner.as_deref(),
+        Some(crate::strings::CATALOG_OFFLINE)
+    );
+}
+
+#[tokio::test]
+async fn refresh_catalog_emits_catalog_updated() {
+    let service = super::MockService::deterministic();
+    service.set_catalog_status(CatalogStatus::Offline);
+    let mut rx = service.subscribe();
+    service.refresh_catalog(true).expect("refresh accepted");
+    drain_until_finished(&mut rx).await.expect("refresh ok");
+    assert_eq!(
+        service.catalog().expect("catalog").status,
+        CatalogStatus::Fresh
+    );
+}
+
+#[tokio::test]
+async fn cancel_marks_the_operation() {
+    let service = super::MockService::deterministic();
+    let op = service
+        .create_instance(spec("cancelled", EngineKey::Mysql, "8.4.4", 3306))
+        .expect("accepted");
+    service.cancel_operation(&op).expect("cancel accepted");
+    let mut rx = service.subscribe();
+    let err = drain_until_finished(&mut rx)
+        .await
+        .expect_err("cancelled create reports an error");
+    assert_eq!(err.code, "DBL-7001");
+}
+
+#[tokio::test]
+async fn clock_and_random_source_are_seedable() {
+    let service = super::MockService::with_config(super::MockConfig::deterministic().with_seed(99));
+    let start = service.now();
+    service.advance_clock(Duration::from_secs(5));
+    assert_eq!(service.now(), start + Duration::from_secs(5));
+    let a = service.next_deterministic_id("x");
+    let b = service.next_deterministic_id("x");
+    assert_ne!(a, b, "the RNG must advance");
+    assert!(a.starts_with("x-"));
+}
+
+#[tokio::test]
+async fn change_port_rejects_a_port_owned_by_another_instance() {
+    let service = super::MockService::deterministic();
+    let a = service.seed_instance(
+        spec("aa-inst", EngineKey::Postgresql, "17.4", 5432),
+        InstanceStatus::Stopped,
+    );
+    let _b = service.seed_instance(
+        spec("bb-inst", EngineKey::Postgresql, "17.4", 5433),
+        InstanceStatus::Stopped,
+    );
+    let err = service
+        .change_port(&a, Port::new(5433).expect("valid"))
+        .expect_err("port owned");
+    assert_eq!(err.code(), "DBL-1001");
+    service
+        .change_port(&a, Port::new(5440).expect("valid"))
+        .expect("free port");
+}
+
+#[tokio::test]
+async fn runtimes_and_archives_round_trip() {
+    let service = super::MockService::deterministic();
+    let runtimes = service.list_runtimes().expect("runtimes");
+    assert!(!runtimes.is_empty());
+    let first = runtimes[0].id().to_owned();
+    service.remove_runtime(&first).expect("remove runtime");
+    assert_eq!(
+        service.list_runtimes().expect("runtimes").len(),
+        runtimes.len() - 1
+    );
+    assert!(service.purge_archive("missing").is_err());
+}
+
+#[tokio::test]
+async fn data_size_and_autostart_only_touch_real_instances() {
+    let service = super::MockService::deterministic();
+    let id = service.seed_instance(
+        spec("size", EngineKey::Postgresql, "17.4", 5432),
+        InstanceStatus::Stopped,
+    );
+    assert_eq!(service.data_size(&id).expect("size"), 41 * 1024 * 1024);
+    service.set_autostart(&id, true).expect("autostart");
+    let view = service
+        .list_instances()
+        .expect("list")
+        .into_iter()
+        .find(|v| v.id == id)
+        .expect("instance");
+    assert!(view.autostart);
+    let missing = crate::model::InstanceId::new();
+    assert!(service.data_size(&missing).is_err());
+    assert!(service.set_autostart(&missing, true).is_err());
+    assert!(service.tail_logs(&missing, 10).is_err());
+    assert!(service.watch_logs(&missing, true).is_err());
+    assert!(service.connection_uri(&missing, UriFormat::Uri).is_err());
+}
