@@ -277,7 +277,7 @@ All tests run offline against an in-process TCP server on `127.0.0.1:0`.
 ## Notes and deviations
 
 - `DblPaths` has no downloads directory, so this module owns `downloads/` directly under the DBLocal
-  root (`fetch::DOWNLOADS_DIR_NAME`). It shares the runtimes filesystem, which is what makes the
+  root (`DblPaths::downloads_dir()`). It shares the runtimes filesystem, which is what makes the
   free-space check meaningful.
 - Extraction runs on `tokio::task::spawn_blocking`; decompression is CPU-bound and must not stall
   the async runtime (PRD §9 rule 2).
