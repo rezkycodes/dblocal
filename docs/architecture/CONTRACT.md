@@ -78,6 +78,8 @@ UI/CLI -> DblService::create_instance / start / stop / delete
        <- ServiceEvent::DownloadProgress { id, progress }
        <- ServiceEvent::InstanceChanged  { view }             // full InstanceView
        <- ServiceEvent::OperationFinished{ id, result: Result<(), UserFacingError> }
+       <- ServiceEvent::InstanceRemoved  { id }               // row gone: delete, failed/interrupted create
+       <- ServiceEvent::StopForced       { id }               // stop escalated to a forced kill (F-INS-03 AC3)
        <- ServiceEvent::CatalogUpdated   { status }
        <- ServiceEvent::LogLines         { id, lines }        // only while watch_logs(id, true)
 ```
