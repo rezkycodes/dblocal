@@ -1,0 +1,7 @@
+# Run A — normal startup on Wayland (release binary)
+# cmd: WAYLAND_DISPLAY=wayland-0 /home/rezkycodes/.cache/dblocal-target-gui/release/gpui-spike
+# exit: (killed by timeout 12, meaning the window stayed up)
+STARTUP_BEGIN_MS=0.00
+TRAY backend=ksni 0.3 (StatusNotifierItem, no GTK) available=true note=Linux tray registered via ksni (StatusNotifierItem/D-Bus). Desktop=GNOME, session=wayland. StatusNotifierWatcher present=true. GNOME Shell does not show SNI items without an AppIndicator/KStatusNotifier extension (e.g. appindicatorsupport@rgcjonas.gmail.com).
+FIRST_FRAME_MS=1220.91
+WINDOW_OPEN_DISPATCHED_MS=1243.37

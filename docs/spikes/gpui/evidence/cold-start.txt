@@ -1,0 +1,12 @@
+# Cold start to first frame (release binary, Wayland, GNOME 50.6, cache warm)
+# FIRST_FRAME_MS is printed by the app on its first render() call
+run 1: FIRST_FRAME_MS=373.62
+run 2: FIRST_FRAME_MS=412.32
+run 3: FIRST_FRAME_MS=403.76
+run 4: FIRST_FRAME_MS=384.29
+run 5: FIRST_FRAME_MS=414.34
+run 6: FIRST_FRAME_MS=406.39
+run 7: FIRST_FRAME_MS=414.74
+run 8: FIRST_FRAME_MS=416.89
+run 9: FIRST_FRAME_MS=380.62
+run 10: FIRST_FRAME_MS=460.02

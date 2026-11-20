@@ -1,0 +1,45 @@
+# cargo-deny configuration for the GPUI spike only.
+# The real workspace allowlist is owned by the CI/packaging worker (W0-D).
+
+[licenses]
+# GPL-3.0-only product: every dependency must be compatible in the
+# GPL-3.0 -> permissive direction (Apache-2.0, MIT, ISC, BSD, Zlib, MPL-2.0, etc.).
+allow = [
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "MIT",
+    "MIT-0",
+    "ISC",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "Zlib",
+    "MPL-2.0",
+    "Unicode-3.0",
+    "Unicode-DFS-2016",
+    "CC0-1.0",
+    "BSL-1.0",
+    "bzip2-1.0.6",
+    "CDLA-Permissive-2.0",
+    "OpenSSL",
+    "Ubuntu-font-1.0",
+    "0BSD",
+    "NCSA",
+    "Unlicense",
+    # The product itself (this crate) is GPL-3.0-only by D-05.
+    "GPL-3.0-only",
+]
+confidence-threshold = 0.8
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+deny = [
+    # TLS must be rustls; native-tls/openssl would break the "no system TLS" rule.
+    { name = "openssl" },
+    { name = "openssl-sys" },
+    { name = "native-tls" },
+]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"

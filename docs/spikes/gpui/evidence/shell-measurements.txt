@@ -1,0 +1,89 @@
+# Zed-style shell measurements, release build (2026-11-20)
+# host: Fedora 44 / CachyOS kernel 7.3.0 / GNOME Shell 50.6 / Wayland (wayland-0)
+# binary: $HOME/.cache/dblocal-target-gui/release/gpui-spike
+# cmd: WAYLAND_DISPLAY=wayland-0 <binary>  (FIRST_FRAME_MS printed on first render())
+
+## Cold start to first frame (10 runs, warm page cache)
+# FIRST_FRAME_MS is emitted by AppState::render on its first call.
+run 1: FIRST_FRAME_MS=398.29
+run 2: FIRST_FRAME_MS=362.60
+run 3: FIRST_FRAME_MS=394.38
+run 4: FIRST_FRAME_MS=354.58
+run 5: FIRST_FRAME_MS=350.59
+run 6: FIRST_FRAME_MS=359.13
+run 7: FIRST_FRAME_MS=329.97
+run 8: FIRST_FRAME_MS=349.17
+run 9: FIRST_FRAME_MS=412.82
+run 10: FIRST_FRAME_MS=424.76
+# sorted: 329.97 349.17 350.59 354.58 359.13 362.60 394.38 398.29 412.82 424.76
+# p50 = 360.87 ms, p95 (index 9 of 10) = 424.76 ms   -> under the 1.5 s target
+
+## Idle RSS (20 s after launch; the simulated download finishes at ~4.2 s)
+$ ps -o pid,pcpu,rss -p <pid>
+  PID %CPU   RSS
+771327  3.2 176272
+VmHWM:  176272 kB
+VmRSS:  176272 kB
+Threads: 41
+cpu_ticks(utime+stime)=64  -> ~3.2 % CPU at idle (50 ms event-pump tick)
+# RSS 176 MB is ABOVE the 150 MB target. See README "measurements".
+
+## Release binary size (profile: strip=true, lto="thin", codegen-units=1)
+$ ls -l release/gpui-spike
+-rwxr-xr-x 35888416 bytes = 34.2 MiB   (already stripped by the profile)
+readelf -S | grep -c debug  -> 0        (no debug sections)
+
+## Build wall time
+incremental release rebuild after touching src/app.rs: 113.28 s
+cargo check --features x11 (incremental): 4.95 s
+# Full clean build of gpui + gpui-component + wgpu on this machine was completed
+# earlier in the session; the shared target dir ($HOME/.cache/dblocal-target-gui)
+# is what keeps it from repeating (currently 33 GB).
+
+## Shared target dir size
+33 GB ($HOME/.cache/dblocal-target-gui, both debug and release profiles)
+
+## Runtime libraries actually linked (ldd, release binary)
+linux-vdso.so.1
+libxkbcommon.so.0
+libgcc_s.so.1
+libm.so.6
+libc.so.6
+ld-linux-x86-64.so.2
+# No GTK, no libappindicator, no libsecret, no OpenSSL.
+
+## Font cost of bundling IBM Plex Sans (measured, not estimated)
+# A one-function Rust binary with four faces embedded via include_bytes!
+# + black_box (so the linker keeps them) versus the same binary without them:
+#   no font            336,616 bytes
+#   Regular only      +200,512 bytes
+#   Regular/Italic/SemiBold/SemiBoldItalic  +822,432 bytes (raw .ttf total 822,124)
+# i.e. one face ~0.19 MiB, four faces ~0.78 MiB of the final ELF.
+# Separate measurement on the 822,124-byte blob: xz -9 -> 227,608 B, zstd-19 -> 258,305 B
+
+## Tray latency re-taken on the Zed-style shell
+# D-Bus com.canonical.dbusmenu Event -> "ACTION_APPLIED source=tray" log line
+# host: GNOME Shell 50.6 on Wayland with the AppIndicator (KStatusNotifierItem) extension
+# bus: org.kde.StatusNotifierItem-<pid>-1, menu object /MenuBar
+id=3 latency=50.1 state=stopped
+id=4 latency=48.5 state=running
+id=5 latency=47.6 state=running
+id=3 latency=47.3 state=running
+id=4 latency=46.1 state=stopped
+id=5 latency=45.5 state=stopped
+# n=6 min=45.5 p50=47.6 max=50.1 ms   (target <= 1000 ms)
+
+## Dark/light render evidence (headless wgpu, 1100x720 logical -> 2200x1440 device px)
+dark:  936 distinct colours, top colours #21252b (panel/title/sidebar/status), #282c34 (centre)
+light: 961 distinct colours, top colours #fafafa (centre), #f0f0f0 (panel), #eaeaeb (tab bar)
+
+## First launch after a rebuild (cold GPU pipeline cache)
+# The very first run after `cargo build --release` replaced the binary:
+FIRST_FRAME_MS=1314.68
+WINDOW_OPEN_DISPATCHED_MS=1337.56
+# The next 10 runs in the same session:
+# 361.45 395.78 400.14 388.17 433.46 363.74 380.95 380.32 376.41 391.16
+# p50 = 385.5 ms, p95 = 433.5 ms
+# Cause: wgpu/wgpu-hal compiles its shader/pipeline set on first use. The cache
+# lives outside the binary, so an installer's first launch is slower than every
+# launch after it. Budget for ~1.4 s on first run; the 1.5 s target still holds.

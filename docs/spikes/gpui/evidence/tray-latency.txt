@@ -1,0 +1,12 @@
+# Tray -> UI end-to-end latency: DBusMenu Event -> ACTION_APPLIED log line
+# host: GNOME Shell 50.6 on Wayland, AppIndicator (KStatusNotifierItem) extension enabled
+# build: release; event pump tick = 50 ms via GPUI's own timer
+# single instance; app idle (simulated download finished); GetLayout primed once
+# bus: org.kde.StatusNotifierItem-375022-1
+item=3 end_to_end_ms=38.5
+item=4 end_to_end_ms=50.5
+item=5 end_to_end_ms=54.4
+item=3 end_to_end_ms=49.2
+item=4 end_to_end_ms=49.4
+item=3 end_to_end_ms=49.6
+# n=6 min=38.5 p50=49.6 max=54.4 ms (target <=1000)

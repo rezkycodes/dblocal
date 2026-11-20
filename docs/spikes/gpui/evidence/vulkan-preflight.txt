@@ -1,0 +1,26 @@
+# C) Missing Vulkan ICD, preflight enabled (our guard)
+# cmd: env VK_DRIVER_FILES=/nonexistent VK_ICD_FILENAMES=/nonexistent /home/rezkycodes/.cache/dblocal-target-gui/release/gpui-spike
+EXIT=78
+--- stdout ---
+--- stderr ---
+DBLocal cannot start because Vulkan is not available on this system.
+
+Detected: VK_ICD_FILENAMES points to missing ICD manifest(s): /nonexistent
+
+Why: DBLocal's UI uses GPUI, which requires a working Vulkan driver/ICD.
+
+How to fix (install a Vulkan driver for your GPU):
+  Fedora:  sudo dnf install mesa-vulkan-drivers vulkan-loader
+           # NVIDIA proprietary: install the matching akmod-nvidia / driver package
+  Ubuntu:  sudo apt install mesa-vulkan-drivers vulkan-tools
+  Arch:    sudo pacman -S vulkan-icd-loader mesa-vulkan-drivers
+
+Verify after installing:
+  vulkaninfo --summary   (or: vkcube)
+
+More help: https://github.com/db-local/dblocal/blob/main/docs/guides/linux-vulkan.md (placeholder)
+
+If a driver is installed but DBLocal still cannot start, ensure an ICD JSON exists in /usr/share/vulkan/icd.d and that VK_ICD_FILENAMES/VK_DRIVER_FILES are not set to an invalid path.
+
+Exit code: 78 (DBLOCAL_E_VULKAN).
+
