@@ -898,7 +898,8 @@
     { "id": "D-20", "title": "macOS dinotarisasi; Windows unsigned di v1", "status": "approved" },
     { "id": "D-21", "title": "Urutan fase: P0 spike, P1 PostgreSQL+Valkey, P2 MySQL/MariaDB+CLI+paket, P3 konfigurasi+autostart", "status": "approved" },
     { "id": "D-22", "title": "Nama produk DBLocal, binary dblocal, data di ~/.dblocal/", "status": "approved" },
-    { "id": "D-23", "title": "Tampilan UI bergaya Zed IDE (dock, pane bertab, status bar, command palette); tema gelap+terang dari palet One Dark/Light; token warna wajib lolos kontras 4,5:1", "status": "approved", "supersedes": "referensi tampilan DBDelve di D-06", "doc": "docs/design/UI-DIRECTION.md" }
+    { "id": "D-23", "title": "Tampilan UI bergaya Zed IDE (dock, pane bertab, status bar, command palette); tema gelap+terang dari palet One Dark/Light; token warna wajib lolos kontras 4,5:1", "status": "approved", "supersedes": "referensi tampilan DBDelve di D-06", "doc": "docs/design/UI-DIRECTION.md" },
+    { "id": "D-24", "title": "Dukungan engine per platform mengikuti artefak upstream nyata (MariaDB hanya Linux x86_64 dan Windows x64; Valkey hanya Linux; MySQL Linux x86_64 pakai tarball minimal 80 MB); SHA-256 MySQL dihitung CI", "status": "adopted-pending-user-confirmation", "adjusts": "D-14", "evidence": "docs/spikes/engines/upstream-sources.md" }
   ],
   "openQuestions": [
     { "id": "OPEN-01", "question": "Dapatkah Valkey dibangun untuk Windows (dan macOS) di CI dengan hasil stabil?", "gate": "F-SPK-02; bila tidak, fallback D-13 dan parity lima-OS pecah" },

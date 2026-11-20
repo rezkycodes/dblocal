@@ -55,7 +55,7 @@ Karena DBLocal **tidak punya telemetri** (D-05), tidak ada metrik yang mengandal
 | Goal | Metrik | Target | Cara verifikasi |
 |---|---|---|---|
 | Sesi pertama berhasil, cepat | TTFRI (time-to-first-running-instance), PostgreSQL | p50 < 120 s @ 20 Mbps | E2E test di CI, bandwidth di-throttle |
-| Sesi pertama berhasil, engine besar | TTFRI MySQL (artefak ±260 MB) | p50 < 300 s @ 20 Mbps | E2E test di CI |
+| Sesi pertama berhasil, engine besar | TTFRI MySQL (artefak 80 MB Linux x86_64 minimal, 168 MB macOS, 281 MB Windows; Linux aarch64 penuh 832 MB ≈ 333 s dikecualikan, lihat D-24) | p50 < 300 s @ 20 Mbps | E2E test di CI |
 | Terasa native, bukan web | Cold start app sampai window interaktif | p95 < 1,5 s | Benchmark CI (NVMe, runner standar) |
 | Lebih ringan dari Docker | RSS aplikasi saat idle (tanpa instance jalan) | < 150 MB | Benchmark CI |
 | Mudah dipasang | Ukuran installer per platform | < 60 MB | Gate ukuran artefak di CI |
@@ -241,7 +241,7 @@ graph TD
 - **Sub-features:**
 
   **F-RTM-01 — Unduhan resumable dengan progres**
-  - AC1: Given unduhan 260 MB sedang berjalan, When koneksi putus lalu user menekan "Lanjutkan", Then unduhan dilanjutkan dengan header HTTP `Range` dari byte terakhir, bukan diulang dari nol.
+  - AC1: Given unduhan besar (mis. 281 MB) sedang berjalan, When koneksi putus lalu user menekan "Lanjutkan", Then unduhan dilanjutkan dengan header HTTP `Range` dari byte terakhir, bukan diulang dari nol.
   - AC2: Given unduhan sedang berjalan, Then UI menampilkan persen, byte terunduh/total, kecepatan, dan ETA, serta diperbarui minimal 2×/detik.
   - AC3: Given server tidak mendukung `Range` (merespons 200 dan bukan 206), Then app mengulang dari awal secara transparan tanpa menampilkan error.
   - AC4: Given user menekan "Batal", Then unduhan berhenti < 1 detik dan file `.part` dihapus.
@@ -489,7 +489,7 @@ stateDiagram-v2
   **F-ENG-01 — Adapter MySQL**
   - AC1: Given artefak MySQL dari katalog, When instance dibuat, Then inisialisasi memakai `mysqld --initialize-insecure`, lalu password superuser di-set dan `my.cnf` ditulis dengan `bind-address=127.0.0.1`, `port`, dan `datadir` instance.
   - AC2: Given instance `running`, Then health check memakai handshake protokol MySQL, bukan sekadar cek proses.
-  - AC3: Given unduhan 260 MB, Then progres dan ETA ditampilkan sejak byte pertama dan unduhan dapat dilanjutkan setelah putus.
+  - AC3: Given unduhan besar (mis. 281 MB), Then progres dan ETA ditampilkan sejak byte pertama dan unduhan dapat dilanjutkan setelah putus.
 
   **F-ENG-02 — Adapter MariaDB**
   - AC1: Given artefak MariaDB dari `downloads.mariadb.org/rest-api`, When instance dibuat, Then inisialisasi memakai `mariadb-install-db` dengan `--auth-root-authentication-method=normal`.
@@ -922,7 +922,7 @@ dblocal/
 |---|---|---|
 | Performa | Cold start sampai jendela interaktif p95 < 1,5 s | Benchmark CI per OS, gate rilis |
 | Performa | RSS app idle < 150 MB; CPU idle < 1% | Benchmark CI |
-| Performa | UI tetap responsif (tidak ada frame > 100 ms) selama unduhan 260 MB berjalan | Uji manual terstruktur + profiling di CI |
+| Performa | UI tetap responsif (tidak ada frame > 100 ms) selama unduhan besar (hingga 832 MB) berjalan | Uji manual terstruktur + profiling di CI |
 | Performa | Rekonsiliasi 20 instance < 2 s | Test integrasi |
 | Performa | PostgreSQL stopped → menerima koneksi p95 < 5 s; Valkey < 1 s | E2E per OS |
 | Skala | Didukung sampai 25 instance dan 15 runtime terpasang per mesin | Test integrasi dengan fixture |
@@ -1033,7 +1033,7 @@ Konteks: layanan lokal tanpa autentikasi adalah target serangan DNS-rebinding da
 Konteks: data dev sering sekali pakai, tetapi kehilangan tak sengaja tidak bisa dibatalkan. Keputusan: dialog dengan dua aksi; penghapusan data mewajibkan pengetikan nama instance; arsip dipindah ke `~/.dblocal/archive/`. Konsekuensi: butuh halaman Storage untuk membersihkan arsip agar disk tidak membengkak diam-diam. Status: Approved.
 
 **D-19 | Katalog bundled + refresh TTL 24 jam; unduhan resumable**
-Konteks: unduhan sebesar 260 MB dan jaringan yang tidak andal. Keputusan: snapshot katalog dibundel, di-refresh di latar dengan TTL 24 jam; kegagalan refresh tidak memunculkan error; unduhan memakai HTTP Range dan wajib lolos SHA-256. Konsekuensi: app tetap berguna offline; rilis keamanan engine baru dapat menjangkau user tanpa update aplikasi. Status: Approved.
+Konteks: unduhan engine yang bisa mencapai ratusan MB (MySQL 80 MB sampai 832 MB, lihat D-24) dan jaringan yang tidak andal. Keputusan: snapshot katalog dibundel, di-refresh di latar dengan TTL 24 jam; kegagalan refresh tidak memunculkan error; unduhan memakai HTTP Range dan wajib lolos SHA-256. Konsekuensi: app tetap berguna offline; rilis keamanan engine baru dapat menjangkau user tanpa update aplikasi. Status: Approved.
 
 **D-20 | macOS dinotarisasi; Windows unsigned di v1**
 Konteks: macOS memblokir aplikasi tak ter-notarisasi secara keras sehingga membutuhkan perintah terminal — bertentangan langsung dengan janji produk; Windows hanya menampilkan peringatan yang bisa dilewati. Keputusan: Apple Developer ID + notarisasi (±$99/th) wajib; Windows dirilis tanpa tanda tangan disertai dokumentasi SmartScreen dan checksum publik. Konsekuensi: satu biaya tetap tahunan; pengguna Windows melihat "Unknown publisher" — harus dinyatakan jujur di README dan halaman rilis. Status: Approved.
@@ -1047,6 +1047,11 @@ Konteks: nama menentukan binary, path, dan slug dokumentasi. Keputusan: DBLocal.
 **D-23 | Tampilan UI bergaya Zed IDE**
 Konteks: user meminta tampilan seperti Zed IDE dengan rujukan contoh GPUI di repositori Zed (`crates/gpui/examples`). Zed adalah workspace berisi dock dan pane bertab, bukan jendela berhalaman. Keputusan: panel Instances (pohon per engine) di dock kiri, pane tengah bertab per instance (Overview, Logs, Databases, Config), status bar di bawah, command palette `Ctrl/Cmd+K`, toast dan modal; tema gelap dan terang berbasis palet Atom One Dark/Light (MIT), tanpa menyalin tema atau kode Zed. Konsekuensi: (a) crate `gpui` dan examples-nya Apache-2.0 sehingga boleh dirujuk dan potongan kecil boleh diadaptasi dengan atribusi, tetapi crate `ui` dan `theme` milik Zed IDE berlisensi GPL-3.0-or-later, berada di dalam workspace Zed, dan tidak tersedia di crates.io, jadi tidak bisa dijadikan dependensi; (b) abu redup khas One Dark gagal kontras 4,5:1 yang diwajibkan F-PLH-02 (mis. `#5c6370` hanya 2,32:1), sehingga token warna wajib lolos tes kontras otomatis dan warna yang gagal dilebihterangkan; (c) `gpui-component` menyediakan sistem tema JSON dan komponen dock/tab/sidebar, tetapi tidak menyertakan tema One Dark, sehingga tema dibuat sendiri; (d) pemilihan font (IBM Plex Sans, SIL OFL 1.1) bergantung pada biaya ukuran binary yang diukur di Phase 0. Rincian: `docs/design/UI-DIRECTION.md`. Status: Approved.
 
+**D-24 | Dukungan engine per platform mengikuti artefak upstream yang nyata; MySQL Linux x86_64 memakai tarball minimal; SHA-256 MySQL dihitung CI**
+Konteks: spike W0-B (2026-11-20, diverifikasi ulang oleh reviewer) memeriksa sumber upstream. Temuan: (a) tarball MySQL 8.4.11 untuk Linux berukuran 832 MB (794 MiB), bukan ±260 MB; Linux x86_64 memiliki varian `-minimal` 79,8 MB yang berisi `mysqld`, `mysql`, `mysqladmin`, `mysqldump`, dan `mysqld_safe` (isi arsip didaftar tanpa diekstrak); Linux aarch64 hanya tersedia penuh (822 MB); macOS 160-164 MiB dan hanya untuk `macos15`; Windows x64 zip 281 MB; tidak ada Windows arm64. (b) MySQL tidak menerbitkan SHA-256, hanya MD5 dan tanda tangan GPG `.asc`. (c) MariaDB 11.8.10 dan 11.4.14 hanya menerbitkan Linux x86_64 dan Windows x86_64. (d) Valkey hanya menerbitkan Linux (x86_64 dan `arm64`; token `aarch64` memberi 403). (e) PostgreSQL dari theseus-rs mencakup keenam kombinasi OS dan arsitektur.
+Keputusan: katalog hanya memuat kombinasi yang artefaknya benar-benar ada; kombinasi lain tampil sebagai "tidak tersedia di platform ini" (F-CAT-02 AC2), bukan error. Janji "empat engine" (D-14) berlaku per platform menurut matriks di `docs/spikes/engines/upstream-sources.md` bagian 5. Builder katalog menghitung sendiri SHA-256 MySQL dengan mengunduh sekali di CI dan memverifikasi tanda tangan GPG bila memungkinkan, lalu mem-pin hash itu di katalog; installer tetap wajib memverifikasi sebelum ekstraksi, hanya sumber kepercayaannya adalah katalog kita, bukan upstream. Valkey Linux memakai varian jammy secara default dengan preflight glibc dan soname; macOS dan Windows tetap lewat F-SPK-02. Konsekuensi: MariaDB tidak tersedia di macOS dan Linux aarch64 pada v1, kecuali kita membangunnya sendiri atau user memilih jalur lain.
+Status: diadopsi koordinator berdasarkan spike, menunggu konfirmasi user karena mengubah cakupan D-14.
+
 ---
 
 ## 13. Assumptions & Open Questions
@@ -1059,14 +1064,14 @@ Konteks: user meminta tampilan seperti Zed IDE dengan rujukan contoh GPUI di rep
 - **[OPEN-04]** Siapa pemilik akun Apple Developer dan siapa yang menanggung biaya tahunannya, serta bagaimana rahasia penandatanganan disimpan di GitHub Actions?
 - **[OPEN-05]** Apakah runner `linux-aarch64` tersedia dan stabil untuk repo ini, atau build arm64 perlu cross-compilation/QEMU?
 - **[OPEN-06]** Apakah nama "DBLocal" bebas konflik di crates.io, Homebrew cask, winget, dan sebagai domain? (D-22.)
-- **[OPEN-07]** Endpoint unduhan MySQL mana yang stabil untuk otomatisasi, dan apakah ketentuan penggunaannya mengizinkan pengunduhan terprogram oleh aplikasi klien? Bila bermasalah, MariaDB menjadi jalur utama keluarga MySQL.
+- **[OPEN-07]** Endpoint unduhan MySQL mana yang stabil untuk otomatisasi, dan apakah ketentuan penggunaannya mengizinkan pengunduhan terprogram oleh aplikasi klien? Bila bermasalah, MariaDB menjadi jalur utama keluarga MySQL. Sebagian terjawab oleh spike W0-B: `dev.mysql.com/get/...` dan `cdn.mysql.com` dapat diunduh tanpa penerimaan syarat di browser, tetapi MySQL tidak menerbitkan SHA-256 (D-24). Ketentuan penggunaan Oracle untuk unduhan terprogram oleh aplikasi klien belum ditinjau secara hukum dan tetap terbuka.
 
 ### Assumptions — dipegang sampai terbukti sebaliknya
 
 - **[ASSUMPTION-01]** `theseus-rs/postgresql-binaries` tetap dirawat dan terus merilis versi PostgreSQL baru (saat ini 18.7.0, lengkap dengan SHA-256, SBOM, dan provenance). Mitigasi: katalog bersifat data, sehingga sumber dapat dialihkan tanpa mengubah kode.
-- **[ASSUMPTION-02]** Tarball Valkey untuk Ubuntu `jammy` berjalan di Fedora dan distro lain berkat kompatibilitas mundur glibc. Harus dibuktikan oleh job E2E Fedora di Phase 1.
+- **[ASSUMPTION-02]** Tarball Valkey untuk Ubuntu `jammy` berjalan di Fedora dan distro lain berkat kompatibilitas mundur glibc. Terbukti sebagian oleh spike W0-B: jammy dan noble 9.2.0 berjalan di Fedora 44 (glibc 2.43) dengan 0 library hilang, tetapi tarball tidak self-contained (butuh `libssl.so.3` dan `libsystemd.so.0`) dan lantai glibc-nya 2.34 (jammy) dan 2.38 (noble); default jammy dengan preflight soname. Job E2E Fedora di Phase 1 tetap wajib.
 - **[ASSUMPTION-03]** Target user menjalankan mesin dengan driver Vulkan yang berfungsi (mesin pengembangan modern). Mesin tanpa Vulkan dianggap di luar dukungan, dengan pesan yang jelas, bukan crash.
-- **[ASSUMPTION-04]** Unduhan satu kali sebesar 260 MB untuk MySQL dapat diterima user selama progres, ETA, dan kemampuan melanjutkan ditampilkan dengan baik.
+- **[ASSUMPTION-04]** Unduhan satu kali untuk MySQL (80 MB Linux x86_64 minimal sampai 832 MB Linux aarch64 penuh, D-24) dapat diterima user selama progres, ETA, dan kemampuan melanjutkan ditampilkan dengan baik.
 - **[ASSUMPTION-05]** Keychain tersedia di mayoritas lingkungan desktop target; fallback file `0600` cukup untuk sisanya (mis. Linux tanpa Secret Service).
 - **[ASSUMPTION-06]** Tidak ada kewajiban hukum tambahan karena tidak ada data pribadi yang dikumpulkan; pernyataan ini perlu ditinjau ulang bila kelak telemetri opt-in dipertimbangkan.
 
