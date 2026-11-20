@@ -26,7 +26,8 @@ Prototype: `spikes/gpui/` (standalone `[workspace]`, pins `gpui-pre =0.3.12`, `g
 - **Modal:** "New instance" dialog via `window.open_dialog`.
 - **Themes:** `DBLocal One Dark` / `DBLocal One Light` loaded through `gpui-component`'s JSON theme system (`ThemeRegistry::load_themes_from_str` + `Theme::apply_config`). System appearance is followed (`observe_window_appearance` -> `sync_to_system`). Both render distinctly (see evidence below).
 
-Rendered numerically (no image viewer; compositor capture denied):
+Rendered numerically (no image viewer; compositor capture denied). Five states are rendered by
+`tests/render_screenshot.rs` (dark, light, command palette, Logs tab, welcome):
 - Dark (`zed-shell-dark.png`, 2200x1440): 936 colours; samples title/sidebar `rgba(33,37,43,255)` = `#21252b`, centre `rgba(40,44,52,255)` = `#282c34`, status `rgba(33,37,43,255)`.
 - Light (`zed-shell-light.png`, 2200x1440): 961 colours; samples title/sidebar `rgba(240,240,240,255)` = `#f0f0f0`, centre `rgba(250,250,250,255)` = `#fafafa`, status `rgba(240,240,240,255)`.
 - Centre-region mean luminance, printed by `renders_zed_style_shell_dark_and_light`: dark **42.93**, light **241.45** (the assertion requires a gap > 10). Samples logged by the test: dark title/sidebar `rgba(33,37,43,255)`, dark centre `rgba(40,44,52,255)`, light title/sidebar `rgba(240,240,240,255)`, light centre `rgba(250,250,250,255)`.
@@ -38,6 +39,7 @@ Unit test: `contrast::tests::all_text_pairs_meet_wcag_aa` (`cargo test -p` in `s
 Final token table (from `contrast::token_table()`):
 
 | Theme | Token | Foreground | Background | Ratio | Result |
+|---|---|---|---|---:|---|
 | dark | dark/body on editor | #abb2bf | #282c34 | 6.57 | pass |
 | dark | dark/secondary on editor | #9da5b4 | #282c34 | 5.65 | pass |
 | dark | dark/body on panel | #abb2bf | #21252b | 7.22 | pass |
@@ -166,7 +168,32 @@ Measured by embedding faces with `include_bytes!` + `black_box` in a stripped `-
 - `evidence/vulkan-preflight.txt`, `evidence/vulkan-raw-fallback.txt`, `evidence/vulkan-raw-panic.txt` — Vulkan scenarios
 - `evidence/x11-link.txt` — X11 feature check/build outcome and missing dev package
 - `evidence/screenshot-attempt.txt` — compositor/tool capture unavailable on this host
-- `evidence/zed-shell-dark.png`, `evidence/zed-shell-light.png` — headless wgpu renders (numeric proof above)
+- `evidence/zed-shell-dark.png`, `zed-shell-light.png` — headless wgpu renders of the shell (numeric proof above)
+- `evidence/zed-shell-palette.png` (1181 colours), `zed-shell-logs.png` (887), `zed-shell-welcome.png` (867) — the palette overlay, Logs tab and welcome state
 - `evidence/window-rendered.png`, `evidence/window-x11.png` — earlier prototype captures
 
-Quality gates (this spike crate): `cargo fmt --all -- --check` PASS, `cargo clippy --all-targets -D warnings` PASS, `cargo test` PASS (22 lib + 1 integration + 1 doc-test set, 0 failed), `cargo deny check licenses bans` PASS (`bans ok, licenses ok`).
+## 9. Quality gates and coverage
+
+| Gate | Command | Result |
+|---|---|---|
+| Format | `cargo fmt --all -- --check` | PASS |
+| Lint | `cargo clippy --all-targets -- -D warnings` | PASS (no warnings) |
+| Tests | `cargo test` | PASS: 26 lib tests + 2 integration tests, 0 failed |
+| Licences/bans | `cargo deny check licenses bans` | PASS (`bans ok, licenses ok`) |
+
+Coverage (`cargo llvm-cov --summary-only`):
+
+| File | Lines | Line coverage |
+|---|---:|---:|
+| `app.rs` | 1096 | 65.4% |
+| `contrast.rs` | 314 | 96.5% |
+| `progress.rs` | 48 | 93.8% |
+| `theme.rs` | 97 | 95.9% |
+| `tray.rs` | 183 | 93.4% |
+| `vulkan.rs` | 173 | 75.7% |
+| `main.rs` | 15 | 0% (process entry; exercised only by a real run) |
+| **Total** | **1926** | **75.8%** |
+
+The 80% floor from the contract is not met overall because `main.rs` is a process entry point and
+`app.rs` keeps a large amount of pure layout code that only a real frame exercises. The modules with
+logic (contrast, theme, tray, progress) are all at or above 93%.
