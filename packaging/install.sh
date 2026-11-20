@@ -26,6 +26,21 @@ warn() { log "dblocal: warning: $*"; }
 err()  { log "dblocal: error: $*"; }
 die()  { err "$*"; exit 1; }
 
+# Temporary directory for downloads/extraction; cleaned up by the EXIT trap.
+tmpdir=""
+
+cleanup() {
+  if [ -n "$tmpdir" ] && [ -d "$tmpdir" ]; then
+    rm -rf "$tmpdir"
+  fi
+}
+
+# In POSIX sh a handler for INT/TERM that merely returns lets the script
+# continue. Exit explicitly with the conventional signal codes instead.
+on_int()  { cleanup; trap - EXIT; exit 130; }
+on_term() { cleanup; trap - EXIT; exit 143; }
+on_hup()  { cleanup; trap - EXIT; exit 129; }
+
 usage() {
   cat >&2 <<'USAGE'
 Usage: install.sh [options]
@@ -63,6 +78,18 @@ DRY_RUN=0
 PREFIX=""
 USE_SUDO=0
 
+validate_tag() {
+  # Accept semver-like release tags: v1.2.3, 1.2.3, and prerelease/build forms
+  # such as v1.2.3-rc.1 or v1.2.3+meta.1. Reject anything else (including
+  # shell metacharacters and regex-surprising inputs) because the tag flows
+  # into URLs and into filesystem lookups.
+  tag="$1"
+  case "$tag" in
+    ''|*[!0-9A-Za-z.+-]*) return 1 ;;
+  esac
+  printf '%s\n' "$tag" | grep -Eq '^v?[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?$'
+}
+
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --version)
@@ -90,6 +117,10 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 [ "$#" -eq 0 ] || die "unexpected argument(s): $* (try --help)"
+
+if [ -n "$VERSION" ] && ! validate_tag "$VERSION"; then
+  die "invalid --version tag '$VERSION' (expected e.g. v1.2.3 or v1.2.3-rc.1)"
+fi
 
 REPO="${DBLOCAL_REPO:-rezkycodes/dblocal}"
 
@@ -135,21 +166,106 @@ pick_downloader() {
   fi
 }
 
+require_https_url() {
+  # require_https_url <url> <what>
+  # https is always fine. Plain http is tolerated ONLY for a loopback host, which
+  # is what the offline tests and a local mirror use. Everything else is refused.
+  url="$1"; what="$2"
+  case "$url" in
+    https://*)
+      return 0
+      ;;
+    http://*)
+      rest="${url#http://}"
+      authority="${rest%%/*}"
+      case "$authority" in
+        127.0.0.1|127.0.0.1:*) return 0 ;;
+        localhost|localhost:*) return 0 ;;
+        \[::1\]|\[::1\]:*)     return 0 ;;
+      esac
+      die "$what uses plain http for a non-local host ($url); refusing. TLS is required — use an https URL."
+      ;;
+    *)
+      die "$what must be an absolute https URL (got: $url)"
+      ;;
+  esac
+}
+
+# Strict TLS flags. The https-only pair is used for every real download; plain
+# http is permitted only for a loopback host (offline tests / a local mirror),
+# and even then only http/https are allowed as protocols. If the installed curl
+# cannot understand the flags, we fail loudly; we never retry a weaker request.
+CURL_TLS_FLAGS_HTTPS="--proto =https --proto-redir =https --tlsv1.2"
+CURL_TLS_FLAGS_LOOPBACK="--proto =http,https --proto-redir =http,https --tlsv1.2"
+
+is_loopback_url() {
+  case "$1" in
+    http://*)
+      rest="${1#http://}"
+      case "${rest%%/*}" in
+        127.0.0.1|127.0.0.1:*|localhost|localhost:*|\[::1\]|\[::1\]:*) return 0 ;;
+      esac
+      ;;
+  esac
+  return 1
+}
+
+check_curl_supports_tls_flags() {
+  [ "$DOWNLOADER" = "curl" ] || return 0
+  # Test-only override: the offline suite injects a stub curl whose --help does
+  # not advertise real flags. Never set this in normal use.
+  if [ "${DBLOCAL_TEST_SKIP_CURL_CAPS:-0}" = "1" ]; then
+    return 0
+  fi
+  # Verify the flags exist without performing a request. `curl --help all` lists
+  # long options; older curl lacks --proto-redir. If we cannot confirm support we
+  # stop — a possibly downgraded download is worse than no install.
+  help_out="$(curl --help all 2>/dev/null || curl --help 2>/dev/null || true)"
+  case "$help_out" in
+    *--proto-redir*) return 0 ;;
+  esac
+  die "installed curl does not advertise '--proto-redir' (too old?). Refusing to download over a connection that could be downgraded. Upgrade curl, or use wget."
+}
+
 http_get() {
   # http_get <url> <output-file>
   url="$1"; out="$2"
+  require_https_url "$url" "download URL"
   case "$DOWNLOADER" in
-    curl) curl -fsSL --proto '=https' --tlsv1.2 -o "$out" "$url" 2>/dev/null || curl -fsSL -o "$out" "$url" ;;
-    wget) wget -qO "$out" "$url" ;;
+    curl)
+      if is_loopback_url "$url"; then flags="$CURL_TLS_FLAGS_LOOPBACK"; else flags="$CURL_TLS_FLAGS_HTTPS"; fi
+      # shellcheck disable=SC2086 # word-splitting the flag list is intended
+      curl -fsSL $flags -o "$out" "$url" || die "download failed (strict TLS): $url"
+      ;;
+    wget)
+      # --https-only would reject the loopback http test/mirror URLs; require_https_url
+      # has already confined plain http to loopback, so restrict protocols instead.
+      if is_loopback_url "$url"; then
+        wget -qO "$out" "$url" || die "download failed: $url"
+      else
+        wget --https-only -qO "$out" "$url" || die "download failed (strict TLS): $url"
+      fi
+      ;;
     *) die "internal: no downloader selected" ;;
   esac
 }
 
 http_get_stdout() {
   url="$1"
+  require_https_url "$url" "download URL"
   case "$DOWNLOADER" in
-    curl) curl -fsSL --proto '=https' --tlsv1.2 "$url" 2>/dev/null || curl -fsSL "$url" ;;
-    wget) wget -qO - "$url" ;;
+    curl)
+      if is_loopback_url "$url"; then flags="$CURL_TLS_FLAGS_LOOPBACK"; else flags="$CURL_TLS_FLAGS_HTTPS"; fi
+      # shellcheck disable=SC2086 # word-splitting the flag list is intended
+      curl -fsSL $flags "$url" || die "download failed (strict TLS): $url"
+      ;;
+    wget)
+      if is_loopback_url "$url"; then
+        wget -qO - "$url" || die "download failed: $url"
+      else
+        wget --https-only -qO - "$url" || die "download failed (strict TLS): $url"
+      fi
+      ;;
     *) die "internal: no downloader selected" ;;
   esac
 }
@@ -228,18 +344,36 @@ ensure_dir() {
 
 install_file() {
   src="$1"; dest="$2"
-  if [ -w "$(dirname "$dest")" ] || [ -w "$dest" ] 2>/dev/null; then
-    # Overwrite in place (idempotent upgrade). Use cp+chmod for portability.
-    cp "$src" "$dest"
-    chmod 0755 "$dest"
+  dest_dir="$(dirname "$dest")"
+
+  # Install atomically and safely when the destination is a running executable:
+  # copying over an in-use ELF fails with ETXTBSY ("Text file busy") on Linux.
+  # Instead, write to a temporary sibling in the destination directory, chmod it,
+  # then rename(2) over the destination (atomic on the same filesystem; also
+  # never leaves a half-written binary in place).
+  if [ -w "$dest_dir" ] || [ -w "$dest" ] 2>/dev/null; then
+    tmp_dest="${dest}.new.$$"
+    if ! cp "$src" "$tmp_dest" 2>/dev/null; then
+      rm -f "$tmp_dest" 2>/dev/null || true
+      die "cannot write temporary install file '$tmp_dest'"
+    fi
+    chmod 0755 "$tmp_dest" || { rm -f "$tmp_dest"; die "cannot chmod '$tmp_dest'"; }
+    if ! mv -f "$tmp_dest" "$dest" 2>/dev/null; then
+      rm -f "$tmp_dest" 2>/dev/null || true
+      die "cannot place binary at '$dest'"
+    fi
     return
   fi
+
   if [ "$USE_SUDO" -eq 1 ] && have_cmd sudo; then
     info "installing to $dest with sudo (--sudo requested)"
-    sudo cp "$src" "$dest"
-    sudo chmod 0755 "$dest"
+    tmp_dest="${dest}.new.$$"
+    sudo cp "$src" "$tmp_dest" || { sudo rm -f "$tmp_dest" 2>/dev/null || true; die "cannot write temporary install file '$tmp_dest' (sudo)"; }
+    sudo chmod 0755 "$tmp_dest" || { sudo rm -f "$tmp_dest"; die "cannot chmod '$tmp_dest' (sudo)"; }
+    sudo mv -f "$tmp_dest" "$dest" || { sudo rm -f "$tmp_dest" 2>/dev/null || true; die "cannot place binary at '$dest' (sudo)"; }
     return
   fi
+
   die "cannot write to '$dest' (pass --prefix <dir> or re-run with --sudo)"
 }
 
@@ -258,7 +392,9 @@ path_warn() {
 resolve_release_base() {
   if [ -n "${DBLOCAL_RELEASE_BASE_URL:-}" ]; then
     # Trim trailing slash for consistent joining.
-    printf '%s\n' "${DBLOCAL_RELEASE_BASE_URL%/}"
+    base="${DBLOCAL_RELEASE_BASE_URL%/}"
+    require_https_url "$base" "DBLOCAL_RELEASE_BASE_URL"
+    printf '%s\n' "$base"
     return
   fi
 
@@ -273,6 +409,7 @@ resolve_release_base() {
     # Minimal JSON parsing without jq: grab the first tag_name value.
     tag="$(printf '%s' "$json" | tr -d '\n' | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
     [ -n "$tag" ] || die "could not determine latest release tag from GitHub API response"
+    validate_tag "$tag" || die "latest release tag from API is not a valid version tag: '$tag'"
   fi
 
   printf 'https://github.com/%s/releases/download/%s\n' "$REPO" "$tag"
@@ -281,9 +418,14 @@ resolve_release_base() {
 expected_checksum() {
   sums_file="$1"; asset_name="$2"
   # checksums.txt format: "<sha256>  <filename>" (sha256sum/shasum output).
-  line="$(grep -E "[[:space:]]${asset_name}$|[[:space:]]\*${asset_name}$" "$sums_file" | head -n 1 || true)"
-  [ -n "$line" ] || die "asset '$asset_name' not found in checksums.txt"
-  printf '%s\n' "$line" | awk '{print $1}'
+  # Match the asset name literally (never as a regex) to avoid '.' acting as a
+  # wildcard or metacharacters in the name affecting the match.
+  hash="$(awk -v n="$asset_name" '
+    $2 == n || $2 == "*" n { print $1; found=1; exit }
+    END { if (!found) exit 1 }
+  ' "$sums_file")" || die "asset '$asset_name' not found in checksums.txt"
+  [ -n "$hash" ] || die "could not read expected checksum for '$asset_name' from checksums.txt"
+  printf '%s\n' "$hash"
 }
 
 # --- main ---------------------------------------------------------------------
@@ -291,6 +433,7 @@ expected_checksum() {
 main() {
   detect_target
   pick_downloader
+  check_curl_supports_tls_flags
   pick_sha256
 
   base="$(resolve_release_base)"
@@ -323,29 +466,39 @@ main() {
   ensure_dir "$dest_prefix"
 
   tmpdir="$(mktemp -d 2>/dev/null || mktemp -d -t dblocal-install)"
-  # shellcheck disable=SC2064
-  trap "rm -rf '$tmpdir'" EXIT INT TERM
+  # Clean up temp files on exit, and exit cleanly on signals (INT->130, TERM->143).
+  trap cleanup EXIT
+  trap on_int  INT
+  trap on_term TERM
+  trap on_hup  HUP
 
   sums="$tmpdir/checksums.txt"
   archive="$tmpdir/$asset"
 
   info "downloading checksums: $base/checksums.txt"
-  http_get "$base/checksums.txt" "$sums" || die "failed to download checksums.txt from $base"
+  http_get "$base/checksums.txt" "$sums"
 
   expected="$(expected_checksum "$sums" "$asset")"
-  [ -n "$expected" ] || die "could not read expected checksum for $asset"
 
   info "downloading $asset"
-  http_get "$base/$asset" "$archive" || die "failed to download $asset from $base"
+  http_get "$base/$asset" "$archive"
 
   info "verifying SHA-256"
   verify_sha256 "$archive" "$expected"
 
   info "extracting"
   mkdir -p "$tmpdir/extract"
-  tar -xzf "$archive" -C "$tmpdir/extract"
+  # Extract only the expected member. Even though the checksum covers the
+  # archive, extraction of an untrusted archive must be defensive against
+  # unexpected members (traversal, extra files) and the binary itself must not
+  # be a symlink.
+  tar -xzf "$archive" -C "$tmpdir/extract" -- dblocal \
+    || die "failed to extract 'dblocal' from archive (unexpected layout or unsafe archive)"
 
   bin_src="$tmpdir/extract/dblocal"
+  if [ -L "$bin_src" ]; then
+    die "extracted 'dblocal' is a symlink; refusing to install"
+  fi
   [ -f "$bin_src" ] || die "archive did not contain expected 'dblocal' binary"
 
   info "installing to $dest_bin"

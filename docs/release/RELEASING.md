@@ -96,6 +96,11 @@ requires Vulkan/GPU libraries.
 
 ### Checksums
 
+Note what this does and does not prove: `checksums.txt` is downloaded from the **same** release as
+the archive, so it protects against corruption in transit and against a bad mirror, but **not**
+against a compromised release (an attacker who replaces the archive could replace the checksum
+too). For a stronger guarantee, verify the build provenance with `gh attestation verify`.
+
 ```sh
 # Linux
 sha256sum -c checksums.txt --ignore-missing

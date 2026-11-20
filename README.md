@@ -36,6 +36,10 @@ against `checksums.txt`**, and installs `dblocal` to `~/.local/bin` (or `/usr/lo
 writable). It is idempotent — re-run it to upgrade — and never calls `sudo` unless you pass
 `--sudo`.
 
+`checksums.txt` is downloaded from the same release as the archive, so it protects against
+corruption and a bad mirror but not against a compromised release; verify provenance with
+`gh attestation verify` for a stronger guarantee.
+
 ```sh
 # install a specific tag
 curl -fsSL https://raw.githubusercontent.com/rezkycodes/dblocal/main/packaging/install.sh \
