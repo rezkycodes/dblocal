@@ -18,23 +18,28 @@ Hard invariants: AGENTS.md §3 items 4 and 5.
 | The password in a log/error/argv/`Debug` | never |
 
 `CredentialRef` is a pointer: instance id, backend, key reference, username. It
-holds no secret. The only way to read the password is
-`SecretStore::get(_)`/`get_from(_, _)`, which returns a `SecretString` that
-redacts `Debug`/`Display` and zeroes its buffer on drop.
+holds no secret. The only way to read the password is `SecretStore::get(&ref)`,
+which routes by `ref.backend()` and returns a `SecretString` that redacts
+`Debug`/`Display` and zeroes its buffer on drop.
 
 ## Backends
 
 ```text
                  ┌────────────────────────────┐
-   set/get/del   │ SecretStore                │
-   ─────────────►│  keyring first             │
-                 │  on Unsupported → file     │
-                 └───────┬────────────┬───────┘
-                         │            │
-                 ┌───────▼──────┐ ┌───▼─────────┐
-                 │ KeyringBackend│ │ FileBackend │
-                 │ (keyring 4.2) │ │ 0600 files  │
-                 └───────────────┘ └─────────────┘
+   set            │ SecretStore                │
+   ──────────────►│  keychain first,           │
+                  │  file on Unsupported       │
+   get            │                            │
+   ──────────────►│  routes by                 │
+                  │  reference.backend() only  │
+   delete         │                            │
+   ──────────────►│  removes from both         │
+                  └───────┬────────────┬───────┘
+                          │            │
+                  ┌───────▼──────┐ ┌───▼─────────┐
+                  │ KeyringBackend│ │ FileBackend │
+                  │ (keyring 4.2) │ │ 0600 files  │
+                  └───────────────┘ └─────────────┘
 ```
 
 `SecretBackend` is the trait: `kind() -> BackendKind`, `get`, `set`, `delete`,
@@ -92,17 +97,36 @@ message; only a debug-level log line records the mapping.
 
 ### `FileBackend` — `0600` fallback
 
-Path: `<root>/secrets/<key_ref>`, i.e. `~/.dblocal/secrets/dblocal:<instance-id>`
-in production and `<DBLOCAL_HOME>/secrets/...` in tests.
+Path: `<root>/secrets/<file-name>`, where `<file-name>` is derived from the key
+reference by `file_name_for`. Every allowed character (`A-Za-z0-9`, `.`, `-`,
+`_`) is kept, every `:` becomes `%3A`, and the whole name is prefixed `cred-`.
+So `dblocal:<instance-id>` lives at `~/.dblocal/secrets/cred-dblocal%3A<id>`
+(production) or `<DBLOCAL_HOME>/secrets/cred-dblocal%3A<id>` (tests).
+
+Why encode at all: `:` is legal in the key (`dblocal:<instance-id>`) but on
+NTFS `secrets\cred-dblocal:<id>` would name an *alternate data stream* of a file
+called `cred-dblocal`, and renaming the temp file onto it fails, so the fallback
+would not work on Windows at all. `%` is not a legal key character, so `%3A` can
+only ever come from a `:`, which makes the mapping injective: two distinct keys
+can never share a file name. The `cred-` prefix means a key that happens to be a
+reserved Windows device name (`CON`, `NUL`, `COM1`, ...) is still an ordinary
+file. `get`, `set` and `delete` all resolve the path through the same function,
+and temp files keep their `.tmp-` prefix.
 
 | Property | Unix | Windows |
 |---|---|---|
-| Directory mode | `0700`, set explicitly after create; recursive parents | inherits parent ACL |
+| Directory mode | `0700`; created explicitly **and** an existing real directory is tightened to `0700` | inherits parent ACL |
 | File mode | `0600`, forced after create (umask cannot widen it) | inherits parent ACL (best effort) |
 | Symlinked directory | refused (`symlink_metadata`) | refused |
 | Symlinked file | refused, checked before every get/set/delete **and** via `O_NOFOLLOW` | refused (check only) |
+| File name | `cred-` + key with `:` → `%3A` (no `:`, never a device name) | same |
 | Atomic write | temp file in same dir, `fsync`, `rename`, best-effort dir `fsync` | same |
 | Never world-readable | guaranteed on Unix; on Windows only as good as the user profile ACL | documented limitation |
+
+The directory tightening matters because an older build (or a hand-made
+directory) could have created `secrets/` under the default umask (`0755`), which
+lets other users list the reference names. `ensure_dir` therefore keeps refusing
+a symlink but forces `0700` on any existing real directory before a write.
 
 The temp file is created with `create_new(true)` and mode `0600` **before** any
 byte is written, so the plaintext is never briefly world-readable. Two writers
@@ -115,22 +139,46 @@ Windows: `std::fs` cannot apply a POSIX mode. The file inherits the ACL of
 restriction would need `windows-sys` ACL APIs; that is documented here as
 best-effort rather than implemented.
 
-### `SecretStore` — keychain first, file fallback
+### `SecretStore` — routing
 
-- `set` tries the keychain; on `Unsupported` it writes the file and returns the
-  backend that actually stored the value. That return value is what must be
-  persisted so `F-CRD-01` AC2 ("Disimpan di file, bukan keychain") is honest.
-- `get` tries the keychain; on `Unsupported` it reads the file.
-- `delete` follows the same rule.
-- `delete_everywhere` removes from both and tolerates `NotFound`, which is what
-  `F-CRD-01` AC3 (delete on instance removal) needs even if the keychain went
-  away in the meantime.
-- `get_from(kind, ref)` reads the backend recorded on the instance and falls
-  back to the other one only when the recorded backend is `Unsupported`, so a
-  credential recorded as keychain-backed stays readable on a headless login.
+`set` prefers the keychain and falls back to the file when the keychain reports
+itself unavailable, returning the backend that actually stored the value so the
+caller persists it with the instance. `get` routes **strictly** by
+`CredentialRef::backend()`, the backend recorded on the instance, and nothing
+else: a credential lives in exactly one backend, so a read never crosses over.
+This is what makes a secret survive the realistic "created over SSH, then opened
+on the desktop" sequence — the secret was written to the file fallback while the
+keychain was down, and a later `get` from a session where gnome-keyring *is* up
+must not ask the (now available but empty) keychain and answer `NotFound`; it
+reads the file, as recorded. Conversely, if the recorded keychain backend is
+locked or gone, its `Unsupported` error is returned unchanged so the UI can say
+the keychain is unavailable, and the file is never consulted for a secret it does
+not hold. `delete` removes the credential from **both** backends, so a stale copy
+can never survive an instance teardown; a missing entry or an unreachable backend
+is not an error there, but an invalid key reference or a real I/O failure is.
 
 Migration between backends is **out of scope** (task statement); nothing here
 moves a secret from one backend to the other.
+
+### Platform coverage (unverified)
+
+This host is Linux, so only the `zbus` Secret Service path was built and
+exercised. The `apple-native-keyring-store` (macOS Keychain) and
+`windows-native-keyring-store` (Windows Credential Manager) stores are selected
+by the same `v1` feature but sit behind `cfg` branches this machine cannot
+compile or run; they are **unverified** here. Likewise the Windows filesystem
+behaviour (ACL inheritance, the absence of `:` in names) is reasoned about and
+encoded defensively but not run.
+
+### Dependency footprint
+
+Adding `keyring` 4.2 with the `v1` feature brings in **50 new transitive
+crates** (essentially the `zbus` stack: `zbus`, `zvariant`, `secret-service`,
+`async-io`, `futures-lite`, …). That is a real supply-chain increase, accepted
+because it is the pure-Rust Secret Service path: it needs no `libsecret-1` or
+`libdbus` development package, pulls in no `openssl`/`native-tls`, and adds no
+`*-sys` crate and no `unsafe` in our code. `cargo deny check` passes
+advisories, bans, licenses and sources with that graph.
 
 ## Password generation (`F-CRD-01`, `F-CRD-03`)
 
@@ -165,8 +213,8 @@ mode without a password, or no-auth mode carrying one).
 | Test | What it proves |
 |---|---|
 | `secrets::password::*` | length 24, allowed charset, no forbidden characters, zero length rejected, chi-square-style uniformity over 186 000 draws, CSPRNG failure mapping |
-| `secrets::file::*` | `0700`/`0600` modes asserted, symlinked directory and file refused, concurrent writers never tear, unsafe keys rejected, non-UTF-8 rejected, delete semantics |
-| `secrets::store::*` | keychain preferred; file used when keychain reports `Unsupported`; `NotFound` is not a fallback trigger; `delete_everywhere`; `get_from` recovery; torn-write test through the store |
+| `secrets::file::*` | `0700`/`0600` modes asserted; an existing `0755` directory is tightened to `0700`; symlinked directory and file refused; concurrent writers never tear; unsafe keys rejected; non-UTF-8 rejected; delete semantics; the file name never contains `:`, is prefixed `cred-`, and 20 distinct keys (including `:` vs `_` pairs) give distinct names |
+| `secrets::store::*` | `set` prefers the keychain and falls back to the file, returning the backend used; `get` routes by `reference.backend()` **only** — a file-recorded secret is readable when the keychain is available but empty, and an unavailable recorded keychain returns `Unsupported` without touching the file (asserted via call counters); `delete` clears both backends and is idempotent; torn-write test through the store |
 | `secrets::keyring::*` | every `keyring` error variant mapped to the right `DblError` code, and get/set/delete driven through a scripted `KeychainOpener`; the platform opener never runs under `cargo test` |
 | `secrets::redaction_tests::*` | every public type formatted with `{:?}` and `{}`, every error path, never contains the canary |
 | `real_keychain_round_trip` | `#[ignore]`d; needs a live keychain and may prompt for unlock |

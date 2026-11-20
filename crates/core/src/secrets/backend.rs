@@ -58,7 +58,12 @@ pub trait SecretBackend: Send + Sync {
 /// Both backends embed the reference in a file name or a keychain lookup key,
 /// so it must be short, printable ASCII with no separators or control bytes.
 pub(crate) fn validate_key_ref(reference: &CredentialRef) -> Result<()> {
-    let key = reference.key_ref();
+    validate_key_str(reference.key_ref())
+}
+
+/// The one rule set for a key reference, shared by both backends and by the
+/// file-name encoder, so they can never disagree about what is legal.
+pub(crate) fn validate_key_str(key: &str) -> Result<()> {
     if key.is_empty() {
         return Err(DblError::InvalidInput {
             field: "key_ref",
@@ -100,6 +105,7 @@ pub struct FakeBackend {
     kind: Option<BackendKind>,
     entries: Mutex<BTreeMap<String, SecretString>>,
     available: std::sync::atomic::AtomicBool,
+    gets: std::sync::atomic::AtomicUsize,
 }
 
 #[cfg(any(test, feature = "mock"))]
@@ -110,6 +116,7 @@ impl FakeBackend {
             kind: Some(kind),
             entries: Mutex::new(BTreeMap::new()),
             available: std::sync::atomic::AtomicBool::new(true),
+            gets: std::sync::atomic::AtomicUsize::new(0),
         }
     }
 
@@ -129,6 +136,12 @@ impl FakeBackend {
         self.len() == 0
     }
 
+    /// How many times `get` reached this backend, so a test can prove a read
+    /// was never routed here.
+    pub fn get_calls(&self) -> usize {
+        self.gets.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
     fn guard(&self) -> Result<std::sync::MutexGuard<'_, BTreeMap<String, SecretString>>> {
         self.entries.lock().map_err(|_| DblError::Secret {
             reason: "the in-memory backend lock was poisoned".to_owned(),
@@ -143,6 +156,7 @@ impl SecretBackend for FakeBackend {
     }
 
     fn get(&self, reference: &CredentialRef) -> Result<SecretString> {
+        self.gets.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         validate_key_ref(reference)?;
         if !self.available.load(std::sync::atomic::Ordering::SeqCst) {
             return Err(unavailable(self.kind()));

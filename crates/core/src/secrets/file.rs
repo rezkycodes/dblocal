@@ -25,7 +25,7 @@ use crate::model::{CredentialBackend, CredentialRef};
 use crate::paths::DblPaths;
 use crate::secret::SecretString;
 
-use super::backend::{BackendKind, SecretBackend, not_found, validate_key_ref};
+use super::backend::{BackendKind, SecretBackend, not_found, validate_key_ref, validate_key_str};
 
 /// Monotonic suffix so two writers in the same process never pick the same
 /// temporary name.
@@ -56,44 +56,62 @@ impl FileBackend {
     /// Path of the file holding `reference`.
     fn path_for(&self, reference: &CredentialRef) -> Result<PathBuf> {
         validate_key_ref(reference)?;
-        Ok(self.dir.join(reference.key_ref()))
+        Ok(self.dir.join(file_name_for(reference.key_ref())?))
     }
 
     /// Creates the directory (and its parents) `0700`, refusing a symlink.
+    ///
+    /// An existing real directory is *tightened* to `0700` on Unix rather than
+    /// left alone: if it was created earlier with the default umask (by an
+    /// older build, or by hand), other users could list the reference names.
     fn ensure_dir(&self) -> Result<()> {
-        if let Ok(meta) = fs::symlink_metadata(&self.dir) {
-            if meta.file_type().is_symlink() {
-                return Err(DblError::Secret {
-                    reason: "the secrets directory is a symlink".to_owned(),
-                });
+        match fs::symlink_metadata(&self.dir) {
+            Ok(meta) => {
+                if meta.file_type().is_symlink() {
+                    return Err(DblError::Secret {
+                        reason: "the secrets directory is a symlink".to_owned(),
+                    });
+                }
+                if !meta.is_dir() {
+                    return Err(DblError::Secret {
+                        reason: "the secrets path exists but is not a directory".to_owned(),
+                    });
+                }
+                #[cfg(unix)]
+                tighten_dir(&self.dir)?;
+                Ok(())
             }
-            if !meta.is_dir() {
-                return Err(DblError::Secret {
-                    reason: "the secrets path exists but is not a directory".to_owned(),
-                });
+            Err(err) if err.kind() == ErrorKind::NotFound => {
+                let mut builder = fs::DirBuilder::new();
+                builder.recursive(true);
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::DirBuilderExt;
+                    builder.mode(0o700);
+                }
+                builder.create(&self.dir).map_err(DblError::from)?;
+
+                // `recursive(true)` honours a pre-existing mode on some
+                // platforms, so set it explicitly once the directory exists.
+                #[cfg(unix)]
+                tighten_dir(&self.dir)?;
+                Ok(())
             }
-            return Ok(());
+            Err(err) => Err(DblError::from(err)),
         }
-
-        let mut builder = fs::DirBuilder::new();
-        builder.recursive(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::DirBuilderExt;
-            builder.mode(0o700);
-        }
-        builder.create(&self.dir).map_err(DblError::from)?;
-
-        // `recursive(true)` honours a pre-existing mode on some platforms, so
-        // set it explicitly once the directory exists.
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            fs::set_permissions(&self.dir, fs::Permissions::from_mode(0o700))
-                .map_err(DblError::from)?;
-        }
-        Ok(())
     }
+}
+
+/// Forces `0700` on a directory, ignoring a mode that is already correct.
+#[cfg(unix)]
+fn tighten_dir(dir: &Path) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let current = fs::metadata(dir).map_err(DblError::from)?.permissions();
+    if current.mode() & 0o777 == 0o700 {
+        return Ok(());
+    }
+    fs::set_permissions(dir, fs::Permissions::from_mode(0o700)).map_err(DblError::from)
 }
 
 impl SecretBackend for FileBackend {
@@ -144,6 +162,37 @@ impl SecretBackend for FileBackend {
             Err(err) => Err(DblError::from(err)),
         }
     }
+}
+
+/// Prefix on every credential file name; see [`file_name_for`].
+const KEY_FILE_PREFIX: &str = "cred-";
+
+/// A Windows-safe, injective file name for a key reference.
+///
+/// The key may contain `:` (`dblocal:<instance-id>`), which NTFS would read as
+/// an alternate data stream of a file named `dblocal`; a rename onto it then
+/// fails, so the fallback would not work on Windows at all. The encoding is
+/// therefore:
+///
+/// - every `:` becomes `%3A`. `%` is not an allowed key character (see
+///   [`validate_key_str`]), so the escape can never appear literally and two
+///   distinct keys can never map to the same name;
+/// - the result is prefixed with `cred-`, which makes a key that looks like a
+///   reserved device name (`CON`, `NUL`, `COM1`, ...) an ordinary file name;
+/// - every other allowed character (`A-Za-z0-9`, `.`, `-`, `_`) is kept, so the
+///   name stays readable and `get`/`set`/`delete` agree by construction.
+pub(crate) fn file_name_for(key: &str) -> Result<String> {
+    validate_key_str(key)?;
+    let mut name = String::with_capacity(KEY_FILE_PREFIX.len() + key.len() + 8);
+    name.push_str(KEY_FILE_PREFIX);
+    for ch in key.chars() {
+        if ch == ':' {
+            name.push_str("%3A");
+        } else {
+            name.push(ch);
+        }
+    }
+    Ok(name)
 }
 
 /// Opens an existing credential file without following a symlink.

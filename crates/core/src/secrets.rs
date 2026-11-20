@@ -4,8 +4,10 @@
 //!
 //! - a password never reaches SQLite, a log line, an error message, a command
 //!   line or `Debug` output;
-//! - the OS keychain is preferred and the `0600` file is the documented
-//!   fallback, reported honestly through [`BackendKind`];
+//! - the OS keychain is preferred on write and the `0600` file is the
+//!   documented fallback, reported honestly through [`BackendKind`];
+//! - a read routes to the backend recorded on the instance
+//!   ([`crate::model::CredentialRef::backend`]) and never guesses;
 //! - every buffer that holds a secret is zeroed on drop.
 //!
 //! Layout: [`backend`] defines the [`SecretBackend`] trait and the in-memory

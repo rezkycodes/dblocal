@@ -1,11 +1,19 @@
-//! Keychain-first credential store with an automatic file fallback.
+//! Backend-routed credential store with a keychain-preferred writer.
 //!
-//! [`SecretStore`] tries the OS keychain for every operation and transparently
-//! retries against the file backend when the keychain is unavailable
-//! (`F-CRD-01` AC2). The backend actually used is returned to the caller and is
-//! the value that must be recorded as `Instance.credential_backend` so the UI
-//! can show where the secret lives. Migration between backends is deliberately
-//! out of scope.
+//! [`SecretStore`] is the only place that knows about both backends:
+//!
+//! - **read** routes strictly by [`CredentialRef::backend()`], the backend
+//!   recorded on the instance. A credential lives in exactly one backend, so a
+//!   read never crosses over: an available-but-empty keychain must not mask a
+//!   secret that was written to the file fallback while the keychain was down
+//!   (the "created over SSH, then opened on the desktop" case);
+//! - **write** prefers the keychain and falls back to the file when the
+//!   keychain reports itself unavailable (`F-CRD-01` AC2), returning the
+//!   backend that actually stored the secret so the caller can persist it;
+//! - **delete** clears the credential from both backends, because tearing an
+//!   instance down must not leave a copy behind on the other side.
+//!
+//! Migration between backends is deliberately out of scope.
 
 use crate::DblError;
 use crate::error::Result;
@@ -17,7 +25,7 @@ use super::backend::{BackendKind, SecretBackend, unavailable};
 use super::file::FileBackend;
 use super::keyring::KeyringBackend;
 
-/// Routes secret operations to the keychain and falls back to the file store.
+/// Routes secret operations to the keychain and the file fallback.
 ///
 /// The type is generic so unit tests can inject fakes for both sides and force
 /// the keychain to report "unavailable" deterministically, without depending on
@@ -62,7 +70,8 @@ where
     ///
     /// Returns the backend that actually holds the secret. A successful
     /// keychain write never touches the file; a successful file fallback write
-    /// means the keychain was unavailable.
+    /// means the keychain was unavailable. The caller records the returned
+    /// backend with the instance, so later reads route back here.
     pub fn set(&self, reference: &CredentialRef, secret: &SecretString) -> Result<BackendKind> {
         match self.keyring.set(reference, secret) {
             Ok(()) => Ok(self.keyring.kind()),
@@ -78,92 +87,34 @@ where
         }
     }
 
-    /// Reads the secret stored for `reference`.
+    /// Reads the secret from the backend recorded on `reference`.
     ///
-    /// The keychain is tried first. If it reports "unavailable", the file
-    /// fallback is consulted. A `NotFound` from the keychain is not treated as
-    /// a reason to look in the file: each credential lives in exactly one
-    /// backend, recorded on the instance.
+    /// Routing is by [`CredentialRef::backend()`] and nothing else. If that
+    /// backend is unavailable (locked or absent keychain), its `Unsupported`
+    /// error is returned unchanged and the other backend is never consulted.
     pub fn get(&self, reference: &CredentialRef) -> Result<SecretString> {
-        match self.keyring.get(reference) {
-            Ok(secret) => Ok(secret),
-            Err(err) if should_fallback(&err) => {
-                tracing::info!(
-                    reference = %reference.key_ref(),
-                    "keychain unavailable, reading credential from the file fallback"
-                );
-                self.file.get(reference)
-            }
-            Err(err) => Err(err),
-        }
+        self.backend_for(reference.backend()).get(reference)
     }
 
-    /// Deletes the secret from the backend that holds it.
+    /// Removes the credential from both backends.
     ///
-    /// When the keychain is available this removes it there; when it is not,
-    /// the file fallback is tried instead. A `NotFound` means nothing was stored
-    /// in the consulted backend. To be safe during teardown (for example when
-    /// an instance is deleted after the keychain went away), callers that need
-    /// "remove from everywhere" should try the other backend too when the first
-    /// reports `NotFound`; the service layer owns that policy.
+    /// `F-CRD-01` AC3 requires the stored secret to disappear when an instance
+    /// is deleted, and the instance record may be stale or the backend may have
+    /// changed since the write. Removing from both is therefore unconditional;
+    /// a missing entry or an unavailable backend is not an error, but any real
+    /// failure (invalid key reference, I/O error) is reported.
     pub fn delete(&self, reference: &CredentialRef) -> Result<()> {
-        match self.keyring.delete(reference) {
-            Ok(()) => Ok(()),
-            Err(err) if should_fallback(&err) => {
-                tracing::info!(
-                    reference = %reference.key_ref(),
-                    "keychain unavailable, deleting credential from the file fallback"
-                );
-                self.file.delete(reference)
-            }
-            Err(err) => Err(err),
-        }
-    }
+        let keyring_result = self.keyring.delete(reference);
+        let file_result = self.file.delete(reference);
 
-    /// Deletes the credential from every backend, ignoring a missing entry.
-    ///
-    /// `F-CRD-01` AC3 requires the stored secret to be removed when an instance
-    /// is deleted. Because the instance record is the source of truth for which
-    /// backend was used, this is a convenience for callers that do not know (or
-    /// no longer trust) that record: it removes from the keychain when possible
-    /// and always attempts the file, returning success once neither holds the
-    /// secret.
-    pub fn delete_everywhere(&self, reference: &CredentialRef) -> Result<()> {
-        let keyring_result = match self.keyring.delete(reference) {
-            Ok(()) => Ok(()),
-            Err(DblError::NotFound { .. }) | Err(DblError::Unsupported { .. }) => Ok(()),
-            Err(err) => Err(err),
-        };
-        let file_result = match self.file.delete(reference) {
-            Ok(()) => Ok(()),
-            Err(DblError::NotFound { .. }) => Ok(()),
-            Err(err) => Err(err),
-        };
-
-        // Prefer the more specific keychain failure (a real secret error)
-        // over a file I/O failure, but never hide either.
+        // A real keychain failure takes precedence over a file failure, but
+        // neither may be hidden.
+        let keyring_result = absorbed(keyring_result);
+        let file_result = absorbed(file_result);
         match (keyring_result, file_result) {
             (Ok(()), Ok(())) => Ok(()),
             (Err(err), _) => Err(err),
             (Ok(()), Err(err)) => Err(err),
-        }
-    }
-
-    /// Reads the secret from the backend named by the instance record.
-    ///
-    /// When the recorded backend is unavailable the store falls back to the
-    /// other one, which keeps an instance readable after the keychain
-    /// disappears (for example on a headless login). The caller that needs to
-    /// persist a backend change after such a recovery is outside this module.
-    pub fn get_from(&self, kind: BackendKind, reference: &CredentialRef) -> Result<SecretString> {
-        let (primary, secondary): (&dyn SecretBackend, &dyn SecretBackend) = match kind {
-            CredentialBackend::Keychain => (&self.keyring, &self.file),
-            CredentialBackend::File => (&self.file, &self.keyring),
-        };
-        match primary.get(reference) {
-            Ok(secret) => Ok(secret),
-            Err(err) if should_fallback(&err) => secondary.get(reference),
-            Err(err) => Err(err),
         }
     }
 
@@ -176,19 +127,40 @@ where
     pub fn keyring_backend(&self) -> &K {
         &self.keyring
     }
+
+    /// The backend that owns `kind`, used to route a read.
+    fn backend_for(&self, kind: BackendKind) -> &dyn SecretBackend {
+        match kind {
+            CredentialBackend::Keychain => &self.keyring,
+            CredentialBackend::File => &self.file,
+        }
+    }
 }
 
 /// A `NotFound` is a real answer; an `Unsupported` keychain means "try the
-/// file". Every other error is returned to the caller unchanged.
+/// file" on write. Every other error is returned to the caller unchanged.
 fn should_fallback(err: &DblError) -> bool {
     matches!(err, DblError::Unsupported { .. })
+}
+
+/// Whether a delete outcome is a success for the purpose of "remove everywhere".
+///
+/// A credential that is already gone, or a backend that cannot be reached at
+/// all, leaves nothing behind; only a real failure is propagated.
+fn absorbed(result: Result<()>) -> Result<()> {
+    match result {
+        Ok(()) => Ok(()),
+        Err(DblError::NotFound { .. }) | Err(DblError::Unsupported { .. }) => Ok(()),
+        Err(err) => Err(err),
+    }
 }
 
 /// Builds a [`CredentialRef`] that follows the `dblocal:<instance-id>` key
 /// convention, pointing at the backend that actually stored the secret.
 ///
 /// This is the canonical way to produce the reference recorded in
-/// `InstanceView.credential_backend` and in the instance row.
+/// `InstanceView.credential_backend` and in the instance row. After a `set`,
+/// pass the returned backend here so the next `get` routes to the same place.
 pub fn credential_ref_for(
     instance_id: &crate::model::InstanceId,
     backend: BackendKind,
