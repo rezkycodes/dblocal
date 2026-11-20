@@ -127,6 +127,24 @@ pub enum ServiceEvent {
         /// Outcome, carrying a stable code and an optional start diagnosis.
         result: Result<(), UserFacingError>,
     },
+    /// An instance no longer exists: deleted, rolled back after a failed
+    /// create, or cleaned up after an interrupted create.
+    ///
+    /// `InstanceChanged` cannot carry this (there is no view left), so without
+    /// it a consumer keeps showing a row that is gone. Consumers drop the row
+    /// and any tab or log watcher for `id`.
+    InstanceRemoved {
+        /// The instance that is gone.
+        id: InstanceId,
+    },
+    /// A stop had to escalate to a forced kill because the engine ignored the
+    /// graceful shutdown within the grace period (PRD `F-INS-03` AC3: the user
+    /// is told it was a forced stop). Emitted once, before the final
+    /// `InstanceChanged` that carries the `Stopped` view.
+    StopForced {
+        /// The instance that was force-killed.
+        id: InstanceId,
+    },
     /// The catalog was refreshed or its freshness changed.
     CatalogUpdated {
         /// Freshness of the snapshot now in use.
