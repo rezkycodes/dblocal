@@ -1199,7 +1199,9 @@ pub fn run() {
     eprintln!("STARTUP_BEGIN_MS=0.00");
 
     let (event_tx, event_rx): (Sender<UiEvent>, Receiver<UiEvent>) = flume::unbounded();
-    progress::spawn_fake_download(event_tx.clone());
+    if let Err(err) = progress::spawn_fake_download(event_tx.clone()) {
+        tracing::warn!("simulated download thread did not start: {err}");
+    }
 
     let tray_snapshot = tray::start_tray(event_tx.clone());
     eprintln!(
@@ -1250,24 +1252,43 @@ pub fn run() {
 
             let tray_note_view = tray_note.clone();
             let mailbox_view = mailbox.clone();
-            let window_handle = cx
-                .open_window(options, move |window, cx| {
-                    let view = cx.new(|cx| {
-                        AppState::new(tray_note_view, tray_available, started_at, mailbox_view, cx)
-                    });
-                    cx.new(|cx| Root::new(view, window, cx))
-                })
-                .expect("failed to open window");
+            let window_handle = match cx.open_window(options, move |window, cx| {
+                let view = cx.new(|cx| {
+                    AppState::new(tray_note_view, tray_available, started_at, mailbox_view, cx)
+                });
+                cx.new(|cx| Root::new(view, window, cx))
+            }) {
+                Ok(handle) => handle,
+                Err(err) => {
+                    // A failure here is a surface/window-system problem, not a
+                    // recoverable UI state: report it and exit non-zero rather
+                    // than panicking inside the GPUI callback.
+                    tracing::error!("failed to open the main window: {err:#}");
+                    eprintln!("DBLocal could not open its window: {err:#}");
+                    cx.quit();
+                    return;
+                }
+            };
 
             // Retrieve the actual AppState entity for the pump.
-            let view_entity: Entity<AppState> = window_handle
+            let view_entity: Entity<AppState> = match window_handle
                 .update(cx, |root, _window, _cx| {
-                    root.view()
-                        .clone()
-                        .downcast::<AppState>()
-                        .expect("root view is AppState")
-                })
-                .expect("window");
+                    root.view().clone().downcast::<AppState>()
+                }) {
+                Ok(updated) => match updated {
+                    Ok(entity) => entity,
+                    Err(_) => {
+                        tracing::error!("root view was not an AppState; the event pump is off");
+                        cx.quit();
+                        return;
+                    }
+                },
+                Err(err) => {
+                    tracing::error!("the window closed before the pump started: {err:#}");
+                    cx.quit();
+                    return;
+                }
+            };
 
             // F-TRY-02: minimize instead of close when tray is available.
             if tray_available {

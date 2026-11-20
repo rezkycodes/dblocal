@@ -151,6 +151,7 @@ Measured by embedding faces with `include_bytes!` + `black_box` in a stripped `-
 ## 7. Gaps and what remains unverified
 
 - **Idle RSS 176 MB > 150 MB target** — not profiled; likely wgpu/gpui baseline + pump. Needs allocation/render profiling.
+- **`panic!`/`unwrap`/`expect` audit** — none remain outside `#[cfg(test)]`; the download thread spawn, the ksni park thread, window creation and root downcast all now log and degrade instead of aborting.
 - **Windows and macOS runtime** — neither tray nor window behaviour run here; tray event-loop integration and native window controls are reasoned only (**untested**).
 - **X11 runtime** — feature compiles (`cargo check --features x11`) but cannot be linked/run on this host without `libxkbcommon-x11-devel` (only `libxkbcommon-x11.so.0` present). Wayland CSD fallback is observed; native X11 decorations not exercised.
 - **Full dock framework** (`dock::DockArea`) — spike uses an explicit flex layout; adopting gpui-component's dock/panel traits is a follow-up once panel types are defined.
@@ -186,14 +187,14 @@ Coverage (`cargo llvm-cov --summary-only`):
 
 | File | Lines | Line coverage |
 |---|---:|---:|
-| `app.rs` | 1096 | 65.4% |
+| `app.rs` | 1107 | 64.8% |
 | `contrast.rs` | 314 | 96.5% |
 | `progress.rs` | 48 | 93.8% |
 | `theme.rs` | 97 | 95.9% |
-| `tray.rs` | 183 | 93.4% |
+| `tray.rs` | 184 | 92.9% |
 | `vulkan.rs` | 173 | 75.7% |
 | `main.rs` | 15 | 0% (process entry; exercised only by a real run) |
-| **Total** | **1926** | **75.8%** |
+| **Total** | **1938** | **75.3%** |
 
 The 80% floor from the contract is not met overall because `main.rs` is a process entry point and
 `app.rs` keeps a large amount of pure layout code that only a real frame exercises. The modules with

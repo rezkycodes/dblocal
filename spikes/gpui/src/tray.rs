@@ -78,7 +78,10 @@ fn start_ksni(event_tx: Sender<UiEvent>) -> TraySnapshot {
         Ok(handle) => {
             // Keep handle alive for the process lifetime in a detached thread so the
             // tray stays registered even though we don't hold it in the caller.
-            std::thread::Builder::new()
+            // A failure to spawn the park thread only means the handle is
+            // dropped here, which unregisters the tray. Log it and continue:
+            // the window fallback still leaves the app fully usable.
+            if let Err(err) = std::thread::Builder::new()
                 .name("ksni-handle".to_string())
                 .spawn(move || {
                     // Park forever; dropping would unregister the tray.
@@ -87,7 +90,9 @@ fn start_ksni(event_tx: Sender<UiEvent>) -> TraySnapshot {
                         std::thread::park();
                     }
                 })
-                .expect("failed to park ksni handle thread");
+            {
+                tracing::warn!("failed to park ksni handle thread: {err}");
+            }
 
             let mut note = format!(
                 "Linux tray registered via ksni (StatusNotifierItem/D-Bus). \
