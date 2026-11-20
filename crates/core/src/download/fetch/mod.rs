@@ -13,10 +13,6 @@ use crate::model::DownloadProgress;
 use crate::paths::DblPaths;
 use crate::{DblError, Result};
 
-/// Directory name under the DBLocal root that holds `.part` downloads. The
-/// layout lives in `consts` and `DblPaths::downloads_dir`.
-pub const DOWNLOADS_DIR_NAME: &str = crate::consts::DIR_DOWNLOADS;
-
 /// Maximum number of HTTP redirects followed for a download.
 pub const MAX_REDIRECTS: usize = 5;
 /// Maximum retry attempts for transient network failures (in addition to the

@@ -73,7 +73,7 @@ fn downloads_dir_and_part_path_are_deterministic() {
     let paths = DblPaths::with_root(Path::new("/tmp/dblocal-root"));
     assert_eq!(
         super::super::fetch::downloads_dir(&paths),
-        Path::new("/tmp/dblocal-root").join(super::super::fetch::DOWNLOADS_DIR_NAME)
+        Path::new("/tmp/dblocal-root").join(crate::consts::DIR_DOWNLOADS)
     );
     let artifact = https_artifact();
     assert_eq!(
