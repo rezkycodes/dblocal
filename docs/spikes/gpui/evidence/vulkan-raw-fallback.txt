@@ -1,0 +1,24 @@
+# A) Missing Vulkan ICD, preflight bypassed (raw GPUI behaviour)
+# cmd: env VK_DRIVER_FILES=/nonexistent VK_ICD_FILENAMES=/nonexistent DBLOCAL_SPIKE_SKIP_PREFLIGHT=1 /home/rezkycodes/.cache/dblocal-target-gui/release/gpui-spike
+# exit follows:
+EXIT=124
+--- stdout (stripped) ---
+2026-11-20T13:09:41.137373Z  WARN Failed to load a font face 0 from '/home/rezkycodes/.local/share/fonts/SegoeUIHistoric.ttf' cause malformed font.
+2026-11-20T13:09:41.163581Z  INFO Compositor GPU hint: vendor=0x1002, device=0x1636 (from dev 226:128)
+2026-11-20T13:09:41.166276Z  WARN failed to load font Font { family: ".SystemUIFont", features: FontFeatures, fallbacks: None, weight: FontWeight(400.0), style: Normal }: requested font family contains no font matching the other parameters: no font found
+2026-11-20T13:09:41.166316Z  INFO UI font ".SystemUIFont" resolves to "Segoe UI", naming it on the theme.
+2026-11-20T13:09:41.166325Z  WARN Monospace font "DejaVu Sans Mono" is not installed, using "Noto Sans Mono" instead.
+2026-11-20T13:09:41.253956Z  INFO Found 1 GPU adapter(s):
+2026-11-20T13:09:41.253984Z  INFO   - AMD Radeon Graphics (radeonsi, renoir, ACO, DRM 3.64, 7.3.0-cachyos1.fc44.x86_64) (vendor=0x1002, device=0x0000, backend=Gl, type=Other)
+2026-11-20T13:09:41.253992Z  INFO Testing adapter: AMD Radeon Graphics (radeonsi, renoir, ACO, DRM 3.64, 7.3.0-cachyos1.fc44.x86_64) (Gl)...
+2026-11-20T13:09:41.296009Z  INFO Selected GPU (passed configuration test): AMD Radeon Graphics (radeonsi, renoir, ACO, DRM 3.64, 7.3.0-cachyos1.fc44.x86_64) (Gl)
+2026-11-20T13:09:41.296037Z  INFO Selected GPU adapter: "AMD Radeon Graphics (radeonsi, renoir, ACO, DRM 3.64, 7.3.0-cachyos1.fc44.x86_64)" (Gl)
+2026-11-20T13:09:41.315654Z  INFO Server-side decorations requested, but the Wayland server does not support them. Falling back to client-side decorations.
+2026-11-20T13:09:41.317940Z  INFO Accessibility activated
+2026-11-20T13:09:41.338614Z  INFO activate is not implemented on Linux, ignoring the call
+--- stderr ---
+PREFLIGHT skipped (DBLOCAL_SPIKE_SKIP_PREFLIGHT set)
+STARTUP_BEGIN_MS=0.00
+TRAY backend=ksni 0.3 (StatusNotifierItem, no GTK) available=true note=Linux tray registered via ksni (StatusNotifierItem/D-Bus). Desktop=GNOME, session=wayland. StatusNotifierWatcher present=true. GNOME Shell does not show SNI items without an AppIndicator/KStatusNotifier extension (e.g. appindicatorsupport@rgcjonas.gmail.com).
+FIRST_FRAME_MS=229.17
+WINDOW_OPEN_DISPATCHED_MS=252.00

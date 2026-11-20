@@ -1,0 +1,47 @@
+[workspace]
+
+[package]
+name = "gpui-spike"
+version = "0.1.0"
+edition = "2024"
+publish = false
+license = "GPL-3.0-only"
+default-run = "gpui-spike"
+
+[features]
+default = []
+# X11 backend additionally needs the libxkbcommon-x11 development package
+# (Fedora: libxkbcommon-x11-devel). Not installed on the spike machine.
+# Enable with: cargo build --features x11
+x11 = ["gpui-platform/x11"]
+
+[dependencies]
+gpui = { package = "gpui-pre", version = "=0.3.12" }
+gpui-component = "=0.10.0"
+gpui-kit-assets = "0.10.0"
+anyhow = "1"
+flume = "0.11"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies]
+wgpu = { version = "30", default-features = true }
+gpui-platform = { package = "gpui-pre-platform", version = "=0.3.12", default-features = false, features = ["wayland"] }
+ksni = { version = "0.3", default-features = false, features = ["blocking", "async-io"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+gpui-platform = { package = "gpui-pre-platform", version = "=0.3.12", default-features = false, features = ["font-kit"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+gpui-platform = { package = "gpui-pre-platform", version = "=0.3.12", default-features = false }
+
+[dev-dependencies]
+gpui = { package = "gpui-pre", version = "=0.3.12", features = ["test-support"] }
+gpui-platform = { package = "gpui-pre-platform", version = "=0.3.12", default-features = false, features = ["wayland", "test-support"] }
+gpui-component = { version = "=0.10.0", features = ["test-support"] }
+image = "0.25"
+
+[profile.release]
+strip = true
+lto = "thin"
+codegen-units = 1

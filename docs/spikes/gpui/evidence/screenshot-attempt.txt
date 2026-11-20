@@ -1,0 +1,17 @@
+# Transparent screenshot attempt and programmatic frame proof
+
+## 1. Screenshot tools present?
+grim               (not installed)
+spectacle          (not installed)
+gnome-screenshot   (not installed)
+scrot              (not installed)
+maim               (not installed)
+flameshot          (not installed)
+wf-recorder        (not installed)
+
+## 2. GNOME Shell screenshot over D-Bus
+Error org.freedesktop.DBus.Error.AccessDenied: Screenshot is not allowed
+
+## 3. X11 root capture via ImageMagick import (DISPLAY=:0)
+import: missing an image filename `/tmp/root.png' @ error/import.c/ImportImageCommand/1291.
+ls: cannot access '/tmp/root.png': No such file or directory

@@ -1,0 +1,14 @@
+# Idle RSS and CPU (release, Wayland, measured on the real app PID)
+# simulated download finishes at ~4.2 s, so t+20 s is fully idle
+t+20s: 174776 3.5 41
+t+23s: 174776 3.1 41
+t+26s: 174796 2.8 41
+t+29s: 174796 2.6 41
+t+32s: 174796 2.4 41
+--- /proc/388884/status ---
+VmHWM:	  174796 kB
+VmRSS:	  174796 kB
+Threads:	41
+--- cumulative cpu ticks (utime+stime) and elapsed since start ---
+cpu_ticks=78
+start_ticks=25569848
