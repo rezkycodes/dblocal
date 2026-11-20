@@ -1,0 +1,134 @@
+# deny.toml — cargo-deny policy for DBLocal
+#
+# Status: WRITTEN WITHOUT A CARGO WORKSPACE PRESENT (Wave 0, W0-D).
+# `cargo deny check` cannot run end-to-end against DBLocal until `Cargo.lock`
+# exists (created by W0-A skeleton). The config schema/semantics were validated
+# locally in a throwaway workspace (`cargo deny check -A license-not-encountered
+# licenses bans sources advisories` -> ok). Treat this file as policy-complete
+# but UNVERIFIED against the real dependency graph; re-run as soon as the
+# workspace lands.
+#
+# Open question (report): ring/aws-lc crypto licence posture for a GPL-3.0-only
+# binary. See "Crypto licence note" below and the worker report.
+
+[graph]
+targets = [
+    "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu",
+    "x86_64-apple-darwin",
+    "aarch64-apple-darwin",
+    "x86_64-pc-windows-msvc",
+]
+all-features = false
+no-default-features = false
+
+[output]
+feature-depth = 1
+
+# ---------------------------------------------------------------------------
+# Advisories — fail on vulnerabilities (RustSec).
+# ---------------------------------------------------------------------------
+[advisories]
+version = 2
+# db-path / db-urls default to the RustSec advisory-db. No ignores here:
+# a GPL-distributed binary must not ship with known vulnerabilities. Any
+# future ignore must be a single entry with an explicit reason and a tracking
+# issue, added only when no fixed version exists.
+ignore = []
+
+# ---------------------------------------------------------------------------
+# Licences — allowlist limited to GPL-3.0-compatible licences.
+# The OpenSSL licence is NOT allowed. DBLocal is GPL-3.0-only (D-05).
+# ---------------------------------------------------------------------------
+[licenses]
+version = 2
+confidence-threshold = 0.93
+# "license-not-encountered" fires when an allowlisted SPDX ID doesn't appear in
+# the resolved graph. The allowlist here is an intentional policy set for the
+# full DBLocal dependency graph (once W0-A lands), so allow this lint rather
+# than dropping licences from policy.
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-3.0",
+    "Zlib",
+    "MPL-2.0",
+    "CC0-1.0",
+    "0BSD",
+    "BSL-1.0",
+    "Unlicense",
+    "GPL-3.0-only",
+    "GPL-3.0-or-later",
+    "LGPL-3.0-or-later",
+]
+# No per-crate licence exceptions. If a dependency needs one, document why in
+# this file and in the report rather than silently exempting it.
+exceptions = []
+
+[licenses.private]
+# Workspace crates will be unpublished/private during early development;
+# ignore them so licence checks focus on third-party dependencies.
+ignore = true
+registries = []
+
+# ---------------------------------------------------------------------------
+# Crypto licence note (UNRESOLVED — see report for full analysis/recommendation)
+# ---------------------------------------------------------------------------
+# DBLocal is GPL-3.0-only and uses reqwest + rustls (AGENTS/PRD: rustls only).
+# The default rustls crypto providers historically came from *ring* and/or
+# aws-lc-sys, both derived from BoringSSL (forked from pre-Apache OpenSSL).
+#
+# Current published crates (checked 2026-11-20, crates.io):
+#   ring       0.17.14 -> "Apache-2.0 AND ISC" (OpenSSL-licensed code removed;
+#                         BoringSSL relicensed to Apache-2.0, ring#1827 closed
+#                         2025-02). No "OpenSSL" licence text in the crate.
+#   aws-lc-sys 0.47.0  -> "ISC AND (Apache-2.0 OR ISC) AND Apache-2.0 AND MIT
+#                         AND BSD-3-Clause AND ..." (no OpenSSL licence).
+#   rustls     0.23.46 -> "Apache-2.0 OR ISC OR MIT"; crypto provider is
+#                         feature-selected (ring / aws-lc-rs).
+#
+# Because neither crate currently declares the OpenSSL licence, they do not
+# fail the allowlist as stated. However, the chain is derived from code that
+# was under the old OpenSSL/SSLeay licence (GPL-incompatible), and the
+# dependency graph/provider choice is not fixed until W0-A creates Cargo.lock.
+# This is therefore treated as an OPEN QUESTION, not "resolved": once the
+# workspace exists, `cargo deny check licenses` must be reviewed to confirm
+# no OpenSSL-licenced file remains in the resolved dependency tree, and the
+# chosen rustls provider should be pinned intentionally (see report
+# recommendation).
+#
+# Do NOT add "OpenSSL" to the allowlist.
+
+# ---------------------------------------------------------------------------
+# Bans — deny OpenSSL/native-tls stacks (rustls only, per AGENTS/PRD).
+# ---------------------------------------------------------------------------
+[bans]
+multiple-versions = "warn"
+wildcards = "warn"
+highlight = "all"
+workspace-default-features = "allow"
+external-default-features = "allow"
+
+# If a banned crate appears, the build must fail. Use `wrappers = [...]` only
+# with a documented, reviewed justification — none expected here.
+deny = [
+    { crate = "openssl", reason = "DBLocal requires rustls-only TLS; OpenSSL linkage is forbidden." },
+    { crate = "openssl-sys", reason = "DBLocal requires rustls-only TLS; OpenSSL linkage is forbidden." },
+    { crate = "native-tls", reason = "DBLocal requires rustls-only TLS; native-tls may pull in platform/OpenSSL TLS." },
+]
+
+skip = []
+skip-tree = []
+
+# ---------------------------------------------------------------------------
+# Sources — crates.io only. No git deps, no unknown registries.
+# ---------------------------------------------------------------------------
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

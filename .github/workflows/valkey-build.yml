@@ -1,0 +1,170 @@
+# UNVERIFIED until run on GitHub.
+# Implements F-SPK-02: build Valkey from source with CMake on Windows and both
+# macOS architectures, smoke-test `PING` -> `PONG` against a real server, then
+# upload the produced binaries for inspection.
+#
+# Nothing in this workflow has executed in GitHub Actions. The things most likely
+# to need adjustment on the first real run:
+#   * whether CMake produces the binaries at the paths the `locate` step guesses,
+#   * whether `valkey-cli` is built by default on Windows,
+#   * build time and whether the CMake cache generator needs `-G Ninja`.
+# See docs/spikes/valkey-build.md for the checklist.
+name: Valkey build (spike)
+
+on:
+  workflow_dispatch:
+    inputs:
+      valkey_tag:
+        description: "Valkey git tag to build (pinned ref, e.g. 8.1.6 or 9.0.3)"
+        required: true
+        type: string
+        default: "8.1.6"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build Valkey (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # The task brief asked for windows-latest, macos-14 and an Intel macOS
+        # runner. macos-14 was fully retired on 2026-11-02
+        # (actions/runner-images#13518, verified 2026-11-20). Replacements:
+        # macos-15 (arm64) and macos-15-intel (x86_64).
+        os:
+          - windows-latest
+          - macos-15
+          - macos-15-intel
+
+    steps:
+      - name: Checkout Valkey source at pinned tag
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: valkey-io/valkey
+          ref: ${{ inputs.valkey_tag }}
+          path: valkey-src
+
+      - name: Configure (CMake)
+        shell: bash
+        working-directory: valkey-src
+        run: |
+          set -euo pipefail
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        shell: bash
+        working-directory: valkey-src
+        run: |
+          set -euo pipefail
+          cmake --build build --config Release --parallel
+
+      - name: Locate server and CLI binaries
+        id: locate
+        shell: bash
+        working-directory: valkey-src
+        run: |
+          set -euo pipefail
+          # Best-effort search. Windows multi-config generators typically write to
+          # build/Release; Unix generators usually build/src. Verify on first run.
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            server="$(find build -type f \( -name 'valkey-server.exe' -o -name 'redis-server.exe' \) | head -n 1 || true)"
+            cli="$(find build -type f \( -name 'valkey-cli.exe' -o -name 'redis-cli.exe' \) | head -n 1 || true)"
+          else
+            server="$(find build -type f \( -name 'valkey-server' -o -name 'redis-server' \) -perm -111 | head -n 1 || true)"
+            cli="$(find build -type f \( -name 'valkey-cli' -o -name 'redis-cli' \) -perm -111 | head -n 1 || true)"
+          fi
+          if [[ -z "${server}" || -z "${cli}" ]]; then
+            echo "Could not locate valkey-server/valkey-cli under build/." >&2
+            find build -maxdepth 4 -type f >&2 || true
+            exit 1
+          fi
+          echo "server=${server}" >> "$GITHUB_OUTPUT"
+          echo "cli=${cli}" >> "$GITHUB_OUTPUT"
+          echo "Server: ${server}"
+          echo "CLI:    ${cli}"
+
+      - name: Smoke test PING -> PONG
+        shell: bash
+        working-directory: valkey-src
+        env:
+          SERVER: ${{ steps.locate.outputs.server }}
+          CLI: ${{ steps.locate.outputs.cli }}
+        run: |
+          set -euo pipefail
+          port=46379
+          data_dir="$(mktemp -d)"
+          server_pid=""
+
+          cleanup() {
+            set +e
+            "$CLI" -h 127.0.0.1 -p "$port" shutdown nosave >/dev/null 2>&1 || true
+            if [[ -n "$server_pid" ]]; then
+              kill "$server_pid" >/dev/null 2>&1 || true
+              wait "$server_pid" >/dev/null 2>&1 || true
+            fi
+            rm -rf "$data_dir"
+          }
+          trap cleanup EXIT
+
+          "$SERVER" --port "$port" --bind 127.0.0.1 --dir "$data_dir" \
+            --save "" --appendonly no --daemonize no &
+          server_pid=$!
+
+          ready=0
+          for _ in $(seq 1 30); do
+            if "$CLI" -h 127.0.0.1 -p "$port" ping 2>/dev/null | grep -q PONG; then
+              ready=1
+              break
+            fi
+            sleep 1
+          done
+          if [[ "$ready" -ne 1 ]]; then
+            echo "valkey-server did not answer PING within timeout" >&2
+            exit 1
+          fi
+
+          reply="$("$CLI" -h 127.0.0.1 -p "$port" ping)"
+          echo "PING reply: ${reply}"
+          test "$reply" = "PONG"
+
+          "$CLI" -h 127.0.0.1 -p "$port" shutdown nosave
+          for _ in $(seq 1 20); do
+            if ! kill -0 "$server_pid" 2>/dev/null; then
+              server_pid=""
+              break
+            fi
+            sleep 1
+          done
+          if [[ -n "$server_pid" ]]; then
+            echo "Server did not exit cleanly after SHUTDOWN; forcing." >&2
+            kill "$server_pid" 2>/dev/null || true
+            wait "$server_pid" 2>/dev/null || true
+            server_pid=""
+          fi
+
+      - name: Collect artifacts
+        shell: bash
+        working-directory: valkey-src
+        env:
+          SERVER: ${{ steps.locate.outputs.server }}
+          CLI: ${{ steps.locate.outputs.cli }}
+          TAG: ${{ inputs.valkey_tag }}
+        run: |
+          set -euo pipefail
+          out="../valkey-out"
+          mkdir -p "$out"
+          cp "$SERVER" "$out/"
+          cp "$CLI" "$out/"
+          printf '%s\n' "$TAG" > "$out/VALKEY_TAG"
+          printf '%s %s\n' "$RUNNER_OS" "$RUNNER_ARCH" > "$out/BUILD_PLATFORM"
+          ls -la "$out"
+
+      - name: Upload Valkey binaries
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: valkey-${{ inputs.valkey_tag }}-${{ matrix.os }}
+          path: valkey-out/
+          if-no-files-found: error
