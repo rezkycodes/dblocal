@@ -1,9 +1,11 @@
 //! DBLocal GPUI spike library.
 //!
-//! The window, tray, progress and Vulkan-preflight modules live here so that both the
-//! `gpui-spike` binary and the off-screen screenshot test can use them.
+//! Zed-style workspace prototype: gpui + gpui-component shell with tray integration,
+//! Vulkan preflight, and contrast-checked One Dark / One Light themes.
 
 pub mod app;
+pub mod contrast;
 pub mod progress;
+pub mod theme;
 pub mod tray;
 pub mod vulkan;
