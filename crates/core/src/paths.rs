@@ -55,6 +55,12 @@ impl DblPaths {
         self.root.join(consts::DIR_RUNTIMES)
     }
 
+    /// Directory holding in-flight `.part` downloads, on the same filesystem as
+    /// the runtimes so disk accounting stays predictable.
+    pub fn downloads_dir(&self) -> PathBuf {
+        self.root.join(consts::DIR_DOWNLOADS)
+    }
+
     /// Directory holding one runtime: `runtimes/<engine>/<version>/<arch>/`.
     pub fn runtime_dir(&self, engine: EngineKey, version: &str, arch: Arch) -> Result<PathBuf> {
         self.checked_join(&[
@@ -218,8 +224,11 @@ mod tests {
         let instance = name("my-db");
         let root = dir.path();
 
+        assert_eq!(paths.downloads_dir(), root.join("downloads"));
+
         let locations = vec![
             paths.runtimes_dir(),
+            paths.downloads_dir(),
             paths
                 .runtime_dir(EngineKey::Postgresql, "18.7", Arch::X86_64)
                 .expect("ok"),

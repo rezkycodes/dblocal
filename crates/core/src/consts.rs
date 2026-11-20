@@ -26,6 +26,10 @@ pub const STOP_GRACE_SECS: u64 = 20;
 pub const STATUS_POLL_SECS: u64 = 2;
 /// How long a cached catalog snapshot stays fresh.
 pub const CATALOG_TTL_HOURS: u64 = 24;
+/// Largest catalog body accepted from the refresh source, in bytes (4 MiB).
+pub const CATALOG_MAX_BODY_BYTES: u64 = 4 * 1024 * 1024;
+/// Busy timeout applied to every state-database connection, in milliseconds.
+pub const STORE_BUSY_TIMEOUT_MS: u32 = 5_000;
 
 /// Maximum size of a single instance log file before it is rotated.
 pub const LOG_MAX_BYTES: u64 = 10 * 1024 * 1024;
@@ -50,6 +54,8 @@ pub const APP_LOG_FILE: &str = "app.log";
 
 /// Sub-directory holding installed engine runtimes.
 pub const DIR_RUNTIMES: &str = "runtimes";
+/// Sub-directory holding in-flight `.part` downloads.
+pub const DIR_DOWNLOADS: &str = "downloads";
 /// Sub-directory holding instances.
 pub const DIR_INSTANCES: &str = "instances";
 /// Sub-directory holding archived data directories.
