@@ -1,16 +1,17 @@
 //! TCP bind probing for port availability (`F-PRT-02`).
 //!
 //! The probe performs a **real** bind on loopback only — `127.0.0.1` and, when
-//! the host can bind it, `::1` — with default socket options. It never sets
-//! `SO_REUSEADDR`: the PRD edge cases and W0-B both note that reuse makes a bind
-//! succeed while another listener owns the port, which would defeat the check.
-//! On Windows the standard library's listener already uses `SO_EXCLUSIVEADDRUSE`
-//! semantics.
+//! the host can bind it, `::1` — with **no** `SO_REUSEADDR`. Reuse lets a bind
+//! succeed while another listener owns the port (PRD `F-PRT` edge case, W0-B),
+//! which would defeat the check. The socket is closed before returning
+//! (`F-PRT-02` AC3) so the engine can bind immediately afterwards.
 //!
-//! The probe socket is closed before returning (`F-PRT-02` AC3) so the engine can
-//! bind immediately afterwards without racing us.
+//! Implementation note: `std::net::TcpListener::bind` sets `SO_REUSEADDR` on
+//! Unix. To avoid it we construct the socket through `tokio::net::TcpSocket`
+//! (which wraps `socket2` and never sets reuse unless asked) and bind it
+//! directly. `tokio` is already a core dependency.
 
-use std::net::{Ipv4Addr, Ipv6Addr, SocketAddrV4, SocketAddrV6, TcpListener};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 
 use crate::error::Result;
 use crate::model::Port;
@@ -65,7 +66,7 @@ impl BindReport {
 pub fn probe_bind(port: Port) -> Result<BindReport> {
     let number = port.get();
 
-    match bind_v4(number) {
+    match bind_addr(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), number)) {
         Ok(()) => {}
         Err(err) if is_addr_in_use(&err) => {
             return Ok(BindReport::new(
@@ -78,7 +79,7 @@ pub fn probe_bind(port: Port) -> Result<BindReport> {
         Err(err) => return Err(err.into()),
     }
 
-    match bind_v6(number) {
+    match bind_addr(SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), number)) {
         Ok(()) => Ok(BindReport::new(port, BindStatus::Free)),
         Err(err) if is_addr_in_use(&err) => Ok(BindReport::new(
             port,
@@ -108,15 +109,15 @@ pub fn probe_or_in_use(port: Port) -> BindReport {
     })
 }
 
-fn bind_v4(port: u16) -> std::io::Result<()> {
-    let listener = TcpListener::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, port))?;
-    drop(listener);
-    Ok(())
-}
-
-fn bind_v6(port: u16) -> std::io::Result<()> {
-    let listener = TcpListener::bind(SocketAddrV6::new(Ipv6Addr::LOCALHOST, port, 0, 0))?;
-    drop(listener);
+/// Creates a socket, binds it with default options (no reuse), then closes it.
+fn bind_addr(addr: SocketAddr) -> std::io::Result<()> {
+    let socket = match addr {
+        SocketAddr::V4(_) => tokio::net::TcpSocket::new_v4()?,
+        SocketAddr::V6(_) => tokio::net::TcpSocket::new_v6()?,
+    };
+    socket.bind(addr)?;
+    // Dropping the socket closes it immediately.
+    drop(socket);
     Ok(())
 }
 
@@ -134,6 +135,7 @@ fn is_no_ipv6(err: &std::io::Error) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::net::TcpListener;
 
     fn ephemeral() -> (TcpListener, Port) {
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("ephemeral bind");
@@ -219,8 +221,6 @@ mod tests {
         let port = listener.local_addr().expect("addr").port();
         let port = Port::new(port).expect("valid port");
         let report = probe_bind(port).expect("probe");
-        // Either v6 is exclusive and we see InUse, or the v4 probe already
-        // failed first — in both cases the port must not be reported free.
         assert!(!report.is_free(), "a v6 listener must not read as free");
         drop(listener);
         assert!(probe_bind(port).expect("probe").is_free());
@@ -228,8 +228,6 @@ mod tests {
 
     #[test]
     fn privileged_ports_cannot_even_be_constructed() {
-        // `Port` validates at the boundary, so the probe can never be asked to
-        // test a privileged port (PRD `F-PRT` edge case).
         assert!(Port::new(80).is_err());
         assert!(Port::new(1023).is_err());
     }
