@@ -108,3 +108,12 @@ service/view.rs                    91                 0   100.00%           6   
 -----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 TOTAL                            3005               120    96.01%         312                19    93.91%        2181                95    95.64%           0                 0         -
 ```
+
+## Round 2 (M5: trim `zip` features)
+
+- **Change:** `zip = "9"` -> `zip = { version = "9", default-features = false, features = ["deflate"] }` (root `Cargo.toml`). We only read ordinary deflate zip archives and extraction is on untrusted input, so extra codecs were dropped.
+- **Dependency tree size:** `cargo tree --workspace | wc -l` **612 -> 577** (delta **-35**).
+- **Removed crates (19, from `Cargo.lock`):** `aes`, `bzip2`, `cipher`, `cpubits`, `deflate64`, `deranged`, `inout`, `libbz2-rs-sys`, `lzma-rust2`, `num-conv`, `pbkdf2`, `powerfmt`, `ppmd-rust`, `sha1`, `time`, `time-core`, `zstd`, `zstd-safe`, `zstd-sys`. None added.
+- **Verification:** `cargo tree --workspace -i libbz2-rs-sys` reports nothing (exit 1, no match); `grep -cE 'name = "(libbz2-rs-sys|bzip2)"' Cargo.lock` prints `0`.
+- **Nit:** `SecretString` (crates/core/src/secret.rs) gained a doc note that `==`/`PartialEq` must not be used to compare secrets from untrusted input (derived comparison is not constant-time); existing behavior/tests unchanged.
+- **Not done:** `.commandcode/` left uncommitted (ignored on `main`). `deny.toml` is not present in this worktree, so `cargo deny check licenses bans` was not re-run here; the targeted licence source (`libbz2-rs-sys`/`bzip2`) is removed from the lock.
