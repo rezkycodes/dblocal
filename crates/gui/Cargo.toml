@@ -5,25 +5,31 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
+[features]
+default = []
+demo = ["dblocal-core/mock"]
+
 [dependencies]
-# W1 only: the GUI runs against the in-memory mock. W2-B must drop this feature
-# from the production build and reach `LocalService` through `run_with_service`;
-# see docs/architecture/gui.md ("Wave 2 seam").
-dblocal-core = { workspace = true, features = ["mock"] }
+dblocal-core = { workspace = true }
 gpui-kit = { workspace = true }
 flume = { version = "0.11", default-features = false, features = ["async"] }
 tracing = { workspace = true }
-tracing-subscriber = { workspace = true }
+tracing-subscriber = { workspace = true, features = ["env-filter", "fmt"] }
 serde_json = { workspace = true }
 tokio = { workspace = true }
 anyhow = { workspace = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+ksni = { version = "0.3", default-features = false, features = ["blocking", "async-io"] }
 
 [target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies]
 wgpu = { version = "30.0.1", default-features = true }
 
 [dev-dependencies]
+dblocal-core = { workspace = true, features = ["mock"] }
 gpui-kit = { workspace = true, features = ["test-support"] }
 image = "0.25"
+
 
 [lints]
 workspace = true

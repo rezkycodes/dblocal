@@ -79,11 +79,24 @@ pub(super) fn render(workspace: &Workspace, cx: &mut Context<Workspace>) -> impl
                 ))),
         )
         .child(Label::new(platform))
+        .when(workspace.pending(), |this| {
+            this.child(
+                Label::new(strings::UI_PENDING)
+                    .text_xs()
+                    .px_2()
+                    .rounded_full()
+                    .bg(crate::theme::tokens::tint(theme.warning, 0.20))
+                    .text_color(theme.warning),
+            )
+        })
         .child(Label::new(if workspace.tray_available() {
             strings::UI_TRAY_ACTIVE
         } else {
             strings::UI_TRAY_UNAVAILABLE
         }))
+        .when_some(workspace.tray_note(), |this, note| {
+            this.child(Label::new(note).text_xs().text_color(theme.warning))
+        })
         .child(downloads_popover(workspace, &theme, cx))
         .when_some(workspace.toast_text(), |this, toast| {
             this.child(

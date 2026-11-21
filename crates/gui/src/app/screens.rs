@@ -123,7 +123,7 @@ impl Workspace {
                             .hover(|s| s.text_color(theme.foreground))
                     })
                     .on_click(cx.listener(move |this, _, _, cx| {
-                        this.select_tab(index);
+                        this.select_tab(index, cx);
                         cx.notify();
                     }))
                     .child(status_glyph(status, 8.0, theme))
@@ -245,9 +245,9 @@ impl Workspace {
                             .disabled(busy)
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 if running {
-                                    this.stop_instance(id_run.clone());
+                                    this.stop_instance(id_run.clone(), cx);
                                 } else {
-                                    this.start_instance(id_run.clone());
+                                    this.start_instance(id_run.clone(), cx);
                                 }
                                 cx.notify();
                             })),
@@ -258,7 +258,7 @@ impl Workspace {
                             .label(strings::UI_ACTION_RESTART)
                             .disabled(!format::can_restart(view.status) || busy)
                             .on_click(cx.listener(move |this, _, _, cx| {
-                                this.stop_instance(id_restart.clone());
+                                this.stop_instance(id_restart.clone(), cx);
                                 cx.notify();
                             })),
                     )
@@ -314,7 +314,7 @@ impl Workspace {
                     .underline()
                     .selected_index(active.index())
                     .on_click(cx.listener(|this, index: &usize, _window, cx| {
-                        this.set_inner_tab(InnerTab::from_index(*index));
+                        this.set_inner_tab(InnerTab::from_index(*index), cx);
                         cx.notify();
                     }))
                     .children(

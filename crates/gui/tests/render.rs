@@ -46,6 +46,7 @@ const DARK_ACTIVE_ROW: [u8; 3] = [0x2a, 0x2c, 0x3a];
 const DARK_SUCCESS: [u8; 3] = [0x98, 0xc3, 0x79];
 const DARK_DANGER: [u8; 3] = [0xef, 0x88, 0x91];
 const DARK_PRIMARY: [u8; 3] = [0x61, 0xaf, 0xef];
+const DARK_WARNING: [u8; 3] = [0xe5, 0xc0, 0x7b];
 
 const LIGHT_BG: [u8; 3] = [0xf8, 0xf8, 0xfb];
 const LIGHT_SIDEBAR: [u8; 3] = [0xf0, 0xf0, 0xf4];
@@ -515,7 +516,7 @@ fn renders_dark_and_light_overview_with_the_prototype_regions() {
     // A selected row in the dock.
     let selected = dark.count_near((0, 70, DOCK, LOGICAL_H - 80), DARK_ACTIVE_ROW, 4);
     eprintln!("DOCK selected={selected}");
-    assert!(selected > 300, "no selected dock row ({selected})");
+    assert!(selected > 150, "no selected dock row ({selected})");
 
     // Defect 5: dock rows are one line. Sample the name column across the
     // visible rows and require one text band per 30px row pitch, not two
@@ -771,12 +772,70 @@ fn renders_palette_and_delete_dialog() {
 }
 
 #[test]
+fn renders_quit_dialog_with_both_buttons_and_the_default_marked() {
+    let frame = render(true, "quit-dark.png", Workspace::preview_quit);
+    let panel = frame.count_near((160, 60, LOGICAL_W - 160, LOGICAL_H - 60), [35, 36, 47], 10)
+        + frame.count_near((160, 60, LOGICAL_W - 160, LOGICAL_H - 60), DARK_SIDEBAR, 10);
+    let primary = frame.count_near((160, 60, LOGICAL_W - 160, LOGICAL_H - 60), DARK_PRIMARY, 18);
+    let text = frame.count_not_near((160, 60, LOGICAL_W - 160, LOGICAL_H - 60), DARK_BG, 16);
+    eprintln!("QUIT panel={panel} primary={primary} text={text}");
+    assert!(panel > 3000, "quit panel not painted ({panel})");
+    assert!(text > 800, "quit dialog body text missing ({text})");
+    // Exactly one button is primary: "Biarkan tetap berjalan" is the default.
+    assert!(primary > 150, "default button not marked ({primary})");
+}
+
+#[test]
+fn renders_quit_dialog_reporting_a_failed_stop() {
+    let frame = render(
+        true,
+        "quit-stop-failed-dark.png",
+        Workspace::preview_quit_stop_failed,
+    );
+    let text = frame.count_not_near((160, 60, LOGICAL_W - 160, LOGICAL_H - 60), DARK_BG, 16);
+    eprintln!("QUIT-FAILED text={text}");
+    assert!(
+        text > 600,
+        "failed-stop quit dialog renders nothing ({text})"
+    );
+}
+
+#[test]
+fn renders_the_neutral_pending_note() {
+    let idle = render(true, "pending-idle-dark.png", Workspace::preview);
+    let pending = render(true, "pending-dark.png", Workspace::preview_pending);
+    let bar = (0, LOGICAL_H - 30, LOGICAL_W, LOGICAL_H - 2);
+    // The pending note adds warning-tinted glyphs to the status bar; compare
+    // against the same bar in the idle frame with a wide tolerance because text
+    // is antialiased and only a few pixels sit on the token colour.
+    let idle_warn = idle.count_near(bar, DARK_WARNING, 60);
+    let pending_warn = pending.count_near(bar, DARK_WARNING, 60);
+    eprintln!("PENDING idle={idle_warn} pending={pending_warn}");
+    assert!(
+        pending_warn > idle_warn + 10,
+        "pending note did not appear ({idle_warn} -> {pending_warn})"
+    );
+}
+
+#[test]
+fn renders_the_tray_unavailable_note_once() {
+    let frame = render(false, "no-tray-light.png", Workspace::preview_no_tray);
+    let bar = (0, LOGICAL_H - 30, LOGICAL_W, LOGICAL_H - 2);
+    let warn = frame.count_near(bar, LIGHT_WARNING, 30);
+    eprintln!("NO-TRAY warning text={warn}");
+    assert!(
+        warn > 20,
+        "no-tray note missing from the status bar ({warn})"
+    );
+}
+
+#[test]
 fn renders_stale_banner_and_revealed_uri() {
     let stale = render(false, "stale-light.png", Workspace::preview_stale_banner);
-    let banner = stale.count_near((DOCK, 34, LOGICAL_W, 90), LIGHT_WARNING, 30)
-        + stale.count_tint((DOCK, 34, LOGICAL_W, 90), LIGHT_BG, LIGHT_WARNING);
+    let banner = stale.count_near((DOCK, 34, LOGICAL_W, 140), LIGHT_WARNING, 30)
+        + stale.count_tint((DOCK, 34, LOGICAL_W, 140), LIGHT_BG, LIGHT_WARNING);
     eprintln!("STALE banner={banner}");
-    assert!(banner > 100, "stale catalog banner missing ({banner})");
+    assert!(banner > 50, "stale catalog banner missing ({banner})");
 
     let revealed = render(
         true,

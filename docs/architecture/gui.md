@@ -126,93 +126,138 @@ regression fails the test rather than passing on a "> 40 colours" check:
 | Failure panel danger surface | 606864 px |
 | Palette panel surface | present over the dimmed backdrop |
 
-## Wave 2 seam (must change before the production build ships)
+## W2-B: the real service, tray, close and quit
 
-- **The production GUI links the mock today.** `crates/gui/Cargo.toml` has
-  `dblocal-core = { features = ["mock"] }` and `run_with_mock()` builds a
-  `MockService`. That is acceptable for W1 only. W2-B must:
-  1. Replace `run_with_mock()` with `run_with_service(Arc<LocalService>)` in
-     `dblocal_gui::run()`.
-  2. Gate the mock behind a `demo` feature so a release build does not compile
-     it, and keep `run_with_mock()` behind that feature for the render tests.
-- **Service calls run on the GPUI thread.** `refresh_instances`,
-  `create_instance`, `validate_spec`, `change_port` and the other trait calls
-  are synchronous and short, so calling them from the render/handler path is
-  fine for the mock (and the trait contract says they return quickly). W2-B
-  must keep them non-blocking: the real service must not do I/O on the caller's
-  thread, or these call sites must move to the bridge's task and report back
-  through `UiEvent`.
+The Wave 2 seam is closed. `dblocal_gui::run()` builds a real
+`LocalService`; the in-memory mock is behind the `demo` cargo feature.
 
-## Vulkan
+### Entry point
 
-`vulkan::preflight()` runs before `gpui_platform::application()`. It detects missing or invalid ICD manifests/overrides and, as a final gate, wgpu Vulkan adapter enumeration failure; on failure it prints distro install commands, `vulkaninfo` verification and exits `78`, never a panic or black window. `DBLOCAL_GUI_HEADLESS=1` and the main-thread/display checks in `lib::gui_unavailable_reason` keep `dblocal` (no args) usable on a headless box and from test harnesses.
+1. `gui_unavailable_reason()` (headless flag, main-thread check, display check) and
+   `vulkan::preflight()` run first, exactly as before.
+2. `LocalService::new(DblPaths::from_env()?, ServiceOptions::default())`. Construction already
+   opens SQLite, reads the catalog and probes glibc **on the service's own thread**
+   (`service.md`, "Threading model"), so the GPUI thread does no I/O.
+3. If construction fails (unwritable home, corrupt store), `show_startup_failure` opens a small
+   window with the Indonesian `DblError::user_message()` and the process exits `1`. With no display
+   it prints `UI_STARTUP_FAILED_TITLE` to stderr and exits `1`. There is no panic and no black window.
+4. `app::run_with_service(Arc<dyn DblService>)` opens the window.
 
-## GPUI Kit (W2-D, 2026-11-21)
+`demo` feature: `dblocal-core/mock` is enabled and `DBLOCAL_DEMO=1` selects
+`app::run_with_mock()` (the prototype cast) instead. Without the feature the variable is ignored
+with a warning. The production dependency edge has no `mock`: `cargo build -p dblocal-gui` does
+not link `service::mock` (checked with `strings` on the built rlib: 0 `MockService` symbols).
 
-User direction: adopt https://gpui-kit.com/docs/ as the UI toolkit and design rulebook (layout stays
-Zed-style, D-23 → D-25). `crates/gui` now depends on the **umbrella crate** `gpui-kit = "=0.10.0"`
-(Apache-2.0), which re-exports the same GPUI stack (gpui-pre 0.3.12, gpui-component 0.10.0,
-gpui-kit-assets 0.10.0). The direct `gpui`, `gpui-component`, `gpui-kit-assets` and per-OS
-`gpui-platform` edges are gone; imports are `gpui_kit::*`, `gpui_kit::component::*`,
-`gpui_kit::assets`, `gpui_kit::platform`, `gpui_kit::actions!`, and init is `gpui_kit::init(cx)`.
+### The background-call rule (deliverable 2)
 
-- **Linux backends:** the kit enables `wayland` **and** `x11` (plus `font-kit`,
-  `runtime_shaders`) on `gpui-pre-platform`/`gpui-pre-linux`, and downstream cannot opt X11 out.
-  Both are compiled in and selected at runtime from `WAYLAND_DISPLAY` / `DISPLAY`; there is no
-  local backend feature. This makes
-  `libxkbcommon-x11-devel` / `libxkbcommon-x11-dev` a **required** build dependency
-  (`docs/dev/linux-build-deps.md`). Verified running on Wayland and on X11 (Xwayland `:0`).
-- **Cost vs direct deps (same-session A/B):** +1.5 MB release binary and +0.5 MB floor /
-  +0.7 MB shell idle RSS; cold start is indistinguishable (p50 494 vs 489 ms). See
-  `docs/spikes/gpui-kit/README.md` §2 and the Performance section above.
-- **Themes:** `gpui_kit::init` registers the registry; `theme::init` loads our Atom One JSON via
-  `ThemeRegistry::load_themes_from_str` and applies it with `Theme::update(...apply_config...)` —
-  the same path the D-25 prototype uses. Ours is the default; the 122-pair contrast test stays the
-  contract; Kit presets are not loaded.
-- **Design rules:** the normative must/should/may checklist from Kit's `design-guides`, with a
-  headless check per rule for W2-E to fill in, is in `docs/spikes/gpui-kit/README.md`.
-- **`gpui-fast`:** measured with the same probe, **not adopted** (+2.2 MB floor / +2.7 MB shell idle
-  vs the default backend, so no floor improvement); see `docs/spikes/gpui-kit/gpui-fast-notes.md`.
+`DblService` is synchronous; `LocalService` takes the store mutex and hits SQLite on most reads, and
+`connection_uri` may block on an OS keychain prompt. **No trait call runs on the GPUI thread.**
 
-## W2-E prototype port (D-25)
+- `Workspace::bg(cx, work)` (`app/background.rs`) runs `work` with `cx.background_spawn`, then applies
+  the returned closure inside `this.update(...)`. The closure receives `(&mut Workspace,
+  &mut Context)`, so the result lands on the UI thread with no shared mutable state.
+- A `pending` counter is bumped before the spawn and decremented in the apply step. The status bar
+  shows `UI_PENDING` ("Memuat...") while it is non-zero — the neutral pending state.
+- Every call site goes through it: initial load, resync, catalog reload, tab open (logs, URI,
+  `.env`, data size, port suggestion), reveal, copy, start, stop, delete, autostart, create submit,
+  `watch_logs(false)` on removal/tab close, and each quit-flow stop.
+- `cargo test` proves it: `app::bg_service_tests::slow_service_calls_do_not_block_gpui` uses a fake
+  service whose every call sleeps 2 s. It fires a background refresh, immediately toggles the
+  palette, and asserts the toggle took < 500 ms and the result still landed (palette state intact,
+  service called at least once).
 
-The W2-E port replaced the W1-G placeholder views with the user's prototype layout, keeping the frozen
-`DblService` boundary and the event pump. The prototype's `model.rs` and sample data are not used in
-the product build; views render `InstanceView`, `CatalogView`, `Runtime`, `LogStore` and service events.
+Preview/render constructors (`Workspace::new_preview`) read synchronously on purpose: they are
+not on a user path, they seed a deterministic frame, and they never start background work that
+could change the render between frames (`bg_startup = false`).
 
-### Screen map
+### Startup (deliverable 3, F-CAT-01/02)
 
-| Prototype screen | Implementation | Headless render test |
-|---|---|---|
-| Overview (running) | `crates/gui/src/app/screens/overview.rs` | `renders_dark_and_light_overview_with_the_prototype_regions` |
-| Overview (failed, diagnosis in Logs) | `crates/gui/src/app/screens/logs.rs` banner + `screens.rs` header | `renders_failed_logs_with_the_diagnosis_banner` |
-| Logs | `crates/gui/src/app/screens/logs.rs`, `crates/gui/src/logs.rs` | `renders_logs_with_monospace_text` |
-| Databases placeholder (product) | `crates/gui/src/app/screens/databases.rs` (`demo_content == false`) | `renders_databases_placeholder_in_the_product_build`, `format::placeholder_layout` / `placeholder_labels` |
-| Databases demo | `crates/gui/src/app/screens/databases.rs` (`demo_content == true`) | `renders_databases_placeholder_in_the_product_build` (demo frame) |
-| Config placeholder | `crates/gui/src/app/screens/databases.rs` (`demo_content == false`) | `format::placeholder_layout` / `placeholder_labels` (exact disabled control list) |
-| New instance dialog (download needed) | `crates/gui/src/app/create_dialog.rs` | `renders_create_dialog_with_a_download_and_an_unavailable_version` |
-| New instance dialog (unavailable version) | `crates/gui/src/app/create_dialog.rs` + preview forcing unavailable engine | `renders_create_dialog_with_a_download_and_an_unavailable_version` |
-| Dock with filter | `crates/gui/src/app/dock.rs`, `format::filter_instances` | `renders_dock_with_the_filter_applied` |
-| Light theme Overview | same Overview path, `DBLocal Light` | `renders_dark_and_light_overview_with_the_prototype_regions` |
-| Delete dialog | `crates/gui/src/app/delete_dialog.rs` | `renders_palette_and_delete_dialog` |
-| Command palette | `crates/gui/src/app/palette.rs` | `renders_palette_and_delete_dialog` |
-| Stale catalog banner | `crates/gui/src/app/status_bar.rs` | `renders_stale_banner_and_revealed_uri` |
-| Revealed URI | `crates/gui/src/app/screens/overview.rs`, `UriView` | `renders_stale_banner_and_revealed_uri` |
+`Workspace::new` starts with an **offline** catalog read model and an empty instance list, seeds the
+event pump and the tray pump, and calls `startup_load` in the background: `list_instances`,
+`catalog`, `list_runtimes`, then `refresh_catalog(false)` **without awaiting it**. So the first frame
+never blocks on the network; an offline start shows the banner + bundled catalog and never an empty
+create form. The refresh reports back through `CatalogUpdated`.
 
-### Honest placeholders (Phase 2/3, no frozen-service backend)
+Events drive everything (`app.rs::apply_event` / `apply_event_with_cx`):
 
-| Surface | Phase | Product build | Demo build | Fills when |
-|---|---:|---|---|---|
-| Databases tab (`F-DBU`) | 2 | Prototype card structure: Database card (disabled name field + "Buat database", empty state "belum tersedia di versi ini (Fase 2)"), "User & hak akses" card (disabled "User baru"), "Password superuser" card (disabled "Reset password"), footer boundary card with disabled "Open in…". No sample rows. | Prototype layout with sample rows for review | `DblService` gains database/user operations |
-| Config tab (`F-CFG`) | 3 | Prototype card structure: restart-required banner (disabled "Nanti"/"Restart sekarang"), "Setting penting" card (column header + empty state "belum tersedia di versi ini (Fase 3)"), footer actions (disabled "Buka file konfigurasi"/"Kembalikan konfigurasi sebelumnya"/"Buang perubahan"/"Simpan"). No sample rows. | Prototype layout with sample config rows for review | `DblService` gains config read/write |
-| "Open in…" (`F-OPN`) | 2 | Menu disabled with placeholder reason | Menu entries visible but disabled | Client detection/open integration lands |
+| Event | Effect |
+|---|---|
+| `InstanceChanged(view)` | upsert the row, refresh the tray menu |
+| `InstanceRemoved(id)` | drop row, tab, selection, log buffer, URI, dotenv/port/size caches; `watch_logs(false)` in the background |
+| `StopForced(id)` | toast `UI_TOAST_STOP_FORCED` |
+| `OperationFinished(Err)` | toast `<DBL code> — <message>` |
+| `Lagged` → `Resync` | background re-read of instances + runtimes |
+| `CatalogUpdated` | background catalog re-read |
 
-The placeholder rule is enforced by `Workspace::demo_content`: render tests use preview constructors that
-set it explicitly; the product build never sets it.
+### Tray (F-TRY-01)
 
-## Unverified here
+`crates/gui/src/tray.rs`:
 
-X11 now builds and runs here (Xwayland `:0`, verified in W2-D). Windows and macOS cannot be built or
-run on this Linux host; `gpui-fast` is measured but has no render-parity or 40× evidence; non-AMD
-GPUs unverified. Tray wiring, quit dialogs and the real service are Wave 2. Light theme is verified
-by headless renders and the contrast test, not on real hardware.
+- `TrayMenuModel::from_views(&[InstanceView])` is pure: instance rows grouped by engine in dock
+  order, each with a shape+word status label (`●`/`○`/`▲`/`◐` + status) and a start or stop action,
+  disabled while `Starting`/`Stopping`; plus "Buka DBLocal" (`UI_TRAY_OPEN`) and "Keluar"
+  (`UI_TRAY_QUIT`). Unit-tested for grouping, labels, disabled states and id→action lookup.
+- `TrayBackend` is the platform glue trait. Linux implements it with **ksni 0.3** (StatusNotifierItem
+  over D-Bus, `blocking` + `async-io`, no GTK). `start_tray()` also runs a `StatusNotifierWatcher`
+  probe via `gdbus` and reports "no tray" instead of failing the app when the item cannot register.
+- macOS and Windows are **not implemented**: `start_tray()` returns `TrayStartup::none()` there, the
+  status bar says the tray is unavailable, and close-to-quit applies. `tray-icon` 0.26 remains
+  reasoned-only (`docs/spikes/gpui/README.md` §6).
+- No idle timer (OPEN-08): the tray sends actions over a `flume` channel and the workspace parks on
+  `recv_async`, so the loop wakes only on real activity. The tray menu is pushed on
+  `InstanceChanged`/`InstanceRemoved` — no polling.
+- Tray actions call the **same** `start_instance`/`stop_instance`/`request_quit` methods the window
+  uses, so the window reflects a tray action through the normal event path (F-TRY-01 AC2).
+- Previews never start the tray: `tray::enable_for_app()` is set by `run_with_service`, so a headless
+  render cannot register a StatusNotifierItem on the test host.
+
+### Close and quit (F-TRY-02)
+
+`crates/gui/src/quit.rs` is the pure state machine:
+
+```text
+Idle --QuitRequested{running: []}--> Done                      (Exit)
+Idle --QuitRequested{running}-----> Confirming                 (ShowDialog)
+Confirming --KeepRunning----------> Done                       (Exit)
+Confirming --StopAll--------------> StoppingAll                 (StopInstances)
+Confirming --Cancel---------------> Idle
+StoppingAll --StopFinished{ok}----> StoppingAll | Done         (None | Exit)
+StoppingAll --StopFinished{!ok}---> StoppingAll | StopFailed   (None | ShowDialog)
+StoppingAll --ForceExit-----------> Done                       (Exit)
+StopFailed --ForceExit------------> Done                       (Exit)
+StopFailed --Cancel---------------> Idle
+```
+
+Every transition is unit-tested, including "a stop fails" and "the user cancels".
+
+Window behaviour: `window.on_window_should_close` calls
+`Workspace::handle_window_close_request`. With a tray it calls `cx.hide()` and returns `false`, so the
+window is hidden and the app keeps running with engines untouched (AC1). Without a tray the close is
+a quit. The quit dialog's default (primary) button is "Biarkan tetap berjalan" (AC2, AC3); the
+alternative issues `stop_instance` for each running instance and shows `UI_QUIT_STOPPING`; a failed
+stop shows `UI_QUIT_STOP_FAILED` with cancel or exit-anyway, and while stops are pending the user
+may confirm `UI_QUIT_FORCE_CONFIRM` — the app never exits with a stop pending without that
+confirmation.
+
+### Modules added in W2-B
+
+| Module | Responsibility |
+|---|---|
+| `app/background.rs` | `bg`, `is_pending`, startup load, pumps, tray refresh, catalog reload |
+| `app/instance_actions.rs` | tab open + derived reads, start/stop, reveal/copy, autostart, create and delete dialogs |
+| `app/quit_flow.rs` | tray actions, quit transitions → service calls/window ops, the quit dialog |
+| `app/tests_secret.rs` | `LocalService`-shaped URI/`.env` never reaches a `Label` before Show |
+| `quit.rs` | the pure quit machine |
+| `tray.rs` | the pure menu model + Linux ksni glue |
+
+### Unverified per OS
+
+- **Linux/Wayland (this host):** ksni registers (a `StatusNotifierWatcher`/AppIndicator extension is
+  present here); the tray-to-window latency through the real service path is reported with p50/max
+  in the W2-B report.
+- **GNOME without the AppIndicator extension:** untested removal path; the code reports "tray tidak
+  tersedia", keeps the app usable and applies close-to-quit.
+- **X11:** builds and runs (W2-D), tray not exercised there.
+- **macOS / Windows:** neither the tray nor the window/quit behaviour can be built or run here.
+  `tray-icon` integration is reasoned only; `start_tray` returns no tray on those targets.
+

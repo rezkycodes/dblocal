@@ -212,7 +212,7 @@ impl Workspace {
                                 strings::UI_SHOW_PASSWORD
                             })
                             .on_click(cx.listener(move |this, _, _, cx| {
-                                this.toggle_reveal(&id_reveal);
+                                this.toggle_reveal(&id_reveal, cx);
                                 cx.notify();
                             })),
                     )
@@ -404,7 +404,7 @@ impl Workspace {
                             .compact()
                             .label(strings::UI_OVERVIEW_GOTO_LOGS)
                             .on_click(cx.listener(|this, _, _, cx| {
-                                this.set_inner_tab(crate::app::InnerTab::Logs);
+                                this.set_inner_tab(crate::app::InnerTab::Logs, cx);
                                 cx.notify();
                             })),
                     ),
