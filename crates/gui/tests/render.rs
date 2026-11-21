@@ -154,22 +154,36 @@ fn output_path(name: &str) -> (std::path::PathBuf, bool) {
 
 static GPU: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-/// Fails the test process loudly if a render hangs. A deadlocked render held
-/// the GPU mutex for 54 minutes in CI; an abort with the case name is the only
-/// diagnostic we can get from inside a wedged process.
+/// Per-case hang guard. A deadlocked render held the GPU mutex for 54 minutes
+/// in CI; aborting with the case name is the only diagnostic a wedged process
+/// can emit. Arm it *after* acquiring the GPU mutex so a queued case is not
+/// blamed for time spent waiting on an earlier case.
+const RENDER_WATCHDOG_SECS: u64 = 120;
+
 struct RenderWatchdog {
     done: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl RenderWatchdog {
     fn arm(name: &str) -> Self {
+        Self::arm_after(name, Duration::from_secs(RENDER_WATCHDOG_SECS))
+    }
+
+    fn arm_after(name: &str, limit: Duration) -> Self {
         let done = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let flag = Arc::clone(&done);
         let label = name.to_owned();
         std::thread::spawn(move || {
-            std::thread::sleep(Duration::from_secs(120));
+            std::thread::sleep(limit);
             if !flag.load(std::sync::atomic::Ordering::SeqCst) {
-                eprintln!("RENDER HANG: {label} did not finish within 120s; aborting");
+                let msg = format!(
+                    "RENDER HANG: {label} did not finish within {}s; aborting",
+                    limit.as_secs()
+                );
+                eprintln!("{msg}");
+                use std::io::Write as _;
+                let _ = std::io::stderr().write_all(msg.as_bytes());
+                let _ = std::io::stderr().write_all(b"\n");
                 std::process::abort();
             }
         });
@@ -181,6 +195,67 @@ impl Drop for RenderWatchdog {
     fn drop(&mut self) {
         self.done.store(true, std::sync::atomic::Ordering::SeqCst);
     }
+}
+
+#[test]
+fn watchdog_does_not_fire_for_a_queued_case() {
+    // Simulate: case A holds the mutex; case B waits. B arms only after A
+    // releases, so B's timer does not include A's hold time.
+    let mutex = std::sync::Arc::new(std::sync::Mutex::new(()));
+    let a_started = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let a_release = Arc::new(std::sync::atomic::AtomicBool::new(false));
+
+    let a_started_t = Arc::clone(&a_started);
+    let a_release_t = Arc::clone(&a_release);
+    let mutex_t = Arc::clone(&mutex);
+    let handle = std::thread::spawn(move || {
+        let _guard_a = mutex_t.lock().expect("lock a");
+        a_started_t.store(true, std::sync::atomic::Ordering::SeqCst);
+        while !a_release_t.load(std::sync::atomic::Ordering::SeqCst) {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    });
+
+    while !a_started.load(std::sync::atomic::Ordering::SeqCst) {
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    // A holds the mutex longer than B's watchdog limit; B must arm after acquire.
+    std::thread::sleep(Duration::from_millis(120));
+    a_release.store(true, std::sync::atomic::Ordering::SeqCst);
+    handle.join().expect("a joined");
+
+    let _guard_b = mutex.lock().expect("lock b");
+    let watchdog = RenderWatchdog::arm_after("queued-case", Duration::from_millis(80));
+    std::thread::sleep(Duration::from_millis(40));
+    drop(watchdog);
+}
+
+#[test]
+fn watchdog_fires_for_a_stuck_case() {
+    let status = std::process::Command::new(std::env::current_exe().expect("exe"))
+        .args([
+            "--exact",
+            "watchdog_probe_stuck_child",
+            "--ignored",
+            "--nocapture",
+        ])
+        .env("DBLOCAL_WATCHDOG_PROBE", "1")
+        .status()
+        .expect("spawn probe");
+    assert!(
+        !status.success(),
+        "watchdog probe should abort, got {status:?}"
+    );
+}
+
+#[test]
+#[ignore = "subprocess probe: aborts intentionally when DBLOCAL_WATCHDOG_PROBE=1"]
+fn watchdog_probe_stuck_child() {
+    if std::env::var_os("DBLOCAL_WATCHDOG_PROBE").is_none() {
+        return;
+    }
+    let _watchdog = RenderWatchdog::arm_after("stuck-probe", Duration::from_millis(50));
+    std::thread::sleep(Duration::from_secs(5));
 }
 
 /// Builds a headless app with the DBLocal themes registered.
@@ -217,10 +292,10 @@ fn shutdown_headless(mut app: HeadlessAppContext) {
 }
 
 fn render(mode_dark: bool, name: &str, build: Build) -> Frame {
-    // Arm before the mutex so a case stuck waiting on an earlier deadlock is
-    // named too, not just the case that holds it.
-    let watchdog = RenderWatchdog::arm(name);
     let guard = GPU.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    // Arm after the mutex is acquired: queueing behind other cases must not
+    // consume the watchdog budget. A hang in draw or shutdown is still caught.
+    let watchdog = RenderWatchdog::arm(name);
     let mut app = headless_app(mode_dark);
     let frame = draw_and_capture(&mut app, name, build);
     // Release the render mutex before shutting the context down: the next case
@@ -229,6 +304,23 @@ fn render(mode_dark: bool, name: &str, build: Build) -> Frame {
     shutdown_headless(app);
     drop(watchdog);
     frame
+}
+
+fn a11y_node_count_and_dups(json: &str) -> (usize, Vec<String>) {
+    let value: serde_json::Value = serde_json::from_str(json).expect("a11y json");
+    let nodes = value
+        .get("nodes")
+        .and_then(|n| n.as_object())
+        .cloned()
+        .unwrap_or_default();
+    let mut seen = HashSet::new();
+    let mut dups = Vec::new();
+    for key in nodes.keys() {
+        if !seen.insert(key.clone()) {
+            dups.push(key.clone());
+        }
+    }
+    (nodes.len(), dups)
 }
 
 /// The actual render: window, frames, screenshot, PNG. The caller owns the
@@ -268,6 +360,19 @@ fn draw_and_capture(app: &mut HeadlessAppContext, name: &str, build: Build) -> F
         })
         .expect("draw frame");
         app.run_until_parked();
+    }
+    if std::env::var_os("DBLOCAL_TEST_A11Y").is_some() {
+        let json = app
+            .update_window(handle, |_view, window, _cx| window.debug_a11y_tree_json())
+            .expect("a11y json read");
+        if let Some(json) = json {
+            let (count, dups) = a11y_node_count_and_dups(&json);
+            eprintln!("A11Y {name}: nodes={count} dups={}", dups.len());
+            assert!(
+                dups.is_empty(),
+                "duplicate a11y node ids in {name}: {dups:?}\n{json}"
+            );
+        }
     }
     let image = app
         .capture_screenshot(handle)
