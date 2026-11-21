@@ -750,6 +750,144 @@ mod handler_tests {
     }
 
     #[gpui_kit::test]
+    fn submit_create_pushes_a_download_and_closes_the_form(cx: &mut TestAppContext) {
+        let (view, _service, cx) = fixture(cx);
+        view.update_in(cx, |this, window, cx| {
+            this.open_create_dialog(window, cx);
+            // An empty catalog leaves the version blank; any version string is
+            // accepted by InstanceSpec, and the service is the fake.
+            if let Some(form) = this.create.as_mut() {
+                form.version = "17.4".to_owned();
+            }
+            this.set_create_field_texts("pg-new", "5500", window, cx);
+            this.submit_create(window, cx);
+        });
+        cx.run_until_parked();
+        assert!(
+            view.read_with(cx, |this, _| this.create_form().is_none()),
+            "a valid submit must close the form"
+        );
+        assert!(
+            view.read_with(cx, |this, _| !this.downloads().is_empty()),
+            "a valid submit must add a download row"
+        );
+    }
+
+    #[gpui_kit::test]
+    fn submit_create_reopens_the_form_with_the_validation_message(cx: &mut TestAppContext) {
+        let (view, _service, cx) = fixture(cx);
+        view.update_in(cx, |this, window, cx| {
+            this.open_create_dialog(window, cx);
+            // An empty name is rejected by validate_form, before the service.
+            this.set_create_field_texts("", "", window, cx);
+            this.submit_create(window, cx);
+        });
+        cx.run_until_parked();
+        assert!(
+            view.read_with(cx, |this, _| this.create_form().is_some()),
+            "an invalid submit must keep the form open"
+        );
+        assert!(
+            view.read_with(cx, |this, _| this.toast_text().is_some()),
+            "an invalid submit must explain the problem in Indonesian"
+        );
+    }
+
+    #[gpui_kit::test]
+    fn choose_auth_and_cancel_shape_the_form(cx: &mut TestAppContext) {
+        let (view, _service, cx) = fixture(cx);
+        view.update_in(cx, |this, window, cx| {
+            this.open_create_dialog(window, cx);
+            this.choose_auth(dblocal_core::model::AuthMode::None);
+        });
+        assert_eq!(
+            view.read_with(cx, |this, _| this.create_form().map(|f| f.auth)),
+            Some(dblocal_core::model::AuthMode::None)
+        );
+        view.update(cx, |this, _| this.cancel_create());
+        assert!(view.read_with(cx, |this, _| this.create_form().is_none()));
+    }
+
+    #[gpui_kit::test]
+    fn open_delete_dialog_reads_the_size_in_the_background(cx: &mut TestAppContext) {
+        let (view, service, cx) = fixture(cx);
+        let id = service.id_with(InstanceStatus::Stopped);
+        view.update_in(cx, |this, window, cx| {
+            this.open_delete_dialog(id.clone(), window, cx);
+        });
+        cx.run_until_parked();
+        assert_eq!(
+            view.read_with(cx, |this, _| this.delete_size()),
+            4096,
+            "the dialog must show the size the service reported"
+        );
+        assert!(view.read_with(cx, |this, _| this.delete_name_input().is_some()));
+        assert_eq!(
+            view.read_with(cx, |this, _| this.delete_mode()),
+            dblocal_core::model::DeleteMode::ArchiveData
+        );
+    }
+
+    #[gpui_kit::test]
+    fn autostart_reports_and_refreshes(cx: &mut TestAppContext) {
+        let (view, service, cx) = fixture(cx);
+        let id = service.id_with(InstanceStatus::Stopped);
+        view.update(cx, |this, cx| this.set_autostart(&id, true, cx));
+        cx.run_until_parked();
+        assert_eq!(
+            view.read_with(cx, |this, _| this.toast_text())
+                .as_deref()
+                .map(ToString::to_string),
+            Some(strings::UI_TOAST_AUTOSTART_ON.to_owned())
+        );
+        view.update(cx, |this, cx| this.set_autostart(&id, false, cx));
+        cx.run_until_parked();
+        assert_eq!(
+            view.read_with(cx, |this, _| this.toast_text())
+                .as_deref()
+                .map(ToString::to_string),
+            Some(strings::UI_TOAST_AUTOSTART_OFF.to_owned())
+        );
+    }
+
+    #[gpui_kit::test]
+    fn toggle_follow_touches_only_local_state(cx: &mut TestAppContext) {
+        let (view, service, cx) = fixture(cx);
+        let id = service.id_with(InstanceStatus::Stopped);
+        view.update(cx, |this, cx| {
+            this.open_tab(id.clone(), cx);
+            this.set_inner_tab(InnerTab::Logs, cx);
+            // The tail arrives from the background executor; wait for it so the
+            // buffer exists before follow is toggled.
+            this.load_logs_sync(&id);
+        });
+        cx.run_until_parked();
+        // A fresh buffer follows, so the first toggle turns it off and the
+        // second turns it back on.
+        assert!(view.read_with(cx, |this, _| this.log_lines(&id).is_following()));
+        view.update(cx, |this, _| this.toggle_follow());
+        assert!(!view.read_with(cx, |this, _| this.log_lines(&id).is_following()));
+        view.update(cx, |this, _| this.toggle_follow());
+        assert!(view.read_with(cx, |this, _| this.log_lines(&id).is_following()));
+    }
+
+    #[gpui_kit::test]
+    fn toggle_run_selected_starts_a_stopped_instance(cx: &mut TestAppContext) {
+        let (view, service, cx) = fixture(cx);
+        let id = service.id_with(InstanceStatus::Stopped);
+        view.update(cx, |this, cx| this.open_tab(id.clone(), cx));
+        cx.run_until_parked();
+        view.update(cx, |this, cx| this.toggle_run_selected(cx));
+        cx.run_until_parked();
+        assert_eq!(
+            view.read_with(cx, |this, _| this.toast_text())
+                .as_deref()
+                .map(ToString::to_string),
+            Some(strings::UI_TOAST_START_REQUESTED.to_owned())
+        );
+    }
+
+    #[gpui_kit::test]
     fn choose_engine_switches_the_form(cx: &mut TestAppContext) {
         let (view, _service, cx) = fixture(cx);
         view.update_in(cx, |this, window, cx| {
