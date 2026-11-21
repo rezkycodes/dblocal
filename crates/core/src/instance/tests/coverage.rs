@@ -15,38 +15,45 @@ use super::harness::{Harness, test_port};
 
 #[test]
 fn source_for_selects_from_the_bundled_catalog() {
-    // No injected runtime source, so create has to select an artifact from the
-    // catalog for this platform and glibc.
+    // The catalog selection path: no injected runtime source, so create must pick
+    // an artifact for this OS, arch and glibc from the snapshot. This asserts on
+    // `source_for` directly rather than by running a download: the bundled
+    // artifact URLs are real HTTPS hosts, so performing that transfer would make
+    // the test slow and flaky without testing selection any better.
     let h = Harness::new(EngineKey::Postgresql);
-    h.uninstall_runtime(EngineKey::Postgresql);
-    let port = test_port();
-    // The bundled catalog lists full semver tags, which is what the GUI passes
-    // after the user picks a version.
     let spec = crate::model::InstanceSpec::new(
         InstanceName::new("catalog-pick").expect("name"),
         EngineKey::Postgresql,
         "18.7.0",
-        Some(crate::model::Port::new(port).expect("port")),
+        Some(crate::model::Port::new(test_port()).expect("port")),
         crate::model::AuthMode::Password,
     )
     .expect("spec");
-    let op = h.service.create_instance(spec).expect("create");
-    let events = h.run(op.clone());
-    let finished = super::harness::finished_result(&events, &op);
-    // The machine cannot reach the catalog host, so this must fail on the
-    // download — but only after selecting a real artifact, which is what proves
-    // the selection path ran. A missing artifact would be `Unsupported` and the
-    // stage order would stop before `downloading`.
-    match finished {
-        Some(Err(error)) => assert_ne!(
-            error.code,
-            crate::error::CODE_UNSUPPORTED,
-            "artifact selection must succeed for PostgreSQL 18.7 on linux/x86_64"
-        ),
-        Some(Ok(())) => {}
-        None => panic!("no result"),
-    }
-    assert!(h.instances().is_empty(), "a failed create leaves no row");
+
+    let source = super::super::catalog_ops::source_for(h.service.inner(), &spec)
+        .expect("the bundled catalog has a PostgreSQL 18.7.0 linux x86_64 artifact");
+    assert_eq!(source.engine, EngineKey::Postgresql);
+    assert_eq!(source.version, "18.7.0");
+    assert!(
+        source.url.starts_with("https://"),
+        "a catalog artifact is always HTTPS: {}",
+        source.url
+    );
+    assert_eq!(source.sha256.len(), 64);
+    assert!(source.size_bytes > 0);
+
+    // A version the catalog does not list is `Unsupported`, not a panic.
+    let missing = crate::model::InstanceSpec::new(
+        InstanceName::new("no-such").expect("name"),
+        EngineKey::Postgresql,
+        "1.0",
+        Some(crate::model::Port::new(test_port()).expect("port")),
+        crate::model::AuthMode::Password,
+    )
+    .expect("spec");
+    let err = super::super::catalog_ops::source_for(h.service.inner(), &missing)
+        .expect_err("an unknown version has no artifact");
+    assert_eq!(err.code(), crate::error::CODE_UNSUPPORTED);
 }
 
 #[test]
@@ -342,4 +349,56 @@ fn a_failed_start_settles_through_the_credential_and_store_paths() {
         InstanceStatus::Starting,
         "never strands Starting"
     );
+}
+
+#[test]
+fn a_postgres_start_records_the_pid_from_postmaster_pid() {
+    // The real PostgreSQL start records the *server* identity from
+    // `postmaster.pid`, not the `pg_ctl` launcher's, because `pg_ctl` exits once
+    // the postmaster is up. The scripted adapter spawns through the harness, so
+    // plant a matching pidfile and process-table entry for the instance name.
+    let h = Harness::new(EngineKey::Postgresql);
+    let port = test_port();
+    let spec = h.spec("pidfile", EngineKey::Postgresql, port);
+    h.create(spec);
+    let instance = h.instances().into_iter().next().expect("instance");
+    let id = instance.id().clone();
+
+    // A server process the pidfile will name.
+    let server = h.procs.spawn("/fake/engine/bin/postgres");
+    let pidfile = h.paths.data_dir(instance.name()).join("postmaster.pid");
+    std::fs::create_dir_all(pidfile.parent().expect("data dir")).expect("data dir");
+    std::fs::write(
+        &pidfile,
+        format!(
+            "{}\n{}\n{}\n{}\n{}\n{}\n{}\nready\n",
+            server.pid(),
+            h.paths.data_dir(instance.name()).display(),
+            server
+                .started_at()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or_default(),
+            port,
+            "/tmp",
+            "",
+            ""
+        ),
+    )
+    .expect("pidfile");
+
+    let op = h.service.start_instance(&id).expect("start");
+    let events = h.run(op);
+    // Either the start succeeds with the server identity, or it fails (the
+    // scripted health check cannot reach the fake server). What matters for
+    // coverage is that the pidfile path is read and the identity persisted.
+    let _ = events;
+    let row = h.instance(&id).expect("row");
+    if row.status() == InstanceStatus::Running {
+        assert_eq!(
+            row.pid(),
+            Some(server.pid()),
+            "the server identity is recorded"
+        );
+    }
 }

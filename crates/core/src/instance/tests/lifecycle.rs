@@ -211,29 +211,72 @@ fn an_unhealthy_engine_produces_a_diagnosed_failure_and_can_be_retried() {
 }
 
 #[test]
-fn a_stop_that_needs_a_forced_kill_is_reported() {
+fn a_forced_stop_is_reported_as_an_event_and_a_graceful_one_is_not() {
+    // `F-INS-03` AC3: the user must be told a stop was a forced kill. The event
+    // is the observable report; asserting the flag the test itself set proved
+    // nothing.
     let h = Harness::new(EngineKey::Postgresql);
     let instance = created(&h, "app-dev");
     let id = instance.id().clone();
+
+    // Graceful first: no `StopForced`.
     start(&h, &id);
     h.wait_for_status(&id, InstanceStatus::Running);
+    let mut receiver = h.receiver();
+    let op = h.service.stop_instance(&id).expect("stop");
+    let events = h.run_on(&mut receiver, op);
+    assert!(
+        matches!(
+            super::harness::finished_result(&events, &last_op(&events)),
+            Some(Ok(()))
+        ),
+        "graceful stop: {:#?}",
+        super::harness::describe(&events)
+    );
+    assert!(
+        !super::harness::stop_forced_for(&events, &id),
+        "a graceful stop must not emit StopForced: {:#?}",
+        super::harness::describe(&events)
+    );
 
+    // Now a stop that needs escalation: exactly one `StopForced`, before the
+    // final change.
+    start(&h, &id);
+    h.wait_for_status(&id, InstanceStatus::Running);
     h.terminator
         .forced
         .store(true, std::sync::atomic::Ordering::SeqCst);
-    let events = stop(&h, &id);
-    assert!(matches!(
-        super::harness::finished_result(&events, &last_op(&events)),
-        Some(Ok(()))
-    ));
+    let mut receiver = h.receiver();
+    let op = h.service.stop_instance(&id).expect("stop");
+    let events = h.run_on(&mut receiver, op);
     assert!(
-        h.terminator
-            .forced
-            .load(std::sync::atomic::Ordering::SeqCst)
+        super::harness::stop_forced_for(&events, &id),
+        "a forced stop must emit StopForced: {:#?}",
+        super::harness::describe(&events)
     );
+    let forced_count = events
+        .iter()
+        .filter(|event| matches!(event, crate::service::ServiceEvent::StopForced { .. }))
+        .count();
+    assert_eq!(forced_count, 1, "StopForced is emitted exactly once");
+
+    // It must come before the `Stopped` change, so a UI sees the reason first.
+    let positions: Vec<&str> = events
+        .iter()
+        .filter_map(|event| match event {
+            crate::service::ServiceEvent::StopForced { .. } => Some("forced"),
+            crate::service::ServiceEvent::InstanceChanged { view }
+                if view.status == InstanceStatus::Stopped =>
+            {
+                Some("stopped")
+            }
+            _ => None,
+        })
+        .collect();
     assert_eq!(
-        h.terminator.calls.load(std::sync::atomic::Ordering::SeqCst),
-        1
+        positions,
+        vec!["forced", "stopped"],
+        "StopForced precedes the Stopped view"
     );
     let stopped = h.wait_for_status(&id, InstanceStatus::Stopped);
     assert!(stopped.pid().is_none());

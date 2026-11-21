@@ -14,7 +14,8 @@ use crate::model::{
     AuthMode, EngineKey, Instance, InstanceEvent, InstanceStatus, Port, StartFailure,
 };
 use crate::paths::DblPaths;
-use crate::process::identity::ProcessIdentity;
+use crate::process::identity::{ProcessIdentity, ProcessState};
+use crate::process::terminate::TerminateOutcome;
 use crate::secret::SecretString;
 use crate::service::{FailureInfo, InstanceView, OperationId, OperationStage, ServiceEvent};
 use crate::store::Store;
@@ -68,10 +69,9 @@ pub(crate) fn view_for(inner: &Inner, instance: &Instance) -> Result<InstanceVie
         view = view.with_credential_backend(backend);
     }
     if instance.status() == InstanceStatus::Failed
-        && let Ok(failures) = inner.failures.lock()
-        && let Some(failure) = failures.get(instance.id())
+        && let Some(failure) = failure_for(inner, instance)
     {
-        view = view.with_failure(failure.clone());
+        view = view.with_failure(failure);
     }
     Ok(view)
 }
@@ -82,6 +82,43 @@ pub(crate) fn emit_changed(inner: &Inner, id: &crate::model::InstanceId) {
     {
         inner.emit(ServiceEvent::InstanceChanged { view });
     }
+}
+
+/// Announces that a row is gone.
+///
+/// `InstanceChanged` cannot express this (there is no view left), so a delete, a
+/// rolled-back create and a cleaned-up interrupted create all end here.
+pub(crate) fn emit_removed(inner: &Inner, id: &crate::model::InstanceId) {
+    inner.emit(ServiceEvent::InstanceRemoved { id: id.clone() });
+}
+
+/// Announces that a stop had to escalate to a forced kill (`F-INS-03` AC3).
+pub(crate) fn emit_stop_forced(inner: &Inner, id: &crate::model::InstanceId) {
+    inner.emit(ServiceEvent::StopForced { id: id.clone() });
+}
+
+/// Builds failure details for a `Failed` row, from the in-memory record or,
+/// when that is missing (a new process after a restart), from the log tail.
+fn failure_for(inner: &Inner, instance: &Instance) -> Option<FailureInfo> {
+    let stored = inner
+        .failures
+        .lock()
+        .ok()
+        .and_then(|failures| failures.get(instance.id()).cloned());
+    if stored.is_some() {
+        return stored;
+    }
+    // `F-LOG-02` requires an explanation, not just the word "failed", so a row
+    // restored from disk is diagnosed lazily from its log instead of showing an
+    // empty panel. No schema change is needed: the tail is re-derived.
+    let tail = failure_tail(&log_file_for(&inner.paths, instance));
+    let diagnosis = diagnose(inner, instance.engine(), &tail.join("\n"));
+    Some(failure_info(
+        crate::error::CODE_ENGINE,
+        crate::strings::ERR_ENGINE.to_owned(),
+        diagnosis,
+        tail,
+    ))
 }
 
 pub(crate) fn emit_stage(inner: &Inner, op: &OperationId, stage: OperationStage) {
@@ -371,4 +408,151 @@ pub(crate) fn read_credential(inner: &Inner, instance: &Instance) -> Result<Opti
     };
     let password = inner.secrets.get(&reference)?;
     Ok(credential_for(instance, Some(&password)))
+}
+
+/// The credential for a stop, which must never block one.
+///
+/// A stop exists to make an engine go away; an unreadable secret only removes
+/// the graceful path (the adapter cannot authenticate), so it is downgraded to
+/// "no credential" with a log line and escalation through the process layer
+/// still runs. Raising here would leave the engine running while the row said
+/// otherwise.
+pub(crate) fn credential_for_stop(inner: &Inner, instance: &Instance) -> Option<Credential> {
+    match read_credential(inner, instance) {
+        Ok(credential) => credential,
+        Err(err) => {
+            tracing::warn!(
+                instance = %instance.id(),
+                error = %err,
+                "credential unavailable; stopping through the process layer only"
+            );
+            None
+        }
+    }
+}
+
+/// Removes everything a failed or interrupted create could have produced.
+///
+/// The verified runtime is deliberately kept: it is reusable, and removing it
+/// would make a retry download it again. Paths are re-validated first and a
+/// rejected path aborts the removal rather than being ignored, so a corrupt row
+/// cannot turn cleanup into a delete outside the home.
+///
+/// Returns whether a row was actually removed, so the caller can announce it.
+pub(crate) async fn rollback_create(
+    inner: &Arc<Inner>,
+    id: &crate::model::InstanceId,
+    name: &crate::model::InstanceName,
+) -> bool {
+    let instance_dir = inner.paths.instance_dir(name);
+    let data_dir = inner.paths.data_dir(name);
+    for path in [&instance_dir, &data_dir] {
+        if let Err(err) = safe_within(&inner.paths, path) {
+            tracing::error!(path = %path.display(), error = %err, "rollback refused an unsafe path");
+            return false;
+        }
+    }
+    let _ = blocking(move || {
+        remove_tree(&data_dir)?;
+        remove_tree(&instance_dir)
+    })
+    .await;
+
+    for backend in [
+        crate::model::CredentialBackend::File,
+        crate::model::CredentialBackend::Keychain,
+    ] {
+        let reference = crate::secrets::credential_ref_for(id, backend, "");
+        let _ = inner.secrets.delete(&reference);
+    }
+
+    let id2 = id.clone();
+    let removed = db_async(inner, move |store| match store.delete_instance(&id2) {
+        Ok(()) => Ok(true),
+        Err(DblError::NotFound { .. }) => Ok(false),
+        Err(err) => Err(err),
+    })
+    .await
+    .unwrap_or(false);
+    inner.log_watchers.disable(id);
+    removed
+}
+
+/// What a verified termination produced.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Terminated {
+    /// Whether the process is gone, decided by a probe *after* the attempt.
+    pub state: Stopped,
+    /// Whether the terminator had to escalate to a forced kill.
+    ///
+    /// Only ever `true` when `TerminateOutcome::Forced` was returned, so the UI
+    /// is never told "kill paksa" for a signal that never landed.
+    pub forced: bool,
+}
+
+/// What a verified termination produced.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Stopped {
+    /// The process is gone (or never was ours): the identity may be cleared.
+    Gone,
+    /// The process is still alive under our identity: the identity must be kept.
+    StillAlive,
+}
+
+/// Terminates `identity` and then **re-probes** it, so the caller never clears a
+/// PID that still names a live engine.
+///
+/// The process layer already refuses a mismatch; this decides the row's fate
+/// from an observation made after the attempt, which is the only trustworthy
+/// answer to "is it gone?".
+pub(crate) async fn terminate_verified(
+    inner: &Arc<Inner>,
+    identity: Option<ProcessIdentity>,
+    grace: Duration,
+) -> Terminated {
+    let Some(identity) = identity else {
+        // No recorded process: there is nothing we may signal, and nothing to
+        // keep an identity for.
+        return Terminated {
+            state: Stopped::Gone,
+            forced: false,
+        };
+    };
+
+    let terminator = Arc::clone(&inner.terminator);
+    let probe = Arc::clone(&inner.probe);
+    let outcome = blocking(move || {
+        let result = terminator.terminate(&identity, grace);
+        // Probe regardless of the signal result: a refused signal on a live
+        // process must still report "alive", and a vanished one "gone".
+        let observed = probe.validate(&identity);
+        Ok((result, observed))
+    })
+    .await;
+
+    let (forced, state) = match outcome {
+        Ok((result, observed)) => {
+            let forced = result
+                .as_ref()
+                .is_ok_and(|outcome| matches!(outcome, TerminateOutcome::Forced));
+            if let Err(err) = &result {
+                tracing::warn!(error = %err, "termination reported an error; re-probing");
+            }
+            let state = match observed {
+                ProcessState::Match => Stopped::StillAlive,
+                // Absent and Reused mean our process is gone; Unknown means we
+                // cannot prove it is ours any more, which also means we must not
+                // keep claiming it.
+                ProcessState::Absent | ProcessState::Reused | ProcessState::Unknown => {
+                    Stopped::Gone
+                }
+            };
+            (forced, state)
+        }
+        Err(err) => {
+            tracing::warn!(error = %err, "termination probe failed");
+            (false, Stopped::StillAlive)
+        }
+    };
+    Terminated { state, forced }
 }

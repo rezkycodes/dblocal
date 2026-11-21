@@ -199,7 +199,11 @@ impl ProcessProbe for FakeProcs {
 /// Terminator that removes the process from the fake table.
 pub struct FakeTerminator {
     procs: Arc<FakeProcs>,
+    /// Report `Forced` instead of `Graceful` when a signal lands.
     pub forced: AtomicBool,
+    /// Refuse every attempt with an error and leave the process running, the
+    /// way a mismatched identity makes the real process layer refuse.
+    pub refuse: AtomicBool,
     /// How many terminate calls were made, for assertions.
     pub calls: AtomicUsize,
 }
@@ -209,6 +213,7 @@ impl FakeTerminator {
         Self {
             procs,
             forced: AtomicBool::new(false),
+            refuse: AtomicBool::new(false),
             calls: AtomicUsize::new(0),
         }
     }
@@ -217,6 +222,13 @@ impl FakeTerminator {
 impl Terminator for FakeTerminator {
     fn terminate(&self, identity: &ProcessIdentity, _grace: Duration) -> Result<TerminateOutcome> {
         self.calls.fetch_add(1, Ordering::SeqCst);
+        if self.refuse.load(Ordering::SeqCst) {
+            // Deliberately do **not** touch the process table: the caller must
+            // observe that it is still alive and keep its identity.
+            return Err(crate::DblError::Engine {
+                reason: "the process refused to stop".to_owned(),
+            });
+        }
         self.procs.kills.fetch_add(1, Ordering::SeqCst);
         if self.procs.observe(identity.pid()) == ProcessObservation::Missing {
             return Ok(TerminateOutcome::NotRunning);
@@ -236,6 +248,9 @@ pub struct FakeSecrets {
     pub keychain: FakeBackend,
     pub file: FakeBackend,
     pub keychain_available: AtomicBool,
+    /// When set, `get` fails with a keychain-unavailable error, which is what a
+    /// locked Secret Service looks like to a stop.
+    pub unreadable: AtomicBool,
 }
 
 impl Default for FakeSecrets {
@@ -250,6 +265,7 @@ impl FakeSecrets {
             keychain: FakeBackend::new(CredentialBackend::Keychain),
             file: FakeBackend::new(CredentialBackend::File),
             keychain_available: AtomicBool::new(false),
+            unreadable: AtomicBool::new(false),
         }
     }
 
@@ -272,6 +288,11 @@ impl super::super::service::SecretAccess for FakeSecrets {
     }
 
     fn get(&self, reference: &CredentialRef) -> Result<SecretString> {
+        if self.unreadable.load(Ordering::SeqCst) {
+            return Err(crate::DblError::Unsupported {
+                reason: "the keychain is locked".to_owned(),
+            });
+        }
         self.backend(reference.backend()).get(reference)
     }
 
@@ -583,12 +604,63 @@ pub fn restart(paths: &DblPaths, procs: Arc<FakeProcs>) -> Harness {
     build_over(paths, procs)
 }
 
+/// A fresh service over an existing home that also shares the terminator and
+/// secret backends of the original, so a test can inspect or script them after
+/// the restart.
+pub fn restart_with(
+    paths: &DblPaths,
+    procs: Arc<FakeProcs>,
+    terminator: Arc<FakeTerminator>,
+    secrets: Arc<FakeSecrets>,
+) -> Harness {
+    build_over_shared(paths, procs, terminator, secrets)
+}
+
+/// A harness whose supervisor polls every `poll`, so a test can make a race
+/// against a stop happen every time rather than occasionally.
+pub fn fast_supervisor(poll: Duration) -> Harness {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let paths = DblPaths::with_root(dir.path());
+    let procs = Arc::new(FakeProcs::new());
+    let terminator = Arc::new(FakeTerminator::new(Arc::clone(&procs)));
+    let secrets = Arc::new(FakeSecrets::new());
+    build(dir, paths, procs, terminator, secrets, poll)
+}
+
 /// Builds a harness whose state tree is `paths` and whose process table is
 /// `procs`.
 fn build_over(paths: &DblPaths, procs: Arc<FakeProcs>) -> Harness {
-    let adapter = Arc::new(ScriptedAdapter::new(EngineKey::Postgresql));
     let terminator = Arc::new(FakeTerminator::new(Arc::clone(&procs)));
     let secrets = Arc::new(FakeSecrets::new());
+    build_over_shared(paths, procs, terminator, secrets)
+}
+
+fn build_over_shared(
+    paths: &DblPaths,
+    procs: Arc<FakeProcs>,
+    terminator: Arc<FakeTerminator>,
+    secrets: Arc<FakeSecrets>,
+) -> Harness {
+    build(
+        tempfile::tempdir().expect("tempdir"),
+        paths.clone(),
+        procs,
+        terminator,
+        secrets,
+        Duration::from_millis(60),
+    )
+}
+
+/// The one constructor every harness variant funnels through.
+fn build(
+    dir: TempDir,
+    paths: DblPaths,
+    procs: Arc<FakeProcs>,
+    terminator: Arc<FakeTerminator>,
+    secrets: Arc<FakeSecrets>,
+    status_poll: Duration,
+) -> Harness {
+    let adapter = Arc::new(ScriptedAdapter::new(EngineKey::Postgresql));
     let busy_ports = Arc::new(Mutex::new(Vec::new()));
 
     let adapter_for_service = Arc::clone(&adapter);
@@ -609,17 +681,23 @@ fn build_over(paths: &DblPaths, procs: Arc<FakeProcs>) -> Harness {
             Ok(procs_for_spawn.spawn("/fake/engine/bin/postgres"))
         })),
         start_timeout: Some(Duration::from_millis(400)),
-        status_poll: Some(Duration::from_millis(60)),
+        status_poll: Some(status_poll),
         os: Some(crate::platform::Os::Linux),
         arch: Some(crate::platform::Arch::X86_64),
         host_glibc: Some((2, 39)),
         ..ServiceOptions::default()
     };
 
+    // Pre-install the runtime so create skips the download path (F-RTM-03 AC3).
+    let runtime_dir = paths
+        .runtime_dir(EngineKey::Postgresql, "18.7", crate::platform::Arch::X86_64)
+        .expect("runtime dir");
+    std::fs::create_dir_all(runtime_dir.join("bin")).expect("runtime bin");
+
     let service = LocalService::new(paths.clone(), options).expect("service");
     Harness {
-        dir: tempfile::tempdir().expect("tempdir"),
-        paths: paths.clone(),
+        dir,
+        paths,
         adapter,
         procs,
         terminator,
@@ -697,6 +775,49 @@ pub fn finished_result(
         ServiceEvent::OperationFinished { id, result } if id == op => Some(result.clone()),
         _ => None,
     })
+}
+
+/// Whether a `InstanceRemoved` for `id` appears in `events`.
+pub fn removed_for(events: &[ServiceEvent], id: &InstanceId) -> bool {
+    events
+        .iter()
+        .any(|event| matches!(event, ServiceEvent::InstanceRemoved { id: got } if got == id))
+}
+
+/// Whether a `StopForced` for `id` appears in `events`.
+pub fn stop_forced_for(events: &[ServiceEvent], id: &InstanceId) -> bool {
+    events
+        .iter()
+        .any(|event| matches!(event, ServiceEvent::StopForced { id: got } if got == id))
+}
+
+/// Counts `OperationFinished` events in `events`.
+pub fn finished_count(events: &[ServiceEvent]) -> usize {
+    events
+        .iter()
+        .filter(|event| matches!(event, ServiceEvent::OperationFinished { .. }))
+        .count()
+}
+
+/// Compact rendering used in an assertion message when an event order is wrong.
+pub fn describe(events: &[ServiceEvent]) -> Vec<String> {
+    events
+        .iter()
+        .map(|event| match event {
+            ServiceEvent::OperationProgress { stage, .. } => {
+                format!("Progress({})", stage.as_str())
+            }
+            ServiceEvent::InstanceChanged { view } => format!("Changed({})", view.status.as_str()),
+            ServiceEvent::OperationFinished { result, .. } => match result {
+                Ok(()) => "Finished(ok)".to_owned(),
+                Err(err) => format!("Finished({})", err.code),
+            },
+            ServiceEvent::DownloadProgress { .. } => "Download".to_owned(),
+            ServiceEvent::InstanceRemoved { .. } => "Removed".to_owned(),
+            ServiceEvent::StopForced { .. } => "StopForced".to_owned(),
+            _ => "Other".to_owned(),
+        })
+        .collect()
 }
 
 #[allow(dead_code)]

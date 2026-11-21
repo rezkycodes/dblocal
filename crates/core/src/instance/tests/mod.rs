@@ -8,6 +8,7 @@ mod download;
 mod harness;
 mod lifecycle;
 mod mutations;
+mod races;
 mod safety;
 
 use crate::model::{EngineKey, InstanceStatus};

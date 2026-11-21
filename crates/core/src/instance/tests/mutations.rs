@@ -8,6 +8,7 @@ use crate::model::{DeleteMode, EngineKey, InstanceStatus};
 use crate::service::{DblService, ServiceEvent};
 
 use super::harness::{FailAt, FakeProcs, Harness, test_port};
+use crate::process::probe::ProcessProbe;
 
 fn start_and_wait(h: &Harness, id: &crate::model::InstanceId) {
     let op = h.service.start_instance(id).expect("start");
@@ -238,25 +239,12 @@ fn a_missing_instance_is_reported_not_found() {
 }
 
 #[test]
-fn a_stop_whose_shutdown_and_kill_both_fail_still_ends_stopped() {
-    // The graceful request fails and the terminator refuses (it reports a
-    // mismatched identity), so the operation reports the failure but the row
-    // must not be left in `Stopping`.
-    struct Refusing;
-    impl crate::instance::Terminator for Refusing {
-        fn terminate(
-            &self,
-            _identity: &crate::process::identity::ProcessIdentity,
-            _grace: std::time::Duration,
-        ) -> crate::error::Result<crate::process::terminate::TerminateOutcome> {
-            Err(crate::DblError::Engine {
-                reason: "identity refused on purpose".to_owned(),
-            })
-        }
-    }
-    let h = Harness::with_options(EngineKey::Postgresql, |options| {
-        options.terminator = Some(Arc::new(Refusing));
-    });
+fn a_stop_whose_kill_is_refused_keeps_the_row_running_and_the_identity() {
+    // The graceful request fails, and the terminator refuses (a mismatched
+    // identity). The engine is still alive, so the honest row is `Running` with
+    // its identity intact: clearing it would orphan a live engine DBLocal could
+    // never stop again, which is exactly the defect this test used to bless.
+    let h = Harness::new(EngineKey::Postgresql);
     let port = test_port();
     let spec = h.spec("stuck", EngineKey::Postgresql, port);
     h.create(spec);
@@ -277,18 +265,67 @@ fn a_stop_whose_shutdown_and_kill_both_fail_still_ends_stopped() {
         .transition_status(&id, InstanceStatus::Stopped, InstanceStatus::Running)
         .expect("running");
     *h.adapter.fail_at.lock().unwrap() = FailAt::Shutdown;
+    h.terminator
+        .refuse
+        .store(true, std::sync::atomic::Ordering::SeqCst);
 
     let op = h.service.stop_instance(&id).expect("stop");
     let events = h.run(op.clone());
     assert!(
         matches!(super::harness::finished_result(&events, &op), Some(Err(_))),
-        "the refusal surfaces as a failure"
+        "a refused kill surfaces as a failure: {:#?}",
+        super::harness::describe(&events)
     );
+
     let settled = h.instance(&id).expect("row");
     assert_eq!(
         settled.status(),
-        InstanceStatus::Stopped,
-        "a failed stop must not strand the row in Stopping"
+        InstanceStatus::Running,
+        "an engine that survived must stay Running, not be called Stopped"
     );
-    assert!(settled.pid().is_none(), "the stale identity is cleared");
+    assert_eq!(
+        settled.pid(),
+        Some(identity.pid()),
+        "the identity must be kept so a retry can still stop the engine"
+    );
+    // The engine is still in the fake table, so a retry is meaningful.
+    assert!(
+        matches!(
+            h.procs.observe(identity.pid()),
+            crate::process::probe::ProcessObservation::Found { .. }
+        ),
+        "the refused process must still be running"
+    );
+}
+
+#[test]
+fn a_stop_still_runs_when_the_credential_cannot_be_read() {
+    // A locked keychain removes the graceful path (the adapter cannot
+    // authenticate) but must never prevent escalation through the process layer.
+    let h = Harness::new(EngineKey::Postgresql);
+    let port = test_port();
+    let spec = h.spec("locked", EngineKey::Postgresql, port);
+    h.create(spec);
+    let instance = h.instances().into_iter().next().expect("instance");
+    let id = instance.id().clone();
+    let ops = h.service.start_instance(&id).expect("start");
+    h.run(ops);
+    h.wait_for_status(&id, InstanceStatus::Running);
+
+    h.secrets
+        .unreadable
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    let op = h.service.stop_instance(&id).expect("stop");
+    let events = h.run(op.clone());
+    assert!(
+        matches!(super::harness::finished_result(&events, &op), Some(Ok(()))),
+        "an unreadable credential must not block a stop: {:#?}",
+        super::harness::describe(&events)
+    );
+    let stopped = h.wait_for_status(&id, InstanceStatus::Stopped);
+    assert!(stopped.pid().is_none());
+    assert!(
+        h.terminator.calls.load(std::sync::atomic::Ordering::SeqCst) >= 1,
+        "the process layer was still asked to stop it"
+    );
 }

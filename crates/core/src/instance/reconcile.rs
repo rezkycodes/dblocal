@@ -4,9 +4,12 @@
 //! a live process that is still ours (adopt as `Running`) or a dead/reused PID
 //! (mark `Stopped` and clear the identity). Nothing is signalled here.
 
+use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::SystemTime;
 
-use crate::model::{Instance, InstanceEvent, InstanceId, InstanceStatus};
+use crate::DblError;
+use crate::model::{ArchivedData, Instance, InstanceEvent, InstanceId, InstanceStatus};
 use crate::process::reconcile::{ReconcileRecord, reconcile};
 
 use super::helpers::{db_async, emit_changed, identity_of};
@@ -29,29 +32,46 @@ pub(crate) async fn reconcile_on_startup(inner: Arc<Inner>) {
         .filter(|instance| !inner.ops.is_busy(instance.id()))
         .collect();
 
-    // A `Deleting` row is terminal, so finishing it is the only way out: the
-    // delete it belongs to already archived or removed the data before the app
-    // died, and leaving the row would make the instance unreachable forever.
+    // A `Deleting` row is terminal and must be finished — but only when the
+    // delete is genuinely interrupted. The GUI and a CLI share this home, so a
+    // live delete in another process has written `Deleting` and is between its
+    // filesystem steps; a service starting in that window must not mistake it
+    // for a crash and revert it to `Stopped` (which would let a second delete
+    // run). The owner records its PID in a marker file while it works, and the
+    // row counts as in-flight only while that PID is still alive. A crashed
+    // owner leaves the same file, but its PID is gone, so recovery proceeds.
     for instance in &instances {
-        if instance.status() == InstanceStatus::Deleting {
+        if instance.status() == InstanceStatus::Deleting
+            && !super::delete::delete_in_flight(&inner, instance)
+        {
             finish_delete(&inner, instance).await;
         }
     }
 
-    // Finish interrupted operations first: a `Provisioning` or `Initializing`
-    // row means the app died mid-create.
+    // Finish interrupted creates by running the same cleanup a failed create
+    // runs: a half-initialised data directory and a possible credential must not
+    // survive as a "failed" zombie (`F-INS-01`: nothing half-created, ever).
     for instance in &instances {
         if matches!(
             instance.status(),
             InstanceStatus::Provisioning | InstanceStatus::Initializing
         ) {
-            mark(&inner, instance, InstanceEvent::Interrupted).await;
+            clean_interrupted_create(&inner, instance).await;
         }
     }
 
     let pending: Vec<Instance> = instances
         .iter()
         .filter(|instance| instance.status().holds_process())
+        // A `Starting` row with no recorded identity is a spawn in flight, not
+        // an orphan: no PID has been persisted yet, and the process that is
+        // starting it (possibly the other service sharing this home) has not
+        // finished. Writing it `Stopped` here is what let a second service
+        // clobber a live start. The owner finishes it, and a crashed one is
+        // retaken by the next `start_instance`.
+        .filter(|instance| {
+            !(instance.status() == InstanceStatus::Starting && identity_of(instance).is_none())
+        })
         .cloned()
         .collect();
     if pending.is_empty() {
@@ -63,12 +83,11 @@ pub(crate) async fn reconcile_on_startup(inner: Arc<Inner>) {
         .map(|instance| ReconcileRecord::new(instance.id().clone(), identity_of(instance)))
         .collect();
 
+    // Probe outside the store lock: `reconcile` walks the process table and must
+    // never hold the mutex while a probe can block.
     let probe = Arc::clone(&inner.probe);
-    let Ok(outcomes) = db_async(&inner, move |_store| {
-        Ok(reconcile(&records, probe.as_ref()))
-    })
-    .await
-    else {
+    let outcomes = super::helpers::blocking(move || Ok(reconcile(&records, probe.as_ref()))).await;
+    let Ok(outcomes) = outcomes else {
         return;
     };
 
@@ -84,45 +103,157 @@ pub(crate) async fn reconcile_on_startup(inner: Arc<Inner>) {
     }
 }
 
-/// Removes the row a crashed delete left behind, with the same guards the live
-/// delete uses (nothing outside the home is touched).
+/// Reconciles every row that was mid-operation when the app died.
+///
+/// **Never purges.** The delete mode is not recorded on the row, so a
+/// reconciliation that removed data would silently discard a user's choice of
+/// the D-18 default (`ArchiveData`). Each crash point has one safe answer:
+///
+/// | Data directory | Archive entry for the instance | Meaning                     | Action                    |
+/// |----------------|-------------------------------|-----------------------------|---------------------------|
+/// | present        | —                             | the move never happened     | abort: back to `Stopped`  |
+/// | gone           | none, `archive/<name>-*` exists | rename done, row not written | `add_archive`, then remove the row |
+/// | gone           | one recorded                  | rename and record done      | remove the row            |
+/// | gone           | none, no archive directory    | a purge had finished        | remove the row            |
+///
+/// A row whose data is still present is never removed, so `ArchiveData` always
+/// wins the benefit of the doubt; the user can retry the delete in either mode.
 async fn finish_delete(inner: &Arc<Inner>, instance: &Instance) {
     let id = instance.id().clone();
     let instance_dir = inner.paths.instance_dir(instance.name());
     let data_dir = inner.paths.data_dir(instance.name());
-    if super::helpers::safe_within(&inner.paths, &instance_dir).is_ok() {
-        let _ = super::helpers::blocking(move || {
-            super::helpers::remove_tree(&data_dir)?;
-            super::helpers::remove_tree(&instance_dir)
+
+    // (a) The data directory is still there: nothing was moved or removed, so
+    // the delete never got past writing `Deleting`. Put the row back and stop.
+    if data_dir.exists() {
+        let id2 = id.clone();
+        let _ = db_async(inner, move |store| {
+            store.transition_status(&id2, InstanceStatus::Deleting, InstanceStatus::Stopped)
         })
         .await;
+        emit_changed(inner, &id);
+        return;
     }
+
+    // (b) The rename happened but `add_archive` did not: register the directory
+    // we can see, so the data is not "data without a row you cannot find".
+    let recorded = inner
+        .db(|store| store.list_archives())
+        .map(|archives| {
+            archives
+                .into_iter()
+                .any(|archive| archive.instance_name() == instance.name())
+        })
+        .unwrap_or(false);
+    if !recorded && let Some(path) = unrecorded_archive(inner, instance) {
+        // The same stable id the live delete derives, so a second process's
+        // `add_archive` for the same instance lands on one row, not two.
+        let row = ArchivedData::new(
+            format!("arch-{}", short_id(&id)),
+            instance.name().clone(),
+            instance.engine(),
+            instance.version().to_owned(),
+            path.clone(),
+            super::helpers::dir_size(&path),
+            SystemTime::now(),
+        );
+        let row_for_store = row;
+        let added = db_async(inner, move |store| {
+            match store.add_archive(&row_for_store) {
+                Ok(()) => Ok(true),
+                Err(DblError::AlreadyExists { .. }) => Ok(false),
+                Err(err) => Err(err),
+            }
+        })
+        .await
+        .unwrap_or(false);
+        if added {
+            tracing::info!(
+                instance = %instance.name(),
+                path = %path.display(),
+                "registered an archive a crashed delete left behind"
+            );
+        }
+    }
+
+    // (c) Data is gone: the remove path is safe whatever the mode was, because
+    // nothing is deleted that the user did not already lose or archive.
     if let Ok(Some(reference)) = inner.db(|store| store.get_credential(&id)) {
         let _ = inner.secrets.delete(&reference);
     }
-    let _ = db_async(inner, move |store| {
-        store.delete_instance(&id).or_else(|err| match err {
-            crate::DblError::NotFound { .. } => Ok(()),
-            other => Err(other),
-        })
+    if super::helpers::safe_within(&inner.paths, &instance_dir).is_ok() {
+        let dir = instance_dir;
+        let _ = super::helpers::blocking(move || super::helpers::remove_tree(&dir)).await;
+    }
+    let id2 = id.clone();
+    let removed = db_async(inner, move |store| match store.delete_instance(&id2) {
+        Ok(()) => Ok(true),
+        Err(DblError::NotFound { .. }) => Ok(false),
+        Err(err) => Err(err),
     })
-    .await;
-    emit_changed(inner, &instance.id().clone());
+    .await
+    .unwrap_or(false);
+    inner.log_watchers.disable(&id);
+    if removed {
+        // Only announce a removal that happened.
+        super::helpers::emit_removed(inner, &id);
+    }
+}
+
+/// An `archive/<name>-*` directory that no archive row points at.
+///
+/// The path is derived by listing `archive/` and matching the instance's own
+/// name prefix, never from user text, and each candidate is re-validated.
+fn unrecorded_archive(inner: &Arc<Inner>, instance: &Instance) -> Option<PathBuf> {
+    let archive_root = inner.paths.archive_dir();
+    let prefix = format!("{}-", instance.name().as_str());
+    let entries = std::fs::read_dir(&archive_root).ok()?;
+    let mut found: Vec<PathBuf> = entries
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with(&prefix))
+        })
+        .filter(|path| super::helpers::safe_within(&inner.paths, path).is_ok())
+        .collect();
+    found.sort();
+    found.pop()
+}
+
+fn short_id(id: &InstanceId) -> String {
+    let value = id.as_str();
+    value.get(..8).unwrap_or(value).to_owned()
+}
+
+/// Cleans up a create the app died in the middle of.
+///
+/// The same cleanup a failed create runs (`helpers::rollback_create`): data and
+/// instance directories, both credential backends and the row. The verified
+/// runtime is kept because it is reusable.
+async fn clean_interrupted_create(inner: &Arc<Inner>, instance: &Instance) {
+    let removed = super::helpers::rollback_create(inner, instance.id(), instance.name()).await;
+    if removed {
+        super::helpers::emit_removed(inner, instance.id());
+    } else {
+        emit_changed(inner, instance.id());
+    }
 }
 
 async fn adopt(inner: &Arc<Inner>, instance: &Instance) {
-    // A `Stopping` record that is still alive is finished rather than adopted,
-    // so it never dangles; a live `Starting`/`Running` engine is adopted.
+    // A live `Stopping` row is adopted as `Running`, not written `Stopped`:
+    // nothing was signalled here, so the engine is still there, and pretending
+    // otherwise leaves a live process under a "stopped" label that collides on
+    // the port at the next start. The user can press Stop again.
     let next = match instance.status() {
-        InstanceStatus::Starting | InstanceStatus::Running => InstanceStatus::Running,
-        InstanceStatus::Stopping => InstanceStatus::Stopped,
+        InstanceStatus::Starting | InstanceStatus::Running | InstanceStatus::Stopping => {
+            InstanceStatus::Running
+        }
         other => other,
     };
     if next != instance.status() {
         persist(inner, instance.id(), next).await;
-    }
-    if next == InstanceStatus::Stopped {
-        clear_identity(inner, instance.id()).await;
     }
     emit_changed(inner, instance.id());
 }

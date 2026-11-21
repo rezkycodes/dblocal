@@ -1,4 +1,9 @@
 //! Stopping an instance (`F-INS-03` AC3).
+//!
+//! The row's final status is decided by what the process table says *after* the
+//! attempt, never by whether a signal "succeeded": a stop that cannot prove the
+//! engine is gone leaves the row `Running` with its identity intact, so the
+//! engine stays controllable instead of becoming an untracked orphan.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -6,12 +11,12 @@ use std::time::Duration;
 use crate::DblError;
 use crate::error::Result;
 use crate::model::{InstanceEvent, InstanceId, InstanceStatus};
-use crate::process::terminate::TerminateOutcome;
 use crate::service::{OperationId, OperationStage};
 
 use super::helpers::{
-    OpResult, blocking, claim, db_async, emit_changed, emit_stage, finish_operation, identity_of,
-    load, read_credential, run_context,
+    OpFailure, OpResult, Stopped, blocking, claim, credential_for_stop, db_async, emit_changed,
+    emit_stage, emit_stop_forced, finish_operation, identity_of, load, run_context,
+    terminate_verified,
 };
 use super::service::Inner;
 
@@ -33,89 +38,97 @@ pub(crate) fn stop_instance(inner: &Arc<Inner>, id: &InstanceId) -> Result<Opera
     let inner = Arc::clone(inner);
     let id = id.clone();
     inner.handle().spawn(async move {
-        let _lock = lock;
+        let lock = lock;
         emit_stage(&inner, &op, OperationStage::Queued);
-        let result = run_stop(Arc::clone(&inner), &op, &id, claimed).await;
-        // Whatever happened, the row must not stay in `Stopping`: a stuck
-        // transitional status blocks start, stop and delete alike.
-        settle_stopped(&inner, &id).await;
+        let result = run_stop(Arc::clone(&inner), &id, claimed).await;
+        drop(lock);
         finish_operation(&inner, &op, result);
     });
     Ok(op_id)
 }
 
-/// Finishes a stop that could not complete: the process is gone or
-/// unidentifiable, so the honest end state is `Stopped` with no identity.
-///
-/// Only emits a change when it actually settled a row, so a clean stop does not
-/// produce a duplicate `InstanceChanged` for the same status.
-async fn settle_stopped(inner: &Arc<Inner>, id: &InstanceId) {
-    let id2 = id.clone();
-    let settled = db_async(inner, move |store| {
-        let Some(current) = store.get_instance(&id2)? else {
-            return Ok(false);
-        };
-        if current.status() != InstanceStatus::Stopping {
-            return Ok(false);
-        }
-        store.update_process_identity(&id2, None, None, None)?;
-        store.update_status(&id2, InstanceStatus::Stopped)?;
-        Ok(true)
-    })
-    .await
-    .unwrap_or(false);
-    if settled {
-        emit_changed(inner, id);
-    }
-}
-
 async fn run_stop(
     inner: Arc<Inner>,
-    _op: &OperationId,
     id: &InstanceId,
     instance: crate::model::Instance,
 ) -> OpResult<()> {
-    // Stopping has no separate long phase from the caller's view: the engine is
+    // A stop has no separate long phase from the caller's view: the engine is
     // asked to shut down and the process layer escalates inside the grace
-    // period. `Starting` would be misleading here, so the operation goes
-    // `Queued -> Done` with the status changes in between.
-    // Ask the engine for a clean shutdown through its adapter, then escalate
-    // through the process layer, which re-validates before every signal.
-    let credential = read_credential(&inner, &instance)?;
+    // period. The operation goes `Queued -> Done` with the status change in
+    // between.
+
+    // The graceful path is best-effort. An unreadable credential only removes
+    // the adapter's ability to authenticate; escalation below still runs.
+    let credential = credential_for_stop(&inner, &instance);
     let ctx = run_context(&inner.paths, &instance, credential);
     let engine = instance.engine();
     let adapter = inner.adapter(engine);
     let ctx_for_shutdown = ctx.clone();
     let graceful = blocking(move || adapter.shutdown(&ctx_for_shutdown)).await;
+    let graceful_ok = graceful.is_ok();
 
-    let forced = match identity_of(&instance) {
-        Some(identity) => {
-            let terminator = Arc::clone(&inner.terminator);
-            let outcome = blocking(move || {
-                terminator.terminate(
-                    &identity,
-                    Duration::from_secs(crate::consts::STOP_GRACE_SECS),
-                )
-            })
-            .await?;
-            matches!(outcome, TerminateOutcome::Forced)
-        }
-        // No recorded process: a successful adapter shutdown is the whole story.
-        None => graceful.is_err(),
+    let identity = identity_of(&instance);
+    let had_identity = identity.is_some();
+    let terminated = terminate_verified(
+        &inner,
+        identity,
+        Duration::from_secs(crate::consts::STOP_GRACE_SECS),
+    )
+    .await;
+
+    // No recorded process at all: a successful adapter shutdown is the whole
+    // story. Otherwise the termination probe decided it.
+    let state = if had_identity {
+        terminated.state
+    } else if graceful_ok {
+        Stopped::Gone
+    } else {
+        // Nothing was recorded and the engine could not be asked to stop, so
+        // nothing proves it is gone.
+        Stopped::StillAlive
     };
 
-    // Clear the identity first, then announce `Stopped`, so a crash in between
-    // leaves no pidfile pointing at a process we no longer own.
+    match state {
+        Stopped::Gone => {
+            // Clear the identity first, then announce `Stopped`, so a crash in
+            // between leaves no pidfile pointing at a process we no longer own.
+            clear_identity_and_stop(&inner, id).await?;
+            // A forced kill is reported once, before the final change, and only
+            // when the terminator really escalated.
+            if terminated.forced {
+                emit_stop_forced(&inner, id);
+            }
+            emit_changed(&inner, id);
+            Ok(())
+        }
+        Stopped::StillAlive => {
+            // The engine survives: restore `Running` and keep the identity so a
+            // retried stop (or reconciliation) can still act on it.
+            let id2 = id.clone();
+            let restored = db_async(&inner, move |store| {
+                store.transition_status(&id2, InstanceStatus::Stopping, InstanceStatus::Running)
+            })
+            .await
+            .unwrap_or(false);
+            if !restored {
+                tracing::warn!(instance = %id, "could not restore Running after a failed stop");
+            }
+            emit_changed(&inner, id);
+            Err(OpFailure::new(DblError::Engine {
+                reason: format!("the engine for {id} is still running"),
+            }))
+        }
+    }
+}
+
+/// Clears the identity and moves `Stopping` to `Stopped` in one store step.
+async fn clear_identity_and_stop(inner: &Arc<Inner>, id: &InstanceId) -> OpResult<()> {
     let id2 = id.clone();
-    let _ = db_async(&inner, move |store| {
-        store.update_process_identity(&id2, None, None, None)
-    })
-    .await;
-    let id2 = id.clone();
-    db_async(&inner, move |store| {
+    db_async(inner, move |store| {
+        store.update_process_identity(&id2, None, None, None)?;
         let current = store
             .get_instance(&id2)?
-            .ok_or_else(|| crate::DblError::NotFound {
+            .ok_or_else(|| DblError::NotFound {
                 kind: "instance",
                 name: id2.as_str().to_owned(),
             })?;
@@ -127,12 +140,5 @@ async fn run_stop(
         Ok(())
     })
     .await?;
-
-    if forced {
-        tracing::info!(instance = %id, "engine ignored the graceful stop and was force-killed");
-    }
-    // The "kill paksa" report is the log line plus the `Stopped` event; the
-    // frozen `InstanceView` carries no per-stop flag.
-    emit_changed(&inner, id);
     Ok(())
 }

@@ -62,6 +62,23 @@ lose old events (`RecvError::Lagged`); it never blocks the service.
 A failed operation reports `OperationStage::Failed`; a successful one
 `OperationStage::Done`.
 
+### The two events that describe a row's fate
+
+`InstanceChanged` carries a view, so it cannot express "the row is gone" or "the
+stop was forced". Two additive events (contract commit `b377431`) do:
+
+- **`InstanceRemoved { id }`** — emitted after a row is actually removed: a
+  finished delete, a rolled-back create, and an interrupted create cleaned up by
+  reconciliation. It is never emitted when a row survived (for example an aborted
+  delete that returned the row to `Stopped`).
+- **`StopForced { id }`** — emitted once, before the final `InstanceChanged`, only
+  when the terminator actually escalated. A graceful stop never emits it, and it
+  is never claimed for a kill that did not land.
+
+**W2-B must not poll for removals.** It reacts to `InstanceRemoved` by dropping
+the row and any tab or log watcher for `id`; nothing has to be re-fetched on a
+timer, because every state change already arrives as an event.
+
 ### Stages as they actually occur
 
 The downloader runs download → verify → extract as one fused, safe pipeline
@@ -172,37 +189,83 @@ to `Failed`. A `Failed` instance can be started again.
 
 Claim `Stopping`; ask the adapter for a graceful shutdown; escalate through the
 injected terminator (production: `process::terminate`, which validates the
-identity before every signal and never signals a mismatch). The outcome is
-recorded; a forced kill logs "kill paksa" and `settle_stopped` finishes the row
-as `Stopped` with the identity cleared. The frozen `InstanceView` carries no
-per-stop flag, so "kill paksa" is observable as the log line plus the `Stopped`
-transition rather than as a dedicated field.
+identity before every signal and never signals a mismatch). The row's final
+status is decided by a **probe taken after the attempt**, never by whether a
+signal "succeeded":
+
+- the process is gone (or was never ours) → `Stopped`, identity cleared;
+- the process is still alive under our identity → **`Running`, identity kept**,
+  and the operation finishes with an error carrying a DBL code. An engine that
+  survived must stay controllable; clearing its identity would orphan it, since
+  reconciliation cannot adopt a row with no identity.
+
+An unreadable credential never blocks a stop: it only removes the graceful path,
+because the adapter cannot authenticate, and escalation still runs. A stop is
+supposed to make the engine go away, so a locked keychain is downgraded to "no
+credential" with a log line.
+
+A stop that really escalated emits `ServiceEvent::StopForced { id }` exactly
+once, before the final `InstanceChanged`, and never for a graceful stop
+(`F-INS-03` AC3: the user is told it was a kill paksa).
+
+The same "only clear an identity the probe proved gone" rule applies to
+`start.rs::fail_with_tail` (a failed start whose launcher still runs keeps its
+identity) and to `delete.rs::stop_for_delete` (a surviving engine fails the
+delete instead of orphaning it).
 
 ### Delete (`delete.rs`)
 
-Stop first when running. Claim `Deleting` (terminal) before touching anything.
-`ArchiveMode` moves the data directory into `archive/<name>-<stamp>`, records it,
-and removes the instance shell; `PurgeData` removes the whole instance directory.
-Both paths re-validate every path against the home with `safe_within` first. The
-row (and, by cascade, the credential pointer) is removed only after the data is
-safe, and the secret is deleted from both backends before the pointer that says
-where it lived is gone. The archive path is always derived by the service, never
-from user text.
+Stop first when running. Claim `Deleting` (terminal) synchronously with the
+compare-and-set, so a second caller is refused as busy before any operation
+starts. `ArchiveMode` moves the data directory into `archive/<name>-<stamp>`,
+records it, and removes the instance shell; `PurgeData` removes the whole
+instance directory. Both paths re-validate every path against the home with
+`safe_within` first. The row (and, by cascade, the credential pointer) is removed
+only after the data is safe, and the secret is deleted from both backends before
+the pointer that says where it lived is gone. The archive path is always derived
+by the service, never from user text. The archive id is stable
+(`arch-<instance-id-prefix>`, not time-derived) so two writers land on one row.
+A finished delete ends with `ServiceEvent::InstanceRemoved`.
+
+While it runs, the delete writes `delete.inflight` inside the instance directory,
+carrying its PID and a per-operation nonce. That is what lets another process (or
+a sibling service in the same process) tell "a delete is running" from "the app
+died mid-delete", which is the input to the recovery table below.
+
+If the engine survives the pre-delete stop, the delete **fails** rather than
+removing the row: an orphan with no identity left could never be stopped.
 
 ### Reconciliation (`reconcile.rs`) and supervision (`supervisor.rs`)
 
-Once from `new()`, on the runtime, never blocking it: interrupted creates
-(`Provisioning`/`Initializing`) become `Failed`; instances recorded as
-`Starting`/`Running`/`Stopping` are reconciled with the real probe. A matching
-live process is adopted as `Running`; anything else (`Absent`, `Reused`,
-`Unknown`) becomes `Stopped` with the identity cleared. A `Stopping` row found
-alive is finished as `Stopped`, not adopted. Instances with an operation running
-in this process are skipped, so reconciliation cannot race a create that started
-at the same instant as the app.
+Once from `new()`, on the runtime, never blocking it. Each case has one safe
+answer:
+
+| Row | Condition | Action |
+|---|---|---|
+| `Provisioning` / `Initializing` | — | run the create rollback (data, instance dir, both credential backends, the row), keep the verified runtime, emit `InstanceRemoved` |
+| `Deleting` | a live in-flight marker owns it | leave it alone: the delete is running, not crashed |
+| `Deleting` | data directory present | abort: back to `Stopped` (the delete never moved anything) |
+| `Deleting` | data gone, no record, `archive/<name>-*` exists | `add_archive` the directory it can see, then remove the row |
+| `Deleting` | data gone, a record exists (or a purge finished) | remove the row |
+| `Starting` | no identity recorded | leave it: a spawn is in flight in some process |
+| `Starting` / `Running` / `Stopping` | probe says still ours | adopt as `Running`, identity kept |
+| `Starting` / `Running` / `Stopping` | probe says absent/reused/unknown | `Stopped`, identity cleared |
+
+**Reconciliation never purges.** The delete mode is not on the row, so removing
+data during recovery would silently discard a user's `ArchiveData` choice (the
+D-18 default). A live `Stopping` row is adopted as `Running`, not written
+`Stopped`: nothing is signalled during reconciliation, so the engine is still
+there and a "stopped" label would only collide on the port at the next start.
+Rows removed by reconciliation end with `InstanceRemoved`.
 
 The supervisor polls at `STATUS_POLL_SECS` (injectable) and does nothing while no
-instance holds a process. When a watched process disappears it becomes `Failed`
-with the log tail diagnosed — never a silent `Running`.
+instance holds a process. It only considers settled `Running` rows, skips any
+instance with an operation in flight, and writes `Failed` with the
+compare-and-set `Running -> Failed`; the failure record and the identity clear
+happen only when that CAS wins. A stop that finishes between the probe and the
+write therefore wins, and a clean stop is never relabelled a crash. When a watched
+process really disappears the row becomes `Failed` with the log tail diagnosed —
+never a silent `Running`.
 
 ### Catalog (`catalog_ops.rs`)
 
@@ -261,8 +324,9 @@ is accepted each time with at most one spawn.
 | `lifecycle.rs` | Happy create/start/stop/delete; stage order; duplicate name; create failure leaves nothing; port taken between create and start; diagnosed unhealthy start plus retry; forced stop; delete in both modes; delete-while-running; credential pointer vs SQLite; no-auth |
 | `download.rs` | Real loopback server + real `tar.gz`: download→verify→extract with stages; wrong checksum leaves no runtime; cancel mid-download |
 | `catalog.rs` | Platform filtering; failed refresh keeps the catalog; TTL rule; `CatalogUpdated`; `suggest_port` skips owned ports; `validate_spec` names conflicts |
-| `mutations.rs` | Immediate-exit diagnosis and failure; event sequences for create/start/stop/delete; `change_port`; `data_size`; `set_autostart`; `tail_logs`; unknown operation; failed stop never strands `Stopping` |
-| `safety.rs` | Two-service race (50 rounds); archive traversal/absolute/symlink; runtime in use; reconciliation adopts/clears; supervisor notices a kill; interrupted create surfaces `Failed`; interrupted delete is finished; log watcher idle; sentinel scan; corrupt row cannot delete outside home |
+| `mutations.rs` | Immediate-exit diagnosis and failure; event sequences for create/start/stop/delete; `change_port`; `data_size`; `set_autostart`; `tail_logs`; unknown operation; a refused kill leaves the row `Running` with its identity; a stop with an unreadable credential still succeeds |
+| `races.rs` | Supervisor vs. clean stop (50 rounds, no `Failed`); delete ends with `InstanceRemoved`; failed create ends with `InstanceRemoved` and one `OperationFinished(Err)`; forced stop emits `StopForced` and a graceful one does not; a recovered `Failed` row carries a diagnosis from the log; a delete refuses a surviving engine |
+| `safety.rs` | Two-service start race (50 rounds, exactly one spawn); two concurrent deletes (50 rounds, one removal, one archive); delete crash-point table (both modes) never loses data; an in-flight delete owned elsewhere is left alone; live `Stopping` adopted as `Running`; interrupted create leaves nothing behind and emits `InstanceRemoved`; archive traversal/absolute/symlink; runtime in use; reconciliation adopts/clears; supervisor notices a kill; log watcher idle; sentinel scan; corrupt row cannot delete outside home |
 
 All ports come from `ports::test_support` (20000-29999); tests never bind 5432,
 3306, 3307, 6379 or an ephemeral port. `cargo test` needs no network beyond the
@@ -277,3 +341,13 @@ in-process loopback server and no real engine.
 - Windows-only paths (spawn flags, archive ACLs) are compiled but not run here.
 - `Verifying`/`Extracting` stage boundaries are inferred from download progress
   (see "Stages as they actually occur").
+- The delete in-flight marker distinguishes a live delete from a crash using the
+  owner PID against the live process table. A PID reused by a *different*
+  process in the few-millisecond window between the crash and the next launch
+  would read as "still running" and delay recovery by one launch; that is the
+  same accepted residual PID-reuse trade-off documented for engine identities,
+  and it never loses data (recovery simply waits, and the marker's nonce is not
+  registered so the following launch proceeds).
+- The two crash-point and race tests use the harness's fake process table. The
+  real `SysinfoProbe` and `process::terminate` paths they stand in for are
+  covered by W1-D's own evidence tests and by W2-C's real-engine e2e.

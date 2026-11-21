@@ -2,10 +2,16 @@
 //!
 //! Watches processes started or adopted by this service and marks an unexpected
 //! death as `Failed` with the log tail diagnosed, never as a silent `Running`.
+//!
+//! The supervisor only *witnesses* a death; it must never overwrite a state
+//! another code path owns. It therefore skips any instance with an operation in
+//! flight and writes `Failed` with a compare-and-set from `Running`, so a stop
+//! that finished between the probe and the write wins and the death is treated
+//! as the clean stop it was.
 
 use std::sync::Arc;
 
-use crate::model::{Instance, InstanceEvent, InstanceId, InstanceStatus};
+use crate::model::{Instance, InstanceStatus};
 use crate::process::identity::ProcessState;
 
 use super::helpers::{
@@ -33,10 +39,14 @@ async fn tick(inner: &Arc<Inner>) {
         return;
     };
     for instance in instances {
-        if !matches!(
-            instance.status(),
-            InstanceStatus::Running | InstanceStatus::Starting
-        ) {
+        // Only a settled `Running` row is the supervisor's business. `Starting`
+        // belongs to the start operation (which has its own failure handling),
+        // `Stopping` to the stop operation, and a busy row to whichever
+        // operation holds it.
+        if instance.status() != InstanceStatus::Running {
+            continue;
+        }
+        if inner.ops.is_busy(instance.id()) {
             continue;
         }
         let Some(identity) = identity_of(&instance) else {
@@ -63,6 +73,19 @@ async fn mark_failed(inner: &Arc<Inner>, instance: &Instance) {
     let tail = failure_tail(&log_path);
     let diagnosis = diagnose(inner, instance.engine(), &tail.join("\n"));
 
+    // The compare-and-set is the guard: if a stop (or anything else) moved the
+    // row out of `Running` after the probe, this loses and the record and the
+    // identity clear are skipped, so a clean stop is never relabelled a crash.
+    let id2 = id.clone();
+    let won = db_async(inner, move |store| {
+        store.transition_status(&id2, InstanceStatus::Running, InstanceStatus::Failed)
+    })
+    .await
+    .unwrap_or(false);
+    if !won {
+        return;
+    }
+
     if let Ok(mut failures) = inner.failures.lock() {
         failures.insert(
             id.clone(),
@@ -74,15 +97,10 @@ async fn mark_failed(inner: &Arc<Inner>, instance: &Instance) {
             ),
         );
     }
-
     let id2 = id.clone();
     let _ = db_async(inner, move |store| {
-        store.update_status(&id2, InstanceStatus::Failed)?;
         store.update_process_identity(&id2, None, None, None)
     })
     .await;
     emit_changed(inner, &id);
 }
-
-#[allow(dead_code)]
-fn _unused(_: InstanceId, _: InstanceEvent) {}

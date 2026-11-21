@@ -12,9 +12,9 @@ use crate::process::identity::{ProcessIdentity, ProcessState};
 use crate::service::{OperationId, OperationStage, ServiceEvent};
 
 use super::helpers::{
-    OpFailure, OpResult, blocking, db_async, emit_changed, emit_stage, ensure_port_is_free,
-    failure_info, failure_tail, finish_operation, identity_of, load, log_file_for, read_credential,
-    run_context, start_timeout, view_for,
+    OpFailure, OpResult, Stopped, blocking, db_async, emit_changed, emit_stage,
+    ensure_port_is_free, failure_info, failure_tail, finish_operation, identity_of, load,
+    log_file_for, read_credential, run_context, start_timeout, terminate_verified, view_for,
 };
 use super::service::Inner;
 
@@ -59,9 +59,13 @@ pub(crate) fn start_instance(inner: &Arc<Inner>, id: &InstanceId) -> Result<Oper
     let inner = Arc::clone(inner);
     let id = id.clone();
     inner.handle().spawn(async move {
-        let _lock = lock;
+        let lock = lock;
         emit_stage(&inner, &op, OperationStage::Queued);
         let result = run_start(Arc::clone(&inner), &op, &id, claimed).await;
+        // Release the instance lock before announcing completion: a caller that
+        // reacts to `OperationFinished` by retrying (a failed start is retryable)
+        // must not race a lock that is still held for another few microseconds.
+        drop(lock);
         finish_operation(&inner, &op, result);
     });
     Ok(op_id)
@@ -151,22 +155,26 @@ async fn run_start_inner(
         }
     };
 
-    let identity = match resolve_identity(inner, engine, instance, &spawned, &log_path).await {
-        Some(identity) => identity,
-        None => {
-            return fail(
-                inner,
-                id,
-                instance,
-                &log_path,
-                DblError::Engine {
-                    reason: "the engine process could not be identified".to_owned(),
-                },
-                StartFailure::Unknown,
-            )
-            .await;
-        }
-    };
+    // One deadline covers both "the engine publishes its PID" and "the engine
+    // answers a health probe": that is the start timeout's whole meaning.
+    let deadline = Instant::now() + inner.start_timeout.unwrap_or_else(|| start_timeout(engine));
+    let identity =
+        match resolve_identity(inner, engine, instance, &spawned, &log_path, deadline).await {
+            Some(identity) => identity,
+            None => {
+                return fail(
+                    inner,
+                    id,
+                    instance,
+                    &log_path,
+                    DblError::Engine {
+                        reason: "the engine process could not be identified".to_owned(),
+                    },
+                    StartFailure::Unknown,
+                )
+                .await;
+            }
+        };
 
     // Persist the identity in the same step as the spawn result, so a crash at
     // any instant leaves a state reconciliation can interpret.
@@ -184,7 +192,6 @@ async fn run_start_inner(
         .await?;
     }
 
-    let deadline = Instant::now() + inner.start_timeout.unwrap_or_else(|| start_timeout(engine));
     match poll_health(inner, instance, &ctx, &identity, deadline).await {
         Ok(()) => {
             let id2 = id.clone();
@@ -255,17 +262,21 @@ async fn poll_health(
 ///
 /// `pg_ctl` exits once the postmaster is up, so the recorded PID must come from
 /// `postmaster.pid` (or `valkey.pid`) and be re-observed from the live table.
+///
+/// `deadline` is the same start deadline the readiness poll uses: if the engine
+/// cannot publish its PID within its start timeout, the start has failed and
+/// there is no point waiting longer.
 async fn resolve_identity(
     inner: &Arc<Inner>,
     engine: EngineKey,
     instance: &Instance,
     spawned: &ProcessIdentity,
     log_path: &Path,
+    deadline: Instant,
 ) -> Option<ProcessIdentity> {
     match identity_source(engine) {
         IdentitySource::Child => Some(spawned.clone()),
         IdentitySource::PostmasterPid | IdentitySource::ValkeyPid => {
-            let deadline = Instant::now() + Duration::from_secs(5);
             loop {
                 if let Some(pid) = read_engine_pid(inner, engine, instance) {
                     let probe = Arc::clone(&inner.probe);
@@ -324,6 +335,10 @@ async fn fail(
 }
 
 /// Terminates whatever is left, records the failure and moves to `Failed`.
+///
+/// The identity is only cleared when a post-attempt probe proves the process is
+/// gone. A failed start whose launcher still runs must keep its identity, or the
+/// engine becomes an orphan DBLocal can never stop again.
 async fn fail_with_tail(
     inner: &Arc<Inner>,
     id: &InstanceId,
@@ -331,18 +346,15 @@ async fn fail_with_tail(
     diagnosis: StartFailure,
     tail: Vec<String>,
 ) -> OpResult<()> {
-    if let Ok(current) = load(inner, id)
-        && let Some(identity) = identity_of(&current)
-    {
-        let terminator = Arc::clone(&inner.terminator);
-        let _ = blocking(move || {
-            terminator.terminate(
-                &identity,
-                Duration::from_secs(crate::consts::STOP_GRACE_SECS),
-            )
-        })
-        .await;
-    }
+    let identity = load(inner, id)
+        .ok()
+        .and_then(|current| identity_of(&current));
+    let terminated = terminate_verified(
+        inner,
+        identity,
+        Duration::from_secs(crate::consts::STOP_GRACE_SECS),
+    )
+    .await;
 
     let info = failure_info(err.code(), err.user_message(), diagnosis, tail);
     if let Ok(mut failures) = inner.failures.lock() {
@@ -350,11 +362,21 @@ async fn fail_with_tail(
     }
 
     let id2 = id.clone();
+    let still_alive = terminated.state == Stopped::StillAlive;
     let _ = db_async(inner, move |store| {
-        store.update_process_identity(&id2, None, None, None)?;
+        if !still_alive {
+            store.update_process_identity(&id2, None, None, None)?;
+        }
         store.update_status(&id2, InstanceStatus::Failed)
     })
     .await;
+
+    if still_alive {
+        tracing::warn!(
+            instance = %id,
+            "the failed start left a live process; its identity is kept for a later stop"
+        );
+    }
 
     if let Ok(current) = load(inner, id)
         && let Ok(mut view) = view_for(inner, &current)

@@ -473,6 +473,16 @@ impl LocalService {
         self.inner.paths.root()
     }
 
+    /// The shared state behind the service.
+    ///
+    /// Exposed only to this module's tests so they can call a pure helper
+    /// (`catalog_ops::source_for`) directly instead of driving it through a
+    /// download.
+    #[cfg(test)]
+    pub(crate) fn inner(&self) -> &Arc<Inner> {
+        &self.inner
+    }
+
     /// How many subscribers are listening, for diagnostics.
     pub fn subscriber_count(&self) -> usize {
         self.inner.events.receiver_count()

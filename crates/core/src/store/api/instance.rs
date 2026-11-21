@@ -231,8 +231,16 @@ impl Store {
         );
         match result {
             Ok(affected) => {
-                self.conn.execute_batch("COMMIT").map_err(map_sql)?;
-                Ok(affected == 1)
+                // A failing COMMIT would otherwise leave the transaction open on
+                // this connection, poisoning every later statement; roll back so
+                // the handle stays usable and the error is reported.
+                match self.conn.execute_batch("COMMIT") {
+                    Ok(()) => Ok(affected == 1),
+                    Err(err) => {
+                        let _ = self.conn.execute_batch("ROLLBACK");
+                        Err(map_sql(err))
+                    }
+                }
             }
             Err(err) => {
                 let _ = self.conn.execute_batch("ROLLBACK");

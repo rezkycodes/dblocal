@@ -14,7 +14,7 @@ use crate::service::{OperationId, OperationStage};
 use super::catalog_ops::{record_runtime, runtime_is_installed, source_for};
 use super::helpers::{
     blocking, db_async, emit_changed, emit_stage, ensure_port_is_free, finish_operation,
-    remove_tree, runtime_dir_for, safe_within, secret_for, validate_spec_boundary,
+    runtime_dir_for, secret_for, validate_spec_boundary,
 };
 use super::read_ops::suggest_port;
 use super::service::{Inner, RuntimeSource};
@@ -303,46 +303,14 @@ fn check_cancel(token: &CancellationToken) -> super::helpers::OpResult<()> {
     }
 }
 
-/// Removes everything a failed create could have produced.
+/// Removes everything a failed create could have produced, then tells consumers
+/// the row is gone.
 ///
-/// The verified runtime is deliberately kept: it is reusable, and removing it
-/// would make the retry download it again.
+/// Delegates to [`super::helpers::rollback_create`], which re-validates every
+/// path and refuses to delete when one errs, so the check is not decorative.
 async fn rollback(inner: &Arc<Inner>, id: &InstanceId, spec: &InstanceSpec) {
-    let instance_dir = inner.paths.instance_dir(spec.name());
-    let data_dir = inner.paths.data_dir(spec.name());
-    let _ = safe_within(&inner.paths, &instance_dir);
-    let _ = safe_within(&inner.paths, &data_dir);
-    let _ = blocking(move || {
-        remove_tree(&data_dir)?;
-        remove_tree(&instance_dir)
-    })
-    .await;
-
-    for backend in [CredentialBackend::File, CredentialBackend::Keychain] {
-        let reference = credential_ref_for(id, backend, spec.engine().default_superuser());
-        let _ = inner.secrets.delete(&reference);
-    }
-
-    let id2 = id.clone();
-    let _ = db_async(inner, move |store| {
-        store.delete_instance(&id2).or_else(|err| match err {
-            DblError::NotFound { .. } => Ok(()),
-            other => Err(other),
-        })
-    })
-    .await;
-    emit_removed(inner, id);
-}
-
-fn emit_removed(inner: &Inner, id: &InstanceId) {
-    // No row left means nothing to announce; the operation event carries the
-    // error, and a stale view would resurrect a deleted instance in the UI.
-    if inner
-        .db(|store| store.get_instance(id))
-        .ok()
-        .flatten()
-        .is_some()
-    {
-        emit_changed(inner, id);
+    let removed = super::helpers::rollback_create(inner, id, spec.name()).await;
+    if removed {
+        super::helpers::emit_removed(inner, id);
     }
 }
