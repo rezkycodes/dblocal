@@ -9,14 +9,26 @@ impl HostProbe for SystemHost {
         std::env::var_os("PATH").and_then(|paths| {
             std::env::split_paths(&paths).find_map(|dir| {
                 let candidate = dir.join(name);
-                if candidate.is_file() { Some(candidate) } else { None }
+                if candidate.is_file() {
+                    Some(candidate)
+                } else {
+                    None
+                }
             })
         })
     }
-    fn path_exists(&self, path: &std::path::Path) -> bool { path.exists() }
-    fn desktop_entries(&self) -> Vec<String> { vec![] }
-    fn macos_applications(&self) -> Vec<String> { vec![] }
-    fn windows_app_paths(&self) -> Vec<String> { vec![] }
+    fn path_exists(&self, path: &std::path::Path) -> bool {
+        path.exists()
+    }
+    fn desktop_entries(&self) -> Vec<String> {
+        vec![]
+    }
+    fn macos_applications(&self) -> Vec<String> {
+        vec![]
+    }
+    fn windows_app_paths(&self) -> Vec<String> {
+        vec![]
+    }
 }
 
 #[test]

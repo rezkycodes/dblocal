@@ -13,7 +13,10 @@ pub fn assert_no_secret(plan: &LaunchPlan, secret: &str) {
         assert!(!url.contains(secret), "secret leaked in url: {url:?}");
     }
     if let Some(cmd) = plan.command_string() {
-        assert!(!cmd.contains(secret), "secret leaked in command_string: {cmd:?}");
+        assert!(
+            !cmd.contains(secret),
+            "secret leaked in command_string: {cmd:?}"
+        );
     }
     for env in plan.env() {
         assert_ne!(env.name(), secret, "secret leaked in env name");

@@ -82,7 +82,11 @@ pub fn windows_launcher_script_path(name: &str) -> String {
     format!("%TEMP%\\dblocal-open-client\\{name}")
 }
 
-fn build_posix_launcher(client_program: &Path, client_argv: &[String], env: &[LaunchEnv]) -> String {
+fn build_posix_launcher(
+    client_program: &Path,
+    client_argv: &[String],
+    env: &[LaunchEnv],
+) -> String {
     let mut out = String::from("#!/bin/sh\nset -eu\nrm -f -- \"$0\"\n");
     for var in env {
         out.push_str("export ");
@@ -128,7 +132,7 @@ fn build_windows_launcher(
 }
 
 fn escape_cmd_set_value(value: &str) -> String {
-    value.replace('\r', "").replace('\n', "").replace('"', "\"\"")
+    value.replace(['\r', '\n'], "").replace('"', "\"\"")
 }
 
 /// Escapes a string for an AppleScript double-quoted literal.

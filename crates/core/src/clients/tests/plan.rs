@@ -23,12 +23,23 @@ impl FakeHost {
 
 impl crate::clients::HostProbe for FakeHost {
     fn which(&self, name: &str) -> Option<PathBuf> {
-        self.bins.iter().find(|(n, _)| n == name).map(|(_, p)| p.clone())
+        self.bins
+            .iter()
+            .find(|(n, _)| n == name)
+            .map(|(_, p)| p.clone())
     }
-    fn path_exists(&self, _path: &std::path::Path) -> bool { false }
-    fn desktop_entries(&self) -> Vec<String> { vec![] }
-    fn macos_applications(&self) -> Vec<String> { vec![] }
-    fn windows_app_paths(&self) -> Vec<String> { vec![] }
+    fn path_exists(&self, _path: &std::path::Path) -> bool {
+        false
+    }
+    fn desktop_entries(&self) -> Vec<String> {
+        vec![]
+    }
+    fn macos_applications(&self) -> Vec<String> {
+        vec![]
+    }
+    fn windows_app_paths(&self) -> Vec<String> {
+        vec![]
+    }
 }
 
 fn target(engine: EngineKey) -> OpenTarget {
@@ -254,7 +265,14 @@ fn hostile_corpus_never_leaks_secret_and_is_quoted_in_script() {
     ];
     let s = SecretString::from("TOPSECRET");
     for name in hostile {
-        let t = OpenTarget::new(EngineKey::Postgresql, "127.0.0.1", 5432, "postgres", "postgres", name);
+        let t = OpenTarget::new(
+            EngineKey::Postgresql,
+            "127.0.0.1",
+            5432,
+            "postgres",
+            "postgres",
+            name,
+        );
         let plan = plan_open(
             &client(ClientKind::Psql, "/usr/bin/psql"),
             &t,
@@ -274,23 +292,95 @@ fn hostile_corpus_never_leaks_secret_and_is_quoted_in_script() {
 #[test]
 fn every_golden_plan_has_no_secret() {
     let cases: Vec<(ClientKind, EngineKey, OsKind, TerminalChoice)> = vec![
-        (ClientKind::Psql, EngineKey::Postgresql, OsKind::Linux, linux_terminal()),
-        (ClientKind::Psql, EngineKey::Postgresql, OsKind::Macos, TerminalChoice::new("open", TerminalKind::MacOsTerminalApp)),
-        (ClientKind::Psql, EngineKey::Postgresql, OsKind::Windows, TerminalChoice::new("wt.exe", TerminalKind::WindowsTerminal)),
-        (ClientKind::Mysql, EngineKey::Mysql, OsKind::Linux, linux_terminal()),
-        (ClientKind::Mariadb, EngineKey::Mariadb, OsKind::Linux, linux_terminal()),
-        (ClientKind::ValkeyCli, EngineKey::Valkey, OsKind::Linux, linux_terminal()),
-        (ClientKind::RedisCli, EngineKey::Valkey, OsKind::Linux, linux_terminal()),
-        (ClientKind::TablePlus, EngineKey::Postgresql, OsKind::Linux, linux_terminal()),
-        (ClientKind::TablePlus, EngineKey::Mysql, OsKind::Linux, linux_terminal()),
-        (ClientKind::TablePlus, EngineKey::Valkey, OsKind::Linux, linux_terminal()),
-        (ClientKind::DBeaver, EngineKey::Postgresql, OsKind::Linux, linux_terminal()),
-        (ClientKind::DBeaver, EngineKey::Valkey, OsKind::Linux, linux_terminal()),
-        (ClientKind::DbDelve, EngineKey::Postgresql, OsKind::Linux, linux_terminal()),
+        (
+            ClientKind::Psql,
+            EngineKey::Postgresql,
+            OsKind::Linux,
+            linux_terminal(),
+        ),
+        (
+            ClientKind::Psql,
+            EngineKey::Postgresql,
+            OsKind::Macos,
+            TerminalChoice::new("open", TerminalKind::MacOsTerminalApp),
+        ),
+        (
+            ClientKind::Psql,
+            EngineKey::Postgresql,
+            OsKind::Windows,
+            TerminalChoice::new("wt.exe", TerminalKind::WindowsTerminal),
+        ),
+        (
+            ClientKind::Mysql,
+            EngineKey::Mysql,
+            OsKind::Linux,
+            linux_terminal(),
+        ),
+        (
+            ClientKind::Mariadb,
+            EngineKey::Mariadb,
+            OsKind::Linux,
+            linux_terminal(),
+        ),
+        (
+            ClientKind::ValkeyCli,
+            EngineKey::Valkey,
+            OsKind::Linux,
+            linux_terminal(),
+        ),
+        (
+            ClientKind::RedisCli,
+            EngineKey::Valkey,
+            OsKind::Linux,
+            linux_terminal(),
+        ),
+        (
+            ClientKind::TablePlus,
+            EngineKey::Postgresql,
+            OsKind::Linux,
+            linux_terminal(),
+        ),
+        (
+            ClientKind::TablePlus,
+            EngineKey::Mysql,
+            OsKind::Linux,
+            linux_terminal(),
+        ),
+        (
+            ClientKind::TablePlus,
+            EngineKey::Valkey,
+            OsKind::Linux,
+            linux_terminal(),
+        ),
+        (
+            ClientKind::DBeaver,
+            EngineKey::Postgresql,
+            OsKind::Linux,
+            linux_terminal(),
+        ),
+        (
+            ClientKind::DBeaver,
+            EngineKey::Valkey,
+            OsKind::Linux,
+            linux_terminal(),
+        ),
+        (
+            ClientKind::DbDelve,
+            EngineKey::Postgresql,
+            OsKind::Linux,
+            linux_terminal(),
+        ),
     ];
     let s = SecretString::from("CANARY_SECRET_123");
     for (kind, engine, os, terminal) in cases {
-        let plan = plan_open(&client(kind, "/usr/bin/client"), &target(engine), Some(&s), os, &terminal).unwrap();
+        let plan = plan_open(
+            &client(kind, "/usr/bin/client"),
+            &target(engine),
+            Some(&s),
+            os,
+            &terminal,
+        )
+        .unwrap();
         assert_no_secret(&plan, "CANARY_SECRET_123");
     }
 }

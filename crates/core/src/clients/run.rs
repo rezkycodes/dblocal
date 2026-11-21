@@ -5,7 +5,7 @@ use std::process::Command;
 
 use crate::error::{DblError, Result};
 
-use super::plan::{LaunchEnv, LaunchPlan, TempFile};
+use super::plan::{LaunchPlan, TempFile};
 
 /// Executes a prepared launch plan.
 ///
@@ -21,13 +21,13 @@ pub struct SystemSpawner;
 
 impl Spawner for SystemSpawner {
     fn spawn(&self, plan: &LaunchPlan) -> Result<()> {
-        if let Some(required) = plan.required_path() {
-            if !required.exists() {
-                return Err(DblError::NotFound {
-                    kind: "client",
-                    name: required.display().to_string(),
-                });
-            }
+        if let Some(required) = plan.required_path()
+            && !required.exists()
+        {
+            return Err(DblError::NotFound {
+                kind: "client",
+                name: required.display().to_string(),
+            });
         }
         let script_path = materialize_temp_file(plan.temp_file())?;
         let mut cmd = Command::new(plan.program());
@@ -92,7 +92,7 @@ fn materialize_temp_file(temp: Option<&TempFile>) -> Result<Option<PathBuf>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::clients::LaunchPlan;
+    use crate::clients::{LaunchEnv, LaunchPlan};
     use crate::secret::SecretString;
 
     struct NoopSpawner;

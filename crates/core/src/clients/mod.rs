@@ -14,12 +14,11 @@ mod terminal;
 
 pub use detect::{ClientKind, DetectedClient, HostProbe, OpenMenu, detect_clients};
 pub use plan::{
-    LaunchEnv, LaunchPlan, OpenTarget, OsKind, TempFile, TerminalChoice, TerminalKind,
-    plan_open,
+    LaunchEnv, LaunchPlan, OpenTarget, OsKind, TempFile, TerminalChoice, TerminalKind, plan_open,
 };
-pub use terminal::resolve_terminal;
 pub use quote::shell_quote;
 pub use run::{Spawner, SystemSpawner, run};
+pub use terminal::resolve_terminal;
 
 #[cfg(test)]
 mod tests;

@@ -44,12 +44,24 @@ impl OpenTarget {
         }
     }
 
-    pub fn engine(&self) -> EngineKey { self.engine }
-    pub fn host(&self) -> &str { &self.host }
-    pub fn port(&self) -> u16 { self.port }
-    pub fn username(&self) -> &str { &self.username }
-    pub fn database(&self) -> &str { &self.database }
-    pub fn instance_name(&self) -> &str { &self.instance_name }
+    pub fn engine(&self) -> EngineKey {
+        self.engine
+    }
+    pub fn host(&self) -> &str {
+        &self.host
+    }
+    pub fn port(&self) -> u16 {
+        self.port
+    }
+    pub fn username(&self) -> &str {
+        &self.username
+    }
+    pub fn database(&self) -> &str {
+        &self.database
+    }
+    pub fn instance_name(&self) -> &str {
+        &self.instance_name
+    }
 }
 
 /// OS family for deterministic plan generation.
@@ -62,9 +74,13 @@ pub enum OsKind {
 
 impl OsKind {
     pub const fn current() -> Self {
-        if cfg!(target_os = "macos") { Self::Macos }
-        else if cfg!(target_os = "windows") { Self::Windows }
-        else { Self::Linux }
+        if cfg!(target_os = "macos") {
+            Self::Macos
+        } else if cfg!(target_os = "windows") {
+            Self::Windows
+        } else {
+            Self::Linux
+        }
     }
 }
 
@@ -77,10 +93,17 @@ pub struct TerminalChoice {
 
 impl TerminalChoice {
     pub fn new(program: impl Into<PathBuf>, kind: TerminalKind) -> Self {
-        Self { program: program.into(), kind }
+        Self {
+            program: program.into(),
+            kind,
+        }
     }
-    pub fn program(&self) -> &PathBuf { &self.program }
-    pub fn kind(&self) -> TerminalKind { self.kind }
+    pub fn program(&self) -> &PathBuf {
+        &self.program
+    }
+    pub fn kind(&self) -> TerminalKind {
+        self.kind
+    }
 }
 
 /// Supported terminal emulator kinds.
@@ -106,10 +129,17 @@ pub struct LaunchEnv {
 
 impl LaunchEnv {
     pub fn new(name: impl Into<String>, value: SecretString) -> Self {
-        Self { name: name.into(), value }
+        Self {
+            name: name.into(),
+            value,
+        }
     }
-    pub fn name(&self) -> &str { &self.name }
-    pub fn value(&self) -> &SecretString { &self.value }
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+    pub fn value(&self) -> &SecretString {
+        &self.value
+    }
 }
 
 /// A private temporary file the spawner should create before launch.
@@ -122,11 +152,21 @@ pub struct TempFile {
 
 impl TempFile {
     pub fn new(name_hint: impl Into<String>, contents: SecretString, mode: u32) -> Self {
-        Self { name_hint: name_hint.into(), contents, mode }
+        Self {
+            name_hint: name_hint.into(),
+            contents,
+            mode,
+        }
     }
-    pub fn name_hint(&self) -> &str { &self.name_hint }
-    pub fn contents(&self) -> &SecretString { &self.contents }
-    pub fn mode(&self) -> u32 { self.mode }
+    pub fn name_hint(&self) -> &str {
+        &self.name_hint
+    }
+    pub fn contents(&self) -> &SecretString {
+        &self.contents
+    }
+    pub fn mode(&self) -> u32 {
+        self.mode
+    }
 }
 
 /// A pure, executable launch description.
@@ -166,13 +206,27 @@ impl LaunchPlan {
         self
     }
 
-    pub fn program(&self) -> &PathBuf { &self.program }
-    pub fn argv(&self) -> &[String] { &self.argv }
-    pub fn env(&self) -> &[LaunchEnv] { &self.env }
-    pub fn url(&self) -> Option<&str> { self.url.as_deref() }
-    pub fn temp_file(&self) -> Option<&TempFile> { self.temp_file.as_ref() }
-    pub fn command_string(&self) -> Option<&str> { self.command_string.as_deref() }
-    pub fn required_path(&self) -> Option<&PathBuf> { self.required_path.as_ref() }
+    pub fn program(&self) -> &PathBuf {
+        &self.program
+    }
+    pub fn argv(&self) -> &[String] {
+        &self.argv
+    }
+    pub fn env(&self) -> &[LaunchEnv] {
+        &self.env
+    }
+    pub fn url(&self) -> Option<&str> {
+        self.url.as_deref()
+    }
+    pub fn temp_file(&self) -> Option<&TempFile> {
+        self.temp_file.as_ref()
+    }
+    pub fn command_string(&self) -> Option<&str> {
+        self.command_string.as_deref()
+    }
+    pub fn required_path(&self) -> Option<&PathBuf> {
+        self.required_path.as_ref()
+    }
 }
 
 /// Plans how to open `client` against `target`.
@@ -196,10 +250,11 @@ pub fn plan_open(
         ClientKind::TablePlus => plan_tableplus(target, os),
         ClientKind::DBeaver => plan_dbeaver(client, target),
         ClientKind::DbDelve => plan_dbdelve(client, target),
-        ClientKind::Psql | ClientKind::Mysql | ClientKind::Mariadb
-        | ClientKind::ValkeyCli | ClientKind::RedisCli => {
-            plan_cli(client, target, credential, os, terminal)
-        }
+        ClientKind::Psql
+        | ClientKind::Mysql
+        | ClientKind::Mariadb
+        | ClientKind::ValkeyCli
+        | ClientKind::RedisCli => plan_cli(client, target, credential, os, terminal),
     }
 }
 
@@ -220,9 +275,24 @@ fn plan_tableplus(target: &OpenTarget, os: OsKind) -> Result<LaunchPlan> {
     let (program, argv) = match os {
         OsKind::Linux => ("xdg-open".to_owned(), vec![url.clone()]),
         OsKind::Macos => ("open".to_owned(), vec![url.clone()]),
-        OsKind::Windows => ("cmd.exe".to_owned(), vec!["/c".to_owned(), "start".to_owned(), "".to_owned(), url.clone()]),
+        OsKind::Windows => (
+            "cmd.exe".to_owned(),
+            vec![
+                "/c".to_owned(),
+                "start".to_owned(),
+                "".to_owned(),
+                url.clone(),
+            ],
+        ),
     };
-    Ok(LaunchPlan::new(program, argv, vec![], Some(url), None, None))
+    Ok(LaunchPlan::new(
+        program,
+        argv,
+        vec![],
+        Some(url),
+        None,
+        None,
+    ))
 }
 
 fn plan_dbeaver(client: &DetectedClient, target: &OpenTarget) -> Result<LaunchPlan> {
@@ -240,7 +310,15 @@ fn plan_dbeaver(client: &DetectedClient, target: &OpenTarget) -> Result<LaunchPl
         sanitize_con_value(target.username()),
         sanitize_con_value(target.database()),
     );
-    Ok(LaunchPlan::new(client.path().clone(), vec!["-con".to_owned(), spec], vec![], None, None, None).with_required_path(client.path().clone()))
+    Ok(LaunchPlan::new(
+        client.path().clone(),
+        vec!["-con".to_owned(), spec],
+        vec![],
+        None,
+        None,
+        None,
+    )
+    .with_required_path(client.path().clone()))
 }
 
 fn plan_dbdelve(client: &DetectedClient, target: &OpenTarget) -> Result<LaunchPlan> {
@@ -256,15 +334,25 @@ fn plan_dbdelve(client: &DetectedClient, target: &OpenTarget) -> Result<LaunchPl
     Ok(LaunchPlan::new(
         client.path().clone(),
         vec![
-            "--driver".to_owned(), driver.to_owned(),
-            "--host".to_owned(), target.host().to_owned(),
-            "--port".to_owned(), target.port().to_string(),
-            "--user".to_owned(), target.username().to_owned(),
-            "--database".to_owned(), target.database().to_owned(),
-            "--name".to_owned(), target.instance_name().to_owned(),
+            "--driver".to_owned(),
+            driver.to_owned(),
+            "--host".to_owned(),
+            target.host().to_owned(),
+            "--port".to_owned(),
+            target.port().to_string(),
+            "--user".to_owned(),
+            target.username().to_owned(),
+            "--database".to_owned(),
+            target.database().to_owned(),
+            "--name".to_owned(),
+            target.instance_name().to_owned(),
         ],
-        vec![], None, None, None,
-    ).with_required_path(client.path().clone()))
+        vec![],
+        None,
+        None,
+        None,
+    )
+    .with_required_path(client.path().clone()))
 }
 
 fn plan_cli(
@@ -284,33 +372,57 @@ fn cli_command(
     credential: Option<&SecretString>,
 ) -> Result<(PathBuf, Vec<String>, Vec<LaunchEnv>)> {
     let mut env = Vec::new();
-    if let Some(secret) = credential {
-        if let Some(name) = password_env_name(kind) {
-            env.push(LaunchEnv::new(name, secret.clone()));
-        }
+    if let Some(secret) = credential
+        && let Some(name) = password_env_name(kind)
+    {
+        env.push(LaunchEnv::new(name, secret.clone()));
     }
     let (program, argv) = match kind {
-        ClientKind::Psql => (PathBuf::from("psql"), vec![
-            "--host".to_owned(), target.host().to_owned(),
-            "--port".to_owned(), target.port().to_string(),
-            "--username".to_owned(), target.username().to_owned(),
-            "--dbname".to_owned(), target.database().to_owned(),
-        ]),
-        ClientKind::Mysql | ClientKind::Mariadb => {
-            let bin = if kind == ClientKind::Mysql { "mysql" } else { "mariadb" };
-            (PathBuf::from(bin), vec![
-                "--host".to_owned(), target.host().to_owned(),
-                "--port".to_owned(), target.port().to_string(),
-                "--user".to_owned(), target.username().to_owned(),
-                "--protocol".to_owned(), "tcp".to_owned(),
+        ClientKind::Psql => (
+            PathBuf::from("psql"),
+            vec![
+                "--host".to_owned(),
+                target.host().to_owned(),
+                "--port".to_owned(),
+                target.port().to_string(),
+                "--username".to_owned(),
+                target.username().to_owned(),
+                "--dbname".to_owned(),
                 target.database().to_owned(),
-            ])
+            ],
+        ),
+        ClientKind::Mysql | ClientKind::Mariadb => {
+            let bin = if kind == ClientKind::Mysql {
+                "mysql"
+            } else {
+                "mariadb"
+            };
+            (
+                PathBuf::from(bin),
+                vec![
+                    "--host".to_owned(),
+                    target.host().to_owned(),
+                    "--port".to_owned(),
+                    target.port().to_string(),
+                    "--user".to_owned(),
+                    target.username().to_owned(),
+                    "--protocol".to_owned(),
+                    "tcp".to_owned(),
+                    target.database().to_owned(),
+                ],
+            )
         }
         ClientKind::ValkeyCli | ClientKind::RedisCli => {
-            let bin = if kind == ClientKind::ValkeyCli { "valkey-cli" } else { "redis-cli" };
+            let bin = if kind == ClientKind::ValkeyCli {
+                "valkey-cli"
+            } else {
+                "redis-cli"
+            };
             let mut argv = vec![
-                "-h".to_owned(), target.host().to_owned(),
-                "-p".to_owned(), target.port().to_string(),
+                "-h".to_owned(),
+                target.host().to_owned(),
+                "-p".to_owned(),
+                target.port().to_string(),
             ];
             if !target.username().is_empty() && target.username() != "default" {
                 argv.push("--user".to_owned());
@@ -318,7 +430,11 @@ fn cli_command(
             }
             (PathBuf::from(bin), argv)
         }
-        _ => return Err(DblError::Unsupported { reason: format!("{} is not a CLI client", kind.display_name()) }),
+        _ => {
+            return Err(DblError::Unsupported {
+                reason: format!("{} is not a CLI client", kind.display_name()),
+            });
+        }
     };
     Ok((program, argv, env))
 }
@@ -365,7 +481,14 @@ fn build_linux_terminal_plan(
             argv.extend(client_argv);
         }
     }
-    Ok(LaunchPlan::new(terminal.program().clone(), argv, env, None, None, None))
+    Ok(LaunchPlan::new(
+        terminal.program().clone(),
+        argv,
+        env,
+        None,
+        None,
+        None,
+    ))
 }
 
 fn build_macos_terminal_plan(
@@ -402,15 +525,23 @@ fn build_windows_terminal_plan(
         TerminalKind::WindowsTerminal => vec!["cmd.exe".to_owned(), "/c".to_owned(), script_path],
         _ => vec!["/c".to_owned(), script_path],
     };
-    Ok(LaunchPlan::new(terminal.program().clone(), argv, vec![], None, Some(temp_file), None))
+    Ok(LaunchPlan::new(
+        terminal.program().clone(),
+        argv,
+        vec![],
+        None,
+        Some(temp_file),
+        None,
+    ))
 }
 
 fn encode_component(value: &str) -> String {
     let mut out = String::with_capacity(value.len());
     for b in value.bytes() {
         let safe = b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b'~');
-        if safe { out.push(char::from(b)); }
-        else {
+        if safe {
+            out.push(char::from(b));
+        } else {
             out.push('%');
             out.push(hex_upper(b >> 4));
             out.push(hex_upper(b & 0x0f));
@@ -428,11 +559,19 @@ fn hex_upper(nibble: u8) -> char {
 }
 
 fn sanitize_connection_name(value: &str) -> String {
-    let mut out: String = value.chars().map(|c| if c.is_control() || c == '|' { '_' } else { c }).collect();
-    if out.is_empty() { out.push_str("dblocal"); }
+    let mut out: String = value
+        .chars()
+        .map(|c| if c.is_control() || c == '|' { '_' } else { c })
+        .collect();
+    if out.is_empty() {
+        out.push_str("dblocal");
+    }
     out
 }
 
 fn sanitize_con_value(value: &str) -> String {
-    value.chars().map(|c| if c.is_control() || c == '|' { '_' } else { c }).collect()
+    value
+        .chars()
+        .map(|c| if c.is_control() || c == '|' { '_' } else { c })
+        .collect()
 }

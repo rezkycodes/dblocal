@@ -99,7 +99,10 @@ fn detects_gui_client_from_desktop_entry() {
 fn detects_dbeaver() {
     let host = FakeHost::default().with_bin("dbeaver", "/usr/bin/dbeaver");
     let clients = detect_clients(&host);
-    let dbeaver = clients.iter().find(|c| c.kind() == ClientKind::DBeaver).unwrap();
+    let dbeaver = clients
+        .iter()
+        .find(|c| c.kind() == ClientKind::DBeaver)
+        .unwrap();
     assert!(dbeaver.supports(EngineKey::Postgresql));
     assert!(dbeaver.supports(EngineKey::Mysql));
     assert!(dbeaver.supports(EngineKey::Mariadb));
