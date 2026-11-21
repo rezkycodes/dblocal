@@ -10,12 +10,14 @@ mod detect;
 mod plan;
 mod quote;
 mod run;
+mod terminal;
 
 pub use detect::{ClientKind, DetectedClient, HostProbe, OpenMenu, detect_clients};
 pub use plan::{
     LaunchEnv, LaunchPlan, OpenTarget, OsKind, TempFile, TerminalChoice, TerminalKind,
-    plan_open, resolve_terminal,
+    plan_open,
 };
+pub use terminal::resolve_terminal;
 pub use quote::shell_quote;
 pub use run::{Spawner, SystemSpawner, run};
 
