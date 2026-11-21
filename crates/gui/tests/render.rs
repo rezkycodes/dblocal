@@ -53,92 +53,18 @@ const LIGHT_SIDEBAR: [u8; 3] = [0xf0, 0xf0, 0xf4];
 const LIGHT_PRIMARY: [u8; 3] = [0x1a, 0x60, 0x9f];
 const LIGHT_WARNING: [u8; 3] = [0x73, 0x53, 0x00];
 
-struct Frame {
-    image: image::RgbaImage,
-    colours: usize,
-    scale: u32,
-}
-
-impl Frame {
-    fn dims(&self) -> (u32, u32) {
-        self.image.dimensions()
-    }
-    fn px(&self, x: u32, y: u32) -> [u8; 4] {
-        let (w, h) = self.dims();
-        self.image.get_pixel(x.min(w - 1), y.min(h - 1)).0
-    }
-    /// Scale a logical rect to device pixels, clamped to the frame.
-    fn rect(&self, rect: (u32, u32, u32, u32)) -> (u32, u32, u32, u32) {
-        let (w, h) = self.dims();
-        let s = self.scale;
-        (
-            (rect.0 * s).min(w),
-            (rect.1 * s).min(h),
-            (rect.2 * s).min(w),
-            (rect.3 * s).min(h),
-        )
-    }
-    fn count_near(&self, rect: (u32, u32, u32, u32), rgb: [u8; 3], tol: u8) -> usize {
-        let (x0, y0, x1, y1) = self.rect(rect);
-        let mut hits = 0;
-        for y in y0..y1 {
-            for x in x0..x1 {
-                let p = self.px(x, y);
-                if p[0].abs_diff(rgb[0]) <= tol
-                    && p[1].abs_diff(rgb[1]) <= tol
-                    && p[2].abs_diff(rgb[2]) <= tol
-                {
-                    hits += 1;
-                }
-            }
-        }
-        hits
-    }
-    fn count_not_near(&self, rect: (u32, u32, u32, u32), rgb: [u8; 3], tol: u8) -> usize {
-        let (x0, y0, x1, y1) = self.rect(rect);
-        let mut hits = 0;
-        for y in y0..y1 {
-            for x in x0..x1 {
-                let p = self.px(x, y);
-                if p[0].abs_diff(rgb[0]) > tol
-                    || p[1].abs_diff(rgb[1]) > tol
-                    || p[2].abs_diff(rgb[2]) > tol
-                {
-                    hits += 1;
-                }
-            }
-        }
-        hits
-    }
-    /// Count pixels whose channel distance to `rgb` is within `tol` in the rect,
-    /// but also require the pixel to be "tinted" (differs from `base`).
-    fn count_tint(&self, rect: (u32, u32, u32, u32), base: [u8; 3], tint: [u8; 3]) -> usize {
-        let (x0, y0, x1, y1) = self.rect(rect);
-        let mut hits = 0;
-        for y in y0..y1 {
-            for x in x0..x1 {
-                let p = self.px(x, y);
-                let near_base = p[0].abs_diff(base[0]) <= 6
-                    && p[1].abs_diff(base[1]) <= 6
-                    && p[2].abs_diff(base[2]) <= 6;
-                let toward_tint = (p[0] as i16 - base[0] as i16).signum()
-                    == (tint[0] as i16 - base[0] as i16).signum()
-                    && (p[1] as i16 - base[1] as i16).signum()
-                        == (tint[1] as i16 - base[1] as i16).signum();
-                if !near_base && toward_tint {
-                    hits += 1;
-                }
-            }
-        }
-        hits
-    }
-}
-
 fn seeded_service() -> Arc<dyn DblService> {
     Arc::new(MockService::demo())
 }
 
 type Build = fn(Arc<dyn DblService>, &mut gpui_kit::Window, &mut Context<Workspace>) -> Workspace;
+
+#[path = "render/frame.rs"]
+mod frame;
+#[path = "render/watchdog.rs"]
+mod watchdog;
+
+use frame::Frame;
 
 fn output_path(name: &str) -> (std::path::PathBuf, bool) {
     let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
@@ -153,138 +79,6 @@ fn output_path(name: &str) -> (std::path::PathBuf, bool) {
 }
 
 static GPU: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
-/// Per-case hang guard. A deadlocked render held the GPU mutex for 54 minutes
-/// in CI; aborting with the case name is the only diagnostic a wedged process
-/// can emit. Arm it *after* acquiring the GPU mutex so a queued case is not
-/// blamed for time spent waiting on an earlier case. Under heavy shared-host
-/// load a healthy render can take well over 2 minutes; 10 minutes still catches
-/// a real hang without killing slow-but-progressing cases on a loaded host.
-const RENDER_WATCHDOG_SECS: u64 = 600;
-
-struct RenderWatchdog {
-    done: Arc<std::sync::atomic::AtomicBool>,
-}
-
-impl RenderWatchdog {
-    /// Arms a timer that aborts the process when `limit` elapses before `Drop`.
-    ///
-    /// The callback is injectable so the ordering test can observe a firing
-    /// instead of aborting the whole test binary. Production passes `abort`.
-    fn arm_with(name: &str, limit: Duration, on_fire: impl Fn() + Send + 'static) -> Self {
-        let done = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let flag = Arc::clone(&done);
-        let label = name.to_owned();
-        std::thread::spawn(move || {
-            std::thread::sleep(limit);
-            if !flag.load(std::sync::atomic::Ordering::SeqCst) {
-                let msg = format!(
-                    "RENDER HANG: {label} did not finish within {}s; aborting",
-                    limit.as_secs()
-                );
-                eprintln!("{msg}");
-                use std::io::Write as _;
-                let _ = std::io::stderr().write_all(msg.as_bytes());
-                let _ = std::io::stderr().write_all(b"\n");
-                on_fire();
-            }
-        });
-        Self { done }
-    }
-}
-
-impl Drop for RenderWatchdog {
-    fn drop(&mut self) {
-        self.done.store(true, std::sync::atomic::Ordering::SeqCst);
-    }
-}
-
-/// Locks the render mutex, **then** arms the watchdog, returning both.
-///
-/// The single ordering every render case uses: a case that queued behind others
-/// must not spend its watchdog budget while waiting. `render` keeps the guard
-/// until it has drawn and releases it before the context shutdown; the guard and
-/// watchdog both outlive the draw, so a hang in draw or shutdown still trips it.
-fn lock_then_arm<'a>(
-    mutex: &'a std::sync::Mutex<()>,
-    name: &str,
-    limit: Duration,
-    on_fire: impl Fn() + Send + 'static,
-) -> (std::sync::MutexGuard<'a, ()>, RenderWatchdog) {
-    let guard = mutex
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    let watchdog = RenderWatchdog::arm_with(name, limit, on_fire);
-    (guard, watchdog)
-}
-
-/// A case that queued behind another must not be killed for the wait.
-///
-/// Case A holds the lock longer than B's limit, and B is already queued on it.
-/// Because B arms only after acquiring, A's hold never counts against B's
-/// budget. `fired` records a watchdog trip instead of aborting this binary.
-/// Arming before the lock is the defect: it sets `fired`, and the assertion
-/// fails with the same cause a healthy queued render used to die from.
-#[test]
-fn watchdog_does_not_fire_for_a_queued_case() {
-    let mutex = Arc::new(std::sync::Mutex::new(()));
-    let a_started = Arc::new(std::sync::atomic::AtomicBool::new(false));
-
-    let started = Arc::clone(&a_started);
-    let a_mutex = Arc::clone(&mutex);
-    let a = std::thread::spawn(move || {
-        let _guard = a_mutex.lock().expect("lock a");
-        started.store(true, std::sync::atomic::Ordering::SeqCst);
-        // Longer than B's 80 ms limit.
-        std::thread::sleep(Duration::from_millis(160));
-    });
-
-    while !a_started.load(std::sync::atomic::Ordering::SeqCst) {
-        std::thread::sleep(Duration::from_millis(1));
-    }
-
-    let fired = Arc::new(std::sync::atomic::AtomicBool::new(false));
-    let fired_t = Arc::clone(&fired);
-    {
-        // B queues on the lock while A holds it; its limit is shorter than the
-        // remaining hold, so arming early would fire.
-        let (_guard_b, watchdog) = lock_then_arm(
-            &mutex,
-            "queued-case",
-            Duration::from_millis(80),
-            move || fired_t.store(true, std::sync::atomic::Ordering::SeqCst),
-        );
-        std::thread::sleep(Duration::from_millis(20));
-        drop(watchdog);
-    }
-    a.join().expect("a joined");
-    assert!(
-        !fired.load(std::sync::atomic::Ordering::SeqCst),
-        "the watchdog fired for a case that was only queued"
-    );
-}
-
-/// A case that really hangs must trip the watchdog, promptly and with no
-/// queueing involved. `on_fire` stands in for `abort`, so this stays in-process.
-#[test]
-fn watchdog_fires_for_a_stuck_case() {
-    let mutex = std::sync::Mutex::new(());
-    let fired = Arc::new(std::sync::atomic::AtomicBool::new(false));
-    let fired_t = Arc::clone(&fired);
-    {
-        let (_guard, _watchdog) =
-            lock_then_arm(&mutex, "stuck-case", Duration::from_millis(40), move || {
-                fired_t.store(true, std::sync::atomic::Ordering::SeqCst)
-            });
-        // Do not drop the watchdog: a stuck case never leaves its body.
-        std::thread::sleep(Duration::from_millis(120));
-        assert!(
-            fired.load(std::sync::atomic::Ordering::SeqCst),
-            "the watchdog did not fire for a stuck case"
-        );
-        std::mem::forget(_watchdog);
-    }
-}
 
 /// The platform text system, built once per process.
 ///
@@ -339,10 +133,10 @@ fn shutdown_headless(mut app: HeadlessAppContext) {
 }
 
 fn render(mode_dark: bool, name: &str, build: Build) -> Frame {
-    let (guard, watchdog) = lock_then_arm(
+    let (guard, watchdog) = watchdog::lock_then_arm(
         &GPU,
         name,
-        Duration::from_secs(RENDER_WATCHDOG_SECS),
+        Duration::from_secs(watchdog::RENDER_WATCHDOG_SECS),
         || std::process::abort(),
     );
     let mut app = headless_app(mode_dark);
@@ -435,10 +229,7 @@ fn draw_and_capture(app: &mut HeadlessAppContext, name: &str, build: Build) -> F
         (LOGICAL_W, LOGICAL_H),
         "render must match the prototype logical size"
     );
-    let mut colours = HashSet::new();
-    for pixel in image.pixels() {
-        colours.insert(pixel.0);
-    }
+    let colours = Frame::count_colours(&image);
     let (path, tracked) = output_path(name);
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).expect("create render dir");
@@ -449,12 +240,12 @@ fn draw_and_capture(app: &mut HeadlessAppContext, name: &str, build: Build) -> F
         path.display(),
         image.width(),
         image.height(),
-        colours.len(),
+        colours,
         if tracked { "tracked" } else { "target-only" }
     );
     Frame {
         image,
-        colours: colours.len(),
+        colours,
         scale,
     }
 }
