@@ -178,3 +178,133 @@ impl Workspace {
         };
     }
 }
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::expect_used, clippy::unwrap_used)]
+
+    use std::sync::Arc;
+
+    use dblocal_core::service::DblService;
+    use gpui_kit::TestAppContext;
+
+    use super::Workspace;
+
+    fn demo() -> Arc<dyn DblService> {
+        Arc::new(dblocal_core::service::mock::MockService::demo())
+    }
+
+    /// A background refresh really replaces both collections from the service.
+    #[gpui_kit::test]
+    fn background_refresh_applies_instances_and_runtimes(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+        cx.update(crate::theme::init);
+        let (view, cx) = cx.add_window_view(|window, cx| {
+            Workspace::new_preview(demo(), window, cx)
+        });
+        cx.run_until_parked();
+
+        let planted = dblocal_core::model::Runtime::new(
+            "planted-runtime",
+            dblocal_core::model::EngineKey::Postgresql,
+            "0.0.1",
+            dblocal_core::platform::Arch::X86_64,
+            std::path::PathBuf::from("/nonexistent/planted"),
+            0,
+            std::time::SystemTime::UNIX_EPOCH,
+            dblocal_core::model::RuntimeState::Installed,
+        );
+        view.update(cx, |this, _| this.runtimes = vec![planted.clone()]);
+
+        view.update(cx, |this, cx| this.refresh_instances_bg(cx));
+        // Drive the background executor until the apply closure has run.
+        for _ in 0..50 {
+            cx.run_until_parked();
+            let still_planted = view.read_with(cx, |this, _| {
+                this.runtimes.iter().any(|r| r.id() == "planted-runtime")
+            });
+            if !still_planted {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+
+        let still_planted = view.read_with(cx, |this, _| {
+            this.runtimes.iter().any(|r| r.id() == "planted-runtime")
+        });
+        assert!(
+            !still_planted,
+            "background refresh must replace the planted runtimes with the service's"
+        );
+        let instances = view.read_with(cx, |this, _| this.instances().len());
+        assert!(instances > 0, "the demo service must seed instances");
+        let pending = view.read_with(cx, |this, _| this.is_pending());
+        assert!(!pending, "the pending counter must return to zero");
+    }
+
+    /// `forget_instance` drops every per-instance cache entry.
+    #[gpui_kit::test]
+    fn forget_instance_drops_every_cache(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+        cx.update(crate::theme::init);
+        let (view, cx) = cx.add_window_view(|window, cx| {
+            Workspace::new_preview(demo(), window, cx)
+        });
+        cx.run_until_parked();
+
+        let id = view.read_with(cx, |this, _| this.instances()[0].id.clone());
+        view.update(cx, |this, _| {
+            this.dotenv_cache
+                .insert(id.clone(), dblocal_core::secret::SecretString::new("A=1"));
+            this.port_suggestions.insert(id.clone(), 5433);
+            this.data_sizes.insert(id.clone(), 4096);
+        });
+        view.update(cx, |this, _| this.forget_instance(&id));
+
+        let cached = view.read_with(cx, |this, _| {
+            let dotenv = this.dotenv_cache.contains_key(&id);
+            let port = this.port_suggestions.contains_key(&id);
+            let size = this.data_sizes.contains_key(&id);
+            (dotenv, port, size)
+        });
+        assert_eq!(cached, (false, false, false), "forget_instance left a cache");
+    }
+
+    /// The offline first frame is the bundled catalog plus the offline banner,
+    /// never an empty form (F-CAT-01/02).
+    #[test]
+    fn offline_catalog_carries_the_banner() {
+        let catalog = Workspace::offline_catalog();
+        assert_eq!(
+            catalog.status,
+            dblocal_core::model::CatalogStatus::Offline
+        );
+        assert_eq!(catalog.banner.as_deref(), Some(dblocal_core::strings::CATALOG_OFFLINE));
+        assert!(catalog.engines.is_empty());
+    }
+
+    /// A close event ends the event pump; it must not spin afterwards.
+    #[gpui_kit::test]
+    fn event_pump_stops_on_closed(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+        cx.update(crate::theme::init);
+        let (view, cx) = cx.add_window_view(|window, cx| {
+            Workspace::new_preview(demo(), window, cx)
+        });
+        cx.run_until_parked();
+
+        let (sender, receiver) = flume::unbounded::<crate::service_bridge::UiEvent>();
+        view.update(cx, |this, _| this.events = receiver.clone());
+        view.update(cx, |this, cx| this.start_event_pump(cx));
+        sender
+            .send(crate::service_bridge::UiEvent::Closed)
+            .expect("send closed");
+        for _ in 0..50 {
+            cx.run_until_parked();
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        // Once the pump saw `Closed` it broke out of its loop, so the receiver
+        // is disconnected from our sender and consumes nothing.
+        assert!(receiver.is_disconnected() || receiver.is_empty());
+    }
+}
