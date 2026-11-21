@@ -176,63 +176,74 @@ mechanism. This worker does not implement GUI behaviour.
 
 ## Mutation checks
 
-Each reversion was applied and the red output pasted, so the tests are known to
-pin the behaviour rather than pass by accident.
+Each reversion was applied, the red output pasted, and the file restored
+(`git status --short` clean afterwards).
 
-**1. `uri` decorated** (`uri.rs`, `stdout_line(ctx.out, secret.expose())` ->
-`stdout_line(ctx.out, &format!("URI: {}", secret.expose()))`):
+**1. `uri` decorated** — `uri.rs`, `stdout_line(ctx.out, secret.expose())` becomes
+`stdout_line(ctx.out, &format!("URI: {}", secret.expose()))`:
 
 ```text
-% cargo test -p dblocal-cli --lib 2>&1 | grep -A4 'uri_stdout'
----- commands::tests::inspect::uri_stdout_is_exactly_the_uri_and_stderr_is_empty stdout ----
-assertion `left == right` failed
-  left: "URI: postgresql://postgres:pwd-...@127.0.0.1:5432/postgres\n"
- right: "postgresql://postgres:pwd-...@127.0.0.1:5432/postgres\n"
-test result: FAILED. 86 passed; 1 failed
+% cargo test -p dblocal-cli --lib
+test commands::tests::inspect::uri_stdout_is_exactly_the_uri_and_stderr_is_empty ... FAILED
+test commands::tests::inspect::uri_env_stdout_equals_the_core_dotenv_block ... FAILED
+  left: "URI: postgresql://postgres:pwd-eb731f57@127.0.0.1:5432/postgres\n"
+ right: "postgresql://postgres:pwd-eb731f57@127.0.0.1:5432/postgres\n"
+  left: "URI: DATABASE_URL=postgresql://postgres:pwd-eb731f57@127.0.0.1:5432/postgres\n..."
+ right: "DATABASE_URL=postgresql://postgres:pwd-eb731f57@127.0.0.1:5432/postgres\n..."
+test result: FAILED. 89 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out
 ```
 
-**2. `new_lines` returning the whole window** (`logs.rs`, `&next[0..]`):
+**2. `new_lines` returns the whole window** — `logs.rs`, `&next[overlap(previous,
+next)..]` becomes `&next[0..]`:
 
 ```text
-% cargo test -p dblocal-cli --lib 2>&1 | grep -E 'FAILED|left:|right:' | head
-test commands::logs::tests::first_snapshot_prints_only_the_requested_history ... FAILED
-test commands::logs::tests::one_appended_line_is_exactly_one_new_line ... FAILED
+% cargo test -p dblocal-cli --lib
 test commands::logs::tests::a_full_window_that_rotated_reports_only_the_append ... FAILED
 test commands::logs::tests::duplicate_lines_are_not_swallowed_below_the_window ... FAILED
-test result: FAILED. 83 passed; 4 failed
+test commands::logs::tests::duplicates_filling_the_whole_window_are_indistinguishable ... FAILED
+test commands::logs::tests::first_snapshot_prints_only_the_requested_history ... FAILED
+test commands::logs::tests::one_appended_line_is_exactly_one_new_line ... FAILED
+test commands::logs::tests::poll_reports_retry_and_keeps_the_snapshot ... FAILED
+test commands::logs::tests::follow_prints_the_history_plus_one_append_and_nothing_else ... FAILED
+test commands::logs::tests::follow_keeps_the_snapshot_across_a_transient_read_error ... FAILED
+test result: FAILED. 83 passed; 8 failed; 0 ignored; 0 measured; 0 filtered out
 ```
 
-**3. `stopping` back in the loser list** (`start.rs`, add `| "stopping"` to the
-`InvalidTransition` arm and drop the dedicated arm):
+**3. `stopping` back in the loser list** — `start.rs`, add `| "stopping"` to the
+`InvalidTransition` arm that prints `sudah berjalan`:
 
 ```text
-% cargo test -p dblocal-cli --lib 2>&1 | grep -E 'FAILED|did not return' | head
-test commands::tests::races::start_of_a_stopping_instance_says_stopping_and_exits_1 ... FAILED
-test commands::tests::races::start_refused_from_stopping_says_stopping_and_exits_1 ... FAILED
-test result: FAILED. 85 passed; 2 failed
+% cargo test -p dblocal-cli --lib
+test commands::tests::statuses::start_refused_from_stopping_says_stopping_and_exits_1 ... FAILED
+the command did not return within 5s; a timeout was ignored
+test result: FAILED. 90 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.01s
 ```
 
-**4. `Lagged` ignored again** (`output.rs`, `Err(RecvError::Lagged(_)) => {}`):
+The deadline is what makes this a five-second red test: under the mutation the
+command waits out `--timeout`, and the old version of this test hung the test
+binary for seven minutes.
+
+**4. `Lagged` ignored again** — `output.rs`, both `RecvError::Lagged(_)` arms
+become `=> {}`:
 
 ```text
-% cargo test -p dblocal-cli --lib 2>&1 | grep -E 'FAILED|running from the store' | head
+% cargo test -p dblocal-cli --lib
 test output::tests::wait_for_status_rx_recovers_a_dropped_final_event_after_a_burst ... FAILED
 test output::tests::wait_operation_rx_resolves_a_lagged_finish_from_the_store ... FAILED
-test result: FAILED. 85 passed; 2 failed
+test result: FAILED. 89 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.01s
 ```
 
-**5. The timeout ignored** (`start.rs`, `timeout.max(1)` -> a one-hour value):
+**5. The timeout ignored** — `start.rs`, `Duration::from_secs(timeout.max(1))`
+becomes `Duration::from_secs(3600)`:
 
 ```text
-% cargo test -p dblocal-cli --lib 2>&1 | grep -E 'FAILED|timeout was ignored' | head
-test commands::tests::races::start_of_a_stopping_instance_says_stopping_and_exits_1 ... FAILED
-thread '...' panicked at ...: the command did not return within 5s; a timeout was ignored
-test result: FAILED. HANG-FREE
+% cargo test -p dblocal-cli --lib
+test commands::tests::races::start_of_an_instance_another_process_is_starting_says_sudah_berjalan ... FAILED
+test commands::tests::races::start_busy_loser_reports_sudah_berjalan ... FAILED
+the command did not return within 5s; a timeout was ignored
+the command did not return within 5s; a timeout was ignored
+test result: FAILED. 89 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.01s
 ```
-
-The last one is the point of the deadline wrapper: with `stopping` mutated back
-into the loser list *and* the timeout one hour long, the old test hung for seven
-minutes. The test now returns in under a second with a red assertion.
 
 ## Start race — what the loser really sees
 
@@ -249,9 +260,9 @@ this task's `cli_e2e`), three consecutive runs on a seeded runtime cache:
 
 | Run | service_e2e | cli_e2e | Result |
 |---|---|---|---|
-| 1 | 15 passed | 1 passed | every target passed |
-| 2 | 15 passed | 1 passed | every target passed |
-| 3 | 15 passed | 1 passed | every target passed |
+| 1 | 15 passed, 91.0 s | 1 passed, 4.7 s | every target passed |
+| 2 | 15 passed, 89.8 s | 1 passed, 4.8 s | every target passed |
+| 3 | 15 passed, 86.3 s | 1 passed, 4.7 s | every target passed |
 
 The CLI case creates a real Valkey 9.2.0 through the **installed binary**, starts
 it, asserts `status` exits 0 and the URI connects with the production `redis`
