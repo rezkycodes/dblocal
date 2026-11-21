@@ -265,12 +265,8 @@ impl DenyReason {
 /// safe or not the right delivery mechanism. Anything not recognised becomes
 /// Unknown.
 fn linux_deny_reason(exe_path: &Path) -> Option<DenyReason> {
-    let lower = path_to_lower(&canonical_or_original(exe_path));
-    if let Some(prefix) = DENIED_PREFIXES.into_iter().find(|p| lower.starts_with(p)) {
-        return Some(DenyReason::ManagedPrefix { prefix });
-    }
-    if let Some(suffix) = DENIED_SUFFIXES.into_iter().find(|s| lower.contains(s)) {
-        return Some(DenyReason::BuildTooling { suffix });
+    if let Some(reason) = path_rule_deny_reason(&canonical_or_original(exe_path)) {
+        return Some(reason);
     }
     if !exe_path.parent().is_some_and(directory_is_writable) {
         return Some(DenyReason::NotWritable);
@@ -278,23 +274,29 @@ fn linux_deny_reason(exe_path: &Path) -> Option<DenyReason> {
     None
 }
 
+/// Pure prefix/suffix rules, applied to the canonicalised path.
+fn path_rule_deny_reason(path: &Path) -> Option<DenyReason> {
+    let lower = path_to_lower(path);
+    if let Some(prefix) = DENIED_PREFIXES.into_iter().find(|p| lower.starts_with(p)) {
+        return Some(DenyReason::ManagedPrefix { prefix });
+    }
+    DENIED_SUFFIXES
+        .into_iter()
+        .find(|s| lower.contains(s))
+        .map(|suffix| DenyReason::BuildTooling { suffix })
+}
+
 /// Asks the OS whether `dir` is writable by the current user without creating
 /// anything inside it. Detection must not leave a probe file in the user's
 /// `bin` directory.
 pub(super) fn directory_is_writable(dir: &Path) -> bool {
-    match std::fs::metadata(dir) {
-        Ok(meta) if meta.is_dir() => {}
-        _ => return false,
-    }
     #[cfg(unix)]
     {
         nix::unistd::access(dir, nix::unistd::AccessFlags::W_OK).is_ok()
     }
     #[cfg(not(unix))]
     {
-        !std::fs::metadata(dir)
-            .map(|meta| meta.permissions().readonly())
-            .unwrap_or(true)
+        std::fs::metadata(dir).is_ok_and(|meta| meta.is_dir() && !meta.permissions().readonly())
     }
 }
 

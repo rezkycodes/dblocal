@@ -150,11 +150,19 @@ fn install_target_path(kind: &InstallKind, current_exe: &Path) -> UpdateResult<P
 }
 
 fn ensure_target_writable(target: &Path) -> UpdateResult<()> {
-    let Some(dir) = target.parent() else {
+    let Some(dir) = target.parent().filter(|dir| !dir.as_os_str().is_empty()) else {
         return Err(UpdateError::ApplyFailed {
             reason: "direktori target pembaruan tidak valid".to_owned(),
         });
     };
+    let meta = std::fs::metadata(dir).map_err(|source| UpdateError::ApplyFailed {
+        reason: format!("gagal membaca izin direktori target pembaruan: {source}"),
+    })?;
+    if !meta.is_dir() {
+        return Err(UpdateError::ApplyFailed {
+            reason: "path direktori target pembaruan tidak valid".to_owned(),
+        });
+    }
     if !super::kind::directory_is_writable(dir) {
         return Err(UpdateError::UnsupportedInstallKind {
             reason: format!(

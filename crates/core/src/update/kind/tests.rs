@@ -226,6 +226,145 @@ fn detect_linux_deny_list_paths() {
 }
 
 #[test]
+fn each_managed_prefix_is_denied_at_the_start_of_the_path() {
+    for (path, prefix) in [
+        ("/usr/local/bin/dblocal", "/usr/"),
+        ("/usr/bin/dblocal", "/usr/"),
+        ("/opt/dblocal/dblocal", "/opt/"),
+        ("/app/dblocal", "/app/"),
+        ("/snap/dblocal/current/bin/dblocal", "/snap/"),
+        ("/nix/store/abc-dblocal/bin/dblocal", "/nix/store/"),
+    ] {
+        assert_eq!(
+            path_rule_deny_reason(Path::new(path)),
+            Some(DenyReason::ManagedPrefix { prefix }),
+            "prefix rule for {path}"
+        );
+    }
+}
+
+#[test]
+fn each_build_tooling_suffix_is_denied_anywhere() {
+    for (path, suffix) in [
+        ("/home/u/.cargo/bin/dblocal", "/.cargo/bin/"),
+        (
+            "/home/u/src/dblocal/target/debug/dblocal",
+            "/target/debug/",
+        ),
+        (
+            "/home/u/src/dblocal/target/release/dblocal",
+            "/target/release/",
+        ),
+    ] {
+        assert_eq!(
+            path_rule_deny_reason(Path::new(path)),
+            Some(DenyReason::BuildTooling { suffix }),
+            "suffix rule for {path}"
+        );
+    }
+}
+
+#[test]
+fn user_owned_prefixes_are_not_treated_as_managed_locations() {
+    for path in ["/home/u/opt/dblocal/dblocal", "/home/u/work/app/dblocal"] {
+        assert_eq!(
+            path_rule_deny_reason(Path::new(path)),
+            None,
+            "{path} must not be denied by the prefix rules"
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn user_owned_prefix_trees_stay_portable_and_self_updatable() {
+    if !cfg!(target_os = "linux") {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    for relative in ["opt/dblocal/dblocal", "work/app/dblocal"] {
+        let exe = dir.path().join(relative);
+        std::fs::create_dir_all(exe.parent().unwrap()).unwrap();
+        std::fs::write(&exe, b"x").unwrap();
+        assert_eq!(
+            linux_deny_reason(&exe),
+            None,
+            "{} must not be denied",
+            exe.display()
+        );
+        let kind = detect_from_path(&exe);
+        assert!(
+            matches!(kind, InstallKind::PortableTarball { .. }),
+            "{} should be portable, got {kind:?}",
+            exe.display()
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn unwritable_directory_is_denied() {
+    use std::os::unix::fs::PermissionsExt;
+    if !cfg!(target_os = "linux") {
+        return;
+    }
+    if nix::unistd::Uid::effective().is_root() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let exe = dir.path().join("dblocal");
+    std::fs::write(&exe, b"x").unwrap();
+    let original = std::fs::metadata(dir.path()).unwrap().permissions();
+    std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o555)).unwrap();
+    let reason = linux_deny_reason(&exe);
+    std::fs::set_permissions(dir.path(), original).unwrap();
+    assert_eq!(reason, Some(DenyReason::NotWritable));
+    assert!(
+        reason
+            .unwrap()
+            .message()
+            .contains("tidak dapat ditulis"),
+        "message must explain the writability refusal"
+    );
+}
+
+#[test]
+fn managed_prefix_reaches_the_unknown_refusal_message() {
+    let kind = detect_from_path(Path::new("/usr/local/bin/dblocal"));
+    if cfg!(target_os = "linux") {
+        match kind {
+            InstallKind::Unknown { reason, .. } => {
+                assert!(reason.contains("/usr/"), "reason was {reason}");
+            }
+            other => panic!("expected Unknown, got {other:?}"),
+        }
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn detection_does_not_write_into_the_install_directory() {
+    if !cfg!(target_os = "linux") {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let exe = dir.path().join("dblocal");
+    std::fs::write(&exe, b"x").unwrap();
+    let listing = |p: &Path| {
+        let mut names: Vec<String> = std::fs::read_dir(p)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().to_string())
+            .collect();
+        names.sort();
+        names
+    };
+    let before = listing(dir.path());
+    let kind = detect_from_path(&exe);
+    assert!(matches!(kind, InstallKind::PortableTarball { .. }));
+    assert_eq!(listing(dir.path()), before, "detection wrote a probe file");
+}
+
+#[test]
 fn detect_macos_unknown_when_not_in_bundle() {
     let kind = detect_macos(Path::new("/usr/local/bin/dblocal"));
     assert!(matches!(kind, InstallKind::Unknown { .. }));
