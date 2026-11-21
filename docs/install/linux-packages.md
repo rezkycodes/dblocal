@@ -6,8 +6,10 @@ DBLocal Linux release artifacts are built from the same prebuilt release binary 
 ## GLIBC floor
 
 The `.deb` build computes `Depends: libc6 (>= X.Y)` from the real binary at build time by taking
-the maximum `GLIBC_*` symbol version reported by `objdump -T`. The `.rpm` build logs the same
-computed floor; `rpmbuild` also auto-generates GLIBC requirements from the binary.
+the maximum `GLIBC_*` symbol version reported by `readelf -V`. The `.rpm` build logs the same
+computed floor; `rpmbuild` also auto-generates GLIBC requirements from the binary. `readelf` is
+used instead of `objdump` because it parses ELF headers regardless of host binutils target
+support, so x86_64 CI runners can compute the floor for AArch64 release binaries.
 
 **Consequence:** the installable distro range is determined by the glibc version of the machine
 that built the release binary, not by a hardcoded floor.

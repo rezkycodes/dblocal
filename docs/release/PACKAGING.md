@@ -36,10 +36,12 @@ Derived from `readelf -d` DT_NEEDED on the actual release binary:
 | `libxkbcommon-x11.so.0` | `libxkbcommon-x11-0` | `libxkbcommon-x11` | X11 keyboard handling |
 | `libz.so.1` | `zlib1g` | `zlib` (or `zlib-ng-compat` provides) | Compression used by dependencies |
 
-The libc floor is **computed at package build time** from the real binary (`objdump -T`, maximum
-`GLIBC_*` symbol). It is not hardcoded. The build fails if the floor cannot be determined. See
-[`docs/install/linux-packages.md`](../install/linux-packages.md) for the distro compatibility
-consequence (Ubuntu 22.04/Debian 12 cannot run a binary built on Ubuntu 24.04 glibc 2.39).
+The libc floor is **computed at package build time** from the real binary (`readelf -V`, maximum
+`GLIBC_*` symbol). It is not hardcoded. The build fails if the floor cannot be determined.
+`readelf` is used instead of `objdump` because it handles foreign-architecture ELF binaries on
+stock x86_64 CI runners. See [`docs/install/linux-packages.md`](../install/linux-packages.md) for
+the distro compatibility consequence (Ubuntu 22.04/Debian 12 cannot run a binary built on Ubuntu
+24.04 glibc 2.39).
 
 Optional GUI backends loaded via `dlopen` are **Recommends**, not hard Depends: `libvulkan1`,
 `libwayland-client0`, `libegl1` (deb) and `vulkan-loader`, `libwayland-client`, `mesa-libEGL`
