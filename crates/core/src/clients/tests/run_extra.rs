@@ -2,14 +2,14 @@ use std::fs;
 use std::time::Duration;
 
 use crate::clients::{LaunchPlan, Spawner, SystemSpawner, run};
-use crate::error::DblError;
+use crate::clients::ClientError;
 use crate::secret::SecretString;
 use crate::clients::{LaunchEnv, TempFile};
 
 struct FailingSpawner;
 impl Spawner for FailingSpawner {
-    fn spawn(&self, _plan: &LaunchPlan) -> crate::error::Result<()> {
-        Err(DblError::Unsupported { reason: "boom".to_owned() })
+    fn spawn(&self, _plan: &LaunchPlan) -> crate::clients::ClientResult<()> {
+        Err(ClientError::LaunchFailed { reason: "boom".to_owned() })
     }
 }
 
@@ -17,7 +17,7 @@ impl Spawner for FailingSpawner {
 fn run_surfaces_spawner_error() {
     let plan = LaunchPlan::new("true", vec![], vec![], None, None, None);
     let err = run(&plan, &FailingSpawner).unwrap_err();
-    assert!(matches!(err, DblError::Unsupported { .. }));
+    assert!(matches!(err, ClientError::LaunchFailed { .. }));
 }
 
 #[test]

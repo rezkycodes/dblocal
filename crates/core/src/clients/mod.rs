@@ -7,12 +7,15 @@
 //! command by concatenation.
 
 mod detect;
+mod error;
+mod messages;
 mod plan;
 mod quote;
 mod run;
 mod terminal;
 
 pub use detect::{ClientKind, DetectedClient, HostProbe, OpenMenu, detect_clients};
+pub use error::{ClientError, ClientResult};
 pub use plan::{
     LaunchEnv, LaunchPlan, OpenTarget, OsKind, TempFile, TerminalChoice, TerminalKind, plan_open,
 };

@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 use std::process::Command;
 
-use crate::error::{DblError, Result};
+use super::error::{ClientError, ClientResult};
 
 use super::plan::{LaunchPlan, TempFile};
 
@@ -12,7 +12,7 @@ use super::plan::{LaunchPlan, TempFile};
 /// Implementations must not log secret env values or temp file contents.
 pub trait Spawner: Send + Sync {
     /// Spawns the plan. Returns after the child has been started.
-    fn spawn(&self, plan: &LaunchPlan) -> Result<()>;
+    fn spawn(&self, plan: &LaunchPlan) -> ClientResult<()>;
 }
 
 /// Spawner that uses `std::process::Command`.
@@ -20,7 +20,7 @@ pub trait Spawner: Send + Sync {
 pub struct SystemSpawner;
 
 impl Spawner for SystemSpawner {
-    fn spawn(&self, plan: &LaunchPlan) -> Result<()> {
+    fn spawn(&self, plan: &LaunchPlan) -> ClientResult<()> {
         if let Some(required) = plan.required_path()
             && !required.exists()
         {
@@ -43,12 +43,9 @@ impl Spawner for SystemSpawner {
         cmd.stderr(std::process::Stdio::null());
         let mut child = cmd.spawn().map_err(|err| {
             if err.kind() == std::io::ErrorKind::NotFound {
-                DblError::NotFound {
-                    kind: "client",
-                    name: plan.program().display().to_string(),
-                }
+                ClientError::ClientNotFound { name: plan.program().display().to_string() }
             } else {
-                DblError::Io { source: err }
+                ClientError::LaunchFailed { reason: err.kind().to_string() }
             }
         })?;
         std::thread::spawn(move || {
@@ -59,20 +56,20 @@ impl Spawner for SystemSpawner {
 }
 
 /// Runs a plan through the provided spawner.
-pub fn run(plan: &LaunchPlan, spawner: &dyn Spawner) -> Result<()> {
+pub fn run(plan: &LaunchPlan, spawner: &dyn Spawner) -> ClientResult<()> {
     spawner.spawn(plan)
 }
 
-fn materialize_temp_file(temp: Option<&TempFile>) -> Result<Option<PathBuf>> {
+fn materialize_temp_file(temp: Option<&TempFile>) -> ClientResult<Option<PathBuf>> {
     let Some(temp) = temp else {
         return Ok(None);
     };
     let base = std::env::temp_dir().join("dblocal-open-client");
-    std::fs::create_dir_all(&base)?;
+    std::fs::create_dir_all(&base).map_err(|e| ClientError::LaunchFailed { reason: e.kind().to_string() })?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&base, std::fs::Permissions::from_mode(0o700))?;
+        std::fs::set_permissions(&base, std::fs::Permissions::from_mode(0o700)).map_err(|e| ClientError::LaunchFailed { reason: e.kind().to_string() })?;
     }
     let path = base.join(temp.name_hint());
     let mut options = std::fs::OpenOptions::new();
@@ -83,9 +80,9 @@ fn materialize_temp_file(temp: Option<&TempFile>) -> Result<Option<PathBuf>> {
         options.mode(temp.mode());
     }
     use std::io::Write;
-    let mut file = options.open(&path)?;
-    file.write_all(temp.contents().expose().as_bytes())?;
-    file.sync_all()?;
+    let mut file = options.open(&path).map_err(|e| ClientError::LaunchFailed { reason: e.kind().to_string() })?;
+    file.write_all(temp.contents().expose().as_bytes()).map_err(|e| ClientError::LaunchFailed { reason: e.kind().to_string() })?;
+    file.sync_all().map_err(|e| ClientError::LaunchFailed { reason: e.kind().to_string() })?;
     Ok(Some(path))
 }
 

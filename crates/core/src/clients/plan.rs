@@ -2,7 +2,7 @@
 
 use std::path::PathBuf;
 
-use crate::error::{DblError, Result};
+use super::error::{ClientError, ClientResult};
 use crate::model::EngineKey;
 use crate::secret::SecretString;
 
@@ -236,14 +236,11 @@ pub fn plan_open(
     credential: Option<&SecretString>,
     os: OsKind,
     terminal: &TerminalChoice,
-) -> Result<LaunchPlan> {
+) -> ClientResult<LaunchPlan> {
     if !client.supports(target.engine) {
-        return Err(DblError::Unsupported {
-            reason: format!(
-                "{} does not support {}",
-                client.kind().display_name(),
-                target.engine.display_name()
-            ),
+        return Err(ClientError::UnsupportedClient {
+            client: client.kind().as_str(),
+            engine: target.engine.as_str(),
         });
     }
     match client.kind() {
@@ -258,7 +255,7 @@ pub fn plan_open(
     }
 }
 
-fn plan_tableplus(target: &OpenTarget, os: OsKind) -> Result<LaunchPlan> {
+fn plan_tableplus(target: &OpenTarget, os: OsKind) -> ClientResult<LaunchPlan> {
     let driver = match target.engine {
         EngineKey::Postgresql => "postgresql",
         EngineKey::Mysql | EngineKey::Mariadb => "mysql",
@@ -295,7 +292,7 @@ fn plan_tableplus(target: &OpenTarget, os: OsKind) -> Result<LaunchPlan> {
     ))
 }
 
-fn plan_dbeaver(client: &DetectedClient, target: &OpenTarget) -> Result<LaunchPlan> {
+fn plan_dbeaver(client: &DetectedClient, target: &OpenTarget) -> ClientResult<LaunchPlan> {
     let driver = match target.engine {
         EngineKey::Postgresql => "postgresql",
         EngineKey::Mysql => "mysql",
@@ -321,13 +318,14 @@ fn plan_dbeaver(client: &DetectedClient, target: &OpenTarget) -> Result<LaunchPl
     .with_required_path(client.path().clone()))
 }
 
-fn plan_dbdelve(client: &DetectedClient, target: &OpenTarget) -> Result<LaunchPlan> {
+fn plan_dbdelve(client: &DetectedClient, target: &OpenTarget) -> ClientResult<LaunchPlan> {
     let driver = match target.engine {
         EngineKey::Postgresql => "postgresql",
         EngineKey::Mysql | EngineKey::Mariadb => "mysql",
         EngineKey::Valkey => {
-            return Err(DblError::Unsupported {
-                reason: "DBDelve does not support Valkey".to_owned(),
+            return Err(ClientError::UnsupportedClient {
+                client: ClientKind::DbDelve.as_str(),
+                engine: EngineKey::Valkey.as_str(),
             });
         }
     };
@@ -361,7 +359,7 @@ fn plan_cli(
     credential: Option<&SecretString>,
     os: OsKind,
     terminal: &TerminalChoice,
-) -> Result<LaunchPlan> {
+) -> ClientResult<LaunchPlan> {
     let (client_program, client_argv, env) = cli_command(client.kind(), target, credential)?;
     build_terminal_plan(client_program, client_argv, env, os, terminal)
 }
@@ -370,7 +368,7 @@ fn cli_command(
     kind: ClientKind,
     target: &OpenTarget,
     credential: Option<&SecretString>,
-) -> Result<(PathBuf, Vec<String>, Vec<LaunchEnv>)> {
+) -> ClientResult<(PathBuf, Vec<String>, Vec<LaunchEnv>)> {
     let mut env = Vec::new();
     if let Some(secret) = credential
         && let Some(name) = password_env_name(kind)
@@ -454,7 +452,7 @@ fn build_terminal_plan(
     env: Vec<LaunchEnv>,
     os: OsKind,
     terminal: &TerminalChoice,
-) -> Result<LaunchPlan> {
+) -> ClientResult<LaunchPlan> {
     match os {
         OsKind::Linux => build_linux_terminal_plan(client_program, client_argv, env, terminal),
         OsKind::Macos => build_macos_terminal_plan(client_program, client_argv, env),
@@ -467,7 +465,7 @@ fn build_linux_terminal_plan(
     client_argv: Vec<String>,
     env: Vec<LaunchEnv>,
     terminal: &TerminalChoice,
-) -> Result<LaunchPlan> {
+) -> ClientResult<LaunchPlan> {
     let mut argv = Vec::new();
     match terminal.kind() {
         TerminalKind::GnomeTerminal => {
@@ -495,7 +493,7 @@ fn build_macos_terminal_plan(
     client_program: PathBuf,
     client_argv: Vec<String>,
     env: Vec<LaunchEnv>,
-) -> Result<LaunchPlan> {
+) -> ClientResult<LaunchPlan> {
     let temp_file = launcher_temp_file(&client_program, &client_argv, &env, OsKind::Macos);
     let script_path = macos_launcher_script_path(temp_file.name_hint());
     let command_string = format!("sh {}", shell_quote(&script_path));
@@ -518,7 +516,7 @@ fn build_windows_terminal_plan(
     client_argv: Vec<String>,
     env: Vec<LaunchEnv>,
     terminal: &TerminalChoice,
-) -> Result<LaunchPlan> {
+) -> ClientResult<LaunchPlan> {
     let temp_file = launcher_temp_file(&client_program, &client_argv, &env, OsKind::Windows);
     let script_path = windows_launcher_script_path(temp_file.name_hint());
     let argv = match terminal.kind() {
