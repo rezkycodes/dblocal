@@ -46,9 +46,9 @@ zeroize = { version = "1", features = ["alloc"] }
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Threading"] }
 zip = { version = "9", default-features = false, features = ["deflate"] }
 
-# GUI pins, consumed by W1-G. `gpui` is the `gpui-pre` package under a short name.
-gpui = { package = "gpui-pre", version = "=0.3.12" }
-gpui-component = "=0.10.0"
+# GPUI Kit umbrella pin (D-25): one crate re-exporting the pinned GPUI stack
+# (gpui-pre 0.3.12, gpui-component 0.10.0, gpui-kit-assets 0.10.0).
+gpui-kit = "=0.10.0"
 tray-icon = "0.26"
 
 dblocal-core = { path = "crates/core" }

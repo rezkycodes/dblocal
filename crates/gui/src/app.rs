@@ -24,13 +24,13 @@ use std::time::Instant;
 use dblocal_core::model::{AuthMode, CatalogStatus, DeleteMode, EngineKey, InstanceId, Port};
 use dblocal_core::service::{CatalogView, DblService, InstanceView, UriFormat, UserFacingError};
 use dblocal_core::strings;
-use gpui::{
-    App, AppContext as _, ClipboardItem, Context, Entity, FocusHandle, Focusable, IntoElement,
-    ParentElement, Render, SharedString, Subscription, Window, div, prelude::*,
-};
-use gpui_component::{
+use gpui_kit::component::{
     ActiveTheme, WindowExt, command::CommandState, h_flex, input::InputState,
     notification::Notification,
+};
+use gpui_kit::{
+    App, AppContext as _, ClipboardItem, Context, Entity, FocusHandle, Focusable, IntoElement,
+    ParentElement, Render, SharedString, Subscription, Window, div, prelude::*,
 };
 
 use crate::logs::LogStore;
@@ -76,7 +76,7 @@ pub struct Workspace {
     /// Per-instance log buffers, keyed by instance so each tab shows its own.
     logs: LogStore,
     /// Scroll handle for the visible Logs list, driving follow and pause.
-    log_scroll: gpui::UniformListScrollHandle,
+    log_scroll: gpui_kit::UniformListScrollHandle,
     create: Option<CreateForm>,
     delete_target: Option<InstanceId>,
     delete_name_input: Option<Entity<InputState>>,
@@ -98,7 +98,7 @@ pub struct Workspace {
     /// Instances whose connection URI password is currently revealed.
     revealed: std::collections::HashSet<InstanceId>,
     _appearance: Option<Subscription>,
-    _event_task: Option<gpui::Task<()>>,
+    _event_task: Option<gpui_kit::Task<()>>,
 }
 
 impl Workspace {
@@ -124,7 +124,7 @@ impl Workspace {
             catalog,
             tabs: Tabs::default(),
             logs: LogStore::new(),
-            log_scroll: gpui::UniformListScrollHandle::new(),
+            log_scroll: gpui_kit::UniformListScrollHandle::new(),
             create: None,
             delete_target: None,
             delete_name_input: None,

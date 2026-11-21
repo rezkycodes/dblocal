@@ -5,16 +5,16 @@
 
 use dblocal_core::model::DeleteMode;
 use dblocal_core::strings;
-use gpui::{
-    AnyElement, Context, InteractiveElement as _, IntoElement, ParentElement, SharedString, Styled,
-    div, prelude::*, px,
-};
-use gpui_component::{
+use gpui_kit::component::{
     ActiveTheme, Disableable as _, Sizable,
     button::{Button, ButtonVariants as _},
     h_flex,
     input::Input,
     v_flex,
+};
+use gpui_kit::{
+    AnyElement, Context, InteractiveElement as _, IntoElement, ParentElement, SharedString, Styled,
+    div, prelude::*, px,
 };
 
 use crate::format;
@@ -148,7 +148,7 @@ pub(super) fn render(workspace: &Workspace, cx: &mut Context<Workspace>) -> AnyE
                     .border_b_1()
                     .border_color(theme.border)
                     .text_sm()
-                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                    .font_weight(gpui_kit::FontWeight::SEMIBOLD)
                     .child(strings::UI_DELETE_TITLE),
             )
             .child(body),

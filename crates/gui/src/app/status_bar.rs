@@ -3,21 +3,24 @@
 
 use dblocal_core::model::CatalogStatus;
 use dblocal_core::strings;
-use gpui::{InteractiveElement as _, IntoElement, ParentElement, Styled};
-use gpui_component::{
+use gpui_kit::component::{
     ActiveTheme, Sizable,
     button::{Button, ButtonVariants as _},
     h_flex,
     popover::Popover,
     progress::Progress,
 };
+use gpui_kit::{InteractiveElement as _, IntoElement, ParentElement, Styled};
 
 use crate::format;
 
 use super::Workspace;
 
 /// Renders the bottom status bar.
-pub(super) fn render(workspace: &Workspace, cx: &mut gpui::Context<Workspace>) -> impl IntoElement {
+pub(super) fn render(
+    workspace: &Workspace,
+    cx: &mut gpui_kit::Context<Workspace>,
+) -> impl IntoElement {
     let theme = cx.theme();
     let running = workspace.running_count_value();
     let total = workspace.instances().len();
@@ -90,7 +93,7 @@ pub(super) fn render(workspace: &Workspace, cx: &mut gpui::Context<Workspace>) -
         .collect();
 
     let popover = Popover::new("downloads-pop")
-        .anchor(gpui::Anchor::TopRight)
+        .anchor(gpui_kit::Anchor::TopRight)
         .trigger(
             Button::new("downloads-trigger")
                 .label(download_summary)
@@ -101,16 +104,19 @@ pub(super) fn render(workspace: &Workspace, cx: &mut gpui::Context<Workspace>) -
         .content(move |_, _, cx| {
             let download_rows = download_rows_inner.clone();
             let theme = cx.theme();
-            let mut column = gpui_component::v_flex().gap_2().p_3().min_w(gpui::px(280.));
+            let mut column = gpui_kit::component::v_flex()
+                .gap_2()
+                .p_3()
+                .min_w(gpui_kit::px(280.));
             column = column.child(
-                gpui::div()
+                gpui_kit::div()
                     .text_sm()
                     .text_color(theme.foreground)
                     .child(strings::UI_DOWNLOADS),
             );
             if download_rows.is_empty() {
                 column = column.child(
-                    gpui::div()
+                    gpui_kit::div()
                         .text_xs()
                         .text_color(theme.muted_foreground)
                         .child(strings::UI_NO_DOWNLOADS),
@@ -118,17 +124,17 @@ pub(super) fn render(workspace: &Workspace, cx: &mut gpui::Context<Workspace>) -
             }
             for (title, percent, detail, eta) in download_rows {
                 column = column.child(
-                    gpui_component::v_flex()
+                    gpui_kit::component::v_flex()
                         .gap_1()
-                        .child(gpui::div().text_xs().child(title))
+                        .child(gpui_kit::div().text_xs().child(title))
                         .child(
                             Progress::new("download-row")
                                 .value(percent as f32)
                                 .color(theme.progress_bar)
-                                .h(gpui::px(6.)),
+                                .h(gpui_kit::px(6.)),
                         )
                         .child(
-                            gpui::div()
+                            gpui_kit::div()
                                 .text_xs()
                                 .text_color(theme.muted_foreground)
                                 .child(match eta {
@@ -143,7 +149,7 @@ pub(super) fn render(workspace: &Workspace, cx: &mut gpui::Context<Workspace>) -
 
     h_flex()
         .id("status-bar")
-        .h(gpui::px(26.))
+        .h(gpui_kit::px(26.))
         .w_full()
         .items_center()
         .justify_between()
@@ -156,15 +162,19 @@ pub(super) fn render(workspace: &Workspace, cx: &mut gpui::Context<Workspace>) -
             h_flex()
                 .gap_4()
                 .items_center()
-                .child(gpui::div().child(count))
-                .child(gpui::div().text_color(catalog_colour).child(catalog_text)),
+                .child(gpui_kit::div().child(count))
+                .child(
+                    gpui_kit::div()
+                        .text_color(catalog_colour)
+                        .child(catalog_text),
+                ),
         )
         .child(
             h_flex()
                 .gap_4()
                 .items_center()
                 .child(popover)
-                .child(gpui::div().text_color(theme.muted_foreground).child(
+                .child(gpui_kit::div().text_color(theme.muted_foreground).child(
                     if workspace.tray_available() {
                         strings::UI_TRAY_ACTIVE.to_owned()
                     } else {
@@ -172,7 +182,7 @@ pub(super) fn render(workspace: &Workspace, cx: &mut gpui::Context<Workspace>) -
                     },
                 ))
                 .child(
-                    gpui::div()
+                    gpui_kit::div()
                         .text_color(theme.muted_foreground)
                         .child(format!(
                             "{}{}",

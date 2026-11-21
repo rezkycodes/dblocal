@@ -7,8 +7,8 @@
 use dblocal_core::model::{AuthMode, DeleteMode, EngineKey, InstanceId, Port};
 use dblocal_core::service::{CatalogView, InstanceView, UriFormat};
 use dblocal_core::strings;
-use gpui::{App, Context, Entity, SharedString, Window};
-use gpui_component::{command::CommandState, input::InputState};
+use gpui_kit::component::{command::CommandState, input::InputState};
+use gpui_kit::{App, Context, Entity, SharedString, Window};
 
 use crate::format::{self, PaletteAction};
 

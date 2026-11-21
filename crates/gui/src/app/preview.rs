@@ -8,7 +8,7 @@ use std::sync::Arc;
 use dblocal_core::model::InstanceStatus;
 use dblocal_core::service::{DblService, FailureInfo};
 use dblocal_core::strings;
-use gpui::{Context, Window};
+use gpui_kit::{Context, Window};
 
 use super::{InnerTab, Workspace};
 

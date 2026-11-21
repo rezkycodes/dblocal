@@ -1,11 +1,11 @@
 //! Actions and their key bindings for the workspace.
 
-use gpui::{App, KeyBinding};
+use gpui_kit::{App, KeyBinding};
 
 /// Root view identity, used as the key-binding context.
 pub const ROOT_CONTEXT: &str = "DblocalRoot";
 
-gpui::actions!(
+gpui_kit::actions!(
     dblocal_ui,
     [
         /// Toggle the command palette (`Ctrl/Cmd+K`, `Ctrl/Cmd+Shift+P`).

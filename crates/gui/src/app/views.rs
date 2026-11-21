@@ -6,16 +6,16 @@
 use dblocal_core::model::{AuthMode, InstanceStatus};
 use dblocal_core::service::{FailureInfo, InstanceView, UriFormat};
 use dblocal_core::strings;
-use gpui::{
-    Hsla, InteractiveElement as _, IntoElement, ParentElement, SharedString, Styled, div,
-    prelude::*, px,
-};
-use gpui_component::{
+use gpui_kit::component::{
     ActiveTheme, Disableable as _, Sizable,
     button::{Button, ButtonVariants as _},
     h_flex,
     tab::{Tab, TabBar},
     v_flex,
+};
+use gpui_kit::{
+    Hsla, InteractiveElement as _, IntoElement, ParentElement, SharedString, Styled, div,
+    prelude::*, px,
 };
 
 use crate::format;
@@ -53,7 +53,7 @@ impl Workspace {
                             .px_2()
                             .pt_1()
                             .text_xs()
-                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                            .font_weight(gpui_kit::FontWeight::SEMIBOLD)
                             .text_color(theme.muted_foreground)
                             .child(group.label.to_uppercase()),
                     )
@@ -78,7 +78,7 @@ impl Workspace {
                     .border_b_1()
                     .border_color(theme.sidebar_border)
                     .text_xs()
-                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                    .font_weight(gpui_kit::FontWeight::SEMIBOLD)
                     .text_color(theme.muted_foreground)
                     .child(strings::UI_INSTANCES.to_uppercase()),
             )
@@ -176,7 +176,7 @@ impl Workspace {
                 .child(
                     div()
                         .text_xl()
-                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                        .font_weight(gpui_kit::FontWeight::SEMIBOLD)
                         .child(strings::UI_WELCOME_TITLE),
                 )
                 .child(
@@ -341,7 +341,7 @@ impl Workspace {
                 .child(
                     div()
                         .text_lg()
-                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                        .font_weight(gpui_kit::FontWeight::SEMIBOLD)
                         .child(view.name.clone()),
                 )
                 .child(
@@ -510,7 +510,7 @@ impl Workspace {
                 .child(strings::UI_LOGS_EMPTY)
                 .into_any_element()
         } else {
-            gpui::uniform_list("log-lines", count, move |range, _window, _cx| {
+            gpui_kit::uniform_list("log-lines", count, move |range, _window, _cx| {
                 range
                     .map(|index| {
                         let text = lines
@@ -584,7 +584,7 @@ impl Workspace {
     // ----- Accessors used by submodules ----------------------------------
 }
 
-fn status_colour(status: InstanceStatus, theme: &gpui_component::Theme) -> Hsla {
+fn status_colour(status: InstanceStatus, theme: &gpui_kit::component::Theme) -> Hsla {
     match status {
         InstanceStatus::Running => theme.success,
         InstanceStatus::Failed => theme.danger,
@@ -662,7 +662,7 @@ fn render_failure(
                 .child(
                     div()
                         .text_sm()
-                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                        .font_weight(gpui_kit::FontWeight::SEMIBOLD)
                         .child(strings::UI_FAILURE_HEADING),
                 )
                 .child(div().text_xs().child(format!(

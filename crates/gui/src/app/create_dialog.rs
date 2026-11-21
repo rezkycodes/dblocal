@@ -8,16 +8,16 @@
 
 use dblocal_core::model::AuthMode;
 use dblocal_core::strings;
-use gpui::{
-    AnyElement, Context, InteractiveElement as _, IntoElement, MouseButton, ParentElement,
-    SharedString, Styled, div, prelude::*, px,
-};
-use gpui_component::{
+use gpui_kit::component::{
     ActiveTheme, Disableable as _, Sizable,
     button::{Button, ButtonVariants as _},
     h_flex,
     input::Input,
     v_flex,
+};
+use gpui_kit::{
+    AnyElement, Context, InteractiveElement as _, IntoElement, MouseButton, ParentElement,
+    SharedString, Styled, div, prelude::*, px,
 };
 
 use crate::format;
@@ -229,7 +229,7 @@ pub(super) fn render(workspace: &Workspace, cx: &mut Context<Workspace>) -> AnyE
                     .border_b_1()
                     .border_color(theme.border)
                     .text_sm()
-                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                    .font_weight(gpui_kit::FontWeight::SEMIBOLD)
                     .child(strings::UI_CREATE_TITLE),
             )
             .child(body),
@@ -252,7 +252,7 @@ pub(super) fn overlay(
     panel: impl IntoElement,
     cx: &mut Context<Workspace>,
 ) -> AnyElement {
-    gpui::deferred(
+    gpui_kit::deferred(
         div()
             .id(overlay_id)
             .absolute()
@@ -260,7 +260,7 @@ pub(super) fn overlay(
             .flex()
             .justify_center()
             .items_center()
-            .bg(gpui::hsla(0.0, 0.0, 0.0, 0.45))
+            .bg(gpui_kit::hsla(0.0, 0.0, 0.0, 0.45))
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, _, _window, cx| {

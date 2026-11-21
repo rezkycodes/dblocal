@@ -120,6 +120,33 @@ regression fails the test rather than passing on a "> 40 colours" check:
 
 `vulkan::preflight()` runs before `gpui_platform::application()`. It detects missing or invalid ICD manifests/overrides and, as a final gate, wgpu Vulkan adapter enumeration failure; on failure it prints distro install commands, `vulkaninfo` verification and exits `78`, never a panic or black window. `DBLOCAL_GUI_HEADLESS=1` and the main-thread/display checks in `lib::gui_unavailable_reason` keep `dblocal` (no args) usable on a headless box and from test harnesses.
 
+## GPUI Kit (W2-D, 2026-11-21)
+
+User direction: adopt https://gpui-kit.com/docs/ as the UI toolkit and design rulebook (layout stays
+Zed-style, D-23 → D-25). `crates/gui` now depends on the **umbrella crate** `gpui-kit = "=0.10.0"`
+(Apache-2.0), which re-exports the same GPUI stack (gpui-pre 0.3.12, gpui-component 0.10.0,
+gpui-kit-assets 0.10.0). The direct `gpui`, `gpui-component`, `gpui-kit-assets` and per-OS
+`gpui-platform` edges are gone; imports are `gpui_kit::*`, `gpui_kit::component::*`,
+`gpui_kit::assets`, `gpui_kit::platform`, `gpui_kit::actions!`, and init is `gpui_kit::init(cx)`.
+
+- **Linux backends:** the kit enables `wayland` **and** `x11` (plus `font-kit`,
+  `runtime_shaders`) on `gpui-pre-platform`/`gpui-pre-linux`, and downstream cannot opt X11 out.
+  Both are compiled in and selected at runtime from `WAYLAND_DISPLAY` / `DISPLAY`. This makes
+  `libxkbcommon-x11-devel` / `libxkbcommon-x11-dev` a **required** build dependency
+  (`docs/dev/linux-build-deps.md`). Verified running on Wayland and on X11 (Xwayland `:0`).
+- **Cost vs direct deps:** +1.5 MB release binary and +12.8 MB idle RSS (both backends linked);
+  idle CPU 0.25 %, cold start p50 465 ms Wayland / 384 ms X11. See `docs/spikes/gpui-kit/README.md`.
+- **Themes:** `gpui_kit::init` registers the registry; `theme::init` loads our Atom One JSON via
+  `ThemeRegistry::load_themes_from_str` and applies it with `Theme::update(...apply_config...)` —
+  the same path the D-25 prototype uses. Ours is the default; the 122-pair contrast test stays the
+  contract; Kit presets are not loaded.
+- **Design rules:** the normative must/should/may checklist from Kit's `design-guides`, with a
+  headless check per rule for W2-E to fill in, is in `docs/spikes/gpui-kit/README.md`.
+- **`gpui-fast`:** measured, **not adopted** (RSS 183.6 MB vs 180.5 MB, no floor improvement);
+  `docs/spikes/gpui-kit/gpui-fast-notes.md`.
+
 ## Unverified here
 
-Windows, macOS and the X11 backend cannot be built or run on this Linux/Wayland host: `-lxkbcommon-x11` needs the `libxkbcommon-x11-devel` package, which is not installed (see `docs/dev/linux-build-deps.md`). Tray wiring, quit dialogs and the real service are Wave 2.
+X11 now builds and runs here (Xwayland `:0`, verified in W2-D). Windows and macOS cannot be built or
+run on this Linux host; `gpui-fast` is measured but has no render-parity or 40× evidence; non-AMD
+GPUs unverified. Tray wiring, quit dialogs and the real service are Wave 2.

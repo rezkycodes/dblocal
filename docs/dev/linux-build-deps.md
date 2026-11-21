@@ -1,6 +1,14 @@
 # Linux build dependencies
 
-DBLocal's GUI uses `gpui-pre` (wgpu/Vulkan) and `gpui-component`. On Linux you need X11/Wayland client libraries and a working Vulkan ICD at runtime. This host is Fedora 44 (Wayland, GNOME 50.6); package names differ by distro.
+DBLocal's GUI uses `gpui-kit` 0.10.0 (the umbrella crate over `gpui-pre`/wgpu/Vulkan and
+`gpui-component`). On Linux you need X11/Wayland client libraries and a working Vulkan ICD at
+runtime. This host is Fedora 44 (Wayland, GNOME 50.6); package names differ by distro.
+
+**Both backends are compiled in.** `gpui-kit` 0.10.0 enables `wayland` **and** `x11` (plus
+`font-kit`, `runtime_shaders`) on `gpui-pre-platform`/`gpui-pre-linux` on desktop, and downstream
+cannot opt out (Cargo features are additive). So `libxkbcommon-x11-devel` / `libxkbcommon-x11-dev`
+is a **required build dependency**, not an optional one for a feature flag. The app selects the
+backend at runtime from `WAYLAND_DISPLAY` / `DISPLAY`.
 
 ## Fedora
 
@@ -13,7 +21,10 @@ sudo dnf install \
 ```
 
 Notes:
-- `libxkbcommon-x11-devel` provides the unversioned `libxkbcommon-x11.so` symlink. The runtime `libxkbcommon-x11.so.0` is not enough to link the X11 backend (`cargo build -p dblocal-gui --features x11` fails with `cannot find -lxkbcommon-x11` without the `-devel` package). W0-C observed this on this host.
+- `libxkbcommon-x11-devel` provides the unversioned `libxkbcommon-x11.so` symlink that the X11
+  backend links (`cargo build` fails with `cannot find -lxkbcommon-x11` without it). It is
+  required now because `gpui-kit` always pulls the X11 backend; verified working on this host
+  (`pkg-config --modversion xkbcommon-x11` → 1.13.1).
 - `alsa-lib-devel` is *not* required by DBLocal's current dependency set (no audio crate). Do not add it unless a future dependency needs it.
 - `libsecret-devel` is intentionally not required: the current keyring backend must build without libsecret-1 (see AGENTS.md environment notes).
 

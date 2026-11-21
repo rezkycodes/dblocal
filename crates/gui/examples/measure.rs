@@ -20,7 +20,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use dblocal_core::service::{DblService, mock::MockService};
-use gpui::{App, Bounds, WindowBounds, WindowKind, WindowOptions, div, prelude::*, px, size};
+use gpui_kit::{App, Bounds, WindowBounds, WindowKind, WindowOptions, div, prelude::*, px, size};
 
 const TARGET_RSS_MB: f64 = 150.0;
 const TARGET_CPU_PCT: f64 = 1.0;
@@ -28,12 +28,12 @@ const TARGET_CPU_PCT: f64 = 1.0;
 /// The floor view: an empty window with no DBLocal widgets.
 struct EmptyView;
 
-impl gpui::Render for EmptyView {
+impl gpui_kit::Render for EmptyView {
     fn render(
         &mut self,
-        _window: &mut gpui::Window,
-        _cx: &mut gpui::Context<Self>,
-    ) -> impl gpui::IntoElement {
+        _window: &mut gpui_kit::Window,
+        _cx: &mut gpui_kit::Context<Self>,
+    ) -> impl gpui_kit::IntoElement {
         div().size_full()
     }
 }
@@ -101,20 +101,20 @@ fn main() {
         .init();
 
     // Floor first: an empty window, measured before anything DBLocal builds.
-    gpui_platform::application()
-        .with_assets(gpui_kit_assets::AllAssets)
+    gpui_kit::platform::application()
+        .with_assets(gpui_kit::assets::AllAssets)
         .run(|cx: &mut App| {
-            gpui_component::init(cx);
+            gpui_kit::component::init(cx);
             let bounds = Bounds::centered(None, size(px(1180.), px(760.)), cx);
             let options = WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
-                titlebar: Some(gpui_component::TitleBar::title_bar_options()),
+                titlebar: Some(gpui_kit::component::TitleBar::title_bar_options()),
                 kind: WindowKind::Normal,
                 ..Default::default()
             };
             let _ = cx.open_window(options, |window, cx| {
                 let empty = cx.new(|_| EmptyView);
-                cx.new(|cx| gpui_component::Root::new(empty, window, cx))
+                cx.new(|cx| gpui_kit::component::Root::new(empty, window, cx))
             });
 
             let start_cpu = cpu_seconds();
@@ -136,15 +136,15 @@ fn main() {
         eprintln!("{report}");
         return;
     }
-    gpui_platform::application()
-        .with_assets(gpui_kit_assets::AllAssets)
+    gpui_kit::platform::application()
+        .with_assets(gpui_kit::assets::AllAssets)
         .run(move |cx: &mut App| {
-            gpui_component::init(cx);
+            gpui_kit::component::init(cx);
             dblocal_gui::theme::init(cx);
             let bounds = Bounds::centered(None, size(px(1180.), px(760.)), cx);
             let options = WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
-                titlebar: Some(gpui_component::TitleBar::title_bar_options()),
+                titlebar: Some(gpui_kit::component::TitleBar::title_bar_options()),
                 kind: WindowKind::Normal,
                 ..Default::default()
             };
@@ -152,7 +152,7 @@ fn main() {
             let _ = cx.open_window(options, move |window, cx| {
                 let view =
                     cx.new(|cx| dblocal_gui::app::Workspace::new(service_for_window, window, cx));
-                cx.new(|cx| gpui_component::Root::new(view, window, cx))
+                cx.new(|cx| gpui_kit::component::Root::new(view, window, cx))
             });
 
             let start_cpu = cpu_seconds();
