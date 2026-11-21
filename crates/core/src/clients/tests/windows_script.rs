@@ -1,8 +1,8 @@
 use std::path::{Path, PathBuf};
 
 use crate::clients::{
-    ClientError, ClientKind, ClientResult, DetectedClient, LaunchEnv, LaunchPlan, OpenTarget, OsKind,
-    TempFile, TerminalChoice, TerminalKind, plan_open,
+    ClientError, ClientKind, ClientResult, DetectedClient, LaunchEnv, LaunchPlan, OpenTarget,
+    OsKind, TempFile, TerminalChoice, TerminalKind, plan_open,
 };
 use crate::model::EngineKey;
 use crate::secret::SecretString;
@@ -12,10 +12,7 @@ use super::super::terminal::launcher_temp_file;
 const PROGRAM: &str = r"C:\bin\psql.exe";
 
 fn windows_env(password: &str) -> Vec<LaunchEnv> {
-    vec![LaunchEnv::new(
-        "PGPASSWORD",
-        SecretString::from(password),
-    )]
+    vec![LaunchEnv::new("PGPASSWORD", SecretString::from(password))]
 }
 
 fn windows_temp(password: &str) -> ClientResult<TempFile> {
@@ -166,7 +163,11 @@ fn windows_launcher_structure_is_pinned() {
         del_index < client_index,
         "self-delete must run before the client line"
     );
-    assert_eq!(lines[close_index + 1], "", "nothing after the closing paren");
+    assert_eq!(
+        lines[close_index + 1],
+        "",
+        "nothing after the closing paren"
+    );
 
     for (index, line) in lines.iter().enumerate() {
         let trimmed = line.trim_start();

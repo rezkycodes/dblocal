@@ -112,6 +112,30 @@ disappeared between detection and launch fails with a typed `ClientNotFound` ins
 No shell command is built by concatenation. Launcher scripts use `shell_quote` for POSIX and quoted args
 for Windows cmd. Hostile corpus tested at validation and plan layers.
 
+### Windows `.cmd` escaping (value-tested only)
+
+`escape_cmd_set_value` doubles every `%` in an env value (`%PATH%` -> `%%PATH%%`, `100%` -> `100%%`,
+`a%%b` -> `a%%%%b`), because cmd expands `%VAR%` when it parses a batch line; without doubling a
+password containing `%` would be mangled or expanded. `validate_windows_env_value` rejects `"`, CR and
+LF with typed `InvalidTarget { field: "password" }` before any script is built: a raw `"` would end the
+`set "NAME=value"` quoting early and a CR/LF would inject a new batch line. The same corpus is accepted
+on Linux/macOS, where the POSIX launcher quotes it with `shell_quote`.
+
+The `.cmd` structure is pinned by a golden test: it starts with `@echo off\r\n(\r\n`, every line ends in
+CRLF, the `del "%~f0"` line runs before every `set` and before the client line, the client line is the
+last line inside the parenthesised block, and the file ends with `)\r\n`. cmd.exe cannot run on this
+machine, so the script and its runtime behaviour are **unverified** until the owner's Windows run (see
+the Windows verification checklist).
+
+### macOS AppleScript escaping (value-tested only)
+
+The macOS plan runs `osascript -e 'tell application "Terminal" to do script "<command>"'`.
+`escape_applescript` doubles `\` then escapes `"`, so the command string lands inside the AppleScript
+double-quoted literal with no unescaped quote or backslash. Value tests over the POSIX corpus (`it's`,
+`a"b`, backslash, `\\`, newline, `$HOME`, a 4096-byte string) assert that the escaped literal contains
+no bare quote or backslash and that the test-side inverse gives back the original. macOS Terminal.app
+behaviour itself stays **unverified** here (Linux machine).
+
 ## Secrets scanning
 
 Tests scan every `LaunchPlan` for secret in argv/url/command_string. Env values may contain secrets by design;
@@ -119,7 +143,7 @@ they are not used for CLI terminal launch plans after F1 (secrets live in script
 
 ## Unverified / limitations
 
-- Windows script behaviour, macOS Terminal.app, and terminals not installed locally (xdg-terminal-exec, foot, wezterm, kitty, alacritty, konsole, gnome-terminal, xterm) are unverified by real execution here.
+- Windows script behaviour, macOS Terminal.app, and terminals not installed locally (xdg-terminal-exec, foot, wezterm, kitty, alacritty, konsole, gnome-terminal, xterm) are unverified by real execution here. The Windows launcher `.cmd` structure and its `%`/`"`/CR/LF escaping are value-tested only; `cmd.exe` behaviour is unverified until the owner's Windows run.
 - Real DBDelve/TablePlus/DBeaver behavior is unverified; DBDelve on host was detected but not launched.
 - TablePlus mysql/redis URL forms are unverified by official docs (third-party reports only).
 - DBeaver MariaDB driver id `maria` is unverified.
