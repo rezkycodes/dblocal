@@ -433,7 +433,7 @@ fn wait_for_status_rx_times_out_at_the_deadline() {
         let mut err = Vec::new();
         wait_for_status_rx(&mut rx, &service, wait, &mut err).expect_err("timeout")
     });
-    assert_eq!(failure.code, "DBL-4001");
+    assert_eq!(failure.code, crate::messages::CODE_TIMEOUT);
 }
 
 #[test]

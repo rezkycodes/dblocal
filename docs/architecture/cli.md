@@ -105,8 +105,8 @@ followed by a 60 s wait:
 
 | Command | Concrete status | Exit | Message |
 |---|---|---|---|
-| `start` | `busy` | 0 after waiting, or 1 on timeout | `sudah berjalan` |
-| `start` | `starting` | 0 after waiting, or 1 on timeout | `sudah berjalan` |
+| `start` | `busy` | 0 after waiting, or 4 on timeout | `sudah berjalan` |
+| `start` | `starting` | 0 after waiting, or 4 on timeout | `sudah berjalan` |
 | `start` | `running` | 0 | `sudah berjalan` |
 | `start` | `stopping` | 1 | `[DBL-1004] sedang dihentikan oleh proses lain` |
 | `stop` | `stopped` | 0 | `sudah berhenti` |

@@ -54,7 +54,12 @@ pub fn timeout_line() -> String {
 
 /// The "CLI runtime could not be built" line, with its code.
 pub fn runtime_line(detail: &str) -> String {
-    format!("[{CODE_RUNTIME}] {ERR_RUNTIME}: {detail}")
+    format!("[{CODE_RUNTIME}] {}", runtime_message(detail))
+}
+
+/// The runtime failure's message, before the code is prepended.
+pub fn runtime_message(detail: &str) -> String {
+    format!("{ERR_RUNTIME}: {detail}")
 }
 
 /// The "another process is stopping it" line, with its code.

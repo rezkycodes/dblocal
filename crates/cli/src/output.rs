@@ -276,9 +276,13 @@ pub fn wait_for_status_rx(
         .enable_time()
         .build()
         .map_err(|e| {
-            UserFacingError::from(&DblError::Engine {
-                reason: format!("runtime: {e}"),
-            })
+            // A CLI runtime that cannot start is a CLI failure, not an engine
+            // one: the engine code would claim a database problem that does not
+            // exist.
+            UserFacingError::new(
+                messages::CODE_RUNTIME,
+                messages::runtime_message(&e.to_string()),
+            )
         })?;
     rt.block_on(async {
         let deadline = tokio::time::Instant::now() + timeout;
@@ -286,9 +290,10 @@ pub fn wait_for_status_rx(
         loop {
             let now = tokio::time::Instant::now();
             if now >= deadline {
-                return Err(UserFacingError::from(&DblError::Engine {
-                    reason: "timeout".to_owned(),
-                }));
+                return Err(UserFacingError::new(
+                    messages::CODE_TIMEOUT,
+                    messages::ERR_TIMEOUT,
+                ));
             }
             let remaining = deadline - now;
             let recv = tokio::time::timeout(remaining, rx.recv()).await;
@@ -338,9 +343,10 @@ pub fn wait_for_status_rx(
                     }));
                 }
                 Err(_) => {
-                    return Err(UserFacingError::from(&DblError::Engine {
-                        reason: "timeout".to_owned(),
-                    }));
+                    return Err(UserFacingError::new(
+                        messages::CODE_TIMEOUT,
+                        messages::ERR_TIMEOUT,
+                    ));
                 }
             }
         }
