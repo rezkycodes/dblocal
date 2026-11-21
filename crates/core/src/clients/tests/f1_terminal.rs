@@ -89,14 +89,7 @@ exec "{term}" "$@"
     super::resilient::spawn_resilient(&plan, &SystemSpawner::with_launcher_dir(&launcher_dir))
         .unwrap();
 
-    for _ in 0..100 {
-        if out.exists() {
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(20));
-    }
-    let seen = fs::read_to_string(&out).expect("seen");
-    assert_eq!(seen, "TOPSECRET");
+    super::resilient::wait_for_contents(&out, "TOPSECRET");
     let term_env = fs::read_to_string(dir.path().join("term-env.txt")).unwrap_or_default();
     let term_cmd = fs::read_to_string(dir.path().join("term-cmd.txt")).unwrap_or_default();
     assert!(
@@ -190,13 +183,7 @@ fn two_concurrent_launches_get_different_scripts_and_passwords() {
         .unwrap();
         super::resilient::spawn_resilient(&plan, &SystemSpawner::with_launcher_dir(&launcher_dir))
             .unwrap();
-        for _ in 0..100 {
-            if out.exists() {
-                break;
-            }
-            std::thread::sleep(Duration::from_millis(20));
-        }
-        assert_eq!(fs::read_to_string(out).unwrap(), *pw);
+        super::resilient::wait_for_contents(&out, pw);
     }
 }
 
@@ -264,13 +251,7 @@ fn real_ptyxis_receives_password_via_script() {
     super::resilient::spawn_resilient(&plan, &SystemSpawner::with_launcher_dir(&launcher_dir))
         .unwrap();
 
-    for _ in 0..200 {
-        if out.exists() {
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(50));
-    }
-    assert_eq!(fs::read_to_string(&out).unwrap(), "TOPSECRET");
+    super::resilient::wait_for_contents(&out, "TOPSECRET");
 
     let leftover: Vec<_> = fs::read_dir(&launcher_dir)
         .unwrap()

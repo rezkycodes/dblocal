@@ -1,6 +1,5 @@
 use std::fs;
 use std::path::PathBuf;
-use std::time::Duration;
 
 use crate::clients::ClientError;
 use crate::clients::{LaunchEnv, TempFile};
@@ -79,13 +78,7 @@ fn system_spawner_runs_with_temp_file_and_env() {
     );
     super::resilient::spawn_resilient(&plan, &SystemSpawner::with_launcher_dir(&launcher_dir))
         .unwrap();
-    for _ in 0..50 {
-        if out.exists() {
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(20));
-    }
-    let s = fs::read_to_string(&out).unwrap();
+    let s = super::resilient::wait_for_nonempty(&out);
     assert!(s.contains("sekret"));
 }
 
@@ -172,11 +165,5 @@ fn script_placeholder_is_substituted_from_the_injected_dir() {
     );
     super::resilient::spawn_resilient(&plan, &SystemSpawner::with_launcher_dir(&launcher_dir))
         .unwrap();
-    for _ in 0..100 {
-        if out.exists() {
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(20));
-    }
-    assert_eq!(fs::read_to_string(&out).unwrap().trim(), "yes");
+    assert_eq!(super::resilient::wait_for_nonempty(&out).trim(), "yes");
 }

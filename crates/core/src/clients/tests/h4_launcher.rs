@@ -204,6 +204,17 @@ fn h4_g_i_secure_dir_checks() {
     std::os::unix::fs::symlink(&ok, &link).unwrap();
     assert!(verify_secure_dir_for(&link, uid).is_err());
 
+    // A regular file with mode 0700 passes the mode/owner checks, so this case
+    // is the only one that proves the `is_dir` guard, not just the mode guard.
+    let regular = dir.path().join("regular-file");
+    fs::write(&regular, "x").unwrap();
+    fs::set_permissions(&regular, fs::Permissions::from_mode(0o700)).unwrap();
+    let err = verify_secure_dir_for(&regular, uid).unwrap_err();
+    assert!(
+        format!("{err:?}").contains("ScriptError"),
+        "a regular file must be refused: {err:?}"
+    );
+
     let wrong_uid = dir.path().join("wrong-uid");
     fs::create_dir(&wrong_uid).unwrap();
     fs::set_permissions(&wrong_uid, fs::Permissions::from_mode(0o700)).unwrap();

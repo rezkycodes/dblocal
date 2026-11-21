@@ -1,5 +1,4 @@
 use std::fs;
-use std::time::Duration;
 
 use crate::clients::{LaunchPlan, SystemSpawner, run};
 
@@ -18,14 +17,7 @@ fn real_spawn_runs_harmless_fake_program() {
     }
     let plan = LaunchPlan::new(script.clone(), vec![], vec![], None, None, None);
     spawn_resilient(&plan, &SystemSpawner::default()).expect("spawn");
-    // wait briefly for script
-    for _ in 0..50 {
-        if out.exists() {
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(20));
-    }
-    assert_eq!(fs::read_to_string(&out).expect("read"), "ok\n");
+    super::resilient::wait_for_contents(&out, "ok\n");
 }
 
 #[test]
