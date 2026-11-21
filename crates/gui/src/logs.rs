@@ -16,7 +16,7 @@
 use std::collections::HashMap;
 
 use dblocal_core::model::InstanceId;
-use gpui::SharedString;
+use gpui_kit::SharedString;
 
 /// How many lines the GUI keeps in memory (domain value, one source of truth).
 pub fn capacity() -> usize {

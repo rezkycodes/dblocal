@@ -2,8 +2,8 @@
 //! appearance. Colors come from the JSON files under `assets/themes/`, the same
 //! ones `contrast` verifies.
 
-use gpui::{App, Hsla, SharedString};
-use gpui_component::theme::{Theme, ThemeRegistry};
+use gpui_kit::component::theme::{Theme, ThemeRegistry};
+use gpui_kit::{App, Hsla, SharedString};
 
 use crate::contrast::THEME_FILES;
 
@@ -125,7 +125,7 @@ pub fn sync_to_system(cx: &mut App) {
     let appearance = cx.window_appearance();
     let is_dark = matches!(
         appearance,
-        gpui::WindowAppearance::Dark | gpui::WindowAppearance::VibrantDark
+        gpui_kit::WindowAppearance::Dark | gpui_kit::WindowAppearance::VibrantDark
     );
     let wanted = if is_dark { DARK_THEME } else { LIGHT_THEME };
     apply_named(cx, wanted);
@@ -142,7 +142,10 @@ pub fn log_resolved_fonts(cx: &App) {
     let mono = theme.mono_font_family.clone();
     tracing::info!("UI font family: {ui:?}");
     tracing::info!("Monospace font family: {mono:?}");
-    let resolved = cx.text_system().resolve_font(&gpui::font(ui.as_ref())).0;
+    let resolved = cx
+        .text_system()
+        .resolve_font(&gpui_kit::font(ui.as_ref()))
+        .0;
     tracing::info!("resolved UI font id: {resolved}");
 }
 
@@ -160,7 +163,7 @@ pub fn hex_to_hsla(hex: &str) -> Hsla {
     } else {
         (parse(&h[0..2]), parse(&h[2..4]), parse(&h[4..6]), 255)
     };
-    gpui::rgba(((r as u32) << 24) | ((g as u32) << 16) | ((b as u32) << 8) | a as u32).into()
+    gpui_kit::rgba(((r as u32) << 24) | ((g as u32) << 16) | ((b as u32) << 8) | a as u32).into()
 }
 
 #[cfg(test)]

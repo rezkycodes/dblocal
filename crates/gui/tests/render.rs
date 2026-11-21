@@ -16,18 +16,18 @@ use std::sync::Arc;
 use dblocal_core::model::{AuthMode, EngineKey, InstanceName, InstanceSpec, InstanceStatus, Port};
 use dblocal_core::service::{DblService, mock::MockService};
 use dblocal_gui::app::Workspace;
-use gpui::{
+use gpui_kit::{
     AnyWindowHandle, AppContext as _, AssetSource, Bounds, Context, HeadlessAppContext,
     SharedString, WindowBounds, WindowOptions, px, size,
 };
 
 struct GuiAssets;
 impl AssetSource for GuiAssets {
-    fn load(&self, path: &str) -> gpui::Result<Option<std::borrow::Cow<'static, [u8]>>> {
-        gpui_kit_assets::AllAssets.load(path)
+    fn load(&self, path: &str) -> gpui_kit::Result<Option<std::borrow::Cow<'static, [u8]>>> {
+        gpui_kit::assets::AllAssets.load(path)
     }
-    fn list(&self, path: &str) -> gpui::Result<Vec<SharedString>> {
-        gpui_kit_assets::AllAssets.list(path)
+    fn list(&self, path: &str) -> gpui_kit::Result<Vec<SharedString>> {
+        gpui_kit::assets::AllAssets.list(path)
     }
 }
 
@@ -141,7 +141,7 @@ fn seeded_service() -> Arc<dyn DblService> {
     Arc::new(service)
 }
 
-type Build = fn(Arc<dyn DblService>, &mut gpui::Window, &mut Context<Workspace>) -> Workspace;
+type Build = fn(Arc<dyn DblService>, &mut gpui_kit::Window, &mut Context<Workspace>) -> Workspace;
 
 /// Where a frame is written, and whether that path is tracked by git.
 fn output_path(name: &str) -> (std::path::PathBuf, bool) {
@@ -169,13 +169,13 @@ static GPU: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 fn render(mode_dark: bool, name: &str, build: Build) -> Frame {
     let _guard = GPU.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-    let text_system = gpui_platform::current_platform(true).text_system();
+    let text_system = gpui_kit::platform::current_platform(true).text_system();
     let mut app = HeadlessAppContext::with_platform(
         text_system,
         Arc::new(GuiAssets),
-        gpui_platform::current_headless_renderer,
+        gpui_kit::platform::current_headless_renderer,
     );
-    app.update(gpui_component::init);
+    app.update(gpui_kit::component::init);
     app.update(dblocal_gui::theme::init);
     app.update(|cx| {
         let theme = if mode_dark {
@@ -189,7 +189,7 @@ fn render(mode_dark: bool, name: &str, build: Build) -> Frame {
     let service = seeded_service();
     let handle: AnyWindowHandle = {
         let bounds = Bounds {
-            origin: gpui::point(px(0.0), px(0.0)),
+            origin: gpui_kit::point(px(0.0), px(0.0)),
             size: size(px(1180.0), px(760.0)),
         };
         let window = app
@@ -204,7 +204,7 @@ fn render(mode_dark: bool, name: &str, build: Build) -> Frame {
                     |window, cx| {
                         let service = service.clone();
                         let view = cx.new(|cx| build(service, window, cx));
-                        cx.new(|cx| gpui_component::Root::new(view, window, cx))
+                        cx.new(|cx| gpui_kit::component::Root::new(view, window, cx))
                     },
                 )
             })
