@@ -111,10 +111,15 @@ Rules:
 - AppImage is detected only when `APPIMAGE` names an existing regular file,
   `APPDIR` is set, and the executable path resolves inside `APPDIR`. A foreign
   `$APPIMAGE` in a child process is not trusted.
-- Linux paths in deny-list locations are `Unknown` (refused): `/nix/store`,
-  `/snap`, `/app`, `/usr`, `/opt`, `*/.cargo/bin`, `*/target/debug`,
-  `*/target/release`. Linux executables must also be writable by the current
-  user and look like a portable `dblocal` binary; otherwise `Unknown`.
+- Linux paths in deny-list locations are `Unknown` (refused). The managed
+  prefixes `/nix/store/`, `/snap/`, `/app/`, `/usr/` and `/opt/` match at the
+  **start of the canonicalised path only**, so a portable copy under a
+  user-chosen `~/opt/...` or `~/work/app/...` still self-updates; only the
+  build/tooling suffixes `*/.cargo/bin/`, `*/target/debug/` and
+  `*/target/release/` match anywhere in the path. Linux executables must also
+  be writable by the current user (probed with `nix::unistd::access(.., W_OK)`,
+  which creates nothing in the install directory) and look like a portable
+  `dblocal` binary; otherwise `Unknown`.
 - Windows MSI is detected for `\Program Files`, `\Program Files (x86)`, and
   `\AppData\Local\DBLocal` (per-user MSI install location from
   `packaging/msi/dblocal.wxs`). A zip unpacked there is classified MSI/refused,
@@ -140,8 +145,9 @@ is not executed.
 
 `apply` implements Linux AppImage/portable-tarball replacement:
 
-1. Ensure target directory is writable.
+1. Ensure target directory is writable (OS `access(W_OK)`, no probe file).
 2. Copy staged file next to target; copy Unix mode from target/src fallback.
+   Any failure up to the rename removes the staged sibling.
 3. fsync staged temp file.
 4. Create backup by hard link, or copy fallback when hard link is unsupported.
 5. Atomically `rename(temp, target)` over the live file. No delete-then-rename

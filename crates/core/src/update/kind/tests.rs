@@ -247,10 +247,7 @@ fn each_managed_prefix_is_denied_at_the_start_of_the_path() {
 fn each_build_tooling_suffix_is_denied_anywhere() {
     for (path, suffix) in [
         ("/home/u/.cargo/bin/dblocal", "/.cargo/bin/"),
-        (
-            "/home/u/src/dblocal/target/debug/dblocal",
-            "/target/debug/",
-        ),
+        ("/home/u/src/dblocal/target/debug/dblocal", "/target/debug/"),
         (
             "/home/u/src/dblocal/target/release/dblocal",
             "/target/release/",
@@ -320,10 +317,7 @@ fn unwritable_directory_is_denied() {
     std::fs::set_permissions(dir.path(), original).unwrap();
     assert_eq!(reason, Some(DenyReason::NotWritable));
     assert!(
-        reason
-            .unwrap()
-            .message()
-            .contains("tidak dapat ditulis"),
+        reason.unwrap().message().contains("tidak dapat ditulis"),
         "message must explain the writability refusal"
     );
 }

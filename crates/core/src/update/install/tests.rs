@@ -488,9 +488,15 @@ fn ensure_target_writable_asks_the_os_without_writing_a_probe() {
     let dir = tempdir().unwrap();
     let target = dir.path().join("dblocal");
     fs::write(&target, b"x").unwrap();
-    let before: Vec<_> = fs::read_dir(dir.path()).unwrap().collect::<Result<_, _>>().unwrap();
+    let before: Vec<_> = fs::read_dir(dir.path())
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
     ensure_target_writable(&target).expect("writable dir");
-    let after: Vec<_> = fs::read_dir(dir.path()).unwrap().collect::<Result<_, _>>().unwrap();
+    let after: Vec<_> = fs::read_dir(dir.path())
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
     assert_eq!(before.len(), after.len(), "probe file was created");
 
     let original = fs::metadata(dir.path()).unwrap().permissions();
@@ -535,7 +541,11 @@ fn apply_refuses_read_only_target_directory_and_leaves_it_untouched() {
         err.code(),
         crate::update::error::CODE_UPDATE_UNSUPPORTED_KIND
     );
-    assert_eq!(fs::read(&current).unwrap(), original_bytes, "target changed");
+    assert_eq!(
+        fs::read(&current).unwrap(),
+        original_bytes,
+        "target changed"
+    );
     assert!(!dir.path().join("dblocal.old").exists(), ".old left behind");
     let names: Vec<String> = fs::read_dir(dir.path())
         .unwrap()
@@ -576,7 +586,10 @@ fn apply_removes_staged_sibling_when_write_step_fails() {
         !names.iter().any(|n| n.starts_with(".dblocal.update-")),
         "staged sibling left behind: {names:?}"
     );
-    assert!(!dir.path().join("dblocal.old").exists(), "no backup expected");
+    assert!(
+        !dir.path().join("dblocal.old").exists(),
+        "no backup expected"
+    );
     let out = version_output(&current);
     assert!(String::from_utf8_lossy(&out.stdout).contains("1.0.0"));
 }
@@ -603,9 +616,11 @@ fn smoke_failure_restores_old_bytes_and_removes_staged_sibling() {
     assert_eq!(err.code(), crate::update::error::CODE_UPDATE_APPLY_FAILED);
     assert_eq!(fs::read(&current).unwrap(), old_bytes, "old bytes restored");
     assert!(
-        !fs::read_dir(dir.path())
+        !fs::read_dir(dir.path()).unwrap().any(|e| e
             .unwrap()
-            .any(|e| e.unwrap().file_name().to_string_lossy().starts_with(".dblocal.update-")),
+            .file_name()
+            .to_string_lossy()
+            .starts_with(".dblocal.update-")),
         "staged sibling left behind after rollback"
     );
 }
@@ -647,7 +662,10 @@ fn restore_backup_is_continuous_and_never_unlinks_the_target() {
         !missing.load(Ordering::SeqCst),
         "target went missing during restore"
     );
-    assert!(reads.load(Ordering::SeqCst) > 0, "reader never observed target");
+    assert!(
+        reads.load(Ordering::SeqCst) > 0,
+        "reader never observed target"
+    );
     let out = version_output(&target);
     assert!(String::from_utf8_lossy(&out.stdout).contains("1.0.0"));
 }
