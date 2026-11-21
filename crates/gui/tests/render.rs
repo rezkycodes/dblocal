@@ -211,7 +211,9 @@ fn lock_then_arm<'a>(
     limit: Duration,
     on_fire: impl Fn() + Send + 'static,
 ) -> (std::sync::MutexGuard<'a, ()>, RenderWatchdog) {
-    let guard = mutex.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let guard = mutex
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let watchdog = RenderWatchdog::arm_with(name, limit, on_fire);
     (guard, watchdog)
 }
@@ -270,12 +272,10 @@ fn watchdog_fires_for_a_stuck_case() {
     let fired = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let fired_t = Arc::clone(&fired);
     {
-        let (_guard, _watchdog) = lock_then_arm(
-            &mutex,
-            "stuck-case",
-            Duration::from_millis(40),
-            move || fired_t.store(true, std::sync::atomic::Ordering::SeqCst),
-        );
+        let (_guard, _watchdog) =
+            lock_then_arm(&mutex, "stuck-case", Duration::from_millis(40), move || {
+                fired_t.store(true, std::sync::atomic::Ordering::SeqCst)
+            });
         // Do not drop the watchdog: a stuck case never leaves its body.
         std::thread::sleep(Duration::from_millis(120));
         assert!(

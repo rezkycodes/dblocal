@@ -276,12 +276,24 @@ Declared parallel load: 4 busy-spin threads started inside the test (`CpuLoad::s
 
 | Metric | Value | Target |
 |---|---:|---:|
-| p50 | 0.1 ms | <= 1000 ms |
-| max | 0.1 ms | <= 1000 ms |
+| p50 | 0.0 ms | <= 1000 ms |
+| max | 2.2 ms | <= 1000 ms |
 | n | 50 | 50 |
 
-Command/output: `TRAY_LATENCY n=50 p50=0.1ms max=0.1ms target=1000ms load=4_busy_spin_threads`. The
+Command/output: `TRAY_LATENCY n=50 p50=0.0ms max=2.2ms target=1000ms load=4_busy_spin_threads`. The
 test asserts `max <= 1000.0`.
+
+The measurement is load-bearing: `wait_for_running` used to fall back to reading the service's own
+status field, which is set *before* the event is emitted, so it passed even when the bridge slept.
+With that fallback removed, sleeping 1.5 s inside `service_bridge::forward` makes the test fail with
+`max=1504.3ms`; unmutated it measures max 2.2 ms. A mutation table for this round is in the W2-B-r2
+report.
+
+There is no idle timer: `service_bridge::spawn_bridge` runs `forward`, whose only await is
+`events.recv().await` (a `tokio::sync::broadcast` receiver) and whose sends are plain `flume`; the
+tray pump `start_tray_pump` is a `while let Ok(action) = actions.recv_async().await` loop. Neither
+has a `sleep`, `interval`, or poll — the tray menu is rebuilt only when `InstanceChanged` /
+`InstanceRemoved` arrives.
 
 ### Close and quit (F-TRY-02)
 
