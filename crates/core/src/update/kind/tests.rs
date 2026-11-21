@@ -190,3 +190,28 @@ fn install_kind_path_accessors() {
         p.as_path()
     );
 }
+
+#[test]
+fn detect_from_path_windows_branch_via_direct_call() {
+    // On non-Windows hosts, detect_windows still returns a deterministic kind.
+    let kind = detect_windows(Path::new("C:\\Users\\me\\Downloads\\dblocal.exe"));
+    assert!(matches!(kind, InstallKind::WindowsZip { .. }));
+    let kind = detect_windows(Path::new("C:\\Program Files\\DBLocal\\dblocal.exe"));
+    assert!(matches!(kind, InstallKind::WindowsMsi { .. }));
+}
+
+#[test]
+fn detect_macos_unknown_when_not_in_bundle() {
+    let kind = detect_macos(Path::new("/usr/local/bin/dblocal"));
+    assert!(matches!(kind, InstallKind::Unknown { .. }));
+}
+
+#[test]
+fn detect_package_manager_on_linux_path_does_not_panic() {
+    let _ = detect_package_manager(Path::new("/definitely/not/owned/dblocal"));
+}
+
+#[test]
+fn command_reports_ownership_false_for_missing_cmd() {
+    assert!(!command_reports_ownership("definitely-not-a-command", &["-S", "/bin/sh"]));
+}

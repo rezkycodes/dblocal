@@ -179,3 +179,21 @@ fn effective_max_allows_slack_under_hard_cap() {
     let got = effective_max(100, MAX_UPDATE_BYTES).unwrap();
     assert_eq!(got, 100 + 1024 * 1024);
 }
+
+#[test]
+fn effective_max_caps_at_hard_cap() {
+    let got = effective_max(64 * 1024 * 1024, MAX_UPDATE_BYTES).unwrap();
+    assert!(got <= MAX_UPDATE_BYTES);
+}
+
+#[test]
+fn url_label_fallback() {
+    assert_eq!(url_label("https://github.com/a/b/x.tar.gz"), "x.tar.gz");
+}
+
+#[test]
+fn validate_url_rejects_unknown_scheme() {
+    let url = reqwest::Url::parse("ftp://github.com/a/b").unwrap();
+    let err = validate_url(&url, &UpdateDownloadOptions::default()).expect_err("ftp");
+    assert_eq!(err.code(), crate::update::error::CODE_UPDATE_NETWORK);
+}
