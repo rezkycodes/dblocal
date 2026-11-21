@@ -424,3 +424,46 @@ fn install_kind_paths_and_hints() {
     };
     assert!(h.message().contains("pacman"));
 }
+
+#[test]
+fn asset_kind_display_covers_every_variant() {
+    assert_eq!(UpdateAssetKind::AppImage.to_string(), "appimage");
+    assert_eq!(UpdateAssetKind::TarGz.to_string(), "tar.gz");
+    assert_eq!(UpdateAssetKind::Zip.to_string(), "zip");
+    assert_eq!(UpdateAssetKind::Msi.to_string(), "msi");
+    assert_eq!(UpdateAssetKind::Dmg.to_string(), "dmg");
+    assert_eq!(UpdateAssetKind::Checksums.to_string(), "checksums");
+}
+
+#[test]
+fn platform_tokens_cover_all_supported_pairs() {
+    for (os, arch) in [
+        (Os::Linux, Arch::X86_64),
+        (Os::Linux, Arch::Aarch64),
+        (Os::Macos, Arch::X86_64),
+        (Os::Macos, Arch::Aarch64),
+        (Os::Windows, Arch::X86_64),
+        (Os::Windows, Arch::Aarch64),
+    ] {
+        assert!(platform_asset_tokens(os, arch).is_some(), "{os}-{arch}");
+    }
+}
+
+#[test]
+fn update_check_available_returns_some() {
+    let asset = ReleaseAsset::new(
+        "a.tar.gz",
+        "https://github.com/a",
+        1,
+        UpdateAssetKind::TarGz,
+    );
+    let update = AvailableUpdate::new(
+        Version::parse("2.0.0").unwrap(),
+        "v2.0.0",
+        "notes",
+        asset.clone(),
+        asset.with_kind(UpdateAssetKind::Checksums),
+    );
+    let check = UpdateCheck::Available(update);
+    assert!(check.available().is_some());
+}
