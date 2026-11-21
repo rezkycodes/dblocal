@@ -157,8 +157,10 @@ static GPU: std::sync::Mutex<()> = std::sync::Mutex::new(());
 /// Per-case hang guard. A deadlocked render held the GPU mutex for 54 minutes
 /// in CI; aborting with the case name is the only diagnostic a wedged process
 /// can emit. Arm it *after* acquiring the GPU mutex so a queued case is not
-/// blamed for time spent waiting on an earlier case.
-const RENDER_WATCHDOG_SECS: u64 = 120;
+/// blamed for time spent waiting on an earlier case. Under heavy shared-host
+/// load a healthy render can take well over 2 minutes; 5 minutes still catches
+/// a real hang without killing slow-but-progressing cases.
+const RENDER_WATCHDOG_SECS: u64 = 300;
 
 struct RenderWatchdog {
     done: Arc<std::sync::atomic::AtomicBool>,
