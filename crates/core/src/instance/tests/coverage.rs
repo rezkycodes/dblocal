@@ -68,8 +68,11 @@ fn an_unknown_catalog_version_is_reported_as_unsupported() {
         crate::model::AuthMode::Password,
     )
     .expect("spec");
+    // Subscribe before the call: an unsupported version fails fast and can
+    // finish before a receiver opened afterwards sees its events.
+    let mut receiver = h.receiver();
     let op = h.service.create_instance(spec).expect("create");
-    let events = h.run(op.clone());
+    let events = h.run_on(&mut receiver, op.clone());
     match super::harness::finished_result(&events, &op) {
         Some(Err(error)) => assert_eq!(error.code, crate::error::CODE_UNSUPPORTED),
         other => panic!("expected Unsupported, got {other:?}"),
@@ -126,11 +129,7 @@ fn a_real_archive_can_be_listed_and_purged() {
     let instance = h.instances().into_iter().next().expect("instance");
     let id = instance.id().clone();
 
-    let op = h
-        .service
-        .delete_instance(&id, DeleteMode::ArchiveData)
-        .expect("delete");
-    let events = h.run(op.clone());
+    let (op, events) = h.run_call(|| h.service.delete_instance(&id, DeleteMode::ArchiveData));
     assert!(matches!(
         super::harness::finished_result(&events, &op),
         Some(Ok(()))
@@ -237,11 +236,7 @@ fn delete_after_a_failed_start_uses_the_failed_source_status() {
     let _ = h.run(op);
     h.wait_for_status(&id, InstanceStatus::Failed);
 
-    let op = h
-        .service
-        .delete_instance(&id, DeleteMode::PurgeData)
-        .expect("delete");
-    let events = h.run(op.clone());
+    let (op, events) = h.run_call(|| h.service.delete_instance(&id, DeleteMode::PurgeData));
     assert!(matches!(
         super::harness::finished_result(&events, &op),
         Some(Ok(()))
@@ -340,8 +335,7 @@ fn a_failed_start_settles_through_the_credential_and_store_paths() {
     // Remove the credential pointer, so `read_credential` returns an empty
     // reference set and the start proceeds unauthenticated rather than failing;
     // either way the row must settle out of `Starting`.
-    let op = h.service.start_instance(&id).expect("start");
-    let events = h.run(op.clone());
+    let (op, events) = h.run_call(|| h.service.start_instance(&id));
     assert!(super::harness::finished_result(&events, &op).is_some());
     let settled = h.instance(&id).expect("row");
     assert_ne!(

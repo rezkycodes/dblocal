@@ -126,6 +126,22 @@ impl Harness {
         self.service.subscribe()
     }
 
+    /// Subscribes, calls `start` (which returns an `OperationId`), then waits
+    /// for that operation's events.
+    ///
+    /// This is the safe way to observe an operation that may finish before the
+    /// caller could subscribe: the receiver exists before the call, so no event
+    /// is missed.
+    pub fn run_call(
+        &self,
+        start: impl FnOnce() -> crate::Result<crate::service::OperationId>,
+    ) -> (crate::service::OperationId, Vec<ServiceEvent>) {
+        let mut receiver = self.receiver();
+        let op = start().expect("operation start");
+        let events = self.run_on(&mut receiver, op.clone());
+        (op, events)
+    }
+
     /// Waits for one operation to finish, returning every event it produced.
     pub fn run(&self, op: crate::service::OperationId) -> Vec<ServiceEvent> {
         let mut receiver = self.receiver();

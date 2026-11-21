@@ -199,8 +199,7 @@ fn a_wrong_checksum_fails_and_leaves_no_runtime() {
     let h = harness_with_source(url, wrong, body.len() as u64, EngineKey::Postgresql);
     let port = test_port();
     let spec = h.spec("bad-hash", EngineKey::Postgresql, port);
-    let op = h.service.create_instance(spec).expect("create");
-    let events = h.run(op.clone());
+    let (op, events) = h.run_call(|| h.service.create_instance(spec));
     match super::harness::finished_result(&events, &op) {
         Some(Err(error)) => assert_eq!(error.code, crate::error::CODE_CHECKSUM_MISMATCH),
         other => panic!("expected a checksum mismatch, got {other:?}"),
@@ -225,11 +224,13 @@ fn cancelling_mid_download_stops_the_create() {
     let h = harness_with_source(url, sha, body.len() as u64, EngineKey::Postgresql);
     let port = test_port();
     let spec = h.spec("cancelled", EngineKey::Postgresql, port);
+    // Subscribe before the call so the cancellation's events are all captured.
+    let mut receiver = h.receiver();
     let op = h.service.create_instance(spec).expect("create");
     // Let the download begin (the server trickles), then cancel.
     std::thread::sleep(Duration::from_millis(400));
     h.service.cancel_operation(&op).expect("cancel");
-    let events = h.run(op.clone());
+    let events = h.run_on(&mut receiver, op.clone());
     match super::harness::finished_result(&events, &op) {
         Some(Err(error)) => assert_eq!(error.code, crate::error::CODE_CANCELLED),
         other => panic!("expected a cancellation, got {other:?}"),

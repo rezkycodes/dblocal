@@ -41,8 +41,7 @@ fn an_engine_that_exits_immediately_is_diagnosed_and_failed() {
     let instance = h.instances().into_iter().next().expect("instance");
     let id = instance.id().clone();
 
-    let op = h.service.start_instance(&id).expect("start");
-    let events = h.run(op.clone());
+    let (op, events) = h.run_call(|| h.service.start_instance(&id));
     let finished = super::harness::finished_result(&events, &op);
     assert!(
         matches!(finished, Some(Err(_))),
@@ -269,8 +268,7 @@ fn a_stop_whose_kill_is_refused_keeps_the_row_running_and_the_identity() {
         .refuse
         .store(true, std::sync::atomic::Ordering::SeqCst);
 
-    let op = h.service.stop_instance(&id).expect("stop");
-    let events = h.run(op.clone());
+    let (op, events) = h.run_call(|| h.service.stop_instance(&id));
     assert!(
         matches!(super::harness::finished_result(&events, &op), Some(Err(_))),
         "a refused kill surfaces as a failure: {:#?}",
@@ -315,8 +313,7 @@ fn a_stop_still_runs_when_the_credential_cannot_be_read() {
     h.secrets
         .unreadable
         .store(true, std::sync::atomic::Ordering::SeqCst);
-    let op = h.service.stop_instance(&id).expect("stop");
-    let events = h.run(op.clone());
+    let (op, events) = h.run_call(|| h.service.stop_instance(&id));
     assert!(
         matches!(super::harness::finished_result(&events, &op), Some(Ok(()))),
         "an unreadable credential must not block a stop: {:#?}",

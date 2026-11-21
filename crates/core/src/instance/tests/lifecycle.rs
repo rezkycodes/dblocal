@@ -117,8 +117,7 @@ fn create_failure_at_every_stage_leaves_nothing_behind() {
         let h = Harness::with_adapter(adapter, EngineKey::Postgresql);
         let port = test_port();
         let spec = h.spec("doomed", EngineKey::Postgresql, port);
-        let op = h.service.create_instance(spec).expect("create");
-        let events = h.run(op.clone());
+        let (op, events) = h.run_call(|| h.service.create_instance(spec));
         let finished = super::harness::finished_result(&events, &op);
         assert!(
             matches!(finished, Some(Err(_))),
