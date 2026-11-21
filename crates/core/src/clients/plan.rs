@@ -8,10 +8,7 @@ use crate::secret::SecretString;
 
 use super::detect::{ClientKind, DetectedClient};
 use super::quote::shell_quote;
-use super::terminal::{
-    escape_applescript, launcher_temp_file, macos_launcher_script_path,
-    windows_launcher_script_path,
-};
+use super::terminal::{SCRIPT_PLACEHOLDER, escape_applescript, launcher_temp_file};
 
 /// Target instance connection information.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -25,7 +22,7 @@ pub struct OpenTarget {
 }
 
 impl OpenTarget {
-    /// Creates an open target. Values are treated as untrusted input.
+    /// Creates an open target. Values are treated as untrusted input and validated.
     pub fn new(
         engine: EngineKey,
         host: impl Into<String>,
@@ -33,15 +30,26 @@ impl OpenTarget {
         username: impl Into<String>,
         database: impl Into<String>,
         instance_name: impl Into<String>,
-    ) -> Self {
-        Self {
-            engine,
-            host: host.into(),
-            port,
-            username: username.into(),
-            database: database.into(),
-            instance_name: instance_name.into(),
+    ) -> ClientResult<Self> {
+        let host = host.into();
+        let username = username.into();
+        let database = database.into();
+        let instance_name = instance_name.into();
+        validate_host(&host)?;
+        validate_identifier(&username, "username", false)?;
+        validate_identifier(&database, "database", true)?;
+        validate_instance_name(&instance_name)?;
+        if !(1..=u16::MAX).contains(&port) {
+            return Err(ClientError::InvalidTarget { field: "port" });
         }
+        Ok(Self {
+            engine,
+            host,
+            port,
+            username,
+            database,
+            instance_name,
+        })
     }
 
     pub fn engine(&self) -> EngineKey {
@@ -64,6 +72,44 @@ impl OpenTarget {
     }
 }
 
+fn validate_host(host: &str) -> ClientResult<()> {
+    let ok = matches!(host, "127.0.0.1" | "::1" | "localhost");
+    if ok {
+        Ok(())
+    } else {
+        Err(ClientError::InvalidTarget { field: "host" })
+    }
+}
+
+fn validate_identifier(value: &str, field: &'static str, allow_empty: bool) -> ClientResult<()> {
+    if value.is_empty() {
+        return if allow_empty {
+            Ok(())
+        } else {
+            Err(ClientError::InvalidTarget { field })
+        };
+    }
+    if value.len() > 63 || value.starts_with('-') {
+        return Err(ClientError::InvalidTarget { field });
+    }
+    let ok = value
+        .bytes()
+        .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'.' | b'-'));
+    if ok {
+        Ok(())
+    } else {
+        Err(ClientError::InvalidTarget { field })
+    }
+}
+
+fn validate_instance_name(value: &str) -> ClientResult<()> {
+    if value.is_empty() || value.len() > 128 || value.chars().any(|c| c.is_control()) {
+        return Err(ClientError::InvalidTarget {
+            field: "instance_name",
+        });
+    }
+    Ok(())
+}
 /// OS family for deterministic plan generation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum OsKind {
@@ -115,6 +161,10 @@ pub enum TerminalKind {
     Kitty,
     Alacritty,
     Xterm,
+    Foot,
+    Wezterm,
+    XdgTerminalExec,
+    Ptyxis,
     MacOsTerminalApp,
     WindowsTerminal,
     WindowsCmd,
@@ -179,6 +229,7 @@ pub struct LaunchPlan {
     temp_file: Option<TempFile>,
     command_string: Option<String>,
     required_path: Option<PathBuf>,
+    copy_uri_hint: Option<String>,
 }
 
 impl LaunchPlan {
@@ -198,11 +249,17 @@ impl LaunchPlan {
             temp_file,
             command_string,
             required_path: None,
+            copy_uri_hint: None,
         }
     }
 
     pub fn with_required_path(mut self, path: impl Into<PathBuf>) -> Self {
         self.required_path = Some(path.into());
+        self
+    }
+
+    pub fn with_copy_uri_hint(mut self, uri: impl Into<String>) -> Self {
+        self.copy_uri_hint = Some(uri.into());
         self
     }
 
@@ -227,6 +284,9 @@ impl LaunchPlan {
     pub fn required_path(&self) -> Option<&PathBuf> {
         self.required_path.as_ref()
     }
+    pub fn copy_uri_hint(&self) -> Option<&str> {
+        self.copy_uri_hint.as_deref()
+    }
 }
 
 /// Plans how to open `client` against `target`.
@@ -244,7 +304,7 @@ pub fn plan_open(
         });
     }
     match client.kind() {
-        ClientKind::TablePlus => plan_tableplus(target, os),
+        ClientKind::TablePlus => plan_tableplus(client, target, os),
         ClientKind::DBeaver => plan_dbeaver(client, target),
         ClientKind::DbDelve => plan_dbdelve(client, target),
         ClientKind::Psql
@@ -255,41 +315,42 @@ pub fn plan_open(
     }
 }
 
-fn plan_tableplus(target: &OpenTarget, os: OsKind) -> ClientResult<LaunchPlan> {
-    let driver = match target.engine {
-        EngineKey::Postgresql => "postgresql",
-        EngineKey::Mysql | EngineKey::Mariadb => "mysql",
-        EngineKey::Valkey => "redis",
-    };
-    let url = format!(
-        "tableplus://?name={}&driver={driver}&host={}&port={}&user={}&database={}",
-        encode_component(target.instance_name()),
-        encode_component(target.host()),
-        target.port(),
-        encode_component(target.username()),
-        encode_component(target.database()),
-    );
+fn plan_tableplus(
+    client: &DetectedClient,
+    target: &OpenTarget,
+    os: OsKind,
+) -> ClientResult<LaunchPlan> {
+    // Official TablePlus docs: open with connection URL form, password omitted.
+    // https://docs.tableplus.com/gui-tools/manage-connections
+    let url = tableplus_url(target)?;
     let (program, argv) = match os {
-        OsKind::Linux => ("xdg-open".to_owned(), vec![url.clone()]),
-        OsKind::Macos => ("open".to_owned(), vec![url.clone()]),
-        OsKind::Windows => (
-            "cmd.exe".to_owned(),
-            vec![
-                "/c".to_owned(),
-                "start".to_owned(),
-                "".to_owned(),
-                url.clone(),
-            ],
+        OsKind::Macos => (
+            "open".to_owned(),
+            vec!["-a".to_owned(), "TablePlus".to_owned(), url.clone()],
+        ),
+        OsKind::Linux | OsKind::Windows => (
+            client.path().to_string_lossy().into_owned(),
+            vec![url.clone()],
         ),
     };
-    Ok(LaunchPlan::new(
-        program,
-        argv,
-        vec![],
-        Some(url),
-        None,
-        None,
-    ))
+    Ok(
+        LaunchPlan::new(program, argv, vec![], Some(url), None, None)
+            .with_required_path(client.path().clone()),
+    )
+}
+
+fn tableplus_url(target: &OpenTarget) -> ClientResult<String> {
+    let user = encode_component(target.username());
+    let host = encode_component(target.host());
+    let db = encode_component(target.database());
+    let url = match target.engine {
+        EngineKey::Postgresql => format!("postgresql://{user}@{host}:{}/{db}", target.port()),
+        EngineKey::Mysql | EngineKey::Mariadb => {
+            format!("mysql://{user}@{host}:{}/{db}", target.port())
+        }
+        EngineKey::Valkey => format!("redis://{user}@{host}:{}/{db}", target.port()),
+    };
+    Ok(url)
 }
 
 fn plan_dbeaver(client: &DetectedClient, target: &OpenTarget) -> ClientResult<LaunchPlan> {
@@ -319,38 +380,34 @@ fn plan_dbeaver(client: &DetectedClient, target: &OpenTarget) -> ClientResult<La
 }
 
 fn plan_dbdelve(client: &DetectedClient, target: &OpenTarget) -> ClientResult<LaunchPlan> {
-    let driver = match target.engine {
-        EngineKey::Postgresql => "postgresql",
-        EngineKey::Mysql | EngineKey::Mariadb => "mysql",
-        EngineKey::Valkey => {
-            return Err(ClientError::UnsupportedClient {
-                client: ClientKind::DbDelve.as_str(),
-                engine: EngineKey::Valkey.as_str(),
-            });
-        }
-    };
-    Ok(LaunchPlan::new(
-        client.path().clone(),
-        vec![
-            "--driver".to_owned(),
-            driver.to_owned(),
-            "--host".to_owned(),
-            target.host().to_owned(),
-            "--port".to_owned(),
-            target.port().to_string(),
-            "--user".to_owned(),
-            target.username().to_owned(),
-            "--database".to_owned(),
-            target.database().to_owned(),
-            "--name".to_owned(),
-            target.instance_name().to_owned(),
-        ],
-        vec![],
-        None,
-        None,
-        None,
+    if matches!(target.engine, EngineKey::Valkey) {
+        return Err(ClientError::UnsupportedClient {
+            client: ClientKind::DbDelve.as_str(),
+            engine: EngineKey::Valkey.as_str(),
+        });
+    }
+    // DBDelve connection-argument mechanism is unverified on this machine;
+    // launch the app only and let the GUI copy a password-less URI.
+    let uri = passwordless_uri(target)?;
+    Ok(
+        LaunchPlan::new(client.path().clone(), vec![], vec![], None, None, None)
+            .with_required_path(client.path().clone())
+            .with_copy_uri_hint(uri),
     )
-    .with_required_path(client.path().clone()))
+}
+
+fn passwordless_uri(target: &OpenTarget) -> ClientResult<String> {
+    let user = encode_component(target.username());
+    let host = encode_component(target.host());
+    let db = encode_component(target.database());
+    let url = match target.engine {
+        EngineKey::Postgresql => format!("postgresql://{user}@{host}:{}/{db}", target.port()),
+        EngineKey::Mysql | EngineKey::Mariadb => {
+            format!("mysql://{user}@{host}:{}/{db}", target.port())
+        }
+        EngineKey::Valkey => format!("redis://{user}@{host}:{}/{db}", target.port()),
+    };
+    Ok(url)
 }
 
 fn plan_cli(
@@ -376,39 +433,23 @@ fn cli_command(
         env.push(LaunchEnv::new(name, secret.clone()));
     }
     let (program, argv) = match kind {
-        ClientKind::Psql => (
-            PathBuf::from("psql"),
-            vec![
-                "--host".to_owned(),
-                target.host().to_owned(),
-                "--port".to_owned(),
-                target.port().to_string(),
-                "--username".to_owned(),
-                target.username().to_owned(),
-                "--dbname".to_owned(),
-                target.database().to_owned(),
-            ],
-        ),
+        ClientKind::Psql => (PathBuf::from("psql"), vec![psql_conninfo(target)]),
         ClientKind::Mysql | ClientKind::Mariadb => {
             let bin = if kind == ClientKind::Mysql {
                 "mysql"
             } else {
                 "mariadb"
             };
-            (
-                PathBuf::from(bin),
-                vec![
-                    "--host".to_owned(),
-                    target.host().to_owned(),
-                    "--port".to_owned(),
-                    target.port().to_string(),
-                    "--user".to_owned(),
-                    target.username().to_owned(),
-                    "--protocol".to_owned(),
-                    "tcp".to_owned(),
-                    target.database().to_owned(),
-                ],
-            )
+            let mut argv = vec![
+                format!("--host={}", target.host()),
+                format!("--port={}", target.port()),
+                format!("--user={}", target.username()),
+                "--protocol=tcp".to_owned(),
+            ];
+            if !target.database().is_empty() {
+                argv.push(format!("--database={}", target.database()));
+            }
+            (PathBuf::from(bin), argv)
         }
         ClientKind::ValkeyCli | ClientKind::RedisCli => {
             let bin = if kind == ClientKind::ValkeyCli {
@@ -438,6 +479,14 @@ fn cli_command(
     Ok((program, argv, env))
 }
 
+fn psql_conninfo(target: &OpenTarget) -> String {
+    // Use URI form so dbname is never parsed as libpq keyword conninfo.
+    // Password is intentionally omitted; psql reads PGPASSWORD from env.
+    let user = encode_component(target.username());
+    let host = encode_component(target.host());
+    let db = encode_component(target.database());
+    format!("postgresql://{user}@{host}:{}/{}", target.port(), db)
+}
 fn password_env_name(kind: ClientKind) -> Option<&'static str> {
     match kind {
         ClientKind::Psql => Some("PGPASSWORD"),
@@ -467,27 +516,109 @@ fn build_linux_terminal_plan(
     env: Vec<LaunchEnv>,
     terminal: &TerminalChoice,
 ) -> ClientResult<LaunchPlan> {
-    let mut argv = Vec::new();
-    match terminal.kind() {
-        TerminalKind::GnomeTerminal => {
-            argv.push("--".to_owned());
-            argv.push(client_program.to_string_lossy().into_owned());
-            argv.extend(client_argv);
-        }
-        _ => {
-            argv.push("-e".to_owned());
-            argv.push(client_program.to_string_lossy().into_owned());
-            argv.extend(client_argv);
-        }
-    }
+    let (argv, temp_file, command_string) = if env.is_empty() {
+        let mut argv = Vec::new();
+        push_linux_exec_argv(&mut argv, terminal.kind(), &client_program, &client_argv);
+        (argv, None, None)
+    } else {
+        let temp_file = launcher_temp_file(&client_program, &client_argv, &env, OsKind::Linux)?;
+        let _placeholder = SCRIPT_PLACEHOLDER.to_owned();
+        let cmd = format!("sh {}", shell_quote(SCRIPT_PLACEHOLDER));
+        let mut argv = Vec::new();
+        push_linux_script_argv(&mut argv, terminal.kind());
+        (argv, Some(temp_file), Some(cmd))
+    };
     Ok(LaunchPlan::new(
         terminal.program().clone(),
         argv,
-        env,
+        vec![],
         None,
-        None,
-        None,
+        temp_file,
+        command_string,
     ))
+}
+
+fn push_linux_exec_argv(
+    argv: &mut Vec<String>,
+    kind: TerminalKind,
+    program: &PathBuf,
+    client_argv: &[String],
+) {
+    let prog = program.to_string_lossy().into_owned();
+    match kind {
+        TerminalKind::GnomeTerminal
+        | TerminalKind::Ptyxis
+        | TerminalKind::Wezterm
+        | TerminalKind::XdgTerminalExec => {
+            argv.push("--".to_owned());
+            argv.push(prog);
+            argv.extend(client_argv.iter().cloned());
+        }
+        TerminalKind::Kitty => {
+            argv.push("--".to_owned());
+            argv.push(prog);
+            argv.extend(client_argv.iter().cloned());
+        }
+        _ => {
+            argv.push("-e".to_owned());
+            argv.push(prog);
+            argv.extend(client_argv.iter().cloned());
+        }
+    }
+}
+
+fn push_linux_script_argv(argv: &mut Vec<String>, kind: TerminalKind) {
+    let p = SCRIPT_PLACEHOLDER;
+    match kind {
+        TerminalKind::Ptyxis => {
+            argv.push("--new-window".to_owned());
+            argv.push("--".to_owned());
+            argv.push("sh".to_owned());
+            argv.push(p.to_owned());
+        }
+        TerminalKind::Wezterm => {
+            argv.push("start".to_owned());
+            argv.push("--".to_owned());
+            argv.push("sh".to_owned());
+            argv.push(p.to_owned());
+        }
+        TerminalKind::XdgTerminalExec | TerminalKind::GnomeTerminal => {
+            argv.push("--".to_owned());
+            argv.push("sh".to_owned());
+            argv.push(p.to_owned());
+        }
+        TerminalKind::Foot => {
+            argv.push("sh".to_owned());
+            argv.push(p.to_owned());
+        }
+        TerminalKind::Kitty => {
+            // kitty takes command as positional args after options; `--` separates options.
+            argv.push("--".to_owned());
+            argv.push("sh".to_owned());
+            argv.push(p.to_owned());
+        }
+        _ => {
+            argv.push("-e".to_owned());
+            argv.push("sh".to_owned());
+            argv.push(p.to_owned());
+        }
+    }
+}
+
+fn script_placeholder(name: &str) -> String {
+    format!("{{script:{name}}}")
+}
+
+fn script_placeholder_from_cmd(cmd: &str) -> String {
+    // cmd is "sh '<placeholder>'" or "sh <placeholder>"; extract placeholder token.
+    // We keep a simple format: script_placeholder returns {script:name}; cmd embeds quoted placeholder.
+    // Here we reconstruct by finding {script:...}
+    let start = cmd.find("{script:").unwrap_or(0);
+    let end = cmd[start..]
+        .find('}')
+        .map(|i| start + i + 1)
+        .unwrap_or(cmd.len());
+    cmd[start..end].to_owned()
 }
 
 fn build_macos_terminal_plan(
@@ -495,8 +626,8 @@ fn build_macos_terminal_plan(
     client_argv: Vec<String>,
     env: Vec<LaunchEnv>,
 ) -> ClientResult<LaunchPlan> {
-    let temp_file = launcher_temp_file(&client_program, &client_argv, &env, OsKind::Macos);
-    let script_path = macos_launcher_script_path(temp_file.name_hint());
+    let temp_file = launcher_temp_file(&client_program, &client_argv, &env, OsKind::Macos)?;
+    let script_path = SCRIPT_PLACEHOLDER.to_owned();
     let command_string = format!("sh {}", shell_quote(&script_path));
     let apple_script = format!(
         "tell application \"Terminal\" to do script \"{}\"",
@@ -518,8 +649,8 @@ fn build_windows_terminal_plan(
     env: Vec<LaunchEnv>,
     terminal: &TerminalChoice,
 ) -> ClientResult<LaunchPlan> {
-    let temp_file = launcher_temp_file(&client_program, &client_argv, &env, OsKind::Windows);
-    let script_path = windows_launcher_script_path(temp_file.name_hint());
+    let temp_file = launcher_temp_file(&client_program, &client_argv, &env, OsKind::Windows)?;
+    let script_path = SCRIPT_PLACEHOLDER.to_owned();
     let argv = match terminal.kind() {
         TerminalKind::WindowsTerminal => vec!["cmd.exe".to_owned(), "/c".to_owned(), script_path],
         _ => vec!["/c".to_owned(), script_path],

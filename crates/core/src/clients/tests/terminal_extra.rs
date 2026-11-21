@@ -35,27 +35,27 @@ impl HostProbe for FakeHost {
 
 #[test]
 fn resolve_macos_terminal() {
-    let t = resolve_terminal(&FakeHost::default(), OsKind::Macos);
+    let t = resolve_terminal(&FakeHost::default(), OsKind::Macos).unwrap();
     assert_eq!(t.kind(), TerminalKind::MacOsTerminalApp);
 }
 
 #[test]
 fn resolve_windows_terminal_wt() {
     let h = FakeHost::default().with("wt.exe", "C:/wt.exe");
-    let t = resolve_terminal(&h, OsKind::Windows);
+    let t = resolve_terminal(&h, OsKind::Windows).unwrap();
     assert_eq!(t.kind(), TerminalKind::WindowsTerminal);
 }
 
 #[test]
 fn resolve_windows_terminal_fallback_cmd() {
-    let t = resolve_terminal(&FakeHost::default(), OsKind::Windows);
+    let t = resolve_terminal(&FakeHost::default(), OsKind::Windows).unwrap();
     assert_eq!(t.kind(), TerminalKind::WindowsCmd);
 }
 
 #[test]
 fn resolve_linux_prefers_gnome() {
     let h = FakeHost::default().with("gnome-terminal", "/usr/bin/gnome-terminal");
-    let t = resolve_terminal(&h, OsKind::Linux);
+    let t = resolve_terminal(&h, OsKind::Linux).unwrap();
     assert!(matches!(
         t.kind(),
         TerminalKind::GnomeTerminal | TerminalKind::GenericArgv

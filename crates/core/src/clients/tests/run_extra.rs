@@ -37,7 +37,11 @@ fn system_spawner_runs_with_temp_file_and_env() {
         use std::os::unix::fs::PermissionsExt;
         fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
     }
-    let temp = TempFile::new("helper.txt", SecretString::from("helper"), 0o600);
+    let temp = TempFile::new(
+        format!("dblocal-open-test-{}.sh", std::process::id()),
+        SecretString::from("#!/bin/sh\nexit 0\n"),
+        0o600,
+    );
     let plan = LaunchPlan::new(
         script,
         vec![],
@@ -46,7 +50,11 @@ fn system_spawner_runs_with_temp_file_and_env() {
         Some(temp),
         None,
     );
-    run(&plan, &SystemSpawner).unwrap();
+    let res = run(&plan, &SystemSpawner);
+    if let Err(e) = &res {
+        eprintln!("ERR: {e:?}");
+    }
+    res.unwrap();
     for _ in 0..50 {
         if out.exists() {
             break;

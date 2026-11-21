@@ -31,6 +31,7 @@ pub fn assert_no_secret(plan: &LaunchPlan, secret: &str) {
     }
 }
 
+#[allow(dead_code)]
 pub fn env_names(env: &[LaunchEnv]) -> Vec<&str> {
     env.iter().map(LaunchEnv::name).collect()
 }

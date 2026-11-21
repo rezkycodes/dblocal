@@ -1,85 +1,150 @@
-//! Terminal resolution and launcher-script generation.
+//! Terminal resolution and secure launcher-script preparation.
 //!
-//! CLI clients run in an OS terminal. When the terminal cannot safely inherit
-//! environment variables through its command line, we generate a private launcher
-//! script that exports env vars, deletes itself, then execs the client.
+//! CLI clients that need a password are launched through a private launcher
+//! script on every OS (F1). The script exports env vars, deletes itself as its
+//! first action, then execs the client.
 
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, SystemTime};
+
+use rand::TryRng;
 
 use crate::secret::SecretString;
 
 use super::detect::HostProbe;
+use super::error::{ClientError, ClientResult};
 use super::plan::{LaunchEnv, OsKind, TempFile, TerminalChoice, TerminalKind};
 use super::quote::shell_quote;
 
+pub const SCRIPT_PLACEHOLDER: &str = "{script}";
+pub const SCRIPT_MAX_AGE: Duration = Duration::from_secs(10 * 60);
+
 /// Resolves the terminal to use for CLI clients on the given OS.
-pub fn resolve_terminal(host: &dyn HostProbe, os: OsKind) -> TerminalChoice {
+pub fn resolve_terminal(host: &dyn HostProbe, os: OsKind) -> ClientResult<TerminalChoice> {
     match os {
         OsKind::Linux => resolve_linux_terminal(host),
-        OsKind::Macos => TerminalChoice::new("open", TerminalKind::MacOsTerminalApp),
+        OsKind::Macos => Ok(TerminalChoice::new("open", TerminalKind::MacOsTerminalApp)),
         OsKind::Windows => resolve_windows_terminal(host),
     }
 }
 
-fn resolve_linux_terminal(host: &dyn HostProbe) -> TerminalChoice {
+fn resolve_linux_terminal(host: &dyn HostProbe) -> ClientResult<TerminalChoice> {
     if let Some(path) = std::env::var_os("TERMINAL") {
         let path = PathBuf::from(path);
-        if !path.as_os_str().is_empty() {
-            return TerminalChoice::new(path, TerminalKind::GenericArgv);
+        if !path.as_os_str().is_empty() && terminal_exists(host, &path) {
+            return Ok(TerminalChoice::new(path, TerminalKind::GenericArgv));
         }
     }
-    for (name, kind) in [
+    for (name, kind) in linux_terminal_candidates() {
+        if let Some(path) = host.which(name) {
+            return Ok(TerminalChoice::new(path, *kind));
+        }
+    }
+    Err(ClientError::NoTerminal)
+}
+
+fn terminal_exists(host: &dyn HostProbe, path: &Path) -> bool {
+    if path.components().count() > 1 {
+        host.path_exists(path)
+    } else {
+        host.which(&path.to_string_lossy()).is_some()
+    }
+}
+
+pub fn linux_terminal_candidates() -> &'static [(&'static str, TerminalKind)] {
+    &[
+        ("xdg-terminal-exec", TerminalKind::XdgTerminalExec),
+        ("ptyxis", TerminalKind::Ptyxis),
         ("x-terminal-emulator", TerminalKind::GenericArgv),
         ("gnome-terminal", TerminalKind::GnomeTerminal),
         ("konsole", TerminalKind::Konsole),
+        ("foot", TerminalKind::Foot),
+        ("wezterm", TerminalKind::Wezterm),
         ("kitty", TerminalKind::Kitty),
         ("alacritty", TerminalKind::Alacritty),
         ("xterm", TerminalKind::Xterm),
-    ] {
-        if let Some(path) = host.which(name) {
-            return TerminalChoice::new(path, kind);
+    ]
+}
+
+fn resolve_windows_terminal(host: &dyn HostProbe) -> ClientResult<TerminalChoice> {
+    if let Some(path) = host.which("wt.exe").or_else(|| host.which("wt")) {
+        return Ok(TerminalChoice::new(path, TerminalKind::WindowsTerminal));
+    }
+    Ok(TerminalChoice::new("cmd.exe", TerminalKind::WindowsCmd))
+}
+
+/// Directory used for launcher scripts. One function for plan substitution and spawner.
+pub fn launcher_dir(os: OsKind) -> ClientResult<PathBuf> {
+    match os {
+        OsKind::Linux => linux_launcher_dir(),
+        OsKind::Macos => macos_launcher_dir(),
+        OsKind::Windows => windows_launcher_dir(),
+    }
+}
+
+fn linux_launcher_dir() -> ClientResult<PathBuf> {
+    if let Some(xdg) = std::env::var_os("XDG_RUNTIME_DIR") {
+        if !xdg.is_empty() {
+            return Ok(PathBuf::from(xdg).join("dblocal"));
         }
     }
-    TerminalChoice::new("xterm", TerminalKind::Xterm)
+    let home = std::env::var_os("HOME").ok_or_else(|| ClientError::ScriptError {
+        reason: "HOME missing".to_owned(),
+    })?;
+    Ok(PathBuf::from(home).join(".dblocal").join("run"))
 }
 
-fn resolve_windows_terminal(host: &dyn HostProbe) -> TerminalChoice {
-    if let Some(path) = host.which("wt.exe").or_else(|| host.which("wt")) {
-        return TerminalChoice::new(path, TerminalKind::WindowsTerminal);
-    }
-    TerminalChoice::new("cmd.exe", TerminalKind::WindowsCmd)
+fn macos_launcher_dir() -> ClientResult<PathBuf> {
+    let tmp = std::env::var_os("TMPDIR").unwrap_or_else(|| OsString::from("/tmp"));
+    Ok(PathBuf::from(tmp).join("dblocal"))
 }
 
-/// Builds a private launcher script temp file for terminals that cannot safely
-/// inherit env vars via command string.
+fn windows_launcher_dir() -> ClientResult<PathBuf> {
+    let base = std::env::var_os("LOCALAPPDATA")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .ok_or_else(|| ClientError::ScriptError {
+            reason: "LOCALAPPDATA missing".to_owned(),
+        })?;
+    Ok(PathBuf::from(base).join("dblocal").join("run"))
+}
+
+/// Builds a private launcher script temp file description.
 pub fn launcher_temp_file(
     client_program: &Path,
     client_argv: &[String],
     env: &[LaunchEnv],
     os: OsKind,
-) -> TempFile {
-    match os {
-        OsKind::Windows => TempFile::new(
-            "dblocal-open-client.cmd",
-            SecretString::new(build_windows_launcher(client_program, client_argv, env)),
-            0o600,
-        ),
-        _ => TempFile::new(
-            "dblocal-open-client.sh",
-            SecretString::new(build_posix_launcher(client_program, client_argv, env)),
-            0o600,
-        ),
+) -> ClientResult<TempFile> {
+    let name = random_script_name(os);
+    let contents = match os {
+        OsKind::Windows => {
+            SecretString::new(build_windows_launcher(client_program, client_argv, env)?)
+        }
+        _ => SecretString::new(build_posix_launcher(client_program, client_argv, env)),
+    };
+    Ok(TempFile::new(name, contents, 0o600))
+}
+
+fn random_script_name(os: OsKind) -> String {
+    let mut bytes = [0u8; 16];
+    let _ = rand::rngs::SysRng.try_fill_bytes(&mut bytes);
+    let mut hex = String::with_capacity(32);
+    for b in bytes {
+        use std::fmt::Write;
+        let _ = write!(&mut hex, "{b:02x}");
     }
+    let ext = if matches!(os, OsKind::Windows) {
+        "cmd"
+    } else {
+        "sh"
+    };
+    format!("dblocal-open-{hex}.{ext}")
 }
 
-/// Path hint used in macOS open command.
-pub fn macos_launcher_script_path(name: &str) -> String {
-    format!("/tmp/dblocal-open-client/{name}")
-}
-
-/// Path hint used in Windows command.
-pub fn windows_launcher_script_path(name: &str) -> String {
-    format!("%TEMP%\\dblocal-open-client\\{name}")
+#[allow(dead_code)]
+pub fn script_placeholder_path(name: &str) -> String {
+    format!("{SCRIPT_PLACEHOLDER}/{name}")
 }
 
 fn build_posix_launcher(
@@ -109,15 +174,20 @@ fn build_windows_launcher(
     client_program: &Path,
     client_argv: &[String],
     env: &[LaunchEnv],
-) -> String {
-    let mut out = String::from("@echo off\r\ndel \"%~f0\" >nul 2>&1\r\n");
+) -> ClientResult<String> {
     for var in env {
-        out.push_str("set \"");
+        validate_windows_env_value(var.value().expose())?;
+    }
+    // cmd.exe re-reads .cmd between commands; keep delete/set/exec in one parsed block.
+    let mut out = String::from("@echo off\r\n(\r\n  del \"%~f0\" >nul 2>&1\r\n");
+    for var in env {
+        out.push_str("  set \"");
         out.push_str(var.name());
         out.push('=');
         out.push_str(&escape_cmd_set_value(var.value().expose()));
         out.push_str("\"\r\n");
     }
+    out.push_str("  ");
     out.push('"');
     out.push_str(&client_program.to_string_lossy().replace('"', "\"\""));
     out.push('"');
@@ -127,15 +197,199 @@ fn build_windows_launcher(
         out.push_str(&arg.replace('"', "\"\""));
         out.push('"');
     }
-    out.push_str("\r\n");
-    out
+    out.push_str("\r\n)\r\n");
+    Ok(out)
+}
+
+fn validate_windows_env_value(value: &str) -> ClientResult<()> {
+    if value.contains('"') || value.contains('\r') || value.contains('\n') {
+        return Err(ClientError::InvalidTarget { field: "password" });
+    }
+    Ok(())
 }
 
 fn escape_cmd_set_value(value: &str) -> String {
-    value.replace(['\r', '\n'], "").replace('"', "\"\"")
+    // In cmd batch files, % introduces variable expansion; double it.
+    value.replace('%', "%%")
 }
 
 /// Escapes a string for an AppleScript double-quoted literal.
 pub fn escape_applescript(value: &str) -> String {
     value.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
+/// Materializes a launcher script in a secure private directory.
+///
+/// Returns the written path. Caller is responsible for best-effort deletion on spawn failure.
+pub fn materialize_launcher(temp: &TempFile, os: OsKind) -> ClientResult<PathBuf> {
+    let dir = launcher_dir(os)?;
+    ensure_secure_dir(&dir)?;
+    sweep_old_scripts(&dir)?;
+    write_script_file(&dir, temp)
+}
+
+fn ensure_secure_dir(dir: &Path) -> ClientResult<()> {
+    if dir.exists() {
+        verify_secure_dir(dir)?;
+        return Ok(());
+    }
+    if let Some(parent) = dir.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| ClientError::ScriptError {
+            reason: e.kind().to_string(),
+        })?;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        std::fs::DirBuilder::new()
+            .mode(0o700)
+            .create(dir)
+            .map_err(|e| ClientError::ScriptError {
+                reason: e.kind().to_string(),
+            })?;
+        verify_secure_dir(dir)?;
+    }
+    #[cfg(not(unix))]
+    {
+        std::fs::create_dir_all(dir).map_err(|e| ClientError::ScriptError {
+            reason: e.kind().to_string(),
+        })?;
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn verify_secure_dir(dir: &Path) -> ClientResult<()> {
+    use std::os::unix::fs::MetadataExt;
+    let meta = std::fs::symlink_metadata(dir).map_err(|e| ClientError::ScriptError {
+        reason: e.kind().to_string(),
+    })?;
+    if meta.file_type().is_symlink() || !meta.is_dir() {
+        return Err(ClientError::ScriptError {
+            reason: "not a real directory".to_owned(),
+        });
+    }
+    let uid = libc_uid();
+    if meta.uid() != uid {
+        return Err(ClientError::ScriptError {
+            reason: "wrong owner".to_owned(),
+        });
+    }
+    if meta.mode() & 0o777 != 0o700 {
+        return Err(ClientError::ScriptError {
+            reason: "insecure mode".to_owned(),
+        });
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn verify_secure_dir(_dir: &Path) -> ClientResult<()> {
+    Ok(())
+}
+
+#[cfg(unix)]
+fn libc_uid() -> u32 {
+    std::fs::read_to_string("/proc/self/status")
+        .ok()
+        .and_then(|s| {
+            s.lines()
+                .find(|l| l.starts_with("Uid:"))
+                .and_then(|l| l.split_whitespace().nth(1))
+                .and_then(|v| v.parse().ok())
+        })
+        .unwrap_or(u32::MAX)
+}
+
+fn sweep_old_scripts(dir: &Path) -> ClientResult<()> {
+    let now = SystemTime::now();
+    let entries = match std::fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(_) => return Ok(()),
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let name = match path.file_name().and_then(|n| n.to_str()) {
+            Some(n) => n,
+            None => continue,
+        };
+        if !name.starts_with("dblocal-open-") {
+            continue;
+        }
+        let meta = match std::fs::symlink_metadata(&path) {
+            Ok(m) => m,
+            Err(_) => continue,
+        };
+        if !meta.is_file() {
+            continue;
+        }
+        let modified = match meta.modified() {
+            Ok(m) => m,
+            Err(_) => continue,
+        };
+        if now.duration_since(modified).unwrap_or(Duration::ZERO) > SCRIPT_MAX_AGE {
+            let _ = std::fs::remove_file(&path);
+        }
+    }
+    Ok(())
+}
+
+fn write_script_file(dir: &Path, temp: &TempFile) -> ClientResult<PathBuf> {
+    let path = dir.join(temp.name_hint());
+    #[cfg(unix)]
+    {
+        use std::io::Write;
+        use std::os::unix::fs::OpenOptionsExt;
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(temp.mode())
+            .open(&path)
+            .map_err(|e| ClientError::ScriptError {
+                reason: e.kind().to_string(),
+            })?;
+        file.write_all(temp.contents().expose().as_bytes())
+            .map_err(|e| {
+                let _ = std::fs::remove_file(&path);
+                ClientError::ScriptError {
+                    reason: e.kind().to_string(),
+                }
+            })?;
+        file.sync_all().map_err(|e| {
+            let _ = std::fs::remove_file(&path);
+            ClientError::ScriptError {
+                reason: e.kind().to_string(),
+            }
+        })?;
+    }
+    #[cfg(not(unix))]
+    {
+        use std::io::Write;
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+            .map_err(|e| ClientError::ScriptError {
+                reason: e.kind().to_string(),
+            })?;
+        file.write_all(temp.contents().expose().as_bytes())
+            .map_err(|e| {
+                let _ = std::fs::remove_file(&path);
+                ClientError::ScriptError {
+                    reason: e.kind().to_string(),
+                }
+            })?;
+        file.sync_all().map_err(|e| {
+            let _ = std::fs::remove_file(&path);
+            ClientError::ScriptError {
+                reason: e.kind().to_string(),
+            }
+        })?;
+    }
+    Ok(path)
+}
+
+/// Substitute the script placeholder in an argv element.
+pub fn substitute_script_placeholder(value: &str, script_path: &Path) -> String {
+    value.replace(SCRIPT_PLACEHOLDER, &script_path.to_string_lossy())
 }

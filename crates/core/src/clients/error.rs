@@ -12,6 +12,9 @@ use super::messages;
 pub const CODE_UNSUPPORTED_CLIENT: &str = "DBL-8300";
 pub const CODE_CLIENT_NOT_FOUND: &str = "DBL-8301";
 pub const CODE_LAUNCH_FAILED: &str = "DBL-8302";
+pub const CODE_INVALID_TARGET: &str = "DBL-8303";
+pub const CODE_NO_TERMINAL: &str = "DBL-8304";
+pub const CODE_SCRIPT_ERROR: &str = "DBL-8305";
 
 /// Errors produced by client detection/planning/launch.
 #[derive(Clone, PartialEq, Eq)]
@@ -25,6 +28,12 @@ pub enum ClientError {
     ClientNotFound { name: String },
     /// Spawning the client failed.
     LaunchFailed { reason: String },
+    /// A connection target field was invalid or unsafe.
+    InvalidTarget { field: &'static str },
+    /// No terminal emulator could be found.
+    NoTerminal,
+    /// Launcher script directory/file could not be prepared safely.
+    ScriptError { reason: String },
 }
 
 impl ClientError {
@@ -34,6 +43,9 @@ impl ClientError {
             Self::UnsupportedClient { .. } => CODE_UNSUPPORTED_CLIENT,
             Self::ClientNotFound { .. } => CODE_CLIENT_NOT_FOUND,
             Self::LaunchFailed { .. } => CODE_LAUNCH_FAILED,
+            Self::InvalidTarget { .. } => CODE_INVALID_TARGET,
+            Self::NoTerminal => CODE_NO_TERMINAL,
+            Self::ScriptError { .. } => CODE_SCRIPT_ERROR,
         }
     }
 
@@ -43,6 +55,9 @@ impl ClientError {
             Self::UnsupportedClient { .. } => messages::UNSUPPORTED_CLIENT,
             Self::ClientNotFound { .. } => messages::CLIENT_NOT_FOUND,
             Self::LaunchFailed { .. } => messages::LAUNCH_FAILED,
+            Self::InvalidTarget { .. } => messages::INVALID_TARGET,
+            Self::NoTerminal => messages::NO_TERMINAL,
+            Self::ScriptError { .. } => messages::SCRIPT_ERROR,
         }
     }
 }
@@ -57,6 +72,12 @@ impl fmt::Debug for ClientError {
                 .finish(),
             Self::ClientNotFound { .. } => f.write_str("ClientNotFound { .. }"),
             Self::LaunchFailed { .. } => f.write_str("LaunchFailed { .. }"),
+            Self::InvalidTarget { field } => f
+                .debug_struct("InvalidTarget")
+                .field("field", field)
+                .finish(),
+            Self::NoTerminal => f.write_str("NoTerminal"),
+            Self::ScriptError { .. } => f.write_str("ScriptError { .. }"),
         }
     }
 }
@@ -97,6 +118,11 @@ mod tests {
             ClientError::LaunchFailed {
                 reason: "spawn failed".to_owned(),
             },
+            ClientError::InvalidTarget { field: "database" },
+            ClientError::NoTerminal,
+            ClientError::ScriptError {
+                reason: "bad dir".to_owned(),
+            },
         ]
     }
 
@@ -131,6 +157,11 @@ mod tests {
                 name: CANARY.to_owned(),
             },
             ClientError::LaunchFailed {
+                reason: CANARY.to_owned(),
+            },
+            ClientError::InvalidTarget { field: "database" },
+            ClientError::NoTerminal,
+            ClientError::ScriptError {
                 reason: CANARY.to_owned(),
             },
         ];

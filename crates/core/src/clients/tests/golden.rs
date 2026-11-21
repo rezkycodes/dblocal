@@ -25,11 +25,17 @@ fn term(os: OsKind) -> TerminalChoice {
 fn target(engine: EngineKey) -> OpenTarget {
     match engine {
         EngineKey::Postgresql => {
-            OpenTarget::new(engine, "127.0.0.1", 5432, "postgres", "postgres", "my-app")
+            OpenTarget::new(engine, "127.0.0.1", 5432, "postgres", "postgres", "my-app").unwrap()
         }
-        EngineKey::Mysql => OpenTarget::new(engine, "127.0.0.1", 3306, "root", "", "my-app"),
-        EngineKey::Mariadb => OpenTarget::new(engine, "127.0.0.1", 3307, "root", "", "my-app"),
-        EngineKey::Valkey => OpenTarget::new(engine, "127.0.0.1", 6379, "default", "0", "my-app"),
+        EngineKey::Mysql => {
+            OpenTarget::new(engine, "127.0.0.1", 3306, "root", "", "my-app").unwrap()
+        }
+        EngineKey::Mariadb => {
+            OpenTarget::new(engine, "127.0.0.1", 3307, "root", "", "my-app").unwrap()
+        }
+        EngineKey::Valkey => {
+            OpenTarget::new(engine, "127.0.0.1", 6379, "default", "0", "my-app").unwrap()
+        }
     }
 }
 
@@ -45,21 +51,13 @@ fn golden_psql_linux() {
     )
     .unwrap();
     assert_eq!(plan.program(), &PathBuf::from("xterm"));
-    assert_eq!(
-        plan.argv(),
-        [
-            "-e",
-            "psql",
-            "--host",
-            "127.0.0.1",
-            "--port",
-            "5432",
-            "--username",
-            "postgres",
-            "--dbname",
-            "postgres"
-        ]
-    );
+    assert_eq!(plan.argv()[0], "-e");
+    assert_eq!(plan.argv()[1], "sh");
+    assert_eq!(plan.argv()[2], "{script}");
+    let script = plan.temp_file().unwrap().contents().expose();
+    assert!(script.contains("PGPASSWORD="));
+    assert!(script.contains("postgresql://postgres@127.0.0.1:5432/postgres"));
+    assert!(script.contains("rm -f -- \"$0\""));
     assert_no_secret(&plan, "PW");
 }
 
@@ -74,22 +72,12 @@ fn golden_mysql_linux() {
         &term(OsKind::Linux),
     )
     .unwrap();
-    assert_eq!(
-        plan.argv(),
-        [
-            "-e",
-            "mysql",
-            "--host",
-            "127.0.0.1",
-            "--port",
-            "3306",
-            "--user",
-            "root",
-            "--protocol",
-            "tcp",
-            ""
-        ]
-    );
+    assert_eq!(plan.argv()[0], "-e");
+    assert_eq!(plan.argv()[1], "sh");
+    let script = plan.temp_file().unwrap().contents().expose();
+    assert!(script.contains("MYSQL_PWD="));
+    assert!(script.contains("mysql"));
+    assert!(script.contains("--protocol=tcp"));
     assert_no_secret(&plan, "PW");
 }
 
@@ -104,10 +92,11 @@ fn golden_valkey_cli_linux() {
         &term(OsKind::Linux),
     )
     .unwrap();
-    assert_eq!(
-        plan.argv(),
-        ["-e", "valkey-cli", "-h", "127.0.0.1", "-p", "6379"]
-    );
+    assert_eq!(plan.argv()[0], "-e");
+    assert_eq!(plan.argv()[1], "sh");
+    let script = plan.temp_file().unwrap().contents().expose();
+    assert!(script.contains("REDISCLI_AUTH="));
+    assert!(script.contains("valkey-cli"));
     assert_no_secret(&plan, "PW");
 }
 
@@ -122,8 +111,8 @@ fn golden_tableplus_linux_url() {
         &term(OsKind::Linux),
     )
     .unwrap();
-    assert_eq!(plan.program(), &PathBuf::from("xdg-open"));
-    assert!(plan.url().unwrap().contains("tableplus://"));
+    assert_eq!(plan.program(), &PathBuf::from("/usr/bin/tableplus"));
+    assert!(plan.url().unwrap().starts_with("postgresql://"));
     assert_no_secret(&plan, "PW");
 }
 
@@ -138,8 +127,8 @@ fn golden_tableplus_windows() {
         &term(OsKind::Windows),
     )
     .unwrap();
-    assert_eq!(plan.program(), &PathBuf::from("cmd.exe"));
-    assert!(plan.argv().windows(2).any(|w| w == ["start", ""]));
+    assert_eq!(plan.program(), &PathBuf::from("/usr/bin/tableplus"));
+    assert!(plan.url().unwrap().starts_with("postgresql://"));
     assert_no_secret(&plan, "PW");
 }
 
@@ -155,6 +144,8 @@ fn golden_tableplus_macos() {
     )
     .unwrap();
     assert_eq!(plan.program(), &PathBuf::from("open"));
+    assert_eq!(plan.argv()[0], "-a");
+    assert_eq!(plan.argv()[1], "TablePlus");
     assert_no_secret(&plan, "PW");
 }
 
@@ -171,6 +162,7 @@ fn golden_psql_macos_uses_script() {
     .unwrap();
     assert_eq!(plan.program(), &PathBuf::from("osascript"));
     assert!(plan.temp_file().is_some());
+    assert!(plan.command_string().unwrap().contains("{script}"));
     assert_no_secret(&plan, "PW");
 }
 
@@ -187,5 +179,6 @@ fn golden_psql_windows_uses_script() {
     .unwrap();
     assert_eq!(plan.program(), &PathBuf::from("wt.exe"));
     assert!(plan.temp_file().is_some());
+    assert!(plan.argv().iter().any(|a| a.contains("{script}")));
     assert_no_secret(&plan, "PW");
 }

@@ -5,7 +5,8 @@ use std::process::Command;
 
 use super::error::{ClientError, ClientResult};
 
-use super::plan::{LaunchPlan, TempFile};
+use super::plan::LaunchPlan;
+use super::terminal::{materialize_launcher, substitute_script_placeholder};
 
 /// Executes a prepared launch plan.
 ///
@@ -28,32 +29,46 @@ impl Spawner for SystemSpawner {
                 name: required.display().to_string(),
             });
         }
-        let script_path = materialize_temp_file(plan.temp_file())?;
+        let script_path = materialize_temp_file(plan)?;
         let mut cmd = Command::new(plan.program());
-        cmd.args(plan.argv());
+        for arg in plan.argv() {
+            if let Some(ref sp) = script_path {
+                cmd.arg(substitute_script_placeholder(arg, sp));
+            } else {
+                cmd.arg(arg);
+            }
+        }
         for env in plan.env() {
             cmd.env(env.name(), env.value().expose());
-        }
-        if let Some(path) = script_path.as_ref() {
-            cmd.env("DBLOCAL_LAUNCHER_SCRIPT", path);
         }
         cmd.stdin(std::process::Stdio::null());
         cmd.stdout(std::process::Stdio::null());
         cmd.stderr(std::process::Stdio::null());
-        let mut child = cmd.spawn().map_err(|err| {
-            if err.kind() == std::io::ErrorKind::NotFound {
-                ClientError::ClientNotFound {
-                    name: plan.program().display().to_string(),
+        let mut child = match cmd.spawn() {
+            Ok(c) => c,
+            Err(err) => {
+                if let Some(ref sp) = script_path {
+                    let _ = std::fs::remove_file(sp);
                 }
-            } else {
-                ClientError::LaunchFailed {
-                    reason: err.kind().to_string(),
-                }
+                return Err(if err.kind() == std::io::ErrorKind::NotFound {
+                    ClientError::ClientNotFound {
+                        name: plan.program().display().to_string(),
+                    }
+                } else {
+                    ClientError::LaunchFailed {
+                        reason: err.kind().to_string(),
+                    }
+                });
             }
-        })?;
-        std::thread::spawn(move || {
-            let _ = child.wait();
-        });
+        };
+        std::thread::Builder::new()
+            .name("dblocal-client-wait".to_owned())
+            .spawn(move || {
+                let _ = child.wait();
+            })
+            .map_err(|e| ClientError::LaunchFailed {
+                reason: e.kind().to_string(),
+            })?;
         Ok(())
     }
 }
@@ -63,43 +78,18 @@ pub fn run(plan: &LaunchPlan, spawner: &dyn Spawner) -> ClientResult<()> {
     spawner.spawn(plan)
 }
 
-fn materialize_temp_file(temp: Option<&TempFile>) -> ClientResult<Option<PathBuf>> {
-    let Some(temp) = temp else {
+fn materialize_temp_file(plan: &LaunchPlan) -> ClientResult<Option<PathBuf>> {
+    let Some(temp) = plan.temp_file() else {
         return Ok(None);
     };
-    let base = std::env::temp_dir().join("dblocal-open-client");
-    std::fs::create_dir_all(&base).map_err(|e| ClientError::LaunchFailed {
-        reason: e.kind().to_string(),
-    })?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&base, std::fs::Permissions::from_mode(0o700)).map_err(|e| {
-            ClientError::LaunchFailed {
-                reason: e.kind().to_string(),
-            }
-        })?;
-    }
-    let path = base.join(temp.name_hint());
-    let mut options = std::fs::OpenOptions::new();
-    options.create(true).write(true).truncate(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(temp.mode());
-    }
-    use std::io::Write;
-    let mut file = options.open(&path).map_err(|e| ClientError::LaunchFailed {
-        reason: e.kind().to_string(),
-    })?;
-    file.write_all(temp.contents().expose().as_bytes())
-        .map_err(|e| ClientError::LaunchFailed {
-            reason: e.kind().to_string(),
-        })?;
-    file.sync_all().map_err(|e| ClientError::LaunchFailed {
-        reason: e.kind().to_string(),
-    })?;
-    Ok(Some(path))
+    let os = if cfg!(target_os = "macos") {
+        super::plan::OsKind::Macos
+    } else if cfg!(target_os = "windows") {
+        super::plan::OsKind::Windows
+    } else {
+        super::plan::OsKind::Linux
+    };
+    materialize_launcher(temp, os).map(Some)
 }
 
 #[cfg(test)]

@@ -4,3 +4,6 @@ pub const UNSUPPORTED_CLIENT: &str = "Client ini tidak mendukung engine yang dip
 pub const CLIENT_NOT_FOUND: &str =
     "Client tidak ditemukan. Mungkin sudah dihapus atau dipindahkan.";
 pub const LAUNCH_FAILED: &str = "Gagal membuka client. Periksa instalasi client lalu coba lagi.";
+pub const INVALID_TARGET: &str = "Data koneksi tidak valid.";
+pub const NO_TERMINAL: &str = "Terminal tidak ditemukan. Pasang emulator terminal lalu coba lagi.";
+pub const SCRIPT_ERROR: &str = "Gagal menyiapkan skrip peluncur yang aman.";
