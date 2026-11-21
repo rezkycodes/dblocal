@@ -12,7 +12,7 @@ Nothing here asks you to trust us; the steps below let you **verify the bits**.
 
 ## What you will see
 
-When you open the `.zip`/extracted binary (or a future installer), Windows typically shows:
+When you open the `.zip`/extracted binary or the `.msi` installer, Windows typically shows:
 
 - **"Windows protected your PC"** (SmartScreen) with the text  
   *"Microsoft Defender SmartScreen prevented an unrecognized app from starting. Running this app
@@ -30,30 +30,35 @@ Because the publisher is unknown, your safety check is the **SHA-256 checksum** 
 release. Do this on the file you downloaded, from the **same** GitHub release.
 
 1. Open the release on GitHub: `https://github.com/rezkycodes/dblocal/releases/tag/<version>`
-   and download **both** the Windows artifact
-   (`dblocal-<version>-windows-x86_64.zip`) and **`checksums.txt`**.
+   and download **both** the Windows artifact you intend to use
+   (`dblocal-<version>-windows-x86_64.zip` or `dblocal-<version>-windows-x86_64.msi`) and **`checksums.txt`**.
 2. Compute the hash of the file you downloaded:
 
    **PowerShell (recommended):**
    ```powershell
    Get-FileHash .\dblocal-<version>-windows-x86_64.zip -Algorithm SHA256
+   # or, for the MSI:
+   Get-FileHash .\dblocal-<version>-windows-x86_64.msi -Algorithm SHA256
    ```
 
    **Command Prompt (`certutil`):**
    ```bat
    certutil -hashfile dblocal-<version>-windows-x86_64.zip SHA256
+   certutil -hashfile dblocal-<version>-windows-x86_64.msi SHA256
    ```
 
-3. Open `checksums.txt` from the same release and find the line for
-   `dblocal-<version>-windows-x86_64.zip`. The 64-character hex hash must match **exactly** (case
-   does not matter). If it does **not** match, delete the file and re-download from the official
-   release; if it still does not match, do **not** run it and report the mismatch in a GitHub issue.
+3. Open `checksums.txt` from the same release and find the line for the artifact you downloaded.
+   The 64-character hex hash must match **exactly** (case does not matter). If it does **not**
+   match, delete the file and re-download from the official release; if it still does not match,
+   do **not** run or install it and report the mismatch in a GitHub issue.
 
 4. (Optional, stronger) If you have the GitHub CLI installed, you can also verify the release's
    **build provenance attestation** (proves the artifact was built from this repository by the
    release workflow):
    ```powershell
    gh attestation verify .\dblocal-<version>-windows-x86_64.zip --repo rezkycodes/dblocal
+   # or:
+   gh attestation verify .\dblocal-<version>-windows-x86_64.msi --repo rezkycodes/dblocal
    ```
 
 Only proceed once the checksum matches the official `checksums.txt`.
@@ -62,11 +67,12 @@ Only proceed once the checksum matches the official `checksums.txt`.
 
 1. In the **"Windows protected your PC"** dialog, click **"More info"**.
 2. A **"Run anyway"** button appears (it only shows after "More info"). Click **"Run anyway"** to
-   start DBLocal.
-3. If a User Account Control prompt appears asking to allow changes, read it carefully: DBLocal does
-   **not** require administrator rights and never asks for elevation at runtime. If a prompt asks for
-   admin/elevation in a way that seems unrelated to simply running the app you verified, decline and
-   investigate.
+   start DBLocal or continue the MSI install.
+3. If a User Account Control prompt appears asking to allow changes, read it carefully. The MSI is
+   **per-user by default** and should not require administrator rights. A per-machine MSI install
+   (`ALLUSERS=1 MSIINSTALLPERUSER=""`) does require elevation by design; only approve that if you
+   intentionally chose per-machine install. If a prompt asks for elevation in a way that seems
+   unrelated to the verified installer you chose, decline and investigate.
 
 After the first successful run, SmartScreen may stop warning for that specific file.
 
