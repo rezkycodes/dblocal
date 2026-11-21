@@ -161,30 +161,55 @@ pub(crate) fn load(inner: &Inner, id: &crate::model::InstanceId) -> Result<Insta
         })
 }
 
-/// Applies `event` through the state machine and persists the result with a
-/// compare-and-set, which is also the cross-process lock.
+/// Claims a transition that must start from `expected`, regardless of what the
+/// row currently holds.
 ///
-/// The loser of the CAS gets `InvalidTransition{from:"busy"}` so a second
-/// process (or a second call) never double-starts or double-deletes.
-pub(crate) fn claim(
+/// This is the primitive that makes a stale observation safe: the caller passes
+/// the status it *believes* the row is in, and the compare-and-set refuses when
+/// another writer already moved it. Every operation that reads then claims goes
+/// through this; re-reading the row inside the claim would let a competing
+/// writer's status be adopted silently and destroy the lock.
+///
+/// `event` is only applied to `expected` first, so an event that is illegal from
+/// `expected` is rejected before any write, with the same error a stale row
+/// would produce.
+pub(crate) fn claim_from(
     inner: &Inner,
     id: &crate::model::InstanceId,
+    expected: InstanceStatus,
     event: InstanceEvent,
 ) -> Result<Instance> {
-    let instance = load(inner, id)?;
-    let next = instance.status().apply(event)?;
-    let from = instance.status();
-    if !inner.db(|store| store.transition_status(id, from, next))? {
+    let next = expected.apply(event)?;
+    if !inner.db(|store| store.transition_status(id, expected, next))? {
         return Err(DblError::InvalidTransition {
             from: "busy",
             to: next.as_str(),
         });
     }
-    let claimed = instance.with_status(next);
-    if let Ok(view) = view_for(inner, &claimed) {
+    let instance = load(inner, id)?;
+    if let Ok(view) = view_for(inner, &instance) {
         inner.emit(ServiceEvent::InstanceChanged { view });
     }
-    Ok(claimed)
+    Ok(instance)
+}
+
+/// Claims a specific `expected -> next` status change with the compare-and-set,
+/// without consulting the state machine.
+///
+/// Delete needs this: it claims `Deleting` from any non-terminal status because
+/// it owns stopping the engine as part of the delete (D-18), which the machine
+/// models only for an interactive stop (`StopRequested -> Stopping`). Every other
+/// transition goes through [`claim_from`] and therefore the machine.
+///
+/// The CAS is still the lock: a competing writer that moved the row between the
+/// caller's read and this write makes it lose.
+pub(crate) fn claim_status(
+    inner: &Inner,
+    id: &crate::model::InstanceId,
+    expected: InstanceStatus,
+    next: InstanceStatus,
+) -> Result<bool> {
+    inner.db(|store| store.transition_status(id, expected, next))
 }
 
 /// Every port already reserved by an instance.
@@ -280,7 +305,19 @@ pub(crate) fn remove_tree(path: &Path) -> Result<()> {
     }
 }
 
-/// Re-validates a path read from the store before deleting or moving it.
+/// Re-validates a path read from the store (or derived from an instance name)
+/// before deleting or moving it.
+///
+/// Two checks, both required:
+///
+/// 1. **Lexical containment** — after normalisation the path must be a strict
+///    descendant of the home. This rejects `..` and an absolute path.
+/// 2. **No symlink on the way** — every existing component below the home must be
+///    a real entry, not a symlink. Lexical containment alone is not enough: a
+///    path like `<home>/instances/<name>` is inside the home as a *string* while
+///    `<name>` may itself be a symlink to `/etc`, and deleting through it would
+///    reach outside. The check is on the components, not on the resolved target,
+///    so a symlink is refused outright rather than silently followed.
 pub(crate) fn safe_within(paths: &DblPaths, candidate: &Path) -> Result<()> {
     let base = normalize(paths.root());
     let target = normalize(candidate);
@@ -289,7 +326,37 @@ pub(crate) fn safe_within(paths: &DblPaths, candidate: &Path) -> Result<()> {
             entry: candidate.display().to_string(),
         });
     }
+    if has_symlink_below(&base, &target) {
+        return Err(DblError::UnsafeArchive {
+            entry: candidate.display().to_string(),
+        });
+    }
     Ok(())
+}
+
+/// Whether any existing component of `target` strictly below `base` is a
+/// symlink.
+///
+/// Only the components that exist are inspected, so a path that has not been
+/// created yet (an archive target before the move) is accepted; the moment a
+/// component exists as a symlink, it is rejected. Errors reading metadata are
+/// treated as "not a symlink" here because the lexical check already confined the
+/// path and the caller's own I/O reports a real failure.
+fn has_symlink_below(base: &Path, target: &Path) -> bool {
+    let Ok(relative) = target.strip_prefix(base) else {
+        return true;
+    };
+    let mut current = base.to_path_buf();
+    for component in relative.components() {
+        current.push(component.as_os_str());
+        match std::fs::symlink_metadata(&current) {
+            Ok(meta) if meta.file_type().is_symlink() => return true,
+            Ok(_) => {}
+            // Does not exist (or is unreadable): nothing to follow yet.
+            Err(_) => return false,
+        }
+    }
+    false
 }
 
 pub(crate) fn normalize(path: &Path) -> PathBuf {

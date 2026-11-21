@@ -137,19 +137,19 @@ async fn finish_delete(inner: &Arc<Inner>, instance: &Instance) {
 
     // (b) The rename happened but `add_archive` did not: register the directory
     // we can see, so the data is not "data without a row you cannot find".
+    //
+    // `recorded` is decided by the stable archive id, never by the instance name:
+    // a user who deletes `x`, recreates `x`, and crashes that delete must still
+    // get the second archive recorded, even though an archived row for a
+    // *previous* instance called `x` exists.
+    let archive_id = format!("arch-{}", short_id(&id));
     let recorded = inner
         .db(|store| store.list_archives())
-        .map(|archives| {
-            archives
-                .into_iter()
-                .any(|archive| archive.instance_name() == instance.name())
-        })
+        .map(|archives| archives.iter().any(|archive| archive.id() == archive_id))
         .unwrap_or(false);
     if !recorded && let Some(path) = unrecorded_archive(inner, instance) {
-        // The same stable id the live delete derives, so a second process's
-        // `add_archive` for the same instance lands on one row, not two.
         let row = ArchivedData::new(
-            format!("arch-{}", short_id(&id)),
+            archive_id,
             instance.name().clone(),
             instance.engine(),
             instance.version().to_owned(),
@@ -200,13 +200,23 @@ async fn finish_delete(inner: &Arc<Inner>, instance: &Instance) {
     }
 }
 
-/// An `archive/<name>-*` directory that no archive row points at.
+/// An `archive/<name>-<digits>` directory that no archive row points at.
 ///
-/// The path is derived by listing `archive/` and matching the instance's own
-/// name prefix, never from user text, and each candidate is re-validated.
+/// The match is exact, not a prefix: `pg` must never claim `pg-main-...`, whose
+/// remainder is not a stamp. Every directory that an existing archive row
+/// already references is skipped, so a recovered directory can never shadow
+/// another instance's archive. Each candidate is re-validated against the home.
 fn unrecorded_archive(inner: &Arc<Inner>, instance: &Instance) -> Option<PathBuf> {
     let archive_root = inner.paths.archive_dir();
     let prefix = format!("{}-", instance.name().as_str());
+
+    let taken: Vec<PathBuf> = inner
+        .db(|store| store.list_archives())
+        .unwrap_or_default()
+        .into_iter()
+        .map(|archive| super::helpers::normalize(archive.path()))
+        .collect();
+
     let entries = std::fs::read_dir(&archive_root).ok()?;
     let mut found: Vec<PathBuf> = entries
         .flatten()
@@ -214,12 +224,25 @@ fn unrecorded_archive(inner: &Arc<Inner>, instance: &Instance) -> Option<PathBuf
         .filter(|path| {
             path.file_name()
                 .and_then(|name| name.to_str())
-                .is_some_and(|name| name.starts_with(&prefix))
+                .is_some_and(|name| matches_archive_name(name, &prefix))
         })
         .filter(|path| super::helpers::safe_within(&inner.paths, path).is_ok())
+        .filter(|path| !taken.contains(&super::helpers::normalize(path)))
         .collect();
     found.sort();
     found.pop()
+}
+
+/// Whether `name` is `<prefix><stamp>` with a stamp of ASCII digits only.
+///
+/// `prefix` already ends in `-`, so `pg-main-1700` does not match the prefix of
+/// `pg` (`pg-`); it starts with `pg-` but the remainder `main-1700` is not a
+/// stamp. The digits check is what enforces that.
+fn matches_archive_name(name: &str, prefix: &str) -> bool {
+    let Some(stamp) = name.strip_prefix(prefix) else {
+        return false;
+    };
+    !stamp.is_empty() && stamp.bytes().all(|byte| byte.is_ascii_digit())
 }
 
 fn short_id(id: &InstanceId) -> String {

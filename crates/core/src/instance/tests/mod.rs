@@ -2,13 +2,17 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic, dead_code)]
 
+mod archive_recovery;
 mod catalog;
 mod coverage;
 mod download;
+mod gates;
 mod harness;
+mod harness_fakes;
 mod lifecycle;
 mod mutations;
 mod races;
+mod recovery;
 mod safety;
 
 use crate::model::{EngineKey, InstanceStatus};

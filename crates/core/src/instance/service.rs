@@ -291,6 +291,14 @@ pub(crate) struct Inner {
     /// Set when the last `LocalService` handle is dropped, so the supervisor
     /// stops instead of holding the state alive forever.
     pub stopping: std::sync::atomic::AtomicBool,
+    /// Number of live `LocalService` handles. The supervisor and background
+    /// tasks hold `Arc<Inner>` but not a handle, so this — not `strong_count` —
+    /// is what decides when the service is really gone.
+    pub handles: std::sync::atomic::AtomicUsize,
+    /// True while the supervisor task is looping. Cleared when it sees
+    /// `stopping`, so a caller can wait for it to actually exit before taking
+    /// over the home (a test restart, or a clean shutdown).
+    pub supervisor_alive: std::sync::atomic::AtomicBool,
 }
 
 impl Inner {
@@ -335,12 +343,23 @@ impl Inner {
 /// outlive every background task, but those tasks hold `Arc<Inner>`. Putting it
 /// here (declared after `inner`) means dropping the last `LocalService` shuts
 /// the runtime down, which aborts the tasks and lets `Inner` drop.
-#[derive(Clone)]
 pub struct LocalService {
     inner: Arc<Inner>,
     /// Kept only to own the runtime so it drops after `inner`; never read.
     #[allow(dead_code)]
     runtime: Arc<ServiceRuntime>,
+}
+
+impl Clone for LocalService {
+    fn clone(&self) -> Self {
+        self.inner
+            .handles
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Self {
+            inner: Arc::clone(&self.inner),
+            runtime: Arc::clone(&self.runtime),
+        }
+    }
 }
 
 impl std::fmt::Debug for LocalService {
@@ -452,6 +471,8 @@ impl LocalService {
                 .status_poll
                 .unwrap_or_else(|| Duration::from_secs(consts::STATUS_POLL_SECS)),
             stopping: std::sync::atomic::AtomicBool::new(false),
+            handles: std::sync::atomic::AtomicUsize::new(1),
+            supervisor_alive: std::sync::atomic::AtomicBool::new(true),
             runtime_handle: runtime.handle.clone(),
         });
 
@@ -483,6 +504,66 @@ impl LocalService {
         &self.inner
     }
 
+    /// Claims a transition from an explicit expected status.
+    ///
+    /// Exposed to this module's tests so a stale expectation can be exercised
+    /// directly: a real competing writer would otherwise be needed to reach the
+    /// same branch, and a timing-based test cannot prove the CAS is consulted.
+    #[cfg(test)]
+    pub(crate) fn claim_for_test(
+        &self,
+        id: &InstanceId,
+        expected: crate::model::InstanceStatus,
+        event: crate::model::InstanceEvent,
+    ) -> Result<crate::model::Instance> {
+        super::helpers::claim_from(&self.inner, id, expected, event)
+    }
+
+    /// Claims a raw `expected -> next` status change, like delete does.
+    #[cfg(test)]
+    pub(crate) fn claim_status_for_test(
+        &self,
+        id: &InstanceId,
+        expected: crate::model::InstanceStatus,
+        next: crate::model::InstanceStatus,
+    ) -> Result<bool> {
+        super::helpers::claim_status(&self.inner, id, expected, next)
+    }
+
+    /// Whether the in-memory failure map has an entry, for a test that asserts
+    /// the supervisor did *not* record a failure.
+    #[cfg(test)]
+    pub(crate) fn has_failure_record(&self, id: &InstanceId) -> bool {
+        self.inner
+            .failures
+            .lock()
+            .map(|failures| failures.contains_key(id))
+            .unwrap_or(false)
+    }
+
+    /// Whether an operation has already reported `OperationFinished`.
+    ///
+    /// A consumer that subscribed after completion (a late UI, or a test harness
+    /// that could not subscribe before the call) uses this to notice the end
+    /// instead of waiting on an event that will never be re-delivered. Exposed to
+    /// this module's tests for exactly that reason.
+    #[cfg(test)]
+    pub(crate) fn is_operation_finished(&self, op: &OperationId) -> bool {
+        self.inner.ops.is_finished(op)
+    }
+
+    /// Runs the real create-rollback, for a test that must reach the path guard
+    /// rather than assert on it indirectly.
+    #[cfg(test)]
+    pub(crate) fn rollback_for_test(
+        &self,
+        id: &InstanceId,
+        name: &crate::model::InstanceName,
+    ) -> bool {
+        self.inner
+            .block_on(super::helpers::rollback_create(&self.inner, id, name))
+    }
+
     /// How many subscribers are listening, for diagnostics.
     pub fn subscriber_count(&self) -> usize {
         self.inner.events.receiver_count()
@@ -496,10 +577,18 @@ impl LocalService {
 
 impl Drop for LocalService {
     fn drop(&mut self) {
-        // The last handle stops the watchers and tells the supervisor to leave;
-        // the runtime itself is shut down when its own `Arc` drops (a moment
-        // later, once no background task can still be holding it).
-        if Arc::strong_count(&self.inner) == 1 {
+        // The supervisor task and the background worker hold their own
+        // `Arc<Inner>`, so `Arc::strong_count` never reaches one while they run
+        // and could not be used to detect "last handle". Set the flag
+        // unconditionally: a clone that is still alive keeps working (each
+        // operation tolerates the flag being set), and a genuine shutdown stops
+        // the supervisor and the watchers.
+        if self
+            .inner
+            .handles
+            .fetch_sub(1, std::sync::atomic::Ordering::SeqCst)
+            == 1
+        {
             self.inner
                 .stopping
                 .store(true, std::sync::atomic::Ordering::SeqCst);

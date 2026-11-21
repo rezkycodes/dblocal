@@ -59,8 +59,11 @@ fn a_failed_refresh_keeps_the_working_catalog() {
     });
 
     let before = h.service.catalog().expect("catalog before");
+    // Subscribe before the call: a fast-failing refresh can finish before a
+    // receiver opened afterwards sees its events.
+    let mut receiver = h.receiver();
     let op = h.service.refresh_catalog(true).expect("refresh");
-    let events = h.run(op);
+    let events = h.run_on(&mut receiver, op);
     let finished = events
         .iter()
         .find_map(|event| match event {
@@ -126,8 +129,9 @@ fn catalog_status_tracks_freshness_after_a_successful_refresh() {
     let h = Harness::with_options(EngineKey::Postgresql, |options| {
         options.catalog_fetcher = Some(Arc::new(ServesBody));
     });
+    let mut receiver = h.receiver();
     let op = h.service.refresh_catalog(true).expect("refresh");
-    let events = h.run(op);
+    let events = h.run_on(&mut receiver, op);
     let updated = events.iter().any(|event| {
         matches!(
             event,

@@ -14,8 +14,8 @@ use crate::model::{InstanceEvent, InstanceId, InstanceStatus};
 use crate::service::{OperationId, OperationStage};
 
 use super::helpers::{
-    OpFailure, OpResult, Stopped, blocking, claim, credential_for_stop, db_async, emit_changed,
-    emit_stage, emit_stop_forced, finish_operation, identity_of, load, run_context,
+    OpFailure, OpResult, Stopped, blocking, claim_from, credential_for_stop, db_async,
+    emit_changed, emit_stage, emit_stop_forced, finish_operation, identity_of, load, run_context,
     terminate_verified,
 };
 use super::service::Inner;
@@ -30,8 +30,10 @@ pub(crate) fn stop_instance(inner: &Arc<Inner>, id: &InstanceId) -> Result<Opera
     }
 
     let lock = inner.ops.lock_instance(id)?;
-    // `Stopping` is persisted before any signal is sent.
-    let claimed = claim(inner, id, InstanceEvent::StopRequested)?;
+    // `Stopping` is persisted before any signal is sent, claimed from the status
+    // just read so a competing writer that moved the row makes this call fail as
+    // busy rather than double-stopping.
+    let claimed = claim_from(inner, id, instance.status(), InstanceEvent::StopRequested)?;
 
     let op = inner.ops.next_id();
     let op_id = op.clone();

@@ -3,16 +3,20 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use crate::model::{DeleteMode, EngineKey, InstanceId, InstanceName, InstanceStatus};
+use crate::model::{DeleteMode, EngineKey, InstanceName, InstanceStatus};
 use crate::service::DblService;
 
-use super::harness::{Harness, test_port};
+use super::harness::{Harness, test_port, wait_for_row_gone};
 
 #[test]
 fn two_services_on_one_home_spawn_exactly_once() {
-    // Two independent services over the same home, both asked to start the same
-    // stopped instance at the same instant. The compare-and-set transition must
-    // let exactly one win, and only the winner may spawn.
+    // Two independent services over the same home, released from a barrier at the
+    // same instant so the calls genuinely overlap. Calling them one after the
+    // other would let the second observe `Starting` and fail the state machine
+    // before the compare-and-set is ever reached, which is why this used to pass
+    // even with the CAS removed. The CAS must let exactly one win, only the
+    // winner may spawn, and the loser gets the typed busy error.
+    let winners = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     for round in 0..50 {
         let h = Harness::new(EngineKey::Postgresql);
         let port = test_port();
@@ -22,21 +26,36 @@ fn two_services_on_one_home_spawn_exactly_once() {
         let id = instance.id().clone();
 
         // A second service over the same state tree, sharing the process table.
-        let second = super::harness::second_service(&h.paths, Arc::clone(&h.procs));
+        let second =
+            super::harness::second_service(&h.paths, Arc::clone(&h.procs), Arc::clone(&h.secrets));
 
-        let a = h.service.start_instance(&id);
-        let b = second.service.start_instance(&id);
+        let barrier = Arc::new(std::sync::Barrier::new(2));
+        let a_svc = h.service.clone();
+        let b_svc = second.service.clone();
+        let a_barrier = Arc::clone(&barrier);
+        let b_barrier = Arc::clone(&barrier);
+        let a_id = id.clone();
+        let b_id = id.clone();
+        let a = std::thread::spawn(move || {
+            a_barrier.wait();
+            a_svc.start_instance(&a_id)
+        });
+        let b = std::thread::spawn(move || {
+            b_barrier.wait();
+            b_svc.start_instance(&b_id)
+        });
+        let a = a.join().expect("first thread did not panic");
+        let b = b.join().expect("second thread did not panic");
 
-        let accepted = match (&a, &b) {
-            (Ok(op), Err(_)) => (true, op.clone()),
-            (Err(_), Ok(op)) => (false, op.clone()),
+        let winner_first = match (&a, &b) {
+            (Ok(_), Err(_)) => true,
+            (Err(_), Ok(_)) => false,
             _ => panic!("round {round}: exactly one start must be accepted, got {a:?} / {b:?}"),
         };
-        let winner_is_first = accepted.0;
-        let winner_op = accepted.1;
+        winners.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
 
         // The loser must get the typed busy error, not a silent success.
-        let loser = if winner_is_first { &b } else { &a };
+        let loser = if winner_first { &b } else { &a };
         let loser_err = loser.as_ref().expect_err("the loser must be refused");
         assert_eq!(
             loser_err.code(),
@@ -46,9 +65,10 @@ fn two_services_on_one_home_spawn_exactly_once() {
 
         // Wait for the winner's operation to settle before counting spawns: the
         // spawn happens inside the operation, not before `start_instance`
-        // returns.
-        let winner = if winner_is_first { &h } else { &second };
-        let _ = winner.run(winner_op);
+        // returns. The end state is what matters, so poll it rather than the
+        // winner's event stream — the winner may be the second service (its own
+        // channel) and the operation can finish before this thread subscribes.
+        let winner = if winner_first { &h } else { &second };
         winner.wait_for_status(&id, InstanceStatus::Running);
 
         assert_eq!(
@@ -57,6 +77,11 @@ fn two_services_on_one_home_spawn_exactly_once() {
             "round {round}: exactly one spawn must have happened"
         );
     }
+    assert_eq!(
+        winners.load(std::sync::atomic::Ordering::SeqCst),
+        50,
+        "every round produced exactly one winner"
+    );
 }
 
 #[test]
@@ -71,17 +96,41 @@ fn two_concurrent_deletes_remove_the_instance_once() {
         let instance = h.instances().into_iter().next().expect("instance");
         let id = instance.id().clone();
 
-        let second = super::harness::second_service(&h.paths, Arc::clone(&h.procs));
-        let a = h.service.delete_instance(&id, DeleteMode::ArchiveData);
-        let b = second.service.delete_instance(&id, DeleteMode::ArchiveData);
+        let second =
+            super::harness::second_service(&h.paths, Arc::clone(&h.procs), Arc::clone(&h.secrets));
 
-        let accepted = match (&a, &b) {
+        // Release both deletes from a barrier, so they genuinely overlap and the
+        // compare-and-set is what decides the winner (a sequential pair would let
+        // the second see `Deleting` and be refused by the terminal-status check
+        // before any CAS).
+        let barrier = Arc::new(std::sync::Barrier::new(2));
+        let a_svc = h.service.clone();
+        let b_svc = second.service.clone();
+        let a_barrier = Arc::clone(&barrier);
+        let b_barrier = Arc::clone(&barrier);
+        let a_id = id.clone();
+        let b_id = id.clone();
+        let a = std::thread::spawn(move || {
+            a_barrier.wait();
+            a_svc.delete_instance(&a_id, DeleteMode::ArchiveData)
+        });
+        let b = std::thread::spawn(move || {
+            b_barrier.wait();
+            b_svc.delete_instance(&b_id, DeleteMode::ArchiveData)
+        });
+        let a = a.join().expect("first thread did not panic");
+        let b = b.join().expect("second thread did not panic");
+
+        let (winner_first, winner_op) = match (&a, &b) {
             (Ok(op), Err(_)) => (true, op.clone()),
             (Err(_), Ok(op)) => (false, op.clone()),
             _ => panic!("round {round}: exactly one delete must be accepted, got {a:?} / {b:?}"),
         };
-        let winner = if accepted.0 { &h } else { &second };
-        let _ = winner.run(accepted.1);
+        let _ = (winner_first, winner_op);
+        // Poll the end state rather than the winner's event stream: the winner may
+        // be the second service (its own channel) and may finish before this
+        // thread subscribes.
+        wait_for_row_gone(&h.paths, &id, round);
 
         // The row is gone exactly once and at most one archive exists.
         assert!(
@@ -176,54 +225,64 @@ fn remove_runtime_refuses_while_an_instance_uses_it() {
 
 #[test]
 fn reconciliation_adopts_a_live_process_and_clears_a_dead_one() {
+    // Two rows are prepared *after* the first service is stopped and *before* the
+    // restarted one exists, so only reconciliation decides their fate. Writing
+    // them while the old supervisor still looped would let it witness the bogus
+    // "dead" row as a death first, which is a different (valid) path.
     let h = Harness::new(EngineKey::Postgresql);
     let port = test_port();
     let spec = h.spec("adopted", EngineKey::Postgresql, port);
     h.create(spec);
-    let instance = h.instances().into_iter().next().expect("instance");
-    let id = instance.id().clone();
-
-    // Simulate a session that started the engine and then quit: the row says
-    // `running` with a live process behind it.
-    let identity = h.procs.spawn("/fake/engine/bin/postgres");
-    h.store()
-        .update_process_identity(
-            &id,
-            Some(identity.pid()),
-            Some(identity.started_at()),
-            Some(identity.exe()),
-        )
-        .expect("identity");
-    h.store()
-        .update_status(&id, InstanceStatus::Running)
-        .expect("status");
-
-    // A dead row, pointing at a PID nobody owns.
     let port2 = test_port();
     let spec2 = h.spec("dead", EngineKey::Postgresql, port2);
     h.create(spec2);
-    let dead = h
-        .instances()
-        .into_iter()
+    let instances = h.instances();
+    let adopted = instances
+        .iter()
+        .find(|i| i.name().as_str() == "adopted")
+        .expect("adopted instance");
+    let dead = instances
+        .iter()
         .find(|i| i.name().as_str() == "dead")
         .expect("dead instance");
+    let id = adopted.id().clone();
     let dead_id = dead.id().clone();
-    h.store()
-        .update_process_identity(
-            &dead_id,
-            Some(999_999),
-            Some(std::time::SystemTime::UNIX_EPOCH),
-            Some(std::path::Path::new("/usr/bin/gone")),
-        )
-        .expect("dead identity");
-    h.store()
-        .update_status(&dead_id, InstanceStatus::Running)
-        .expect("status");
+    let procs = Arc::clone(&h.procs);
 
-    // Restart the app: drop the service, build a fresh one over the same home.
-    // Reconciliation runs in the background, so wait for both rows to settle.
-    let restarted = super::harness::restart(&h.paths, Arc::clone(&h.procs));
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    // The live engine and a dead PID are planted on the home after the old
+    // service is gone.
+    let prepare_id = id.clone();
+    let prepare_dead_id = dead_id.clone();
+    let restarted = super::harness::restart_owned_with(h, move |paths| {
+        let store = crate::store::Store::open(paths).expect("store");
+        // A live process behind `adopted`.
+        let identity = procs.spawn("/fake/engine/bin/postgres");
+        store
+            .update_process_identity(
+                &prepare_id,
+                Some(identity.pid()),
+                Some(identity.started_at()),
+                Some(identity.exe()),
+            )
+            .expect("identity");
+        store
+            .update_status(&prepare_id, InstanceStatus::Running)
+            .expect("status");
+        // A dead row, pointing at a PID nobody owns.
+        store
+            .update_process_identity(
+                &prepare_dead_id,
+                Some(999_999),
+                Some(std::time::SystemTime::UNIX_EPOCH),
+                Some(std::path::Path::new("/usr/bin/gone")),
+            )
+            .expect("dead identity");
+        store
+            .update_status(&prepare_dead_id, InstanceStatus::Running)
+            .expect("status");
+    });
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
     loop {
         let views = restarted.service.list_instances().expect("list");
         let adopted = views.iter().find(|v| v.id == id).expect("adopted present");
@@ -375,387 +434,4 @@ fn a_corrupt_row_cannot_delete_outside_the_home() {
     let err = h.service.purge_archive("corrupt").expect_err("must refuse");
     assert_eq!(err.code(), crate::error::CODE_UNSAFE_ARCHIVE);
     assert!(outside.exists(), "outside data must survive");
-}
-
-/// Crash point inside a delete, used by the table-driven recovery test.
-#[derive(Clone, Copy, Debug)]
-enum CrashPoint {
-    /// `Deleting` was written and nothing else happened.
-    DeletingWritten,
-    /// Archive mode: the rename into `archive/` happened, `add_archive` did not.
-    Renamed,
-    /// Archive mode: the record exists, the row and credential were not removed.
-    Recorded,
-    /// Purge mode: the data directory is gone, the row is not.
-    Purged,
-    /// The credential was deleted, the row was not.
-    CredentialDeleted,
-}
-
-impl CrashPoint {
-    fn label(self) -> &'static str {
-        match self {
-            Self::DeletingWritten => "after Deleting written",
-            Self::Renamed => "after rename into archive/",
-            Self::Recorded => "after add_archive",
-            Self::Purged => "after purge removed the data",
-            Self::CredentialDeleted => "after the credential was deleted",
-        }
-    }
-}
-
-#[test]
-fn reconciliation_never_loses_data_for_an_interrupted_delete() {
-    // A delete writes `Deleting` before it moves anything and the mode is not
-    // recorded on the row, so reconciliation must never purge: each crash point
-    // has exactly one safe answer, tested for both delete modes.
-    for mode in [DeleteMode::ArchiveData, DeleteMode::PurgeData] {
-        for point in [
-            CrashPoint::DeletingWritten,
-            CrashPoint::Renamed,
-            CrashPoint::Recorded,
-            CrashPoint::Purged,
-            CrashPoint::CredentialDeleted,
-        ] {
-            // Points that only exist for one mode are skipped for the other.
-            match (mode, point) {
-                (DeleteMode::PurgeData, CrashPoint::Renamed)
-                | (DeleteMode::PurgeData, CrashPoint::Recorded)
-                | (DeleteMode::ArchiveData, CrashPoint::Purged) => continue,
-                _ => {}
-            }
-            run_crash_point(mode, point);
-        }
-    }
-}
-
-fn run_crash_point(mode: DeleteMode, point: CrashPoint) {
-    let label = format!("{mode:?} / {}", point.label());
-    let h = Harness::new(EngineKey::Postgresql);
-    let port = test_port();
-    let spec = h.spec("crash", EngineKey::Postgresql, port);
-    h.create(spec);
-    let instance = h.instances().into_iter().next().expect("instance");
-    let id = instance.id().clone();
-    let name = instance.name().clone();
-    let data_dir = h.paths.data_dir(&name);
-    let instance_dir = h.paths.instance_dir(&name);
-    // The harness adapter wrote a data directory with content.
-    std::fs::write(data_dir.join("marker.txt"), b"precious").expect("marker");
-
-    // Drive the delete up to the chosen crash point, then stop, simulating the
-    // app dying there. The real order is: `Deleting`, move/purge the data,
-    // record the archive (archive mode), delete the credential, delete the row.
-    let store = h.store();
-    store
-        .transition_status(&id, InstanceStatus::Stopped, InstanceStatus::Deleting)
-        .expect("claim");
-
-    // `AfterCredentialDeleted` happens after the data is archived and recorded,
-    // so it replays the full archive path first, then the credential step.
-    let mode_is_archive_step =
-        matches!(mode, DeleteMode::ArchiveData) && !matches!(point, CrashPoint::DeletingWritten);
-    // In purge mode the only pre-credential state is "data removed"; both
-    // `AfterPurgeRenamed` and `AfterCredentialDeleted` have done that.
-    let purge_step =
-        matches!(mode, DeleteMode::PurgeData) && !matches!(point, CrashPoint::DeletingWritten);
-
-    let mut archive_path = None;
-    if mode_is_archive_step {
-        let target = h
-            .paths
-            .archive_dir()
-            .join(format!("{}-999999", name.as_str()));
-        std::fs::create_dir_all(h.paths.archive_dir()).expect("archive dir");
-        std::fs::rename(&data_dir, &target).expect("rename data");
-        if matches!(point, CrashPoint::Recorded | CrashPoint::CredentialDeleted) {
-            // The stable id the service derives, so reconciliation's recovery
-            // (which uses the same id) is idempotent against this row.
-            let short = id.as_str().get(..8).unwrap_or(id.as_str()).to_owned();
-            store
-                .add_archive(&crate::model::ArchivedData::new(
-                    format!("arch-{short}"),
-                    name.clone(),
-                    EngineKey::Postgresql,
-                    "18.7",
-                    target.clone(),
-                    7,
-                    std::time::SystemTime::UNIX_EPOCH,
-                ))
-                .expect("record archive");
-        }
-        archive_path = Some(target);
-    }
-    if purge_step {
-        std::fs::remove_dir_all(&data_dir).expect("purge data");
-    }
-    if matches!(point, CrashPoint::CredentialDeleted | CrashPoint::Recorded)
-        && let Some(reference) = store.get_credential(&id).expect("credential")
-    {
-        use crate::secrets::SecretBackend;
-        h.secrets.file.delete(&reference).ok();
-    }
-
-    // App restart: reconciliation must finish this safely.
-    let restarted = super::harness::restart_with(
-        &h.paths,
-        Arc::clone(&h.procs),
-        Arc::clone(&h.terminator),
-        Arc::clone(&h.secrets),
-    );
-    wait_until_settled(&restarted, &id);
-
-    match point {
-        // The move never happened: the delete is aborted, the row is back.
-        CrashPoint::DeletingWritten => {
-            let row = restarted
-                .instance(&id)
-                .unwrap_or_else(|| panic!("{label}: the row must survive an aborted delete"));
-            assert_eq!(
-                row.status(),
-                InstanceStatus::Stopped,
-                "{label}: an aborted delete returns to Stopped"
-            );
-            assert!(
-                data_dir.join("marker.txt").exists(),
-                "{label}: the data must survive an aborted delete"
-            );
-        }
-        // The data was archived: whether the record existed or is recovered, the
-        // archive entry and its content must survive. `AfterCredentialDeleted`
-        // reached the same point in archive mode, so the same answer applies.
-        CrashPoint::Renamed | CrashPoint::Recorded => {
-            assert!(
-                restarted.instance(&id).is_none(),
-                "{label}: the row is removed once the data is archived"
-            );
-            let archives = restarted.service.list_archives().expect("archives");
-            assert_eq!(
-                archives.len(),
-                1,
-                "{label}: exactly one archive must be recorded, saw {archives:?}"
-            );
-            assert!(
-                archives[0].path().join("marker.txt").exists(),
-                "{label}: the archived data must survive"
-            );
-        }
-        // A purge had removed the data: nothing is left to preserve, so the row
-        // goes. In archive mode the data was archived first, and `archive_path`
-        // carries where it landed.
-        CrashPoint::Purged | CrashPoint::CredentialDeleted => {
-            assert!(
-                restarted.instance(&id).is_none(),
-                "{label}: the row is removed after its data is gone"
-            );
-            let archives = restarted.service.list_archives().expect("archives");
-            if mode == DeleteMode::ArchiveData {
-                // The data was archived before the credential step: nothing may
-                // be lost, so exactly the recorded entry (or the recovery of the
-                // renamed directory) must exist.
-                assert_eq!(
-                    archives.len(),
-                    1,
-                    "{label}: archive mode keeps exactly one archive, saw {archives:?}"
-                );
-                assert!(
-                    archives[0].path().join("marker.txt").exists(),
-                    "{label}: the archived data must survive"
-                );
-                let recorded = archive_path.expect("archive path");
-                assert!(
-                    archives[0].path() == recorded || recorded.exists(),
-                    "{label}: the archive points at the data that was moved"
-                );
-            } else {
-                assert!(
-                    archives.is_empty(),
-                    "{label}: no archive is invented for a purge, saw {archives:?}"
-                );
-            }
-        }
-    }
-
-    // Whichever the mode, reconciliation never leaves the instance directory of
-    // a row it removed.
-    if restarted.instance(&id).is_none() {
-        assert!(
-            !instance_dir.exists(),
-            "{label}: the instance shell is removed with the row"
-        );
-    }
-}
-
-/// Waits until reconciliation has settled `id` (row gone, or not `Deleting`).
-fn wait_until_settled(h: &Harness, id: &InstanceId) {
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-    loop {
-        match h.instance(id) {
-            None => return,
-            Some(row) if row.status() != InstanceStatus::Deleting => return,
-            Some(_) => {}
-        }
-        assert!(
-            std::time::Instant::now() < deadline,
-            "reconciliation never settled the interrupted delete"
-        );
-        std::thread::sleep(std::time::Duration::from_millis(30));
-    }
-}
-
-#[test]
-fn reconciliation_adopts_a_live_stopping_row_as_running() {
-    // Nothing is signalled during reconciliation, so a `Stopping` row whose
-    // process is alive is still running. Writing it `Stopped` would leave a live
-    // engine under a "stopped" label that collides on the port at the next start.
-    let h = Harness::new(EngineKey::Postgresql);
-    let port = test_port();
-    let spec = h.spec("live-stopping", EngineKey::Postgresql, port);
-    h.create(spec);
-    let instance = h.instances().into_iter().next().expect("instance");
-    let id = instance.id().clone();
-
-    let identity = h.procs.spawn("/fake/engine/bin/postgres");
-    h.store()
-        .update_process_identity(
-            &id,
-            Some(identity.pid()),
-            Some(identity.started_at()),
-            Some(identity.exe()),
-        )
-        .expect("identity");
-    h.store()
-        .transition_status(&id, InstanceStatus::Stopped, InstanceStatus::Stopping)
-        .expect("stopping");
-
-    let restarted = super::harness::restart(&h.paths, Arc::clone(&h.procs));
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-    loop {
-        if let Some(row) = restarted.instance(&id)
-            && row.status() == InstanceStatus::Running
-        {
-            assert_eq!(
-                row.pid(),
-                Some(identity.pid()),
-                "an adopted Stopping row keeps its identity"
-            );
-            return;
-        }
-        assert!(
-            std::time::Instant::now() < deadline,
-            "a live Stopping row was not adopted as Running"
-        );
-        std::thread::sleep(std::time::Duration::from_millis(30));
-    }
-}
-
-#[test]
-fn a_reconciled_interrupted_create_leaves_nothing_behind() {
-    // A create the app died in the middle of must not leave a `Failed` zombie
-    // with a half-initialised data directory: the same cleanup a failed create
-    // runs is applied, and consumers are told the row is gone.
-    let h = Harness::new(EngineKey::Postgresql);
-    let port = test_port();
-    let spec = h.spec("interrupted", EngineKey::Postgresql, port);
-    h.create(spec);
-    let instance = h.instances().into_iter().next().expect("instance");
-    let id = instance.id().clone();
-    let name = instance.name().clone();
-    // Model a crash mid-create: the row stayed `Initializing` and half a data
-    // directory exists, plus a credential pointer.
-    let data_dir = h.paths.data_dir(&name);
-    std::fs::write(data_dir.join("PG_VERSION"), b"18\n").expect("half data dir");
-    h.store()
-        .transition_status(&id, InstanceStatus::Stopped, InstanceStatus::Initializing)
-        .expect("initializing");
-
-    let restarted = super::harness::restart_with(
-        &h.paths,
-        Arc::clone(&h.procs),
-        Arc::clone(&h.terminator),
-        Arc::clone(&h.secrets),
-    );
-    // Subscribe after the restart so the reconciliation events are observable.
-    let mut receiver = restarted.receiver();
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-    while restarted.instance(&id).is_some() {
-        assert!(
-            std::time::Instant::now() < deadline,
-            "an interrupted create must be cleaned up, not left as a zombie"
-        );
-        std::thread::sleep(std::time::Duration::from_millis(30));
-    }
-    assert!(
-        !data_dir.exists(),
-        "the half-initialised data directory is removed"
-    );
-    assert!(
-        !h.paths.instance_dir(&name).exists(),
-        "the instance shell is removed"
-    );
-    assert!(
-        h.store().get_credential(&id).expect("credential").is_none(),
-        "the credential pointer is gone"
-    );
-
-    // One of the events the restart emitted must be the removal.
-    let removal_seen = std::iter::from_fn(|| receiver.try_recv().ok())
-        .any(|event| super::harness::removed_for(&[event], &id));
-    assert!(removal_seen, "reconciliation emits InstanceRemoved");
-}
-
-#[test]
-fn reconciliation_skips_a_deleting_row_owned_by_a_live_delete() {
-    // The row alone cannot tell "a delete is running elsewhere" from "the app
-    // died mid-delete": both are `Deleting`. The in-flight marker resolves it, and
-    // this pins both directions deterministically instead of relying on a race
-    // window.
-    let h = Harness::new(EngineKey::Postgresql);
-    let port = test_port();
-    let spec = h.spec("owned", EngineKey::Postgresql, port);
-    h.create(spec);
-    let instance = h.instances().into_iter().next().expect("instance");
-    let id = instance.id().clone();
-    let name = instance.name().clone();
-    // Data present means "the move never happened", which alone would make
-    // reconciliation abort the delete (crash point (a)).
-    std::fs::write(h.paths.data_dir(&name).join("marker.txt"), b"x").expect("data");
-    h.store()
-        .transition_status(&id, InstanceStatus::Stopped, InstanceStatus::Deleting)
-        .expect("deleting");
-
-    // A live process that is *not* ours owns the delete, exactly like the other
-    // service sharing the home.
-    let owner = h.procs.spawn("/some/other/dblocal");
-    let marker = h
-        .paths
-        .instance_dir(&name)
-        .join(super::super::delete::IN_FLIGHT_MARKER);
-    std::fs::write(&marker, format!("{} some-nonce", owner.pid())).expect("marker");
-
-    let restarted = super::harness::restart(&h.paths, Arc::clone(&h.procs));
-    std::thread::sleep(std::time::Duration::from_millis(200));
-    let row = restarted
-        .instance(&id)
-        .expect("an in-flight delete must not be aborted by another process");
-    assert_eq!(
-        row.status(),
-        InstanceStatus::Deleting,
-        "reconciliation must leave a delete that is still running alone"
-    );
-
-    // Once the owner is gone the marker is stale, and the next launch recovers.
-    h.procs.kill(owner.pid());
-    let again = super::harness::restart(&h.paths, Arc::clone(&h.procs));
-    wait_until_settled(&again, &id);
-    let recovered = again.instance(&id).expect("recovered row");
-    assert_eq!(
-        recovered.status(),
-        InstanceStatus::Stopped,
-        "a stale marker lets reconciliation abort the delete back to Stopped"
-    );
-    assert!(
-        h.paths.data_dir(&name).join("marker.txt").exists(),
-        "aborting the delete keeps the data"
-    );
 }

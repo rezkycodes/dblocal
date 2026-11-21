@@ -21,6 +21,14 @@ pub struct Ops {
 struct OpsInner {
     locked: Mutex<HashSet<InstanceId>>,
     cancels: Mutex<HashMap<OperationId, CancellationToken>>,
+    /// Operations that have reported `OperationFinished`.
+    ///
+    /// Kept so a consumer that subscribed after the operation finished (a test
+    /// harness, or a late UI) can still learn that it completed instead of
+    /// waiting forever on an event it never saw. Bounded: only the ids of
+    /// operations finished in this process are retained, and a fresh service
+    /// starts empty.
+    finished: Mutex<HashSet<OperationId>>,
 }
 
 impl Ops {
@@ -86,11 +94,28 @@ impl Ops {
         }
     }
 
-    /// Forgets an operation when it finishes.
+    /// Records that an operation finished and drops its cancellation token.
     pub fn finish(&self, id: &OperationId) {
         if let Ok(mut cancels) = self.inner.cancels.lock() {
             cancels.remove(id);
         }
+        if let Ok(mut finished) = self.inner.finished.lock() {
+            finished.insert(id.clone());
+        }
+    }
+
+    /// Whether `id` has reported `OperationFinished`.
+    ///
+    /// Lets a caller that may have missed the broadcast (it subscribed after the
+    /// operation completed) detect completion by polling, instead of blocking on
+    /// an event that will never be re-delivered.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn is_finished(&self, id: &OperationId) -> bool {
+        self.inner
+            .finished
+            .lock()
+            .map(|finished| finished.contains(id))
+            .unwrap_or(false)
     }
 }
 

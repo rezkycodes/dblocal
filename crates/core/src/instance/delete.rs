@@ -23,12 +23,17 @@ const CLAIM_ATTEMPTS: usize = 4;
 ///
 /// The row alone cannot distinguish "a delete is running" from "the app died
 /// mid-delete", and both look like `Deleting`. The marker carries the owning
-/// PID **and** a per-operation nonce, so a reader knows the difference:
+/// process's identity — PID, start time and executable — plus a per-operation
+/// nonce, so a reader knows the difference:
 ///
-/// - a different, live PID means another process is deleting it;
-/// - a nonce registered in this process's [`super::registry::Ops`] means a
-///   sibling service in the same process is deleting it;
-/// - anything else (dead PID, unknown nonce) is stale, i.e. interrupted.
+/// - a process that still validates as the recorded identity owns the delete;
+/// - a nonce registered in this process means a sibling service here owns it;
+/// - anything else (dead process, a reused PID with a different start time, an
+///   unknown nonce) is stale, i.e. interrupted.
+///
+/// Trusting a bare PID is exactly what AGENTS.md invariant 7 forbids: after a
+/// reboot an unrelated process can hold the same number, and a marker keyed on
+/// the number alone would keep a half-deleted row unrecoverable forever.
 pub(crate) const IN_FLIGHT_MARKER: &str = "delete.inflight";
 
 /// Nonces of deletes running in **this process**, keyed by nothing: membership is
@@ -62,6 +67,75 @@ fn release_nonce(nonce: &str) {
     }
 }
 
+/// The owner recorded by an in-flight marker.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct MarkerOwner {
+    pid: u32,
+    started_at: std::time::SystemTime,
+    exe: std::path::PathBuf,
+    nonce: String,
+}
+
+impl MarkerOwner {
+    /// Serialises the owner as `key=value` lines.
+    ///
+    /// Lines, not space-separated fields, because an executable path can contain
+    /// spaces and a naive split would corrupt it.
+    fn render(&self) -> String {
+        let started = self
+            .started_at
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|elapsed| format!("{}.{}", elapsed.as_secs(), elapsed.subsec_nanos()))
+            .unwrap_or_else(|_| "0.0".to_owned());
+        format!(
+            "pid={}\nstarted={started}\nexe={}\nnonce={}\n",
+            self.pid,
+            self.exe.display(),
+            self.nonce
+        )
+    }
+
+    fn parse(contents: &str) -> Option<Self> {
+        let mut pid = None;
+        let mut started_at = None;
+        let mut exe = None;
+        let mut nonce = None;
+        for line in contents.lines() {
+            let Some((key, value)) = line.split_once('=') else {
+                continue;
+            };
+            match key {
+                "pid" => pid = value.trim().parse::<u32>().ok(),
+                "started" => {
+                    let (secs, nanos) = value.split_once('.').unwrap_or((value, "0"));
+                    started_at = secs.parse::<u64>().ok().map(|secs| {
+                        std::time::UNIX_EPOCH
+                            + std::time::Duration::new(
+                                secs,
+                                nanos.parse::<u32>().unwrap_or_default(),
+                            )
+                    });
+                }
+                "exe" => exe = Some(std::path::PathBuf::from(value)),
+                "nonce" => nonce = Some(value.to_owned()),
+                _ => {}
+            }
+        }
+        Some(Self {
+            pid: pid?,
+            started_at: started_at?,
+            exe: exe?,
+            nonce: nonce?,
+        })
+    }
+
+    /// The identity the process probe validates against.
+    fn identity(&self) -> Option<crate::process::identity::ProcessIdentity> {
+        crate::process::identity::ProcessIdentity::new(self.pid, self.exe.clone(), self.started_at)
+            .ok()
+    }
+}
+
 /// Whether a delete currently owns this row.
 ///
 /// Both the cross-process and the in-process case are covered, because the GUI
@@ -71,28 +145,20 @@ pub(crate) fn delete_in_flight(inner: &Arc<Inner>, instance: &Instance) -> bool 
     let Ok(contents) = std::fs::read_to_string(&marker) else {
         return false;
     };
-    let mut parts = contents.split_whitespace();
-    let pid = parts.next().and_then(|value| value.parse::<u32>().ok());
-    let nonce = parts.next().unwrap_or_default();
-
-    if nonce.is_empty() {
-        return false;
-    }
-    if owns_nonce(nonce) {
-        return true;
-    }
-    let Some(pid) = pid else {
+    let Some(owner) = MarkerOwner::parse(&contents) else {
         return false;
     };
-    if pid == std::process::id() {
-        // Our own process, but no delete here claims the nonce: a leftover from a
-        // panic. Stale.
-        return false;
+
+    if owns_nonce(&owner.nonce) {
+        return true;
     }
-    matches!(
-        inner.probe.observe(pid),
-        crate::process::probe::ProcessObservation::Found { .. }
-    )
+    // Validate the full identity, not just the PID: after a reboot an unrelated
+    // process can hold the same number, and only a matching start time and
+    // executable prove it is the delete that wrote this marker.
+    let Some(identity) = owner.identity() else {
+        return false;
+    };
+    inner.probe.validate(&identity) == crate::process::identity::ProcessState::Match
 }
 
 fn instance_marker(inner: &Inner, instance: &Instance) -> std::path::PathBuf {
@@ -100,6 +166,26 @@ fn instance_marker(inner: &Inner, instance: &Instance) -> std::path::PathBuf {
         .paths
         .instance_dir(instance.name())
         .join(IN_FLIGHT_MARKER)
+}
+
+/// The identity of this process, read from the same probe every other identity
+/// check uses, so the marker records the kernel's start time and not a guess.
+fn own_identity(inner: &Inner) -> Option<crate::process::identity::ProcessIdentity> {
+    let pid = std::process::id();
+    let exe = std::env::current_exe().ok()?;
+    match inner.probe.observe(pid) {
+        crate::process::probe::ProcessObservation::Found {
+            started_at: Some(started_at),
+            ..
+        } => crate::process::identity::ProcessIdentity::new(pid, exe, started_at).ok(),
+        // The probe cannot see this process (a scripted probe in a test, or a
+        // hardened kernel). Fall back to our own executable and the current
+        // instant: a cross-process reader then validates on executable plus a
+        // start-time tolerance, and an in-process sibling is still caught by the
+        // nonce.
+        _ => crate::process::identity::ProcessIdentity::new(pid, exe, std::time::SystemTime::now())
+            .ok(),
+    }
 }
 
 /// A marker that removes its file and its nonce on drop, so a normal exit leaves
@@ -110,10 +196,17 @@ struct InFlightMarker {
 }
 
 impl InFlightMarker {
-    fn create(dir: &std::path::Path, nonce: &str) -> Option<Self> {
+    fn create(inner: &Arc<Inner>, dir: &std::path::Path, nonce: &str) -> Option<Self> {
         std::fs::create_dir_all(dir).ok()?;
         let path = dir.join(IN_FLIGHT_MARKER);
-        std::fs::write(&path, format!("{} {nonce}", std::process::id())).ok()?;
+        let identity = own_identity(inner)?;
+        let owner = MarkerOwner {
+            pid: identity.pid(),
+            started_at: identity.started_at(),
+            exe: identity.exe().to_path_buf(),
+            nonce: nonce.to_owned(),
+        };
+        std::fs::write(&path, owner.render()).ok()?;
         register_nonce(nonce);
         Some(Self {
             path,
@@ -128,8 +221,9 @@ impl Drop for InFlightMarker {
         // lost the claim, or one that finished after a later delete took over,
         // must not erase the owner's marker.
         let ours = std::fs::read_to_string(&self.path)
-            .map(|contents| contents.split_whitespace().nth(1) == Some(self.nonce.as_str()))
-            .unwrap_or(false);
+            .ok()
+            .and_then(|contents| MarkerOwner::parse(&contents))
+            .is_some_and(|owner| owner.nonce == self.nonce);
         if ours {
             let _ = std::fs::remove_file(&self.path);
         }
@@ -159,7 +253,7 @@ pub(crate) fn delete_instance(
     // set leaves a window in which another process's reconciliation sees a
     // `Deleting` row with no owner and mistakes it for a crash.
     let nonce = format!("{}-{}", std::process::id(), id.as_str());
-    let marker = InFlightMarker::create(&inner.paths.instance_dir(instance.name()), &nonce);
+    let marker = InFlightMarker::create(inner, &inner.paths.instance_dir(instance.name()), &nonce);
 
     // Claim `Deleting` synchronously, like `start_instance` claims `Starting`.
     // The compare-and-set is the cross-process lock, so a second service (or a
@@ -170,6 +264,10 @@ pub(crate) fn delete_instance(
     // both are valid sources for a delete.
     let mut claimed = false;
     for _ in 0..CLAIM_ATTEMPTS {
+        // Claim from the status observed at the top of *this* attempt. Claiming
+        // from that observation (not from a fresh read) is what makes the CAS the
+        // lock: a competing writer that moved the row between our read and the
+        // write makes this attempt lose, and the next attempt re-reads.
         let current = load(inner, id)?.status();
         if current.is_terminal() {
             return Err(DblError::InvalidTransition {
@@ -177,9 +275,7 @@ pub(crate) fn delete_instance(
                 to: "deleting",
             });
         }
-        let won =
-            inner.db(|store| store.transition_status(id, current, InstanceStatus::Deleting))?;
-        if won {
+        if super::helpers::claim_status(inner, id, current, InstanceStatus::Deleting)? {
             claimed = true;
             break;
         }

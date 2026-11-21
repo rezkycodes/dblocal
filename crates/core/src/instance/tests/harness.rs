@@ -1,313 +1,28 @@
-//! Shared test harness: scripted adapter, probes, spawn and a service builder.
+//! Shared test harness: the service builder and assertions over the fakes in
+//! [`super::harness_fakes`].
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic, dead_code)]
 
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, SystemTime};
+use std::time::Duration;
 
 use tempfile::TempDir;
 
 use crate::engine::{Credential, EngineAdapter, Health, InitContext, RunContext};
 use crate::error::Result;
 use crate::model::{
-    AuthMode, CredentialBackend, CredentialRef, EngineKey, Instance, InstanceId, InstanceSpec,
-    InstanceStatus, Port, StartFailure,
+    AuthMode, EngineKey, Instance, InstanceId, InstanceSpec, InstanceStatus, Port, StartFailure,
 };
 use crate::paths::DblPaths;
-use crate::process::identity::ProcessIdentity;
-use crate::process::probe::{ProcessObservation, ProcessProbe};
-use crate::process::terminate::TerminateOutcome;
+use crate::process::probe::ProcessProbe;
 use crate::secret::SecretString;
-use crate::secrets::{BackendKind, FakeBackend, SecretBackend};
 use crate::service::{DblService, LocalService, ServiceEvent, Terminator};
 use crate::store::Store;
 
-/// Where a scripted create/start operation should fail.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum FailAt {
-    None,
-    Initialize,
-    Health,
-    Shutdown,
-}
-
-/// Adapter whose behaviour the test scripts.
-#[derive(Debug)]
-pub struct ScriptedAdapter {
-    engine: EngineKey,
-    pub fail_at: Mutex<FailAt>,
-    pub health_ready: AtomicBool,
-    pub init_calls: AtomicUsize,
-    pub health_calls: AtomicUsize,
-    pub shutdown_calls: AtomicUsize,
-    /// Output the adapter should return from `diagnose_start_failure`.
-    pub marker: Mutex<Option<String>>,
-}
-
-impl ScriptedAdapter {
-    pub fn new(engine: EngineKey) -> Self {
-        Self {
-            engine,
-            fail_at: Mutex::new(FailAt::None),
-            health_ready: AtomicBool::new(true),
-            init_calls: AtomicUsize::new(0),
-            health_calls: AtomicUsize::new(0),
-            shutdown_calls: AtomicUsize::new(0),
-            marker: Mutex::new(None),
-        }
-    }
-
-    pub fn failing(engine: EngineKey, at: FailAt) -> Self {
-        let adapter = Self::new(engine);
-        *adapter.fail_at.lock().unwrap() = at;
-        adapter
-    }
-
-    fn fail_at(&self) -> FailAt {
-        *self.fail_at.lock().unwrap()
-    }
-}
-
-impl EngineAdapter for ScriptedAdapter {
-    fn key(&self) -> EngineKey {
-        self.engine
-    }
-
-    fn initialize(&self, ctx: &InitContext) -> Result<()> {
-        self.init_calls.fetch_add(1, Ordering::SeqCst);
-        if self.fail_at() == FailAt::Initialize {
-            return Err(crate::DblError::Engine {
-                reason: "initdb failed on purpose".to_owned(),
-            });
-        }
-        // Really write a data directory so rollback has something to remove.
-        std::fs::create_dir_all(&ctx.data_dir)?;
-        std::fs::write(ctx.data_dir.join("PG_VERSION"), b"18\n")?;
-        Ok(())
-    }
-
-    fn spawn_command(&self, _ctx: &RunContext) -> std::process::Command {
-        // `true` exists everywhere on Unix and exits instantly; tests never run
-        // this for real because they inject a fake spawn.
-        std::process::Command::new("true")
-    }
-
-    fn health_check(&self, _ctx: &RunContext) -> Result<Health> {
-        self.health_calls.fetch_add(1, Ordering::SeqCst);
-        if self.fail_at() == FailAt::Health {
-            return Err(crate::DblError::Engine {
-                reason: "health probe failed on purpose".to_owned(),
-            });
-        }
-        if self.health_ready.load(Ordering::SeqCst) {
-            Ok(Health::Ready)
-        } else {
-            Ok(Health::NotReady("starting".to_owned()))
-        }
-    }
-
-    fn shutdown(&self, _ctx: &RunContext) -> Result<()> {
-        self.shutdown_calls.fetch_add(1, Ordering::SeqCst);
-        if self.fail_at() == FailAt::Shutdown {
-            return Err(crate::DblError::Engine {
-                reason: "shutdown failed on purpose".to_owned(),
-            });
-        }
-        Ok(())
-    }
-
-    fn connection_uri(
-        &self,
-        ctx: &RunContext,
-        credential: &Credential,
-        _format: crate::service::UriFormat,
-    ) -> SecretString {
-        SecretString::new(format!(
-            "{}://{}:{}@127.0.0.1:{}/db",
-            self.engine.as_str(),
-            credential.username,
-            credential.password.expose(),
-            ctx.port.get()
-        ))
-    }
-
-    fn diagnose_start_failure(&self, _output: &str, _exit_code: Option<i32>) -> StartFailure {
-        match self.marker.lock().unwrap().as_deref() {
-            Some("port_in_use") => StartFailure::PortInUse,
-            Some("permission_denied") => StartFailure::PermissionDenied,
-            Some("data_dir_version_mismatch") => StartFailure::DataDirVersionMismatch,
-            Some("binary_missing") => StartFailure::BinaryMissing,
-            _ => StartFailure::Unknown,
-        }
-    }
-}
-
-/// A fake process table shared by the probe and the fake terminator.
-#[derive(Debug, Default)]
-pub struct FakeProcs {
-    table: Mutex<HashMap<u32, ProcessObservation>>,
-    next_pid: AtomicUsize,
-    pub kills: AtomicUsize,
-    spawns: AtomicUsize,
-}
-
-impl FakeProcs {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Registers a live process and returns its identity.
-    pub fn spawn(&self, exe: &str) -> ProcessIdentity {
-        self.spawns.fetch_add(1, Ordering::SeqCst);
-        let pid = u32::try_from(self.next_pid.fetch_add(1, Ordering::SeqCst) + 40_000).unwrap();
-        let started_at =
-            SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000 + u64::from(pid));
-        self.table.lock().unwrap().insert(
-            pid,
-            ProcessObservation::Found {
-                exe: Some(PathBuf::from(exe)),
-                started_at: Some(started_at),
-            },
-        );
-        ProcessIdentity::new(pid, exe, started_at).unwrap()
-    }
-
-    pub fn kill(&self, pid: u32) {
-        self.table.lock().unwrap().remove(&pid);
-    }
-
-    /// How many spawns have been recorded, for the two-service race test.
-    pub fn spawned_count(&self) -> usize {
-        self.spawns.load(Ordering::SeqCst)
-    }
-}
-
-impl ProcessProbe for FakeProcs {
-    fn observe(&self, pid: u32) -> ProcessObservation {
-        self.table
-            .lock()
-            .unwrap()
-            .get(&pid)
-            .cloned()
-            .unwrap_or(ProcessObservation::Missing)
-    }
-}
-
-/// Terminator that removes the process from the fake table.
-pub struct FakeTerminator {
-    procs: Arc<FakeProcs>,
-    /// Report `Forced` instead of `Graceful` when a signal lands.
-    pub forced: AtomicBool,
-    /// Refuse every attempt with an error and leave the process running, the
-    /// way a mismatched identity makes the real process layer refuse.
-    pub refuse: AtomicBool,
-    /// How many terminate calls were made, for assertions.
-    pub calls: AtomicUsize,
-}
-
-impl FakeTerminator {
-    pub fn new(procs: Arc<FakeProcs>) -> Self {
-        Self {
-            procs,
-            forced: AtomicBool::new(false),
-            refuse: AtomicBool::new(false),
-            calls: AtomicUsize::new(0),
-        }
-    }
-}
-
-impl Terminator for FakeTerminator {
-    fn terminate(&self, identity: &ProcessIdentity, _grace: Duration) -> Result<TerminateOutcome> {
-        self.calls.fetch_add(1, Ordering::SeqCst);
-        if self.refuse.load(Ordering::SeqCst) {
-            // Deliberately do **not** touch the process table: the caller must
-            // observe that it is still alive and keep its identity.
-            return Err(crate::DblError::Engine {
-                reason: "the process refused to stop".to_owned(),
-            });
-        }
-        self.procs.kills.fetch_add(1, Ordering::SeqCst);
-        if self.procs.observe(identity.pid()) == ProcessObservation::Missing {
-            return Ok(TerminateOutcome::NotRunning);
-        }
-        self.procs.kill(identity.pid());
-        if self.forced.load(Ordering::SeqCst) {
-            Ok(TerminateOutcome::Forced)
-        } else {
-            Ok(TerminateOutcome::Graceful)
-        }
-    }
-}
-
-/// Secret storage backed by in-memory fakes for both backends, so tests never
-/// touch the developer keychain.
-pub struct FakeSecrets {
-    pub keychain: FakeBackend,
-    pub file: FakeBackend,
-    pub keychain_available: AtomicBool,
-    /// When set, `get` fails with a keychain-unavailable error, which is what a
-    /// locked Secret Service looks like to a stop.
-    pub unreadable: AtomicBool,
-}
-
-impl Default for FakeSecrets {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl FakeSecrets {
-    pub fn new() -> Self {
-        Self {
-            keychain: FakeBackend::new(CredentialBackend::Keychain),
-            file: FakeBackend::new(CredentialBackend::File),
-            keychain_available: AtomicBool::new(false),
-            unreadable: AtomicBool::new(false),
-        }
-    }
-
-    fn backend(&self, kind: BackendKind) -> &FakeBackend {
-        match kind {
-            CredentialBackend::Keychain => &self.keychain,
-            CredentialBackend::File => &self.file,
-        }
-    }
-}
-
-impl super::super::service::SecretAccess for FakeSecrets {
-    fn set(&self, reference: &CredentialRef, secret: &SecretString) -> Result<BackendKind> {
-        if self.keychain_available.load(Ordering::SeqCst) {
-            self.keychain.set(reference, secret)?;
-            return Ok(CredentialBackend::Keychain);
-        }
-        self.file.set(reference, secret)?;
-        Ok(CredentialBackend::File)
-    }
-
-    fn get(&self, reference: &CredentialRef) -> Result<SecretString> {
-        if self.unreadable.load(Ordering::SeqCst) {
-            return Err(crate::DblError::Unsupported {
-                reason: "the keychain is locked".to_owned(),
-            });
-        }
-        self.backend(reference.backend()).get(reference)
-    }
-
-    fn delete(&self, reference: &CredentialRef) -> Result<()> {
-        // Both backends, like the real store; absence is not an error.
-        for backend in [&self.keychain, &self.file] {
-            match backend.delete(reference) {
-                Ok(()) | Err(crate::DblError::NotFound { .. }) => {}
-                Err(crate::DblError::Unsupported { .. }) => {}
-                Err(err) => return Err(err),
-            }
-        }
-        Ok(())
-    }
-}
+pub use super::harness_fakes::{
+    FailAt, FakeProcs, FakeSecrets, FakeTerminator, GatedProbe, ScriptedAdapter,
+};
 
 /// A fully wired service over a temp home plus every fake it uses.
 pub struct Harness {
@@ -414,30 +129,9 @@ impl Harness {
     /// Waits for one operation to finish, returning every event it produced.
     pub fn run(&self, op: crate::service::OperationId) -> Vec<ServiceEvent> {
         let mut receiver = self.receiver();
-        let deadline = std::time::Instant::now() + Duration::from_secs(20);
-        let mut collected = Vec::new();
-        loop {
-            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
-            if remaining.is_zero() {
-                panic!("operation {op} did not finish in time");
-            }
-            match receiver.blocking_recv() {
-                Ok(event) => {
-                    let finished = matches!(
-                        &event,
-                        ServiceEvent::OperationFinished { id, .. } if id == &op
-                    );
-                    collected.push(event);
-                    if finished {
-                        return collected;
-                    }
-                }
-                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
-                Err(tokio::sync::broadcast::error::RecvError::Closed) => {
-                    panic!("event channel closed before {op} finished")
-                }
-            }
-        }
+        wait_for_finished(&mut receiver, &op, || {
+            self.service.is_operation_finished(&op)
+        })
     }
 
     /// Waits for `op` on an existing receiver, returning every event it produced.
@@ -446,34 +140,18 @@ impl Harness {
         receiver: &mut tokio::sync::broadcast::Receiver<ServiceEvent>,
         op: crate::service::OperationId,
     ) -> Vec<ServiceEvent> {
-        let deadline = std::time::Instant::now() + Duration::from_secs(20);
-        let mut collected = Vec::new();
-        loop {
-            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
-            assert!(
-                !remaining.is_zero(),
-                "operation {op} did not finish in time"
-            );
-            match receiver.blocking_recv() {
-                Ok(event) => {
-                    let finished =
-                        matches!(&event, ServiceEvent::OperationFinished { id, .. } if id == &op);
-                    collected.push(event);
-                    if finished {
-                        return collected;
-                    }
-                }
-                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
-                Err(tokio::sync::broadcast::error::RecvError::Closed) => {
-                    panic!("event channel closed before {op} finished")
-                }
-            }
-        }
+        let finished = self.service.is_operation_finished(&op);
+        wait_for_finished(receiver, &op, || {
+            finished || self.service.is_operation_finished(&op)
+        })
     }
 
     /// Waits until `predicate` holds for the stored instance.
     pub fn wait_for_status(&self, id: &InstanceId, status: InstanceStatus) -> Instance {
-        let deadline = std::time::Instant::now() + Duration::from_secs(20);
+        // Generous: the whole instance suite runs many services (each with a
+        // two-worker runtime) in parallel, and a busy machine can delay a task's
+        // first poll by seconds. The deadline only has to catch a genuine hang.
+        let deadline = std::time::Instant::now() + Duration::from_secs(60);
         loop {
             if let Some(instance) = self.instance(id)
                 && instance.status() == status
@@ -505,13 +183,41 @@ impl Harness {
 
     /// Creates an instance through the service and waits for it to settle.
     pub fn create(&self, spec: InstanceSpec) -> Vec<ServiceEvent> {
+        // Subscribe before the call: a create can finish so fast that a receiver
+        // opened afterwards misses every event.
+        let mut receiver = self.receiver();
         let op = self.service.create_instance(spec).expect("create");
-        self.run(op)
+        self.run_on(&mut receiver, op)
     }
 
     /// Number of instances currently watched for live logs.
     pub fn watched_logs(&self) -> usize {
         self.service.watched_logs()
+    }
+
+    /// Claims a transition from an explicit expected status (stale-claim tests).
+    pub fn claim_for_test(
+        &self,
+        id: &InstanceId,
+        expected: InstanceStatus,
+        event: crate::model::InstanceEvent,
+    ) -> crate::Result<Instance> {
+        self.service.claim_for_test(id, expected, event)
+    }
+
+    /// Claims a raw status change like delete does.
+    pub fn claim_status_for_test(
+        &self,
+        id: &InstanceId,
+        expected: InstanceStatus,
+        next: InstanceStatus,
+    ) -> crate::Result<bool> {
+        self.service.claim_status_for_test(id, expected, next)
+    }
+
+    /// Whether the service recorded a failure for `id`.
+    pub fn has_failure_record(&self, id: &InstanceId) -> bool {
+        self.service.has_failure_record(id)
     }
 
     /// The stored status of the named instance, if it exists.
@@ -594,14 +300,69 @@ pub use crate::service::{RuntimeSource, ServiceOptions};
 
 /// A second service over the same home, sharing the process table so the race
 /// test can count spawns.
-pub fn second_service(paths: &DblPaths, procs: Arc<FakeProcs>) -> Harness {
-    build_over(paths, procs)
+pub fn second_service(
+    paths: &DblPaths,
+    procs: Arc<FakeProcs>,
+    secrets: Arc<FakeSecrets>,
+) -> Harness {
+    // The credential lives in the shared home, so a second service must read it
+    // through the same store the first wrote it into. Giving it a fresh store
+    // would make a start fail on a credential it "cannot find", which is a
+    // harness artefact, not a defect.
+    let terminator = Arc::new(FakeTerminator::new(Arc::clone(&procs)));
+    build_over_shared(paths, procs, terminator, secrets)
 }
 
 /// A fresh service over an existing home, sharing the process table so a live
 /// engine recorded before the "restart" is still visible afterwards.
 pub fn restart(paths: &DblPaths, procs: Arc<FakeProcs>) -> Harness {
     build_over(paths, procs)
+}
+
+/// Restarts over the same home, **consuming** the old harness.
+///
+/// Dropping the old service stops its supervisor (which would otherwise observe
+/// rows this test mutates by hand) and takes over its temp dir, so the store file
+/// survives into the new service. Use this whenever a test must prove what
+/// reconciliation, and only reconciliation, does.
+pub fn restart_owned(old: Harness) -> Harness {
+    restart_owned_with(old, |_| {})
+}
+
+/// `restart_owned`, running `prepare` on the home **after** the old service is
+/// gone and **before** the new one starts.
+///
+/// This is the only safe order for a test that must prove what reconciliation
+/// does: rows written while an older supervisor is still looping could be
+/// witnessed as a death by that supervisor, which is a different (valid) path.
+pub fn restart_owned_with(old: Harness, prepare: impl FnOnce(&DblPaths)) -> Harness {
+    let Harness {
+        dir,
+        paths,
+        procs,
+        terminator,
+        secrets,
+        service,
+        ..
+    } = old;
+    // Stop the old supervisor **and wait for it to exit** before the new service
+    // reads the same home: a late tick would act on rows this test prepared by
+    // hand, which is exactly what reconciliation is supposed to decide.
+    drop(service);
+    // Give the runtime one poll interval to abort the supervisor before we touch
+    // the home. `LocalService::drop` sets `stopping`; the runtime shutdown then
+    // aborts the parked task, so after this the old service is provably inert.
+    std::thread::sleep(Duration::from_millis(120));
+    prepare(&paths);
+    build(
+        dir,
+        paths,
+        procs,
+        terminator,
+        secrets,
+        Duration::from_millis(60),
+        None,
+    )
 }
 
 /// A fresh service over an existing home that also shares the terminator and
@@ -624,7 +385,35 @@ pub fn fast_supervisor(poll: Duration) -> Harness {
     let procs = Arc::new(FakeProcs::new());
     let terminator = Arc::new(FakeTerminator::new(Arc::clone(&procs)));
     let secrets = Arc::new(FakeSecrets::new());
-    build(dir, paths, procs, terminator, secrets, poll)
+    build(dir, paths, procs, terminator, secrets, poll, None)
+}
+
+/// A harness whose reconciliation and supervisor use `gated` as the probe, while
+/// the fake spawn writes to `procs`.
+///
+/// The gate must be backed by the same table the spawn writes to, so the test
+/// passes a `GatedProbe` wrapping a clone of its own table view. Here `procs` is
+/// what the spawn uses and `gated` is what the supervisor validates through.
+pub fn with_gated_probe(
+    engine: EngineKey,
+    procs: Arc<FakeProcs>,
+    gated: Arc<GatedProbe>,
+    poll: Duration,
+) -> Harness {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let paths = DblPaths::with_root(dir.path());
+    let terminator = Arc::new(FakeTerminator::new(Arc::clone(&procs)));
+    let secrets = Arc::new(FakeSecrets::new());
+    let _ = engine;
+    build(
+        dir,
+        paths,
+        procs,
+        terminator,
+        secrets,
+        poll,
+        Some(gated as Arc<dyn ProcessProbe + Send + Sync>),
+    )
 }
 
 /// Builds a harness whose state tree is `paths` and whose process table is
@@ -648,10 +437,15 @@ fn build_over_shared(
         terminator,
         secrets,
         Duration::from_millis(60),
+        None,
     )
 }
 
 /// The one constructor every harness variant funnels through.
+///
+/// `probe` overrides the process probe for the reconciliation and supervisor
+/// paths (a gated probe, for a deterministic race); the fake spawn still uses
+/// `procs` so identities and spawns stay in one table.
 fn build(
     dir: TempDir,
     paths: DblPaths,
@@ -659,6 +453,7 @@ fn build(
     terminator: Arc<FakeTerminator>,
     secrets: Arc<FakeSecrets>,
     status_poll: Duration,
+    probe: Option<Arc<dyn ProcessProbe + Send + Sync>>,
 ) -> Harness {
     let adapter = Arc::new(ScriptedAdapter::new(EngineKey::Postgresql));
     let busy_ports = Arc::new(Mutex::new(Vec::new()));
@@ -671,7 +466,7 @@ fn build(
             Box::new(ScriptedAdapterClone(Arc::clone(&adapter_for_service)))
                 as Box<dyn crate::engine::EngineAdapter>
         })),
-        probe: Some(Arc::clone(&procs) as Arc<dyn ProcessProbe + Send + Sync>),
+        probe: probe.or_else(|| Some(Arc::clone(&procs) as Arc<dyn ProcessProbe + Send + Sync>)),
         terminator: Some(Arc::clone(&terminator) as Arc<dyn Terminator>),
         secrets: Some(Arc::clone(&secrets) as Arc<dyn super::super::service::SecretAccess>),
         port_free: Some(Arc::new(move |port: u16| {
@@ -822,3 +617,94 @@ pub fn describe(events: &[ServiceEvent]) -> Vec<String> {
 
 #[allow(dead_code)]
 fn _p(_: &Path) {}
+
+/// Collects events until `op` reports `OperationFinished`, with a hard deadline.
+///
+/// Uses `try_recv` plus a short sleep instead of `blocking_recv`: an operation
+/// can finish before the receiver subscribes (the receiver is created after the
+/// call in the two-service races), and `blocking_recv` would then wait forever
+/// because the missed event is never re-delivered. Polling keeps the deadline
+/// honest.
+fn wait_for_finished(
+    receiver: &mut tokio::sync::broadcast::Receiver<ServiceEvent>,
+    op: &crate::service::OperationId,
+    is_finished: impl Fn() -> bool,
+) -> Vec<ServiceEvent> {
+    // Generous: the whole instance suite runs many services (each with a
+    // two-worker runtime) in parallel, and a busy machine can delay a task's
+    // first poll by seconds. The deadline only has to catch a genuine hang.
+    let deadline = std::time::Instant::now() + Duration::from_secs(60);
+    let mut collected = Vec::new();
+    loop {
+        loop {
+            match receiver.try_recv() {
+                Ok(event) => {
+                    let finished =
+                        matches!(&event, ServiceEvent::OperationFinished { id, .. } if id == op);
+                    collected.push(event);
+                    if finished {
+                        return collected;
+                    }
+                }
+                Err(tokio::sync::broadcast::error::TryRecvError::Empty) => break,
+                Err(tokio::sync::broadcast::error::TryRecvError::Lagged(_)) => continue,
+                Err(tokio::sync::broadcast::error::TryRecvError::Closed) => {
+                    panic!("event channel closed before {op} finished")
+                }
+            }
+        }
+        // The operation may have finished before this receiver subscribed; its
+        // `OperationFinished` is then lost to the broadcast. Completion is still
+        // observable through the registry, so stop waiting once it reports done.
+        if is_finished() {
+            return collected;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "operation {op} did not finish in time; saw: {:?}",
+            describe(&collected)
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+/// Waits until `id` is gone, with a deadline. Shared by recovery tests.
+pub fn wait_until_row_gone(h: &Harness, id: &InstanceId, round: usize) {
+    // Generous: the whole instance suite runs many services (each with a
+    // two-worker runtime) in parallel, and a busy machine can delay a task's
+    // first poll by seconds. The deadline only has to catch a genuine hang.
+    let deadline = std::time::Instant::now() + Duration::from_secs(60);
+    loop {
+        if h.instance(id).is_none() {
+            return;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "round {round}: the row was never removed"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+/// Waits until `id` is gone from the store, with a deadline.
+///
+/// Shared by the race tests: the winning operation may run on either service and
+/// finish before the test can subscribe, so the observable end state (the row is
+/// gone) is what the test waits for.
+pub fn wait_for_row_gone(paths: &DblPaths, id: &InstanceId, round: usize) {
+    let store = Store::open(paths).expect("store");
+    // Generous: the whole instance suite runs many services (each with a
+    // two-worker runtime) in parallel, and a busy machine can delay a task's
+    // first poll by seconds. The deadline only has to catch a genuine hang.
+    let deadline = std::time::Instant::now() + Duration::from_secs(60);
+    loop {
+        if store.get_instance(id).expect("get").is_none() {
+            return;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "round {round}: the row was never removed"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}

@@ -28,6 +28,9 @@ pub(crate) async fn run(inner: Arc<Inner>) {
         let interval = inner.status_poll;
         tokio::time::sleep(interval).await;
         if inner.is_stopping() {
+            inner
+                .supervisor_alive
+                .store(false, std::sync::atomic::Ordering::SeqCst);
             return;
         }
         tick(&inner).await;

@@ -245,7 +245,7 @@ answer:
 | `Provisioning` / `Initializing` | — | run the create rollback (data, instance dir, both credential backends, the row), keep the verified runtime, emit `InstanceRemoved` |
 | `Deleting` | a live in-flight marker owns it | leave it alone: the delete is running, not crashed |
 | `Deleting` | data directory present | abort: back to `Stopped` (the delete never moved anything) |
-| `Deleting` | data gone, no record, `archive/<name>-*` exists | `add_archive` the directory it can see, then remove the row |
+| `Deleting` | data gone, no row for this instance's archive id, `archive/<name>-<digits>` exists | `add_archive` that directory, then remove the row |
 | `Deleting` | data gone, a record exists (or a purge finished) | remove the row |
 | `Starting` | no identity recorded | leave it: a spawn is in flight in some process |
 | `Starting` / `Running` / `Stopping` | probe says still ours | adopt as `Running`, identity kept |
@@ -257,6 +257,48 @@ D-18 default). A live `Stopping` row is adopted as `Running`, not written
 `Stopped`: nothing is signalled during reconciliation, so the engine is still
 there and a "stopped" label would only collide on the port at the next start.
 Rows removed by reconciliation end with `InstanceRemoved`.
+
+**Which archive directory belongs to which instance.** Recovery matches
+`archive/<name>-<stamp>` exactly: the part after `<name>-` must be ASCII digits
+only, so instance `pg` never claims `pg-main-1700000000000` (its remainder
+`main-...` is not a stamp). Directories that any existing archive row already
+points at (compared after normalisation) are skipped too. The "already recorded"
+test is by the **stable archive id** `arch-<short instance id>`, never by name: a
+user who deletes `xx`, recreates `xx`, and crashes that delete must still get the
+second archive recorded even though an archived row for the earlier `xx` exists.
+Both rules are tested (`tests/archive_recovery.rs`) and were mutation-checked
+(a prefix match, or a name-based "recorded" test, each fails a test).
+
+The in-flight marker records the owner's **full process identity** — PID, kernel
+start time and executable — not a bare PID. A marker is live only when
+`process::probe` validates that identity as `Match`; a reused PID after a reboot
+(an unrelated process now holding the number) reads as stale, so a half-deleted
+row is still recovered (AGENTS.md invariant 7). A per-operation nonce additionally
+covers two services in one process.
+
+### Stale claims and the compare-and-set
+
+`helpers::claim_from(inner, id, expected, event)` applies the state machine to
+`expected` and then persists `expected -> next` with
+`Store::transition_status`. The caller passes the status it **observed**, never a
+fresh read: if another writer moved the row in between, the CAS loses and the
+call returns the typed busy error `InvalidTransition { from: "busy" }`, leaving
+the row exactly where the winner put it. Delete uses
+`helpers::claim_status(inner, id, expected, Deleting)`, the same CAS without the
+state machine, because a delete claims from any non-terminal status by design
+(it stops the engine itself, D-18). The two-service race test releases both calls
+from a `Barrier` so they genuinely overlap, and a deterministic test calls
+`claim_from` with a deliberately stale expected status.
+
+### How the supervisor race is tested
+
+The supervisor's `validate` call is the decision point, so the test gates it: a
+`GatedProbe` signals "reached", blocks, and returns the answer the test releases.
+The test waits for "reached", performs a complete honest stop (row `Stopped`,
+identity cleared), then releases the gate with `Absent`. The supervisor now holds
+a stale "dead" decision; the test asserts the row stays `Stopped`, no `Failed`
+view is emitted, and no failure record is written. One deterministic round
+proves what fifty timing-based rounds could not.
 
 The supervisor polls at `STATUS_POLL_SECS` (injectable) and does nothing while no
 instance holds a process. It only considers settled `Running` rows, skips any
@@ -320,13 +362,17 @@ is accepted each time with at most one spawn.
 
 | File | What it covers |
 |---|---|
-| `harness.rs` | Scripted adapter (fail at init/health/shutdown), fake probe, fake terminator, fake secret backends, injectable spawn/port/timings, a two-handle service builder |
-| `lifecycle.rs` | Happy create/start/stop/delete; stage order; duplicate name; create failure leaves nothing; port taken between create and start; diagnosed unhealthy start plus retry; forced stop; delete in both modes; delete-while-running; credential pointer vs SQLite; no-auth |
+| `harness_fakes.rs` | Scripted adapter (fail at init/health/shutdown), fake process table, terminating fake, secret backends, and the `GatedProbe` that parks the supervisor at its decision point |
+| `harness.rs` | The service builder (injectable spawn/port/timings/probe/secrets), a two-handle builder sharing the process table and secret store, and the bounded event/state waiters |
+| `lifecycle.rs` | Happy create/start/stop/delete; stage order; duplicate name; create failure leaves nothing; port taken between create and start; diagnosed unhealthy start plus retry; forced stop emits `StopForced` and a graceful one does not; delete in both modes; delete-while-running; credential pointer vs SQLite; no-auth |
 | `download.rs` | Real loopback server + real `tar.gz`: download→verify→extract with stages; wrong checksum leaves no runtime; cancel mid-download |
 | `catalog.rs` | Platform filtering; failed refresh keeps the catalog; TTL rule; `CatalogUpdated`; `suggest_port` skips owned ports; `validate_spec` names conflicts |
 | `mutations.rs` | Immediate-exit diagnosis and failure; event sequences for create/start/stop/delete; `change_port`; `data_size`; `set_autostart`; `tail_logs`; unknown operation; a refused kill leaves the row `Running` with its identity; a stop with an unreadable credential still succeeds |
-| `races.rs` | Supervisor vs. clean stop (50 rounds, no `Failed`); delete ends with `InstanceRemoved`; failed create ends with `InstanceRemoved` and one `OperationFinished(Err)`; forced stop emits `StopForced` and a graceful one does not; a recovered `Failed` row carries a diagnosis from the log; a delete refuses a surviving engine |
-| `safety.rs` | Two-service start race (50 rounds, exactly one spawn); two concurrent deletes (50 rounds, one removal, one archive); delete crash-point table (both modes) never loses data; an in-flight delete owned elsewhere is left alone; live `Stopping` adopted as `Running`; interrupted create leaves nothing behind and emits `InstanceRemoved`; archive traversal/absolute/symlink; runtime in use; reconciliation adopts/clears; supervisor notices a kill; log watcher idle; sentinel scan; corrupt row cannot delete outside home |
+| `gates.rs` | Deterministic gate races: a stale supervisor decision never overwrites a finished stop; a claim from a stale status is refused (start and delete); the in-flight marker trusts identity, not a bare PID; `rollback_create` refuses a symlinked instance directory |
+| `archive_recovery.rs` | Archive recovery matches only `<name>-<digits>` (never a longer name); records nothing when no own directory exists; a recreated name records its own second archive by stable id |
+| `recovery.rs` | Delete crash-point table (both modes) never loses data; interrupted create leaves nothing behind and emits `InstanceRemoved`; live `Stopping` adopted as `Running`; in-flight delete owned elsewhere is left alone |
+| `races.rs` | Delete ends with `InstanceRemoved`; failed create ends with `InstanceRemoved` and one `OperationFinished(Err)`; a recovered `Failed` row carries a diagnosis from the log; a delete refuses a surviving engine |
+| `safety.rs` | Two-service start race and two-service delete race (50 rounds each, both released from a `Barrier`, exactly one spawn / one removal); archive traversal/absolute/symlink; runtime in use; reconciliation adopts/clears; supervisor notices a kill; log watcher idle; sentinel scan; corrupt row cannot delete outside home |
 
 All ports come from `ports::test_support` (20000-29999); tests never bind 5432,
 3306, 3307, 6379 or an ephemeral port. `cargo test` needs no network beyond the

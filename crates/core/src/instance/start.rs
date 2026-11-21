@@ -50,9 +50,13 @@ pub(crate) fn start_instance(inner: &Arc<Inner>, id: &InstanceId) -> Result<Oper
     }
 
     // Claim the transition synchronously: `Starting` is persisted before any
-    // side effect, and the compare-and-set is the cross-process lock.
+    // side effect, and the compare-and-set is the cross-process lock. The claim
+    // is made *from the status just read*, not from a fresh re-read: if another
+    // service moved the row between our read and the write, the CAS refuses and
+    // this call fails as busy instead of double-starting.
     let lock = inner.ops.lock_instance(id)?;
-    let claimed = super::helpers::claim(inner, id, InstanceEvent::StartRequested)?;
+    let claimed =
+        super::helpers::claim_from(inner, id, instance.status(), InstanceEvent::StartRequested)?;
 
     let op = inner.ops.next_id();
     let op_id = op.clone();
