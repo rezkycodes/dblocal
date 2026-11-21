@@ -25,6 +25,15 @@ fn run_surfaces_spawner_error() {
 #[test]
 fn system_spawner_runs_with_temp_file_and_env() {
     let dir = tempfile::tempdir().unwrap();
+    let launcher_dir = dir.path().join("launcher");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::create_dir(&launcher_dir).unwrap();
+        fs::set_permissions(&launcher_dir, fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    #[cfg(not(unix))]
+    fs::create_dir(&launcher_dir).unwrap();
     let out = dir.path().join("out.txt");
     let script = dir.path().join("fake.sh");
     fs::write(
@@ -38,7 +47,7 @@ fn system_spawner_runs_with_temp_file_and_env() {
         fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
     }
     let temp = TempFile::new(
-        format!("dblocal-open-test-{}.sh", std::process::id()),
+        "dblocal-open-test-run-extra.sh".to_owned(),
         SecretString::from("#!/bin/sh\nexit 0\n"),
         0o600,
     );
@@ -50,10 +59,7 @@ fn system_spawner_runs_with_temp_file_and_env() {
         Some(temp),
         None,
     );
-    let res = run(&plan, &SystemSpawner);
-    if let Err(e) = &res {
-        eprintln!("ERR: {e:?}");
-    }
+    let res = run(&plan, &SystemSpawner::with_launcher_dir(&launcher_dir));
     res.unwrap();
     for _ in 0..50 {
         if out.exists() {

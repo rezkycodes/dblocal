@@ -1,6 +1,7 @@
 mod detect;
 mod f1_terminal;
 mod golden;
+mod h4_launcher;
 mod hostile;
 mod plan;
 mod real_host;

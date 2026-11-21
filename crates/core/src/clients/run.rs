@@ -6,7 +6,7 @@ use std::process::Command;
 use super::error::{ClientError, ClientResult};
 
 use super::plan::LaunchPlan;
-use super::terminal::{materialize_launcher, substitute_script_placeholder};
+use super::terminal::{materialize_launcher, materialize_launcher_in, substitute_script_placeholder};
 
 /// Executes a prepared launch plan.
 ///
@@ -17,8 +17,36 @@ pub trait Spawner: Send + Sync {
 }
 
 /// Spawner that uses `std::process::Command`.
-#[derive(Debug, Default, Clone, Copy)]
-pub struct SystemSpawner;
+#[derive(Debug, Default, Clone)]
+pub struct SystemSpawner {
+    launcher_dir: Option<PathBuf>,
+}
+
+impl SystemSpawner {
+    pub fn with_launcher_dir(dir: impl Into<PathBuf>) -> Self {
+        Self {
+            launcher_dir: Some(dir.into()),
+        }
+    }
+
+    fn materialize_temp_file(&self, plan: &LaunchPlan) -> ClientResult<Option<PathBuf>> {
+        let Some(temp) = plan.temp_file() else {
+            return Ok(None);
+        };
+        let os = if cfg!(target_os = "macos") {
+            super::plan::OsKind::Macos
+        } else if cfg!(target_os = "windows") {
+            super::plan::OsKind::Windows
+        } else {
+            super::plan::OsKind::Linux
+        };
+        if let Some(dir) = &self.launcher_dir {
+            materialize_launcher_in(dir, temp).map(Some)
+        } else {
+            materialize_launcher(temp, os).map(Some)
+        }
+    }
+}
 
 impl Spawner for SystemSpawner {
     fn spawn(&self, plan: &LaunchPlan) -> ClientResult<()> {
@@ -29,7 +57,7 @@ impl Spawner for SystemSpawner {
                 name: required.display().to_string(),
             });
         }
-        let script_path = materialize_temp_file(plan)?;
+        let script_path = self.materialize_temp_file(plan)?;
         let mut cmd = Command::new(plan.program());
         for arg in plan.argv() {
             if let Some(ref sp) = script_path {
@@ -78,20 +106,6 @@ pub fn run(plan: &LaunchPlan, spawner: &dyn Spawner) -> ClientResult<()> {
     spawner.spawn(plan)
 }
 
-fn materialize_temp_file(plan: &LaunchPlan) -> ClientResult<Option<PathBuf>> {
-    let Some(temp) = plan.temp_file() else {
-        return Ok(None);
-    };
-    let os = if cfg!(target_os = "macos") {
-        super::plan::OsKind::Macos
-    } else if cfg!(target_os = "windows") {
-        super::plan::OsKind::Windows
-    } else {
-        super::plan::OsKind::Linux
-    };
-    materialize_launcher(temp, os).map(Some)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -123,7 +137,7 @@ mod tests {
     fn missing_required_client_returns_not_found() {
         let plan = LaunchPlan::new("missing-client", vec![], vec![], None, None, None)
             .with_required_path("/tmp/definitely-missing-dblocal-client");
-        let err = SystemSpawner.spawn(&plan).unwrap_err();
+        let err = SystemSpawner::default().spawn(&plan).unwrap_err();
         assert!(matches!(err, ClientError::ClientNotFound { .. }), "{err:?}");
     }
 }

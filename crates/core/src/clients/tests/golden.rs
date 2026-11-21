@@ -56,6 +56,7 @@ fn golden_psql_linux() {
     assert_eq!(plan.argv()[2], "{script}");
     let script = plan.temp_file().unwrap().contents().expose();
     assert!(script.contains("PGPASSWORD="));
+    assert!(script.contains("/usr/bin/psql"));
     assert!(script.contains("postgresql://postgres@127.0.0.1:5432/postgres"));
     assert!(script.contains("rm -f -- \"$0\""));
     assert_no_secret(&plan, "PW");
@@ -76,7 +77,7 @@ fn golden_mysql_linux() {
     assert_eq!(plan.argv()[1], "sh");
     let script = plan.temp_file().unwrap().contents().expose();
     assert!(script.contains("MYSQL_PWD="));
-    assert!(script.contains("mysql"));
+    assert!(script.contains("/usr/bin/mysql"));
     assert!(script.contains("--protocol=tcp"));
     assert_no_secret(&plan, "PW");
 }
@@ -96,7 +97,7 @@ fn golden_valkey_cli_linux() {
     assert_eq!(plan.argv()[1], "sh");
     let script = plan.temp_file().unwrap().contents().expose();
     assert!(script.contains("REDISCLI_AUTH="));
-    assert!(script.contains("valkey-cli"));
+    assert!(script.contains("/usr/bin/valkey-cli"));
     assert_no_secret(&plan, "PW");
 }
 

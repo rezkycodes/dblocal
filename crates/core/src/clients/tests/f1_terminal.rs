@@ -1,6 +1,6 @@
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
-use std::path::PathBuf;
+use std::path::Path;
 use std::time::Duration;
 
 use crate::clients::{
@@ -10,26 +10,30 @@ use crate::clients::{
 use crate::model::EngineKey;
 use crate::secret::SecretString;
 
-fn write_exec(path: &std::path::Path, body: &str) {
+fn write_exec(path: &Path, body: &str) {
     fs::write(path, body).unwrap();
     fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
+}
+
+fn secure_launcher_dir(base: &Path, name: &str) -> std::path::PathBuf {
+    let dir = base.join(name);
+    fs::create_dir(&dir).unwrap();
+    fs::set_permissions(&dir, fs::Permissions::from_mode(0o700)).unwrap();
+    dir
 }
 
 #[test]
 fn fake_server_terminal_receives_password_via_script_not_env() {
     let dir = tempfile::tempdir().unwrap();
+    let launcher_dir = secure_launcher_dir(dir.path(), "launcher");
     let out = dir.path().join("seen.txt");
     let term = dir.path().join("fake-terminal.sh");
     let psql = dir.path().join("psql");
-    // Fake terminal ignores its own env and just runs the last arg as: sh <script>
     write_exec(
         &term,
         r#"#!/bin/sh
-# simulate single-instance server terminal: do not forward env; just run script
-# write our own env and cmdline for assertion
 env > "$FAKE_TERM_ENV_OUT"
 tr '\0' ' ' < /proc/$$/cmdline > "$FAKE_TERM_CMD_OUT"
-# last arg is script path
 for last do true; done
 sh "$last"
 "#,
@@ -60,14 +64,6 @@ cat /proc/self/cmdline | tr '\0' ' ' > "{}"
         psql.clone(),
         ClientKind::Psql.supported_engines(),
     );
-    let terminal = TerminalChoice::new(&term, TerminalKind::GenericArgv);
-    let secret = SecretString::from("TOPSECRET");
-    let plan = plan_open(&client, &target, Some(&secret), OsKind::Linux, &terminal).unwrap();
-
-    // Run with env vars telling fake terminal where to write evidence
-    let _cmd_plan = plan.clone();
-    // We can't inject env into SystemSpawner; instead wrap by running a script that sets them.
-    // Easier: create a wrapper terminal that sets evidence paths.
     let wrapper = dir.path().join("wrapper-terminal.sh");
     write_exec(
         &wrapper,
@@ -85,13 +81,13 @@ exec "{term}" "$@"
         ),
     );
     let terminal = TerminalChoice::new(&wrapper, TerminalKind::GenericArgv);
+    let secret = SecretString::from("TOPSECRET");
     let plan = plan_open(&client, &target, Some(&secret), OsKind::Linux, &terminal).unwrap();
-
-    run(&plan, &SystemSpawner).unwrap();
-
     let script_name = plan.temp_file().unwrap().name_hint().to_owned();
-    let xdg = std::env::var("XDG_RUNTIME_DIR").unwrap();
-    let script_path = PathBuf::from(xdg).join("dblocal").join(&script_name);
+    let script_path = launcher_dir.join(&script_name);
+
+    run(&plan, &SystemSpawner::with_launcher_dir(&launcher_dir)).unwrap();
+
     for _ in 0..100 {
         if out.exists() {
             break;
@@ -126,6 +122,7 @@ exec "{term}" "$@"
 #[test]
 fn two_concurrent_launches_get_different_scripts_and_passwords() {
     let dir = tempfile::tempdir().unwrap();
+    let launcher_dir = secure_launcher_dir(dir.path(), "launcher");
     let term = dir.path().join("fake-terminal.sh");
     write_exec(&term, "#!/bin/sh\nfor last do true; done\nsh \"$last\"\n");
     let psql = dir.path().join("psql");
@@ -190,7 +187,7 @@ fn two_concurrent_launches_get_different_scripts_and_passwords() {
             &terminal,
         )
         .unwrap();
-        run(&plan, &SystemSpawner).unwrap();
+        run(&plan, &SystemSpawner::with_launcher_dir(&launcher_dir)).unwrap();
         for _ in 0..100 {
             if out.exists() {
                 break;
@@ -208,7 +205,21 @@ fn real_ptyxis_receives_password_via_script() {
         eprintln!("skipped: set DBLOCAL_REAL_TERMINAL=1");
         return;
     }
+    let ptyxis = ["/usr/bin/ptyxis", "/usr/local/bin/ptyxis"]
+        .into_iter()
+        .map(std::path::PathBuf::from)
+        .find(|p| p.exists())
+        .or_else(|| std::process::Command::new("which").arg("ptyxis").output().ok().and_then(|o| {
+            if !o.status.success() {
+                return None;
+            }
+            let s = String::from_utf8_lossy(&o.stdout).trim().to_owned();
+            if s.is_empty() { None } else { Some(std::path::PathBuf::from(s)) }
+        }))
+        .expect("ptyxis not found");
+
     let dir = tempfile::tempdir().unwrap();
+    let launcher_dir = secure_launcher_dir(dir.path(), "launcher");
     let out = dir.path().join("seen.txt");
     let psql = dir.path().join("psql");
     write_exec(
@@ -218,15 +229,7 @@ fn real_ptyxis_receives_password_via_script() {
             out.display()
         ),
     );
-    // wrapper to put psql on PATH
-    let wrapper_term = dir.path().join("term-wrap.sh");
-    write_exec(
-        &wrapper_term,
-        &format!(
-            "#!/bin/sh\nexport PATH=\"{}:$PATH\"\nexec ptyxis --new-window -- \"$@\"\n",
-            dir.path().display()
-        ),
-    );
+
     let target = OpenTarget::new(
         EngineKey::Postgresql,
         "127.0.0.1",
@@ -238,10 +241,10 @@ fn real_ptyxis_receives_password_via_script() {
     .unwrap();
     let client = DetectedClient::new(
         ClientKind::Psql,
-        psql.clone(),
+        psql,
         ClientKind::Psql.supported_engines(),
     );
-    let terminal = TerminalChoice::new(&wrapper_term, TerminalKind::Ptyxis);
+    let terminal = TerminalChoice::new(ptyxis, TerminalKind::Ptyxis);
     let plan = plan_open(
         &client,
         &target,
@@ -250,12 +253,28 @@ fn real_ptyxis_receives_password_via_script() {
         &terminal,
     )
     .unwrap();
-    run(&plan, &SystemSpawner).unwrap();
+    run(&plan, &SystemSpawner::with_launcher_dir(&launcher_dir)).unwrap();
+
     for _ in 0..200 {
         if out.exists() {
             break;
         }
         std::thread::sleep(Duration::from_millis(50));
     }
-    assert_eq!(fs::read_to_string(out).unwrap(), "TOPSECRET");
+    assert_eq!(fs::read_to_string(&out).unwrap(), "TOPSECRET");
+
+    let leftover: Vec<_> = fs::read_dir(&launcher_dir)
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| {
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.starts_with("dblocal-open-"))
+        })
+        .collect();
+    assert!(
+        leftover.is_empty(),
+        "launcher scripts must be cleaned: {leftover:?}"
+    );
 }

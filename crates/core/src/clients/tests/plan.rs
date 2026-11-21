@@ -79,7 +79,7 @@ fn psql_plan_uses_pgpassword_env_not_argv() {
     assert!(plan.env().is_empty());
     let script = plan.temp_file().unwrap().contents().expose();
     assert!(script.contains("PGPASSWORD="));
-    assert!(script.contains("psql"));
+    assert!(script.contains("/usr/bin/psql"));
     assert!(script.contains("postgresql://postgres@127.0.0.1:5432/postgres"));
 }
 
@@ -98,7 +98,7 @@ fn mysql_plan_uses_mysql_pwd_env() {
     assert!(plan.env().is_empty());
     let script = plan.temp_file().unwrap().contents().expose();
     assert!(script.contains("MYSQL_PWD="));
-    assert!(script.contains("mysql"));
+    assert!(script.contains("/usr/bin/mysql"));
 }
 
 #[test]
@@ -116,7 +116,7 @@ fn mariadb_cli_plan_uses_mysql_pwd_env() {
     assert!(plan.env().is_empty());
     let script = plan.temp_file().unwrap().contents().expose();
     assert!(script.contains("MYSQL_PWD="));
-    assert!(script.contains("mariadb"));
+    assert!(script.contains("/usr/bin/mariadb"));
 }
 
 #[test]

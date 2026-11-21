@@ -20,6 +20,27 @@ use super::quote::shell_quote;
 pub const SCRIPT_PLACEHOLDER: &str = "{script}";
 pub const SCRIPT_MAX_AGE: Duration = Duration::from_secs(10 * 60);
 
+pub fn current_uid() -> u32 {
+    #[cfg(unix)]
+    {
+        std::process::Command::new("id")
+            .arg("-u")
+            .output()
+            .ok()
+            .and_then(|o| {
+                if !o.status.success() {
+                    return None;
+                }
+                String::from_utf8_lossy(&o.stdout).trim().parse::<u32>().ok()
+            })
+            .unwrap_or(u32::MAX)
+    }
+    #[cfg(not(unix))]
+    {
+        0
+    }
+}
+
 /// Resolves the terminal to use for CLI clients on the given OS.
 pub fn resolve_terminal(host: &dyn HostProbe, os: OsKind) -> ClientResult<TerminalChoice> {
     match os {
@@ -142,10 +163,6 @@ fn random_script_name(os: OsKind) -> String {
     format!("dblocal-open-{hex}.{ext}")
 }
 
-#[allow(dead_code)]
-pub fn script_placeholder_path(name: &str) -> String {
-    format!("{SCRIPT_PLACEHOLDER}/{name}")
-}
 
 fn build_posix_launcher(
     client_program: &Path,
@@ -218,19 +235,33 @@ pub fn escape_applescript(value: &str) -> String {
     value.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
-/// Materializes a launcher script in a secure private directory.
-///
-/// Returns the written path. Caller is responsible for best-effort deletion on spawn failure.
+/// Materializes a launcher script in the secure default directory.
 pub fn materialize_launcher(temp: &TempFile, os: OsKind) -> ClientResult<PathBuf> {
     let dir = launcher_dir(os)?;
-    ensure_secure_dir(&dir)?;
-    sweep_old_scripts(&dir)?;
-    write_script_file(&dir, temp)
+    materialize_launcher_in(&dir, temp)
 }
 
-fn ensure_secure_dir(dir: &Path) -> ClientResult<()> {
+/// Materializes a launcher script in the provided directory.
+///
+/// The directory is created and verified as secure before writing. Old
+/// `dblocal-open-*` scripts in the directory are swept best-effort.
+pub fn materialize_launcher_in(dir: &Path, temp: &TempFile) -> ClientResult<PathBuf> {
+    materialize_launcher_in_with_uid(dir, temp, current_uid())
+}
+
+pub fn materialize_launcher_in_with_uid(
+    dir: &Path,
+    temp: &TempFile,
+    uid: u32,
+) -> ClientResult<PathBuf> {
+    ensure_secure_dir_for(dir, uid)?;
+    sweep_old_scripts(dir)?;
+    write_script_file(dir, temp)
+}
+
+fn ensure_secure_dir_for(dir: &Path, uid: u32) -> ClientResult<()> {
     if dir.exists() {
-        verify_secure_dir(dir)?;
+        verify_secure_dir_for(dir, uid)?;
         return Ok(());
     }
     if let Some(parent) = dir.parent() {
@@ -247,10 +278,11 @@ fn ensure_secure_dir(dir: &Path) -> ClientResult<()> {
             .map_err(|e| ClientError::ScriptError {
                 reason: e.kind().to_string(),
             })?;
-        verify_secure_dir(dir)?;
+        verify_secure_dir_for(dir, uid)?;
     }
     #[cfg(not(unix))]
     {
+        let _ = uid;
         std::fs::create_dir_all(dir).map_err(|e| ClientError::ScriptError {
             reason: e.kind().to_string(),
         })?;
@@ -259,7 +291,7 @@ fn ensure_secure_dir(dir: &Path) -> ClientResult<()> {
 }
 
 #[cfg(unix)]
-fn verify_secure_dir(dir: &Path) -> ClientResult<()> {
+pub fn verify_secure_dir_for(dir: &Path, uid: u32) -> ClientResult<()> {
     use std::os::unix::fs::MetadataExt;
     let meta = std::fs::symlink_metadata(dir).map_err(|e| ClientError::ScriptError {
         reason: e.kind().to_string(),
@@ -269,7 +301,6 @@ fn verify_secure_dir(dir: &Path) -> ClientResult<()> {
             reason: "not a real directory".to_owned(),
         });
     }
-    let uid = libc_uid();
     if meta.uid() != uid {
         return Err(ClientError::ScriptError {
             reason: "wrong owner".to_owned(),
@@ -284,21 +315,8 @@ fn verify_secure_dir(dir: &Path) -> ClientResult<()> {
 }
 
 #[cfg(not(unix))]
-fn verify_secure_dir(_dir: &Path) -> ClientResult<()> {
+pub fn verify_secure_dir_for(_dir: &Path, _uid: u32) -> ClientResult<()> {
     Ok(())
-}
-
-#[cfg(unix)]
-fn libc_uid() -> u32 {
-    std::fs::read_to_string("/proc/self/status")
-        .ok()
-        .and_then(|s| {
-            s.lines()
-                .find(|l| l.starts_with("Uid:"))
-                .and_then(|l| l.split_whitespace().nth(1))
-                .and_then(|v| v.parse().ok())
-        })
-        .unwrap_or(u32::MAX)
 }
 
 fn sweep_old_scripts(dir: &Path) -> ClientResult<()> {
@@ -334,7 +352,7 @@ fn sweep_old_scripts(dir: &Path) -> ClientResult<()> {
     Ok(())
 }
 
-fn write_script_file(dir: &Path, temp: &TempFile) -> ClientResult<PathBuf> {
+pub fn write_script_file(dir: &Path, temp: &TempFile) -> ClientResult<PathBuf> {
     let path = dir.join(temp.name_hint());
     #[cfg(unix)]
     {

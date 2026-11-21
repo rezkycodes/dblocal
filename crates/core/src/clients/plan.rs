@@ -417,29 +417,26 @@ fn plan_cli(
     os: OsKind,
     terminal: &TerminalChoice,
 ) -> ClientResult<LaunchPlan> {
-    let (client_program, client_argv, env) = cli_command(client.kind(), target, credential)?;
+    let (client_program, client_argv, env) = cli_command(client, target, credential)?;
     build_terminal_plan(client_program, client_argv, env, os, terminal)
 }
 
 fn cli_command(
-    kind: ClientKind,
+    client: &DetectedClient,
     target: &OpenTarget,
     credential: Option<&SecretString>,
 ) -> ClientResult<(PathBuf, Vec<String>, Vec<LaunchEnv>)> {
+    let kind = client.kind();
     let mut env = Vec::new();
     if let Some(secret) = credential
         && let Some(name) = password_env_name(kind)
     {
         env.push(LaunchEnv::new(name, secret.clone()));
     }
-    let (program, argv) = match kind {
-        ClientKind::Psql => (PathBuf::from("psql"), vec![psql_conninfo(target)]),
+    let program = client.path().clone();
+    let argv = match kind {
+        ClientKind::Psql => vec![psql_conninfo(target)],
         ClientKind::Mysql | ClientKind::Mariadb => {
-            let bin = if kind == ClientKind::Mysql {
-                "mysql"
-            } else {
-                "mariadb"
-            };
             let mut argv = vec![
                 format!("--host={}", target.host()),
                 format!("--port={}", target.port()),
@@ -449,14 +446,9 @@ fn cli_command(
             if !target.database().is_empty() {
                 argv.push(format!("--database={}", target.database()));
             }
-            (PathBuf::from(bin), argv)
+            argv
         }
         ClientKind::ValkeyCli | ClientKind::RedisCli => {
-            let bin = if kind == ClientKind::ValkeyCli {
-                "valkey-cli"
-            } else {
-                "redis-cli"
-            };
             let mut argv = vec![
                 "-h".to_owned(),
                 target.host().to_owned(),
@@ -467,7 +459,7 @@ fn cli_command(
                 argv.push("--user".to_owned());
                 argv.push(target.username().to_owned());
             }
-            (PathBuf::from(bin), argv)
+            argv
         }
         _ => {
             return Err(ClientError::UnsupportedClient {

@@ -15,7 +15,7 @@ fn real_spawn_runs_harmless_fake_program() {
         fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).expect("chmod");
     }
     let plan = LaunchPlan::new(script.clone(), vec![], vec![], None, None, None);
-    run(&plan, &SystemSpawner).expect("spawn");
+    run(&plan, &SystemSpawner::default()).expect("spawn");
     // wait briefly for script
     for _ in 0..50 {
         if out.exists() {
@@ -30,7 +30,7 @@ fn real_spawn_runs_harmless_fake_program() {
 fn missing_client_returns_typed_error_not_panic() {
     let plan = LaunchPlan::new("nope", vec![], vec![], None, None, None)
         .with_required_path("/tmp/dblocal-definitely-missing-client-bin");
-    let err = run(&plan, &SystemSpawner).unwrap_err();
+    let err = run(&plan, &SystemSpawner::default()).unwrap_err();
     assert!(matches!(
         err,
         crate::clients::ClientError::ClientNotFound { .. }
