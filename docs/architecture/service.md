@@ -374,7 +374,11 @@ unless `force`, runs in the background, reports `Fresh`/`Stale`/`Offline` throug
   I/O, and the follower stops when disabled or when the instance is gone.
 - `connection_uri` reads the secret through `SecretStore::get` using the
   reference recorded on the instance and returns the adapter's URI as a
-  `SecretString`.
+  `SecretString`. A no-password instance (`AuthMode::None`) has no credential
+  row by design, so it renders through `connection_uri_no_password` instead
+  (PRD `F-CRD-03`, `F-CLI-03`): the URI exists without a password and the `.env`
+  block omits the password key. A password-mode instance whose credential row is
+  missing stays a typed `NotFound { kind: "credential" }`.
 - `remove_runtime` refuses with a typed error while any instance uses the
   engine and version.
 - `purge_archive` accepts only ids it issued, and confines the recorded path to

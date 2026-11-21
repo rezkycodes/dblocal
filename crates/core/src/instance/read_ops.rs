@@ -6,7 +6,7 @@ use crate::DblError;
 use crate::catalog::InstalledVersions;
 use crate::engine::Credential;
 use crate::error::Result;
-use crate::model::{EngineKey, Instance, InstanceId, InstanceSpec, Port};
+use crate::model::{AuthMode, EngineKey, Instance, InstanceId, InstanceSpec, Port};
 use crate::ports::{PortChecker, suggest_port_with};
 use crate::secret::SecretString;
 use crate::service::{CatalogView, InstanceView, OperationId, UriFormat};
@@ -89,23 +89,11 @@ pub(crate) fn change_port(inner: &Inner, id: &InstanceId, port: Port) -> Result<
     ensure_port_is_free(inner, port, Some(id))?;
 
     // Rewrite the engine config before persisting the new port. If the rewrite
-    // fails, neither the file nor the store is changed. The config only exists
-    // after initialisation; before that (Provisioning/initialising edge cases are
-    // not reachable because holds_process() is false only for Stopped/Failed and
-    // create never leaves a port-bearing stopped row without a config) the sync
-    // is best treated as required when the config exists.
-    let name = instance.name();
-    let config_exists = match instance.engine() {
-        crate::model::EngineKey::Postgresql => {
-            inner.paths.data_dir(name).join("postgresql.conf").exists()
-        }
-        crate::model::EngineKey::Valkey => inner.paths.run_dir(name).join("valkey.conf").exists(),
-        crate::model::EngineKey::Mysql | crate::model::EngineKey::Mariadb => false,
-    };
-    if config_exists {
-        let updated = instance.with_port(port);
-        super::helpers::sync_instance_port(&inner.paths, &updated)?;
-    }
+    // fails, neither the file nor the store is changed. `sync_instance_port` is
+    // the single source of truth for "does a config exist and how is it synced";
+    // it is a no-op when the config file is absent.
+    let updated = instance.with_port(port);
+    super::helpers::sync_instance_port(&inner.paths, &updated)?;
 
     inner.db(|store| store.update_port(id, port))?;
     emit_changed(inner, id);
@@ -141,6 +129,17 @@ pub(crate) fn connection_uri(
     format: UriFormat,
 ) -> Result<SecretString> {
     let instance = load(inner, id)?;
+    let adapter = inner.adapter(instance.engine());
+
+    // No-password instances have no credential row by design (`F-CRD-03`). The
+    // URI must still exist, so render it through the adapter's no-password path
+    // instead of failing with a `NotFound` that the real binary surfaced as
+    // `DBL-1002`.
+    if instance.auth() == AuthMode::None {
+        let ctx = run_context(&inner.paths, &instance, None);
+        return Ok(adapter.connection_uri_no_password(&ctx, format));
+    }
+
     let reference =
         inner
             .db(|store| store.get_credential(id))?
@@ -151,9 +150,7 @@ pub(crate) fn connection_uri(
     let password = inner.secrets.get(&reference)?;
     let credential = Credential::new(instance.superuser(), password);
     let ctx = run_context(&inner.paths, &instance, Some(credential.clone()));
-    Ok(inner
-        .adapter(instance.engine())
-        .connection_uri(&ctx, &credential, format))
+    Ok(adapter.connection_uri(&ctx, &credential, format))
 }
 
 pub(crate) fn tail_logs(inner: &Inner, id: &InstanceId, lines: usize) -> Result<Vec<String>> {

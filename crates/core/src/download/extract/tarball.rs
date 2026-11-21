@@ -7,7 +7,7 @@ use crate::{DblError, Result};
 
 #[cfg(unix)]
 use super::fsops::apply_unix_mode;
-use super::fsops::{create_hard_link, create_symlink, write_regular_file};
+use super::fsops::{create_hard_link_with, create_symlink, write_regular_file};
 use super::path::{ensure_parent_safe, safe_join, stripped_relative_path, validate_symlink_target};
 use super::{ExtractCaps, ExtractState};
 
@@ -172,7 +172,9 @@ fn extract_tar<R: Read>(
                 std::fs::create_dir_all(parent).map_err(|source| DblError::Io { source })?;
                 state.seen_dirs.insert(parent.to_path_buf());
             }
-            create_hard_link(&target_dest, &dest, caps, &mut state, &raw_name)?;
+            create_hard_link_with(&target_dest, &dest, caps, &mut state, &raw_name, |t, l| {
+                std::fs::hard_link(t, l)
+            })?;
             state.regular_files.insert(rel);
             continue;
         }
@@ -226,4 +228,67 @@ fn extract_tar<R: Read>(
         });
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    //! Layer-pinning unit tests. The hard-link defences are defence in depth, so
+    //! some are only reachable when a later layer is bypassed. These call
+    //! `validate_hard_link_target` directly so each layer has one test that only
+    //! that layer can satisfy.
+
+    #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
+    use std::collections::HashSet;
+    use std::path::PathBuf;
+
+    use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn on_disk_layer_rejects_a_target_recorded_as_a_file_but_symlinked_on_disk() {
+        // Pins the on-disk `symlink_metadata` layer (M3): the extracted set says
+        // this relative path is a regular file, but the file on disk is a
+        // symlink. Only the on-disk type check can stop this, so removing it
+        // (M3) makes this test fail where the earlier set check passes.
+        let dir = tempfile::tempdir().expect("tmp");
+        let staging = dir.path();
+        std::fs::write(staging.join("real"), b"x").expect("real file");
+        std::os::unix::fs::symlink("real", staging.join("alias")).expect("symlink");
+
+        let mut regular_files = HashSet::new();
+        regular_files.insert(PathBuf::from("alias"));
+
+        let err = validate_hard_link_target(
+            staging,
+            Path::new("root/alias"),
+            Some("root"),
+            "root/h",
+            &regular_files,
+        )
+        .expect_err("an on-disk symlink must be refused even if the set claims a file");
+        assert!(
+            matches!(&err, DblError::UnsafeArchive { entry } if entry.contains("not a regular file")),
+            "expected the on-disk layer to reject, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn lexical_layer_rejects_a_parent_escape_before_other_checks() {
+        // Pins the lexical/containment layer (M1). `stripped_relative_path`
+        // normalises and rejects `..`, so `safe_join` in this function is a
+        // redundant second lexical guard for this input; the assertion is on the
+        // rejection, whichever of the two normalisers catches it first.
+        let dir = tempfile::tempdir().expect("tmp");
+        let regular_files: HashSet<PathBuf> = HashSet::new();
+        let err = validate_hard_link_target(
+            dir.path(),
+            Path::new("root/../outside"),
+            Some("root"),
+            "root/h",
+            &regular_files,
+        )
+        .expect_err("a parent escape must be refused");
+        assert!(matches!(err, DblError::UnsafeArchive { .. }), "{err:?}");
+    }
 }
