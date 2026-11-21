@@ -4,18 +4,62 @@
 //! the visible collections is ordinary data handling. Keeping it here means it
 //! can be unit-tested without a window, an event loop, or a live service.
 
+use std::collections::HashMap;
+
 use dblocal_core::model::{DownloadProgress, InstanceId};
+use dblocal_core::secret::SecretString;
 use dblocal_core::service::{InstanceView, OperationId, OperationStage, UserFacingError};
 
+use crate::format;
 use crate::logs::LogStore;
 
 /// Which inner tab of an instance is showing.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum InnerTab {
-    /// Overview: engine, port, URI, actions.
+    /// Overview: connection, detail and process cards.
+    #[default]
     Overview,
     /// Logs: virtualised tail with follow and copy.
     Logs,
+    /// Databases: Phase 2 (`F-DBU`), a placeholder in the product build.
+    Databases,
+    /// Config: Phase 3 (`F-CFG`), a placeholder in the product build.
+    Config,
+}
+
+impl InnerTab {
+    /// Every inner tab, in bar order.
+    pub const ALL: [Self; 4] = [Self::Overview, Self::Logs, Self::Databases, Self::Config];
+
+    /// Indonesian label for the tab bar.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Overview => dblocal_core::strings::UI_SUBTAB_OVERVIEW,
+            Self::Logs => dblocal_core::strings::UI_SUBTAB_LOGS,
+            Self::Databases => dblocal_core::strings::UI_SUBTAB_DATABASES,
+            Self::Config => dblocal_core::strings::UI_SUBTAB_CONFIG,
+        }
+    }
+
+    /// The tab's index in [`InnerTab::ALL`].
+    pub fn index(self) -> usize {
+        match self {
+            Self::Overview => 0,
+            Self::Logs => 1,
+            Self::Databases => 2,
+            Self::Config => 3,
+        }
+    }
+
+    /// The tab at an index, defaulting to Overview.
+    pub fn from_index(index: usize) -> Self {
+        Self::ALL.get(index).copied().unwrap_or_default()
+    }
+
+    /// Whether this tab has no backend in the frozen service.
+    pub fn is_placeholder(self) -> bool {
+        matches!(self, Self::Databases | Self::Config)
+    }
 }
 
 /// One open tab in the centre pane.
@@ -125,6 +169,54 @@ impl Tabs {
     }
 }
 
+/// The connection URI of one instance, in the form the Overview card shows.
+///
+/// Only the masked preview is retained: the plaintext is fetched from the
+/// service at the moment the user asks for it and dropped again on hide, so a
+/// revealed password never sits in view state longer than the user needs it
+/// (`F-CRD-02`, task requirement 5).
+#[derive(Debug, Clone)]
+pub struct UriView {
+    /// The masked preview, built from the URI once and safe to render.
+    pub masked: String,
+    /// The plaintext, present only while the user has it revealed.
+    revealed: Option<SecretString>,
+}
+
+impl UriView {
+    /// Builds a view from a freshly fetched URI, in the masked state.
+    pub fn masked_from(uri: &SecretString) -> Self {
+        Self {
+            masked: format::mask_uri(uri.expose()),
+            revealed: None,
+        }
+    }
+
+    /// Whether the plaintext is currently held.
+    pub fn is_revealed(&self) -> bool {
+        self.revealed.is_some()
+    }
+
+    /// The text the card renders: plaintext while revealed, the mask otherwise.
+    pub fn text(&self) -> &str {
+        match &self.revealed {
+            Some(secret) => secret.expose(),
+            None => &self.masked,
+        }
+    }
+
+    /// Stores the plaintext the service returned for a reveal request.
+    pub fn reveal(&mut self, uri: SecretString) {
+        self.masked = format::mask_uri(uri.expose());
+        self.revealed = Some(uri);
+    }
+
+    /// Drops the plaintext, keeping the masked preview.
+    pub fn hide(&mut self) {
+        self.revealed = None;
+    }
+}
+
 /// One in-flight download the status bar tracks.
 #[derive(Debug, Clone)]
 pub struct ActiveDownload {
@@ -145,6 +237,8 @@ pub struct ShellState {
     pub downloads: Vec<ActiveDownload>,
     /// The last failure surfaced to the user.
     pub last_failure: Option<UserFacingError>,
+    /// Connection URI per opened tab, keyed by instance.
+    pub uris: HashMap<InstanceId, UriView>,
 }
 
 impl ShellState {
@@ -208,20 +302,47 @@ impl ShellState {
     /// Drops everything that referenced a removed instance.
     ///
     /// Removes the row, closes its tab (clearing the selection if it pointed at
-    /// the instance), and drops its per-instance log buffer. `InstanceRemoved`
-    /// is the contract's way of saying "this row is gone": `InstanceChanged`
-    /// cannot carry a view that no longer exists. An unknown id is a no-op.
+    /// the instance), drops its per-instance log buffer and forgets its URI, so
+    /// a deleted instance cannot leave a secret behind. An unknown id is a
+    /// no-op.
     ///
     /// The caller still issues `watch_logs(id, false)`; that is I/O, not state.
     pub fn apply_removed(&mut self, id: &InstanceId, tabs: &mut Tabs, logs: &mut LogStore) {
         self.instances.retain(|view| &view.id != id);
         tabs.close_by_instance(id);
         logs.close(id);
+        self.uris.remove(id);
+    }
+
+    /// Stores the masked URI preview for an opened tab.
+    pub fn set_uri(&mut self, id: &InstanceId, uri: &SecretString) {
+        self.uris.insert(id.clone(), UriView::masked_from(uri));
+    }
+
+    /// The URI view for an instance, if one was fetched.
+    pub fn uri(&self, id: &InstanceId) -> Option<&UriView> {
+        self.uris.get(id)
+    }
+
+    /// Mutable URI view, for reveal and hide.
+    pub fn uri_mut(&mut self, id: &InstanceId) -> Option<&mut UriView> {
+        self.uris.get_mut(id)
+    }
+
+    /// Forgets an instance's URI entirely (hide drops the plaintext, not the
+    /// mask; this is for a closed tab).
+    pub fn forget_uri(&mut self, id: &InstanceId) {
+        self.uris.remove(id);
     }
 
     /// The number of instances currently running.
     pub fn running_count(&self) -> usize {
-        crate::format::running_count(&self.instances)
+        format::running_count(&self.instances)
+    }
+
+    /// The three status-bar counts.
+    pub fn counts(&self) -> format::InstanceCounts {
+        format::instance_counts(&self.instances)
     }
 }
 
@@ -252,6 +373,10 @@ mod tests {
         InstanceView::from_instance(&instance)
     }
 
+    fn secret() -> SecretString {
+        SecretString::new("postgresql://postgres:hunter2@127.0.0.1:5432/postgres")
+    }
+
     #[test]
     fn upsert_replaces_by_id_and_appends_new() {
         let mut state = ShellState::default();
@@ -260,7 +385,6 @@ mod tests {
         state.upsert_instance(first);
         assert_eq!(state.instances.len(), 1);
 
-        // Same id, new status: replace, do not duplicate.
         let mut updated = view("ignored", InstanceStatus::Running);
         updated.id = id.clone();
         state.upsert_instance(updated);
@@ -282,7 +406,6 @@ mod tests {
         );
         assert_eq!(state.downloads.len(), 1);
 
-        // A later sample updates the same row.
         state.on_download(
             op.clone(),
             DownloadProgress::new(5, 10, 2, None),
@@ -321,7 +444,6 @@ mod tests {
         assert_eq!(logs.get(&pg).expect("pg").len(), 1);
         assert_eq!(logs.get(&other).expect("other").len(), 0);
         state.on_log_lines(&mut logs, &other, vec!["b".to_owned()]);
-        // Neither instance sees the other's line.
         assert_eq!(
             logs.get(&pg).and_then(|b| b.line(0)).map(|s| s.as_ref()),
             Some("a")
@@ -337,6 +459,29 @@ mod tests {
     }
 
     #[test]
+    fn inner_tabs_are_labelled_indexed_and_flag_the_placeholders() {
+        assert_eq!(InnerTab::default(), InnerTab::Overview);
+        for (index, tab) in InnerTab::ALL.iter().enumerate() {
+            assert_eq!(tab.index(), index);
+            assert_eq!(InnerTab::from_index(index), *tab);
+            assert!(!tab.label().is_empty());
+        }
+        assert_eq!(InnerTab::from_index(99), InnerTab::Overview);
+        assert!(!InnerTab::Overview.is_placeholder());
+        assert!(!InnerTab::Logs.is_placeholder());
+        assert!(InnerTab::Databases.is_placeholder());
+        assert!(InnerTab::Config.is_placeholder());
+    }
+
+    #[test]
+    fn inner_tab_labels_match_the_prototype_screen() {
+        assert_eq!(InnerTab::Overview.label(), "Overview");
+        assert_eq!(InnerTab::Logs.label(), "Logs");
+        assert_eq!(InnerTab::Databases.label(), "Databases");
+        assert_eq!(InnerTab::Config.label(), "Config");
+    }
+
+    #[test]
     fn tabs_open_select_and_deduplicate() {
         let mut tabs = Tabs::default();
         let a = instance_id();
@@ -346,7 +491,6 @@ mod tests {
         let b = instance_id();
         assert_eq!(tabs.open_or_select(b.clone()), 1);
         assert_eq!(tabs.len(), 2);
-        // Re-opening an existing instance selects it, no duplicate.
         assert_eq!(tabs.open_or_select(a.clone()), 0);
         assert_eq!(tabs.len(), 2);
         assert_eq!(tabs.select(1), Some(b));
@@ -361,13 +505,11 @@ mod tests {
         let b = instance_id();
         tabs.open_or_select(a.clone());
         tabs.open_or_select(b.clone());
-        // Closing the selected last tab falls back to the remaining one.
         let closed = tabs.close(1).expect("tab 1 exists");
         assert_eq!(closed.instance, b);
         assert_eq!(tabs.len(), 1);
         assert_eq!(tabs.selected_index(), 0);
         assert!(tabs.selected_instance().is_none());
-        // Closing the only tab resets cleanly.
         tabs.close(0);
         assert!(tabs.is_empty());
         assert_eq!(tabs.selected_index(), 0);
@@ -376,7 +518,22 @@ mod tests {
     }
 
     #[test]
-    fn apply_removed_drops_row_tab_selection_and_log_buffer() {
+    fn inner_tab_is_per_tab_not_global() {
+        let mut tabs = Tabs::default();
+        let a = instance_id();
+        let b = instance_id();
+        tabs.open_or_select(a);
+        tabs.open_or_select(b);
+        tabs.set_inner(0, InnerTab::Logs);
+        assert_eq!(tabs.open()[0].inner, InnerTab::Logs);
+        assert_eq!(tabs.open()[1].inner, InnerTab::Overview);
+        // Out-of-range writes are ignored rather than panicking.
+        tabs.set_inner(9, InnerTab::Config);
+        assert_eq!(tabs.open()[1].inner, InnerTab::Overview);
+    }
+
+    #[test]
+    fn apply_removed_drops_row_tab_selection_logs_and_uri() {
         use crate::logs::LogStore;
         let mut state = ShellState::default();
         let mut tabs = Tabs::default();
@@ -389,6 +546,8 @@ mod tests {
         tabs.open_or_select(gone.id.clone());
         logs.load(&gone.id, vec!["log line".to_owned()]);
         logs.load(&kept.id, vec!["keep me".to_owned()]);
+        state.set_uri(&gone.id, &secret());
+        state.set_uri(&kept.id, &secret());
 
         state.apply_removed(&gone.id, &mut tabs, &mut logs);
 
@@ -398,6 +557,8 @@ mod tests {
         assert!(tabs.selected_instance().is_none(), "selection cleared");
         assert!(logs.get(&gone.id).is_none(), "log buffer dropped");
         assert!(logs.get(&kept.id).is_some(), "other logs untouched");
+        assert!(state.uri(&gone.id).is_none(), "the secret was forgotten");
+        assert!(state.uri(&kept.id).is_some());
     }
 
     #[test]
@@ -418,8 +579,6 @@ mod tests {
 
         assert_eq!(tabs.len(), 1, "the other tab stays open");
         assert_eq!(tabs.open()[0].instance, other.id);
-        // The selection pointed at the removed instance, so it is cleared
-        // rather than silently pointing at a different instance.
         assert!(tabs.selected_instance().is_none());
     }
 
@@ -433,21 +592,82 @@ mod tests {
         state.upsert_instance(present.clone());
         tabs.open_or_select(present.id.clone());
         logs.load(&present.id, vec!["x".to_owned()]);
+        state.set_uri(&present.id, &secret());
 
         state.apply_removed(&instance_id(), &mut tabs, &mut logs);
 
         assert_eq!(state.instances.len(), 1);
         assert_eq!(tabs.len(), 1);
         assert!(logs.get(&present.id).is_some());
+        assert!(state.uri(&present.id).is_some());
     }
 
     #[test]
-    fn running_count_reads_the_list() {
+    fn running_count_and_counts_read_the_list() {
         let mut state = ShellState::default();
         state.upsert_instance(view("run", InstanceStatus::Running));
         state.upsert_instance(view("stop", InstanceStatus::Stopped));
+        state.upsert_instance(view("bad", InstanceStatus::Failed));
         assert_eq!(state.running_count(), 1);
+        assert_eq!(state.counts().running, 1);
+        assert_eq!(state.counts().stopped, 1);
+        assert_eq!(state.counts().failed, 1);
         state.replace_instances(vec![]);
         assert_eq!(state.running_count(), 0);
+        assert!(state.counts().is_empty());
+    }
+
+    #[test]
+    fn a_uri_view_masks_until_revealed_and_hides_again() {
+        let mut view = UriView::masked_from(&secret());
+        assert!(!view.is_revealed());
+        assert!(!view.text().contains("hunter2"));
+        assert!(view.text().contains("••••••"));
+        assert!(view.text().contains("127.0.0.1:5432"));
+
+        view.reveal(secret());
+        assert!(view.is_revealed());
+        assert!(view.text().contains("hunter2"));
+
+        view.hide();
+        assert!(!view.is_revealed());
+        assert!(!view.text().contains("hunter2"));
+        assert!(view.text().contains("••••••"));
+    }
+
+    #[test]
+    fn a_revealed_uri_view_never_renders_its_password_in_debug() {
+        let mut view = UriView::masked_from(&secret());
+        view.reveal(secret());
+        // `SecretString` redacts itself, so the derived `Debug` is safe.
+        let rendered = format!("{view:?}");
+        assert!(!rendered.contains("hunter2"));
+        assert!(rendered.contains("SecretString(***)"));
+    }
+
+    #[test]
+    fn uri_state_is_keyed_per_instance_and_forget_drops_it() {
+        let mut state = ShellState::default();
+        let a = instance_id();
+        let b = instance_id();
+        state.set_uri(&a, &secret());
+        state.set_uri(&b, &SecretString::new("redis://default:other@127.0.0.1:6379"));
+        assert!(state.uri(&a).is_some());
+        assert!(state.uri(&b).is_some());
+        assert_ne!(
+            state.uri(&a).map(UriView::text),
+            state.uri(&b).map(UriView::text)
+        );
+
+        state
+            .uri_mut(&a)
+            .expect("a")
+            .reveal(secret());
+        assert!(state.uri(&a).expect("a").is_revealed());
+
+        state.forget_uri(&a);
+        assert!(state.uri(&a).is_none());
+        assert!(state.uri(&b).is_some());
+        assert!(state.uri_mut(&a).is_none());
     }
 }

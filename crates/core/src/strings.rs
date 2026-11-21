@@ -319,3 +319,319 @@ pub const DIAGNOSIS_UNKNOWN: &str = "Penyebab tidak dikenali, lihat log";
 /// Toast shown when a stop had to escalate to a forced kill (F-INS-03 AC3):
 /// the engine ignored the graceful shutdown within the grace period.
 pub const UI_TOAST_STOP_FORCED: &str = "Instance mengabaikan stop normal, jadi dihentikan paksa";
+
+// --- Workspace chrome (D-25 prototype port) ---------------------------------
+
+/// Breadcrumb separator between the engine and the instance name.
+pub const UI_BREADCRUMB_SEPARATOR: &str = "›";
+/// Dock section header above the engine groups.
+pub const UI_DOCK_INSTANCES: &str = "INSTANCES";
+/// Dock section header above the installed runtimes.
+pub const UI_DOCK_RUNTIMES: &str = "RUNTIMES";
+/// Filter input placeholder in the dock.
+pub const UI_DOCK_FILTER: &str = "Filter…";
+/// Placeholder when the dock filter matches nothing.
+pub const UI_DOCK_NO_MATCHES: &str = "Tidak ada instance yang cocok.";
+/// Runtimes list: this runtime is referenced by no instance (F-RTM-04).
+pub const UI_RUNTIME_UNUSED: &str = "tak terpakai";
+/// Runtimes list: how many instances share a runtime.
+pub const UI_RUNTIME_INSTANCE_COUNT: &str = "inst.";
+/// Section heading on the Overview tab for the connection card.
+pub const UI_OVERVIEW_CONNECTION: &str = "Koneksi";
+/// Section heading on the Overview tab for the detail card.
+pub const UI_OVERVIEW_DETAIL: &str = "Detail";
+/// Section heading on the Overview tab for the process card.
+pub const UI_OVERVIEW_PROCESS: &str = "Proses";
+/// Section heading on the Overview tab for the recent-log card.
+pub const UI_OVERVIEW_RECENT_LOGS: &str = "Log terbaru";
+/// Acknowledge the local-only bind (F-INS-02 AC4).
+pub const UI_OVERVIEW_LOOPBACK_ONLY: &str = "Hanya mendengarkan 127.0.0.1 dan ::1";
+/// Note that the connection URI is available although the instance is stopped.
+pub const UI_OVERVIEW_URI_STOPPED_NOTE: &str = "URI tetap bisa disalin, tetapi instance belum berjalan.";
+/// Label for the `.env` block preview.
+pub const UI_OVERVIEW_DOTENV: &str = "# .env";
+/// Detail row label: engine.
+pub const UI_OVERVIEW_ENGINE: &str = "Engine";
+/// Detail row label: superuser.
+pub const UI_OVERVIEW_SUPERUSER: &str = "Superuser";
+/// Detail row label: data directory.
+pub const UI_OVERVIEW_DATA_DIR: &str = "Data dir";
+/// Detail row label: data size.
+pub const UI_OVERVIEW_DATA_SIZE: &str = "Ukuran data";
+/// Marker shown next to an instance on the engine's canonical port.
+pub const UI_OVERVIEW_CANONICAL_PORT: &str = "(kanonik)";
+/// Process row label: PID.
+pub const UI_OVERVIEW_PID: &str = "PID";
+/// Process row label: health check.
+pub const UI_OVERVIEW_HEALTH: &str = "Health check";
+/// Health value when the protocol probe passed.
+pub const UI_OVERVIEW_HEALTH_OK: &str = "OK · protokol handshake";
+/// Health value when the last start failed.
+pub const UI_OVERVIEW_HEALTH_FAILED: &str = "Gagal — lihat Logs";
+/// Health value when the instance is not running.
+pub const UI_OVERVIEW_HEALTH_OFFLINE: &str = "Tidak berjalan";
+/// Process row label: process mode.
+pub const UI_OVERVIEW_PROCESS_MODE: &str = "Mode proses";
+/// Process mode value: spawned detached, survives an app quit (D-10).
+pub const UI_OVERVIEW_PROCESS_DETACHED: &str = "Detached · tetap hidup saat app ditutup";
+/// Process row label: credential reference.
+pub const UI_OVERVIEW_CREDENTIAL: &str = "Kredensial";
+/// Autostart checkbox label.
+pub const UI_OVERVIEW_AUTOSTART: &str = "Jalankan otomatis saat login";
+/// Link from the Overview card to the Logs tab.
+pub const UI_OVERVIEW_GOTO_LOGS: &str = "Buka tab Logs";
+/// Placeholder for a value that has no answer yet.
+pub const UI_VALUE_UNKNOWN: &str = "—";
+/// Sub-tabs of an instance.
+pub const UI_SUBTAB_OVERVIEW: &str = "Overview";
+/// Logs sub-tab.
+pub const UI_SUBTAB_LOGS: &str = "Logs";
+/// Databases sub-tab.
+pub const UI_SUBTAB_DATABASES: &str = "Databases";
+/// Config sub-tab.
+pub const UI_SUBTAB_CONFIG: &str = "Config";
+/// Header action: open the instance in another client (F-OPN, Phase 2).
+pub const UI_ACTION_OPEN_IN: &str = "Open in…";
+/// Header action: restart a running instance.
+pub const UI_ACTION_RESTART: &str = "Restart";
+/// Header action: close a tab.
+pub const UI_ACTION_CLOSE_TAB: &str = "Tutup tab";
+
+// --- Status bar (D-25) -------------------------------------------------------
+
+/// Status bar: stopped count fragment.
+pub const UI_STOPPED: &str = "berhenti";
+/// Status bar: failed count fragment.
+pub const UI_FAILED: &str = "gagal";
+/// Status bar: the data directory label.
+pub const UI_DATA_DIR: &str = "Direktori data";
+/// Status bar: the credential backend label.
+pub const UI_CREDENTIAL_BACKEND: &str = "Kredensial";
+/// Status bar: credential backend name when the OS keychain is in use.
+pub const UI_CREDENTIAL_KEYCHAIN: &str = "Keychain";
+/// Status bar: credential backend name when the `0600` file fallback is in use.
+pub const UI_CREDENTIAL_FILE: &str = "File (0600)";
+
+// --- Downloads (F-RTM-01) ----------------------------------------------------
+
+/// Active-download banner heading.
+pub const UI_DOWNLOAD_HEADING: &str = "Menyiapkan runtime";
+/// Cancel an active download.
+pub const UI_DOWNLOAD_CANCEL: &str = "Batal";
+/// Copy logs from the log viewer.
+pub const UI_LOGS_SHOW_FILE: &str = "engine.log";
+/// Log footer: rotation policy (F-LOG-01 AC2).
+pub const UI_LOGS_ROTATION: &str = "rotasi maks 3 × 10 MB";
+/// Log line count suffix.
+pub const UI_LOGS_LINE_COUNT: &str = "baris";
+/// Logs tab: follow-mode toggle hint.
+pub const UI_LOGS_FOLLOW_HINT: &str = "Ikuti baris baru";
+
+// --- Diagnose banner (F-LOG-02) ---------------------------------------------
+
+/// One-click fix heading for a port conflict (F-PRT-02 AC1).
+pub const UI_DIAGNOSIS_PORT_HEADING: &str = "Port {port} sedang dipakai";
+/// Explanation under the port-conflict heading.
+pub const UI_DIAGNOSIS_PORT_BODY: &str =
+    "Uji bind ke 127.0.0.1:{port} gagal sebelum engine dijalankan. Port ditempati proses di luar DBLocal. Port bebas terdekat: {suggested}.";
+/// One-click fix action: move to the next port and start (F-PRT-02 AC2).
+pub const UI_DIAGNOSIS_MOVE_AND_START: &str = "Pindah ke {port} & start";
+/// Report-issue action for an unrecognised failure (F-LOG-02 AC2).
+pub const UI_DIAGNOSIS_REPORT: &str = "Laporkan issue";
+/// Toast after the issue template was prepared.
+pub const UI_DIAGNOSIS_REPORT_READY: &str =
+    "Template issue disiapkan tanpa password dan tanpa path home";
+
+/// Formats the port-conflict heading.
+pub fn diagnosis_port_heading(port: u16) -> String {
+    UI_DIAGNOSIS_PORT_HEADING.replace("{port}", &port.to_string())
+}
+
+/// Formats the port-conflict explanation.
+pub fn diagnosis_port_body(port: u16, suggested: u16) -> String {
+    UI_DIAGNOSIS_PORT_BODY
+        .replace("{port}", &port.to_string())
+        .replace("{suggested}", &suggested.to_string())
+}
+
+/// Formats the "move to port and start" action label.
+pub fn diagnosis_move_and_start(port: u16) -> String {
+    UI_DIAGNOSIS_MOVE_AND_START.replace("{port}", &port.to_string())
+}
+
+// --- Placeholder tabs (D-25: honest, never sample rows in the product) ------
+
+/// Databases tab, product build: the backend lands in Phase 2 (F-DBU).
+pub const UI_PLACEHOLDER_DATABASES: &str = "Kelola database dan user belum tersedia di versi ini.";
+/// Config tab, product build: the backend lands in Phase 3 (F-CFG).
+pub const UI_PLACEHOLDER_CONFIG: &str = "Editor konfigurasi belum tersedia di versi ini.";
+/// "Open in…" menu, product build: the backend lands in Phase 2 (F-OPN).
+pub const UI_PLACEHOLDER_OPEN_IN: &str = "Membuka di klien eksternal belum tersedia di versi ini.";
+/// Phase label appended to a placeholder.
+pub const UI_PLACEHOLDER_PHASE: &str = "Fase {phase}";
+/// The line that explains what a placeholder tab will contain.
+pub const UI_PLACEHOLDER_PREVIEW: &str = "Pratinjau tata letak memakai data contoh (mode demo).";
+
+/// Formats a phase label.
+pub fn placeholder_phase(phase: &str) -> String {
+    UI_PLACEHOLDER_PHASE.replace("{phase}", phase)
+}
+
+// --- Databases tab (demo content, mock build only) --------------------------
+
+/// Databases table heading.
+pub const UI_DATABASES_HEADING: &str = "Database";
+/// Databases table column: name.
+pub const UI_DATABASES_COLUMN_NAME: &str = "Nama";
+/// Databases table column: encoding.
+pub const UI_DATABASES_COLUMN_ENCODING: &str = "Encoding";
+/// Databases table column: size.
+pub const UI_DATABASES_COLUMN_SIZE: &str = "Ukuran";
+/// Databases table: default encoding values.
+pub const UI_DATABASES_ENCODING: &str = "UTF8 · C.UTF-8";
+/// Databases tab: create action (F-DBU-01).
+pub const UI_DATABASES_CREATE: &str = "Buat database";
+/// Databases tab: the name field placeholder.
+pub const UI_DATABASES_NAME_PLACEHOLDER: &str = "nama_database";
+/// Databases tab: delete action.
+pub const UI_DATABASES_DELETE: &str = "Hapus database (ketik nama untuk konfirmasi)";
+/// Databases tab: validation failure for a bad name (F-DBU-01 AC4).
+pub const UI_DATABASES_INVALID_NAME: &str = "Nama hanya boleh huruf, angka, dan garis bawah.";
+/// Databases tab: heading above the user list.
+pub const UI_DATABASES_USERS: &str = "User & hak akses";
+/// Databases tab: new user action.
+pub const UI_DATABASES_NEW_USER: &str = "User baru";
+/// Databases tab: the boundary note that DBLocal manages servers, not data.
+pub const UI_DATABASES_BOUNDARY: &str =
+    "DBLocal mengelola server, bukan isi data. Untuk menjelajah tabel, buka instance di client Anda.";
+/// Databases tab: superuser password card heading.
+pub const UI_DATABASES_PASSWORD_HEADING: &str = "Password superuser";
+/// Databases tab: superuser password card body.
+pub const UI_DATABASES_PASSWORD_BODY: &str =
+    "Membuat password baru dan memperbarui URI. Bila gagal, password lama tetap berlaku.";
+/// Databases tab: reset-password action (F-DBU-03).
+pub const UI_DATABASES_RESET: &str = "Reset password";
+/// Databases tab: toast after a database is created.
+pub const UI_DATABASES_CREATED: &str = "Database {name} dibuat (UTF-8)";
+/// Databases tab: toast after the superuser password is reset.
+pub const UI_DATABASES_PASSWORD_RESET: &str = "Password baru tersimpan di Keychain";
+/// Databases tab: why the list is empty on an engine without named databases.
+pub const UI_DATABASES_VALKEY_NOTE: &str =
+    "Valkey tidak punya database bernama atau user SQL. Gunakan indeks 0–15 langsung dari URI.";
+/// Databases tab: why the list is empty while the instance is not running.
+pub const UI_DATABASES_STOPPED: &str = "Jalankan instance untuk melihat dan mengelola database.";
+
+/// Formats the database-created toast.
+pub fn databases_created(name: &str) -> String {
+    UI_DATABASES_CREATED.replace("{name}", name)
+}
+
+// --- Config tab (demo content, mock build only) -----------------------------
+
+/// Config table heading.
+pub const UI_CONFIG_HEADING: &str = "Setting penting";
+/// Config table column note.
+pub const UI_CONFIG_COLUMNS: &str = "Nilai saat ini · Default";
+/// Config table: changed badge.
+pub const UI_CONFIG_CHANGED: &str = "diubah";
+/// Config banner after saving (F-CFG-01 AC2).
+pub const UI_CONFIG_RESTART_REQUIRED: &str = "Tersimpan. Restart diperlukan agar perubahan berlaku.";
+/// Config banner: restart later.
+pub const UI_CONFIG_LATER: &str = "Nanti";
+/// Config banner: restart now.
+pub const UI_CONFIG_RESTART_NOW: &str = "Restart sekarang";
+/// Config footer: open the config file (F-CFG-02).
+pub const UI_CONFIG_OPEN_FILE: &str = "Buka file konfigurasi";
+/// Config footer: revert to the previous file (F-CFG-01 AC3).
+pub const UI_CONFIG_REVERT: &str = "Kembalikan konfigurasi sebelumnya";
+/// Config footer: discard changes.
+pub const UI_CONFIG_DISCARD: &str = "Buang perubahan";
+/// Config footer: save changes.
+pub const UI_CONFIG_SAVE: &str = "Simpan";
+
+// --- New instance dialog (D-25 prototype layout) ----------------------------
+
+/// Intro line at the top of the create dialog.
+pub const UI_CREATE_INTRO: &str =
+    "Runtime diunduh dari upstream dan diverifikasi SHA-256 sebelum dipasang.";
+/// Section heading for the version list.
+pub const UI_CREATE_VERSIONS: &str = "Versi · {engine}";
+/// Badge on a catalog version that is not installed yet.
+pub const UI_CREATE_DOWNLOAD_BADGE: &str = "Unduh, {size}";
+/// Inline hint under the name field.
+pub const UI_CREATE_NAME_HINT: &str = "huruf kecil, angka, tanda hubung";
+/// Inline hint under the port field.
+pub const UI_CREATE_PORT_HINT: &str = "port bebas berikutnya";
+/// Inline hint under the superuser field.
+pub const UI_CREATE_SUPERUSER_HINT: &str = "password → Keychain";
+/// Footer note when the chosen runtime is already installed.
+pub const UI_CREATE_READY_NOTE: &str = "Runtime sudah terpasang — siap dalam < 10 detik";
+/// Footer note when a download is needed (F-INS-01 AC2).
+pub const UI_CREATE_DOWNLOAD_NOTE: &str = "Akan mengunduh runtime lalu verifikasi SHA-256";
+/// Submit button label in the create dialog (prototype wording).
+pub const UI_CREATE_SUBMIT_PROTOTYPE: &str = "Create";
+/// The no-password option label.
+pub const UI_CREATE_NO_PASSWORD: &str = "Izinkan koneksi tanpa password";
+/// The full warning under the no-password option (F-CRD-03 AC1).
+pub const UI_CREATE_NO_PASSWORD_WARNING: &str =
+    "Proses dan user lain di mesin ini bisa terhubung tanpa kredensial. Tidak bisa diubah setelah dibuat.";
+
+/// Formats the version-list heading.
+pub fn create_versions(engine: &str) -> String {
+    UI_CREATE_VERSIONS.replace("{engine}", engine)
+}
+
+/// Formats the download badge with its size.
+pub fn create_download_badge(size: &str) -> String {
+    UI_CREATE_DOWNLOAD_BADGE.replace("{size}", size)
+}
+
+// --- Theme and appearance ----------------------------------------------------
+
+/// Label of the dark theme in a picker.
+pub const UI_THEME_DARK: &str = "DBLocal Dark";
+/// Label of the light theme in a picker.
+pub const UI_THEME_LIGHT: &str = "DBLocal Light";
+
+// --- Delete dialog confirmations (D-18) -------------------------------------
+
+/// Delete dialog: archive mode keeps the data (the default).
+pub const UI_DELETE_ARCHIVE_HINT: &str = "Data dipindah ke arsip, instance dihapus.";
+/// Delete dialog: purge mode removes the data too.
+pub const UI_DELETE_PURGE_HINT: &str = "Instance dan seluruh datanya dihapus permanen.";
+
+// --- Palette hints -----------------------------------------------------------
+
+/// Palette row: focus an open instance tab.
+pub const UI_PALETTE_FOCUS: &str = "Fokus";
+
+// --- Toast after an operation that changed state -----------------------------
+
+/// Toast after a start request was accepted.
+pub const UI_TOAST_START_REQUESTED: &str = "Permintaan start dikirim";
+/// Toast after a stop request was accepted.
+pub const UI_TOAST_STOP_REQUESTED: &str = "Permintaan stop dikirim";
+/// Toast after an instance was deleted.
+pub const UI_TOAST_DELETED: &str = "Instance dihapus";
+/// Toast after an autostart toggle.
+pub const UI_TOAST_AUTOSTART_ON: &str = "Instance akan berjalan saat login";
+/// Toast after an autostart toggle was cleared.
+pub const UI_TOAST_AUTOSTART_OFF: &str = "Autostart dimatikan";
+
+// --- Window controls (per platform, as the prototype draws them) -----------
+
+/// Title bar: minimise the window.
+pub const UI_WINDOW_MINIMIZE: &str = "Perkecil";
+/// Title bar: maximise the window.
+pub const UI_WINDOW_MAXIMIZE: &str = "Perbesar";
+/// Title bar: close the window.
+pub const UI_WINDOW_CLOSE: &str = "Tutup jendela";
+
+/// Placeholders the UI renders while no backend exists (D-25). Each entry names
+/// the phase that fills it, so `docs/architecture/gui.md` and the GUI agree.
+pub const PLACEHOLDERS: [(&str, &str); 3] = [
+    ("Databases", "F-DBU · Phase 2"),
+    ("Config", "F-CFG · Phase 3"),
+    ("Open in…", "F-OPN · Phase 2"),
+];
+

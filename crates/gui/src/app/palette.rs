@@ -1,14 +1,17 @@
-//! Command palette built on `gpui_kit::component::command::Command`.
+//! The command palette, built on `gpui_kit::component::command::Command`.
 //!
 //! A filtered list of actions over the current instances (`F-PLH-01` AC2).
 //! `CommandState` owns the query, filtering and keyboard navigation; we only
-//! supply the entries and run the confirmed action.
+//! supply the entries and run the confirmed action. `Ctrl/Cmd+K` stays from
+//! W1-G and the palette is restyled in the prototype's language.
 
 use gpui_kit::component::{
     ActiveTheme,
     command::{Command, CommandGroup, CommandItem},
 };
 use gpui_kit::{IntoElement, ParentElement, SharedString, Styled, div, prelude::*};
+
+use crate::theme::tokens;
 
 use super::Workspace;
 
@@ -17,7 +20,7 @@ pub(super) fn render(
     workspace: &Workspace,
     cx: &mut gpui_kit::Context<Workspace>,
 ) -> impl IntoElement {
-    let theme = cx.theme();
+    let theme = cx.theme().clone();
     let labels = workspace.palette_labels();
     let items = labels
         .iter()
@@ -60,7 +63,7 @@ pub(super) fn render(
         .flex()
         .justify_center()
         .pt(gpui_kit::px(90.))
-        .bg(gpui_kit::hsla(0.0, 0.0, 0.0, 0.45))
+        .bg(tokens::scrim_from(&theme))
         .on_mouse_down(
             gpui_kit::MouseButton::Left,
             cx.listener(|this, _, _window, cx| {

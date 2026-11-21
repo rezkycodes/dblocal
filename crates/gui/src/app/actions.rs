@@ -10,12 +10,14 @@ gpui_kit::actions!(
     [
         /// Toggle the command palette (`Ctrl/Cmd+K`, `Ctrl/Cmd+Shift+P`).
         OpenPalette,
-        /// Open the create-instance dialog.
+        /// Open the create-instance dialog (`Ctrl/Cmd+N`).
         NewInstance,
-        /// Close the top overlay (palette, dialog).
+        /// Close the top overlay (palette, dialog) with Escape.
         CloseOverlay,
-        /// Copy the selected instance's URI.
+        /// Copy the selected instance's URI (`Ctrl/Cmd+Shift+C`).
         CopyUri,
+        /// Start or stop the selected instance (`Ctrl/Cmd+Enter`).
+        ToggleRun,
         /// Start the selected instance.
         StartSelected,
         /// Stop the selected instance.
@@ -24,21 +26,27 @@ gpui_kit::actions!(
 );
 
 /// Registers every root-context key binding.
+///
+/// `F-PLH-01`: the first session is completable from the keyboard, so every
+/// command the prototype advertises also has a binding here.
 pub fn bind_keys(cx: &mut App) {
     #[cfg(target_os = "macos")]
-    let palette_keys = [
+    let modifiers = [
         KeyBinding::new("cmd-k", OpenPalette, Some(ROOT_CONTEXT)),
         KeyBinding::new("cmd-shift-p", OpenPalette, Some(ROOT_CONTEXT)),
         KeyBinding::new("cmd-n", NewInstance, Some(ROOT_CONTEXT)),
-        KeyBinding::new("cmd-c", CopyUri, Some(ROOT_CONTEXT)),
+        KeyBinding::new("cmd-shift-c", CopyUri, Some(ROOT_CONTEXT)),
+        KeyBinding::new("cmd-enter", ToggleRun, Some(ROOT_CONTEXT)),
     ];
     #[cfg(not(target_os = "macos"))]
-    let palette_keys = [
+    let modifiers = [
         KeyBinding::new("ctrl-k", OpenPalette, Some(ROOT_CONTEXT)),
         KeyBinding::new("ctrl-shift-p", OpenPalette, Some(ROOT_CONTEXT)),
         KeyBinding::new("ctrl-n", NewInstance, Some(ROOT_CONTEXT)),
+        KeyBinding::new("ctrl-shift-c", CopyUri, Some(ROOT_CONTEXT)),
+        KeyBinding::new("ctrl-enter", ToggleRun, Some(ROOT_CONTEXT)),
     ];
-    cx.bind_keys(palette_keys);
+    cx.bind_keys(modifiers);
     cx.bind_keys([
         KeyBinding::new("escape", CloseOverlay, Some(ROOT_CONTEXT)),
         KeyBinding::new("ctrl-shift-s", StartSelected, Some(ROOT_CONTEXT)),

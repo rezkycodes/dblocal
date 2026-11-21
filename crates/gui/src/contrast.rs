@@ -9,6 +9,8 @@ use std::collections::HashMap;
 
 use serde_json::Value;
 
+use crate::theme::THEME_FILES;
+
 /// Theme minimum ratio (`F-PLH-02`: 4.5:1 for normal text).
 pub const MIN_RATIO: f64 = 4.5;
 
@@ -39,6 +41,16 @@ impl Rgb {
         let g = u8::from_str_radix(&hex[2..4], 16).ok()?;
         let b = u8::from_str_radix(&hex[4..6], 16).ok()?;
         Some(Self { r, g, b })
+    }
+
+    /// The opaque channels of a colour whose alpha may be translucent.
+    fn from_hsla(color: gpui_kit::Hsla) -> Option<Self> {
+        let rgb = color.to_rgb();
+        Some(Self {
+            r: (rgb.r * 255.0).round() as u8,
+            g: (rgb.g * 255.0).round() as u8,
+            b: (rgb.b * 255.0).round() as u8,
+        })
     }
 }
 
@@ -222,18 +234,6 @@ pub(crate) fn theme_pairs(theme_name: &str, colors: &HashMap<String, String>) ->
         .collect()
 }
 
-/// Themes embedded in the binary, in load order.
-pub(crate) const THEME_FILES: [(&str, &str); 2] = [
-    (
-        "crates/gui/assets/themes/one-dark.json",
-        include_str!("../assets/themes/one-dark.json"),
-    ),
-    (
-        "crates/gui/assets/themes/one-light.json",
-        include_str!("../assets/themes/one-light.json"),
-    ),
-];
-
 /// Parses every theme file into `(theme name, colours)` pairs.
 pub(crate) fn parse_themes() -> Vec<(String, HashMap<String, String>)> {
     let mut out = Vec::new();
@@ -270,7 +270,11 @@ pub(crate) fn check_all() -> (Vec<CheckedPair>, Vec<CheckedPair>) {
     let mut all = Vec::new();
     let mut failing = Vec::new();
     for (name, colours) in parse_themes() {
-        for pair in theme_pairs(&name, &colours) {
+        let pairs = theme_pairs(&name, &colours)
+            .into_iter()
+            .chain(derived_pairs(&name, &colours))
+            .chain(derived_pairs_from_hsla(&name, &colours));
+        for pair in pairs {
             if pair.ratio < MIN_RATIO {
                 failing.push(pair.clone());
             }
@@ -278,6 +282,82 @@ pub(crate) fn check_all() -> (Vec<CheckedPair>, Vec<CheckedPair>) {
         }
     }
     (all, failing)
+}
+
+/// The tokens the views derive their paints from, per theme.
+///
+/// [`crate::theme::tokens`] only changes alpha on these colours, so a pair that
+/// clears 4.5:1 here clears it in every badge, banner and card that uses it.
+/// The derived surfaces are the muted and accent fills a card or a selection
+/// row paints behind text.
+pub(crate) fn derived_pairs(theme_name: &str, colors: &HashMap<String, String>) -> Vec<CheckedPair> {
+    const DERIVED_SURFACES: [&str; 2] = ["muted.background", "sidebar.accent.background"];
+    // `gpui_kit` reads `theme.success` from `success.background`, so that token
+    // is the one the views paint status text with; the same holds for the rest.
+    const DERIVED_TEXT: [&str; 7] = [
+        "foreground",
+        "muted.foreground",
+        "success.background",
+        "danger.background",
+        "warning.background",
+        "info.background",
+        "primary.background",
+    ];
+    let mut out = Vec::new();
+    for text_key in DERIVED_TEXT {
+        let Some(fg) = colors.get(text_key) else {
+            continue;
+        };
+        for surface in DERIVED_SURFACES {
+            let Some(bg) = colors.get(surface) else {
+                continue;
+            };
+            let (Some(fg_rgb), Some(bg_rgb)) = (Rgb::parse(fg), Rgb::parse(bg)) else {
+                continue;
+            };
+            out.push(CheckedPair {
+                theme: theme_name.to_owned(),
+                label: format!("{text_key} on {surface}"),
+                fg: fg.clone(),
+                bg: bg.clone(),
+                ratio: contrast_ratio(fg_rgb, bg_rgb),
+            });
+        }
+    }
+    out
+}
+
+/// Cross-checks a subset of the derived pairs through the GPUI colour type.
+///
+/// The views tint theme colours and hand them to GPUI, so the numbers the
+/// checker prints must survive the `Hsla` round trip the renderer performs.
+pub(crate) fn derived_pairs_from_hsla(
+    theme_name: &str,
+    colors: &HashMap<String, String>,
+) -> Vec<CheckedPair> {
+    let mut out = Vec::new();
+    for (fg_key, bg_key) in [
+        ("foreground", "background"),
+        ("foreground", "muted.background"),
+    ] {
+        let (Some(fg), Some(bg)) = (colors.get(fg_key), colors.get(bg_key)) else {
+            continue;
+        };
+        let (Some(fg_hsla), Some(bg_hsla)) = (
+            Rgb::from_hsla(crate::theme::hex_to_hsla(fg)),
+            Rgb::from_hsla(crate::theme::hex_to_hsla(bg)),
+        ) else {
+            continue;
+        };
+        out.push(CheckedPair {
+            theme: theme_name.to_owned(),
+            label: format!("{fg_key} on {bg_key} (hsla)"),
+            fg: fg.clone(),
+            bg: bg.clone(),
+            ratio: contrast_ratio(fg_hsla, bg_hsla),
+        });
+    }
+    out
 }
 
 /// Formats the measured table for docs and the final report.
@@ -304,7 +384,9 @@ mod tests {
         let black = Rgb::parse("#000000").expect("black");
         assert!((contrast_ratio(white, black) - 21.0).abs() < 0.01);
 
-        // The light-theme failures measured in the W0-C review.
+        // The light-theme failure measured in the W0-C review: white on the
+        // original #4078f2 primary was 3.88:1, which is why the light primary
+        // is now a darker blue.
         let primary_bg = Rgb::parse("#4078f2").expect("blue");
         let on_light = Rgb::parse("#fafafa").expect("near white");
         assert!((contrast_ratio(on_light, primary_bg) - 3.88).abs() < 0.02);
@@ -329,8 +411,8 @@ mod tests {
         let themes = parse_themes();
         assert_eq!(themes.len(), 2, "dark and light must both load");
         let names: Vec<&str> = themes.iter().map(|(n, _)| n.as_str()).collect();
-        assert!(names.contains(&"DBLocal One Dark"));
-        assert!(names.contains(&"DBLocal One Light"));
+        assert!(names.contains(&crate::theme::DARK_THEME));
+        assert!(names.contains(&crate::theme::LIGHT_THEME));
         for (_, colours) in &themes {
             assert!(colours.contains_key("background"));
             assert!(colours.contains_key("foreground"));
@@ -360,12 +442,28 @@ mod tests {
     }
 
     #[test]
+    fn derived_surfaces_keep_text_legible_too() {
+        let mut failing = Vec::new();
+        for (name, colours) in parse_themes() {
+            for pair in derived_pairs(&name, &colours) {
+                if pair.ratio < MIN_RATIO {
+                    failing.push(format!(
+                        "{} / {}: {} on {} = {:.2}",
+                        pair.theme, pair.label, pair.fg, pair.bg, pair.ratio
+                    ));
+                }
+            }
+        }
+        assert!(failing.is_empty(), "derived contrast failures:\n{}", failing.join("\n"));
+    }
+
+    #[test]
     fn token_table_renders_markdown() {
         let (all, _) = check_all();
         let table = render_table(&all);
         assert!(table.contains("| Theme | Pair |"));
-        assert!(table.contains("DBLocal One Dark"));
-        assert!(table.contains("DBLocal One Light"));
+        assert!(table.contains(crate::theme::DARK_THEME));
+        assert!(table.contains(crate::theme::LIGHT_THEME));
     }
 
     #[test]
@@ -373,17 +471,42 @@ mod tests {
         let themes = parse_themes();
         let dark = themes
             .iter()
-            .find(|(n, _)| n == "DBLocal One Dark")
+            .find(|(n, _)| n == crate::theme::DARK_THEME)
             .map(|(_, c)| c)
             .expect("dark");
         let light = themes
             .iter()
-            .find(|(n, _)| n == "DBLocal One Light")
+            .find(|(n, _)| n == crate::theme::LIGHT_THEME)
             .map(|(_, c)| c)
             .expect("light");
         assert_ne!(dark["background"], light["background"]);
         let dark_l = relative_luminance(Rgb::parse(&dark["background"]).expect("dark bg"));
         let light_l = relative_luminance(Rgb::parse(&light["background"]).expect("light bg"));
         assert!(light_l > dark_l, "light background must be lighter");
+    }
+
+    #[test]
+    fn derived_surfaces_are_the_tokens_the_views_use() {
+        // The views tint only these two surfaces behind text, so the checker
+        // must cover them or a badge could regress silently.
+        let themes = parse_themes();
+        for (name, colours) in &themes {
+            let pairs = derived_pairs(name, colours);
+            assert!(pairs.len() >= 14, "{name}: expected every text/surface pair");
+            assert!(
+                pairs.iter().any(|p| p.label.contains("muted.foreground")
+                    && p.label.contains("muted.background")),
+                "{name}: muted text on the elevated surface is missing"
+            );
+        }
+    }
+
+    #[test]
+    fn hsla_round_trip_feeds_the_same_math() {
+        let color = crate::theme::hex_to_hsla("#15161d");
+        let rgb = Rgb::from_hsla(color).expect("rgb");
+        assert!(rgb.r < 32 && rgb.g < 32 && rgb.b < 40);
+        let bg = Rgb::parse("#15161d").expect("bg");
+        assert!((contrast_ratio(bg, bg) - 1.0).abs() < 0.001);
     }
 }

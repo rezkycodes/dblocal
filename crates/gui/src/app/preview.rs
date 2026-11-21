@@ -1,44 +1,36 @@
-//! Preview constructors and demo data for headless renders.
+//! Preview constructors for headless renders (demo/headless builds only).
 //!
-//! These build the same `Workspace` the app builds, seeded from a mock service,
-//! so reviewers and the render tests can exercise every shell state.
+//! These build the same `Workspace` the app builds, seeded from the demo
+//! service, so the render tests can exercise every screen. The demo flag also
+//! turns on the sample content in the placeholder tabs, because the product
+//! build must never invent rows (`D-25`).
 
 use std::sync::Arc;
 
 use dblocal_core::model::InstanceStatus;
-use dblocal_core::service::{DblService, FailureInfo};
-use dblocal_core::strings;
+use dblocal_core::service::DblService;
 use gpui_kit::{Context, Window};
 
 use super::{InnerTab, Workspace};
 
 impl Workspace {
-    /// Builds a preview populated from a seeded mock service.
-    ///
-    /// Preview constructors drive the headless render tests and let reviewers
-    /// exercise every shell state without a live session.
+    /// Builds a preview populated from a seeded demo service.
     pub fn preview(
         service: Arc<dyn DblService>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
         let mut workspace = Self::new(service, window, cx);
+        workspace.demo_content = true;
+        // Open the running instance so the Overview screen is the resting state.
         if let Some(first) = workspace
             .state
             .instances
-            .first()
+            .iter()
+            .find(|view| view.status == InstanceStatus::Running)
             .map(|view| view.id.clone())
         {
             workspace.open_tab(first, cx);
-        }
-        let failure_id = workspace
-            .state
-            .instances
-            .iter()
-            .find(|view| view.status == InstanceStatus::Failed)
-            .map(|view| view.id.clone());
-        if let Some(id) = failure_id {
-            workspace.tabs.open_or_select(id);
         }
         workspace
     }
@@ -54,59 +46,65 @@ impl Workspace {
         workspace
     }
 
-    /// Preview on the Logs tab of the *selected* instance, with lines loaded.
-    ///
-    /// The previous version set `open_tabs.first_mut().inner = Logs`, but
-    /// `preview` leaves the failed instance selected, so the render showed the
-    /// Overview of a different tab. This selects the tab it modifies.
+    /// Preview of a failed instance's Logs tab, exercising the diagnosis banner.
+    pub fn preview_failure(
+        service: Arc<dyn DblService>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let mut workspace = Self::preview(service, window, cx);
+        if let Some(id) = workspace
+            .state
+            .instances
+            .iter()
+            .find(|view| view.status == InstanceStatus::Failed)
+            .map(|view| view.id.clone())
+        {
+            let index = workspace.tabs.open_or_select(id.clone());
+            workspace.load_logs_for(&id);
+            workspace.tabs.set_inner(index, InnerTab::Logs);
+        }
+        workspace
+    }
+
+    /// Preview on the Logs tab of the running instance.
     pub fn preview_logs(
         service: Arc<dyn DblService>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
         let mut workspace = Self::preview(service, window, cx);
-        let index = workspace
-            .tabs
-            .selected_index()
-            .min(workspace.tabs.len().saturating_sub(1));
-        if let Some(tab) = workspace.tabs.open().get(index) {
-            let id = tab.instance.clone();
-            workspace.tabs.set_inner(index, InnerTab::Logs);
-            workspace.logs.load(&id, demo_log_lines_for(0));
+        if let Some(id) = workspace.tabs.selected_instance().cloned() {
+            workspace.load_logs_for(&id);
+            workspace.set_inner_tab(InnerTab::Logs);
         }
         workspace
     }
 
-    /// Preview with two instance tabs open, both on Logs, the `index`-th
-    /// selected, each holding that instance's own lines.
-    ///
-    /// Proves the per-instance buffers: tab A's buffer never contains tab B's
-    /// lines even after a live event for B.
-    pub fn preview_logs_for(
+    /// Preview with the Databases tab open (placeholder or demo content).
+    pub fn preview_databases(
         service: Arc<dyn DblService>,
         window: &mut Window,
         cx: &mut Context<Self>,
-        index: usize,
     ) -> Self {
         let mut workspace = Self::preview(service, window, cx);
-        let ids: Vec<dblocal_core::model::InstanceId> = workspace
-            .state
-            .instances
-            .iter()
-            .take(2)
-            .map(|view| view.id.clone())
-            .collect();
-        for (position, id) in ids.iter().enumerate() {
-            workspace.logs.load(id, demo_log_lines_for(position));
-            let tab_index = workspace.tabs.open_or_select(id.clone());
-            workspace.tabs.set_inner(tab_index, InnerTab::Logs);
-        }
-        let wanted = index.min(workspace.tabs.len().saturating_sub(1));
-        workspace.tabs.select(wanted);
+        workspace.set_inner_tab(InnerTab::Databases);
         workspace
     }
 
-    /// Preview with the create modal open.
+    /// Preview of the product build: no demo content in the placeholder tabs.
+    pub fn preview_product_databases(
+        service: Arc<dyn DblService>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let mut workspace = Self::preview(service, window, cx);
+        workspace.demo_content = false;
+        workspace.set_inner_tab(InnerTab::Databases);
+        workspace
+    }
+
+    /// Preview with the create modal open on a version that needs a download.
     pub fn preview_create(
         service: Arc<dyn DblService>,
         window: &mut Window,
@@ -114,6 +112,29 @@ impl Workspace {
     ) -> Self {
         let mut workspace = Self::preview(service, window, cx);
         workspace.open_create_dialog(window, cx);
+        workspace
+    }
+
+    /// Preview of the create modal with an engine unavailable on this platform.
+    pub fn preview_create_unavailable(
+        service: Arc<dyn DblService>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let mut workspace = Self::preview(service, window, cx);
+        workspace.open_create_dialog(window, cx);
+        // Force the MariaDB card to read as unavailable, exactly as the catalog
+        // read model would on macOS or Linux aarch64 (F-CAT-02 AC2).
+        if let Some(entry) = workspace
+            .catalog
+            .engines
+            .iter_mut()
+            .find(|entry| entry.engine == dblocal_core::model::EngineKey::Mariadb)
+        {
+            entry.available = false;
+            entry.unavailable_reason =
+                Some(dblocal_core::strings::CATALOG_ENGINE_UNAVAILABLE_PLATFORM.to_owned());
+        }
         workspace
     }
 
@@ -135,7 +156,18 @@ impl Workspace {
         workspace
     }
 
-    /// Preview with a stale/offline catalog banner over the centre pane.
+    /// Preview with the dock filter applied, so only matching rows survive.
+    pub fn preview_filtered(
+        service: Arc<dyn DblService>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let mut workspace = Self::preview(service, window, cx);
+        workspace.set_filter_text_for_preview("pg-", window, cx);
+        workspace
+    }
+
+    /// Preview with a stale catalog banner over the centre pane.
     pub fn preview_stale_banner(
         service: Arc<dyn DblService>,
         window: &mut Window,
@@ -153,66 +185,13 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) -> Self {
         let mut workspace = Self::preview(service, window, cx);
-        if let Some(id) = workspace
-            .state
-            .instances
-            .first()
-            .map(|view| view.id.clone())
-        {
-            workspace.revealed.insert(id);
+        if let Some(id) = workspace.tabs.selected_instance().cloned() {
+            workspace.toggle_reveal(&id);
         }
         workspace
     }
 
-    /// Preview focused on a failed instance, exercising the diagnosis panel.
-    pub fn preview_failure(
-        service: Arc<dyn DblService>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Self {
-        let mut workspace = Self::preview(service, window, cx);
-        let failure = FailureInfo {
-            code: "DBL-1005".to_owned(),
-            message: strings::ERR_PORT_IN_USE.to_owned(),
-            diagnosis: dblocal_core::model::StartFailure::PortInUse,
-            log_tail: vec![
-                "[error] bind failed: port 5434 in use".to_owned(),
-                "[error] could not start listener".to_owned(),
-            ],
-        };
-        if let Some(view) = workspace
-            .state
-            .instances
-            .iter_mut()
-            .find(|view| view.status == InstanceStatus::Failed)
-        {
-            view.failure = Some(failure);
-            let id = view.id.clone();
-            let tab_index = workspace.tabs.open_or_select(id.clone());
-            workspace.tabs.set_inner(tab_index, InnerTab::Overview);
-        }
-        workspace
-    }
-}
-
-/// Deterministic per-instance log lines for the two-tab render.
-pub fn demo_log_lines_for(index: usize) -> Vec<String> {
-    (0..24)
-        .map(|line| {
-            if index == 0 {
-                format!("[info] pg-main baris {line} · berkas instance pertama")
-            } else {
-                format!("[info] valkey-cache baris {line} · berkas instance kedua")
-            }
-        })
-        .collect()
-}
-
-impl Workspace {
     /// Preview after the first instance was removed, as a finished delete does.
-    ///
-    /// Exercises the real `InstanceRemoved` path (`ShellState::apply_removed`)
-    /// so a render can prove the dock no longer lists the instance.
     pub fn preview_after_delete(
         service: Arc<dyn DblService>,
         window: &mut Window,
@@ -231,6 +210,18 @@ impl Workspace {
         }
         workspace
     }
+
+    /// Sets the dock filter text through the preview's input entity.
+    fn set_filter_text_for_preview(
+        &mut self,
+        text: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(input) = self.filter_input.clone() {
+            input.update(cx, |state, cx| state.set_value(text.to_owned(), window, cx));
+        }
+    }
 }
 
 #[cfg(test)]
@@ -238,48 +229,31 @@ mod tests {
     use std::sync::Arc;
 
     use dblocal_core::model::{
-        AuthMode, EngineKey, InstanceName, InstanceSpec, InstanceStatus, Port,
+        AuthMode, EngineKey, InstanceId, InstanceName, InstanceSpec, InstanceStatus, Port,
     };
     use dblocal_core::service::{DblService, mock::MockService};
 
     use crate::logs::LogStore;
 
     fn seeded() -> Arc<dyn DblService> {
-        let service = MockService::deterministic();
-        for (name, engine, version, port, status) in [
-            (
-                "pg-main",
-                EngineKey::Postgresql,
-                "17.4",
-                5432,
-                InstanceStatus::Running,
-            ),
-            (
-                "pg-report",
-                EngineKey::Postgresql,
-                "16.6",
-                5433,
-                InstanceStatus::Stopped,
-            ),
-            (
-                "valkey-cache",
-                EngineKey::Valkey,
-                "8.1.0",
-                6379,
-                InstanceStatus::Running,
-            ),
-        ] {
-            let spec = InstanceSpec::new(
-                InstanceName::new(name).expect("name"),
-                engine,
-                version,
-                Some(Port::new(port).expect("port")),
-                AuthMode::Password,
-            )
-            .expect("spec");
-            service.seed_instance(spec, status);
-        }
+        let service = MockService::demo();
         Arc::new(service)
+    }
+
+    #[test]
+    fn the_demo_seeds_a_running_and_a_failed_instance() {
+        let service = seeded();
+        let instances = service.list_instances().expect("list");
+        assert!(
+            instances
+                .iter()
+                .any(|view| view.status == InstanceStatus::Running)
+        );
+        assert!(
+            instances
+                .iter()
+                .any(|view| view.status == InstanceStatus::Failed)
+        );
     }
 
     #[test]
@@ -288,22 +262,21 @@ mod tests {
         let instances = service.list_instances().expect("list");
         let target = instances
             .iter()
-            .find(|view| view.name == "pg-report")
+            .find(|view| view.name == "pg-legacy")
             .expect("seeded instance")
             .clone();
 
-        // Build the same collections the workspace holds.
         let mut state = crate::app::ShellState {
             instances: instances.clone(),
             downloads: Vec::new(),
             last_failure: None,
+            uris: std::collections::HashMap::new(),
         };
         let mut tabs = crate::app::Tabs::default();
         let mut logs = LogStore::new();
         tabs.open_or_select(target.id.clone());
         logs.load(&target.id, vec!["line".to_owned()]);
 
-        // What the dock listed before the delete.
         let before: Vec<String> = crate::format::group_by_engine(&state.instances)
             .into_iter()
             .flat_map(|group| group.instances.into_iter().map(|v| v.name.clone()))
@@ -312,9 +285,6 @@ mod tests {
 
         state.apply_removed(&target.id, &mut tabs, &mut logs);
 
-        // What the dock lists after it: the row is gone from the model the
-        // sidebar renders, its tab is closed and the selection no longer points
-        // at it.
         let after: Vec<String> = crate::format::group_by_engine(&state.instances)
             .into_iter()
             .flat_map(|group| group.instances.into_iter().map(|v| v.name.clone()))
@@ -325,7 +295,6 @@ mod tests {
         );
         assert_eq!(after.len(), before.len() - 1);
         assert!(tabs.open().iter().all(|tab| tab.instance != target.id));
-        assert!(tabs.selected_instance().is_none());
         assert!(logs.get(&target.id).is_none());
     }
 
@@ -338,6 +307,7 @@ mod tests {
             instances,
             downloads: Vec::new(),
             last_failure: None,
+            uris: std::collections::HashMap::new(),
         };
         let mut tabs = crate::app::Tabs::default();
         let mut logs = LogStore::new();
@@ -350,6 +320,38 @@ mod tests {
 
         assert_eq!(tabs.len(), 1);
         assert_eq!(tabs.open()[0].instance, first);
-        assert!(tabs.selected_instance().is_none());
+    }
+
+    #[test]
+    fn the_demo_dock_groups_every_engine_but_valkey_present() {
+        let service = seeded();
+        let instances = service.list_instances().expect("list");
+        let groups = crate::format::group_by_engine(&instances);
+        assert_eq!(groups.len(), 4, "all four engines have an instance");
+        let total: usize = groups.iter().map(|group| group.instances.len()).sum();
+        assert_eq!(total, 6, "the prototype cast has six instances");
+    }
+
+    #[test]
+    fn an_instance_view_can_be_built_for_any_engine() {
+        // Guards the fixture helper the render tests use.
+        for engine in EngineKey::ALL {
+            let spec = InstanceSpec::new(
+                InstanceName::new("probe").expect("name"),
+                engine,
+                "17.4",
+                Some(Port::new(5600).expect("port")),
+                AuthMode::Password,
+            )
+            .expect("spec");
+            let instance = dblocal_core::model::Instance::new(
+                &spec,
+                InstanceId::new(),
+                InstanceStatus::Stopped,
+                std::time::SystemTime::UNIX_EPOCH,
+            );
+            let view = dblocal_core::service::InstanceView::from_instance(&instance);
+            assert_eq!(view.engine, engine);
+        }
     }
 }

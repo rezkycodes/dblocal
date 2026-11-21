@@ -4,30 +4,40 @@
 //! of construction and event handling; these are one-liners the element tree
 //! needs and nothing more.
 
-use dblocal_core::model::{AuthMode, DeleteMode, EngineKey, InstanceId, Port};
+use dblocal_core::model::{AuthMode, DeleteMode, EngineKey, InstanceId, Port, Runtime};
 use dblocal_core::service::{CatalogView, InstanceView, UriFormat};
 use dblocal_core::strings;
 use gpui_kit::component::{command::CommandState, input::InputState};
+use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::{App, Context, Entity, SharedString, Window};
 
 use crate::format::{self, PaletteAction};
 
-use super::{ActiveDownload, CreateForm, Workspace};
+use super::{ActiveDownload, CreateForm, InnerTab, UriView, Workspace};
 
 impl Workspace {
-    /// Selects a centre-pane tab and loads that instance's own log buffer.
-    ///
-    /// Without this the Logs tab would keep showing whichever instance was
-    /// opened last, because one shared buffer used to be reused.
+    /// Selects a centre-pane tab and loads that instance's own state.
     pub(crate) fn select_tab(&mut self, index: usize) {
         if let Some(id) = self.tabs.select(index) {
+            self.load_logs_for(&id);
+            self.load_data_size(&id);
+        }
+    }
+
+    /// Sets the visible tab's inner tab, loading the log tail on first use.
+    pub(crate) fn set_inner_tab(&mut self, inner: InnerTab) {
+        let index = self.tabs.selected_index();
+        self.tabs.set_inner(index, inner);
+        if inner == InnerTab::Logs
+            && let Some(id) = self.tabs.selected_instance().cloned()
+        {
             self.load_logs_for(&id);
         }
     }
 
     /// Toggles follow mode for the visible Logs tab and, when turning it on,
     /// scrolls to the newest line.
-    pub(crate) fn toggle_follow(&mut self, _cx: &mut Context<Self>) {
+    pub(crate) fn toggle_follow(&mut self) {
         let Some(id) = self.tabs.selected_tab().map(|tab| tab.instance.clone()) else {
             return;
         };
@@ -52,8 +62,17 @@ impl Workspace {
         &self.catalog
     }
 
+    pub(crate) fn runtimes(&self) -> &[Runtime] {
+        &self.runtimes
+    }
+
     pub(crate) fn downloads(&self) -> &[ActiveDownload] {
         &self.state.downloads
+    }
+
+    /// Whether the demo build may render sample rows in the placeholder tabs.
+    pub(crate) fn demo_content(&self) -> bool {
+        self.demo_content
     }
 
     pub(crate) fn toggle_palette(&mut self) {
@@ -99,7 +118,7 @@ impl Workspace {
         };
         self.palette_open = false;
         match action {
-            PaletteAction::NewInstance => self.open_create_dialog(window, cx),
+            PaletteAction::NewInstance => self.open_new_instance(window, cx),
             PaletteAction::Open(value) => {
                 if let Ok(id) = value.parse::<InstanceId>() {
                     self.open_tab(id, cx);
@@ -157,8 +176,8 @@ impl Workspace {
         self.delete_name_input.as_ref()
     }
 
-    pub(crate) fn submit_create_action(&mut self, cx: &mut Context<Self>) {
-        self.submit_create(cx);
+    pub(crate) fn submit_create_action(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.submit_create(window, cx);
     }
 
     pub(crate) fn cancel_create_action(&mut self) {
@@ -173,12 +192,22 @@ impl Workspace {
         self.close_modals();
     }
 
-    pub(crate) fn choose_engine_action(&mut self, engine: EngineKey) {
-        self.choose_engine(engine);
+    pub(crate) fn choose_engine_action(
+        &mut self,
+        engine: EngineKey,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.choose_engine(engine, window, cx);
     }
 
-    pub(crate) fn choose_version_action(&mut self, version: String) {
-        self.choose_version(version);
+    pub(crate) fn choose_version_action(
+        &mut self,
+        version: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.choose_version(version, window, cx);
     }
 
     pub(crate) fn choose_auth_action(&mut self, auth: AuthMode) {
@@ -204,49 +233,99 @@ impl Workspace {
     /// Next free port for an instance's engine, falling back to its port + 1.
     pub(crate) fn instance_port_proposal(&self, id: &InstanceId) -> u16 {
         let engine = self.instance(id).map(|view| view.engine);
-        engine
-            .and_then(|engine| self.service.suggest_port(engine).ok())
-            .map(|port| port.get())
-            .or_else(|| {
-                self.instance(id)
-                    .map(|view| view.port.get().saturating_add(1))
-            })
-            .unwrap_or(0)
+        let suggestion = engine
+            .and_then(|engine| self.service_suggest_port(engine));
+        match self.instance(id) {
+            Some(view) => format::suggested_fix_port(view, suggestion),
+            None => suggestion.unwrap_or(0),
+        }
     }
 
-    /// Moves an instance to another port and clears its failure (`F-PRT-02` AC2).
-    pub(crate) fn move_to_port(&mut self, id: &InstanceId, port: u16, cx: &mut Context<Self>) {
+    /// Moves an instance to another port and starts it (`F-PRT-02` AC2):
+    /// `change_port` then `start_instance`, exactly the documented pair.
+    pub(crate) fn move_to_port_and_start(
+        &mut self,
+        id: &InstanceId,
+        port: u16,
+        cx: &mut Context<Self>,
+    ) {
         let Some(port) = Port::new(port).ok() else {
-            self.toast = Some(SharedString::from(strings::UI_VALIDATE_PORT_LOW));
+            self.set_toast(SharedString::from(strings::UI_VALIDATE_PORT_LOW));
             cx.notify();
             return;
         };
-        match self.service.change_port(id, port) {
+        match self.service_change_port(id, port) {
             Ok(()) => {
                 self.refresh_instances();
-                if let Some(err) = self.service.start_instance(id).err() {
-                    self.report_error(&err);
-                }
+                self.start_instance(id.clone());
             }
             Err(err) => self.report_error(&err),
         }
         cx.notify();
     }
 
-    pub(crate) fn is_revealed(&self, id: &InstanceId) -> bool {
-        self.revealed.contains(id)
+    /// The URI text for an instance's card, masked unless revealed.
+    pub(crate) fn uri_text(&self, id: &InstanceId) -> String {
+        self.state
+            .uri(id)
+            .map(|uri| uri.text().to_owned())
+            .unwrap_or_default()
     }
 
-    pub(crate) fn toggle_reveal(&mut self, id: &InstanceId) {
-        if self.revealed.contains(id) {
-            self.revealed.remove(id);
-        } else {
-            self.revealed.insert(id.clone());
+    /// Whether the card is currently showing the plaintext.
+    pub(crate) fn uri_revealed(&self, id: &InstanceId) -> bool {
+        self.state.uri(id).is_some_and(UriView::is_revealed)
+    }
+
+    /// The `.env` block for the card preview, masked unless revealed.
+    pub(crate) fn dotenv_rows(&self, id: &InstanceId) -> Vec<crate::format::EnvLine> {
+        let revealed = self.uri_revealed(id);
+        match self.service_connection_uri(id, UriFormat::DotEnv) {
+            Ok(secret) => super::masked_env_rows(secret.expose(), revealed),
+            Err(_) => Vec::new(),
         }
     }
 
-    pub(crate) fn running_count_value(&self) -> usize {
-        self.running_count()
+    /// The data directory size, once read.
+    pub(crate) fn data_size(&self, id: &InstanceId) -> Option<u64> {
+        self.data_sizes.get(id).copied()
+    }
+
+    /// The dock filter text as typed.
+    pub(crate) fn filter_text(&self, cx: &App) -> String {
+        self.filter_input
+            .as_ref()
+            .map(|input| input.read(cx).value().to_string())
+            .unwrap_or_default()
+    }
+
+    pub(crate) fn filter_input(&self) -> Option<&Entity<InputState>> {
+        self.filter_input.as_ref()
+    }
+
+    /// Whether an engine group is collapsed in the dock.
+    pub(crate) fn is_collapsed(&self, engine: EngineKey) -> bool {
+        self.collapsed.contains(&engine)
+    }
+
+    pub(crate) fn toggle_collapsed(&mut self, engine: EngineKey) {
+        if !self.collapsed.remove(&engine) {
+            self.collapsed.insert(engine);
+        }
+    }
+
+    pub(crate) fn log_scroll(&self) -> gpui_kit::UniformListScrollHandle {
+        self.log_scroll.clone()
+    }
+
+    /// A copy of an instance's log lines for the log list.
+    pub(crate) fn log_lines(&self, id: &InstanceId) -> crate::logs::LogBuffer {
+        self.logs.get(id).cloned().unwrap_or_default()
+    }
+
+    /// The offline/stale catalog strip above the workspace (`F-CAT-01`).
+    pub(crate) fn offline_banner(&self, cx: &App) -> Option<gpui_kit::AnyElement> {
+        super::status_bar::offline_banner(self, cx.theme())
     }
 
     pub(crate) fn version(&self) -> &'static str {

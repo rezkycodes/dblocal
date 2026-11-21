@@ -1,20 +1,18 @@
-//! Delete-instance modal (`F-INS-05`, decision D-18).
+//! The delete-instance modal (`F-INS-05`, decision D-18).
 //!
-//! Two explicit actions: purge the data (requires typing the instance name) or
-//! archive it. The dialog shows the current data-directory size.
+//! Two explicit actions: archive the data (the default) or purge it (requires
+//! typing the instance name). The dialog shows the current data-directory size
+//! and explains what each mode does.
 
 use dblocal_core::model::DeleteMode;
 use dblocal_core::strings;
-use gpui_kit::component::{
-    ActiveTheme, Disableable as _, Sizable,
-    button::{Button, ButtonVariants as _},
-    h_flex,
-    input::Input,
-    v_flex,
-};
+use gpui_kit::component::{ActiveTheme, Disableable, Sizable, h_flex, input::Input, v_flex};
+use gpui_kit::component::button::Button;
+use gpui_kit::component::button::ButtonVariants;
+use gpui_kit::component::label::Label;
 use gpui_kit::{
-    AnyElement, Context, InteractiveElement as _, IntoElement, ParentElement, SharedString, Styled,
-    div, prelude::*, px,
+    AnyElement, Context, InteractiveElement, IntoElement, MouseButton, ParentElement, SharedString,
+    Styled, div, prelude::*, px,
 };
 
 use crate::format;
@@ -33,70 +31,48 @@ pub(super) fn render(workspace: &Workspace, cx: &mut Context<Workspace>) -> AnyE
     let size = workspace.delete_size();
     let can_purge = mode == DeleteMode::PurgeData && typed_matches;
 
-    let mut modes = v_flex().gap_2();
-    for (candidate, label, detail) in [
-        (
+    let modes = v_flex()
+        .gap_2()
+        .child(mode_card(
             DeleteMode::ArchiveData,
             strings::DELETE_ARCHIVE,
-            format!("~{}", format::format_bytes(size)),
-        ),
-        (
+            strings::UI_DELETE_ARCHIVE_HINT,
+            format!("~{}", format::format_bytes_id(size)),
+            mode,
+            &theme,
+            cx,
+        ))
+        .child(mode_card(
             DeleteMode::PurgeData,
             strings::DELETE_PURGE,
-            format!("~{}", format::format_bytes(size)),
-        ),
-    ] {
-        let selected = candidate == mode;
-        modes = modes.child(
-            div()
-                .id(SharedString::from(format!(
-                    "delete-mode-{}",
-                    candidate.as_str()
-                )))
-                .p_2()
-                .rounded(px(4.))
-                .cursor_pointer()
-                .border_1()
-                .border_color(if selected { theme.accent } else { theme.border })
-                .when(selected, |this| this.bg(theme.muted))
-                .on_click(cx.listener(move |this, _, _window, cx| {
-                    this.set_delete_mode(candidate);
-                    cx.notify();
-                }))
-                .child(
-                    v_flex().gap_1().child(div().text_sm().child(label)).child(
-                        div()
-                            .text_xs()
-                            .text_color(theme.muted_foreground)
-                            .child(detail),
-                    ),
-                ),
-        );
-    }
+            strings::UI_DELETE_PURGE_HINT,
+            format!("~{}", format::format_bytes_id(size)),
+            mode,
+            &theme,
+            cx,
+        ));
 
     let mut body = v_flex()
         .gap_3()
-        .p_4()
+        .p(px(20.))
         .child(
-            div()
+            Label::new(format!("{} — {name}", strings::UI_DELETE_TITLE))
                 .text_sm()
-                .child(format!("{} — {}", strings::UI_DELETE_TITLE, name)),
+                .font_weight(gpui_kit::FontWeight::SEMIBOLD),
         )
         .child(
-            div()
+            Label::new(strings::UI_DELETE_PROMPT)
                 .text_xs()
-                .text_color(theme.muted_foreground)
-                .child(strings::UI_DELETE_PROMPT),
+                .text_color(theme.muted_foreground),
         )
         .child(modes);
 
     if mode == DeleteMode::PurgeData {
         body = body
             .child(
-                div()
+                Label::new(strings::UI_DELETE_TYPE_NAME)
                     .text_xs()
-                    .text_color(theme.danger)
-                    .child(strings::UI_DELETE_TYPE_NAME),
+                    .text_color(theme.danger),
             )
             .child(match workspace.delete_name_input() {
                 Some(input) => Input::new(input).small().into_any_element(),
@@ -113,7 +89,7 @@ pub(super) fn render(workspace: &Workspace, cx: &mut Context<Workspace>) -> AnyE
                     .label(strings::UI_CANCEL)
                     .compact()
                     .ghost()
-                    .on_click(cx.listener(|this, _, _window, cx| {
+                    .on_click(cx.listener(|this, _, _, cx| {
                         this.close_modals_action();
                         cx.notify();
                     })),
@@ -123,8 +99,8 @@ pub(super) fn render(workspace: &Workspace, cx: &mut Context<Workspace>) -> AnyE
                     .label(strings::UI_DELETE)
                     .compact()
                     .danger()
-                    .disabled(!can_purge && mode == DeleteMode::PurgeData)
-                    .on_click(cx.listener(|this, _, _window, cx| {
+                    .disabled(mode == DeleteMode::PurgeData && !can_purge)
+                    .on_click(cx.listener(|this, _, _, cx| {
                         this.confirm_delete_action(cx);
                     })),
             ),
@@ -134,24 +110,74 @@ pub(super) fn render(workspace: &Workspace, cx: &mut Context<Workspace>) -> AnyE
         "delete-overlay",
         "delete-panel",
         div()
-            .w(px(480.))
+            .w(px(520.))
             .bg(theme.popover)
             .text_color(theme.popover_foreground)
             .border_1()
             .border_color(theme.border)
-            .rounded(px(8.))
+            .rounded(px(10.))
             .overflow_hidden()
             .child(
-                div()
-                    .px_3()
-                    .py_2()
+                h_flex()
+                    .px(px(20.))
+                    .py(px(14.))
                     .border_b_1()
                     .border_color(theme.border)
-                    .text_sm()
-                    .font_weight(gpui_kit::FontWeight::SEMIBOLD)
-                    .child(strings::UI_DELETE_TITLE),
+                    .child(
+                        Label::new(strings::UI_DELETE_TITLE)
+                            .text_sm()
+                            .font_weight(gpui_kit::FontWeight::SEMIBOLD),
+                    ),
             )
             .child(body),
         cx,
     )
+}
+
+/// One selectable delete mode: title, hint, size, and the selected border.
+#[allow(clippy::too_many_arguments)]
+fn mode_card(
+    candidate: DeleteMode,
+    label: &str,
+    hint: &str,
+    size: String,
+    mode: DeleteMode,
+    theme: &gpui_kit::component::Theme,
+    cx: &mut Context<Workspace>,
+) -> impl IntoElement {
+    let selected = candidate == mode;
+    div()
+        .id(SharedString::from(format!("delete-mode-{}", candidate.as_str())))
+        .p_3()
+        .rounded(px(6.))
+        .cursor_pointer()
+        .border_1()
+        .border_color(if selected { theme.primary } else { theme.border })
+        .when(selected, |this| this.bg(theme.muted))
+        .on_mouse_down(
+            MouseButton::Left,
+            cx.listener(move |this, _, _, cx| {
+                this.set_delete_mode(candidate);
+                cx.notify();
+            }),
+        )
+        .child(
+            v_flex()
+                .gap_1()
+                .child(
+                    h_flex()
+                        .justify_between()
+                        .child(Label::new(label.to_owned()).text_sm())
+                        .child(
+                            Label::new(size)
+                                .text_xs()
+                                .text_color(theme.muted_foreground),
+                        ),
+                )
+                .child(
+                    Label::new(hint.to_owned())
+                        .text_xs()
+                        .text_color(theme.muted_foreground),
+                ),
+        )
 }

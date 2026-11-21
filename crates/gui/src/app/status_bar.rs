@@ -1,62 +1,132 @@
-//! Status bar: running count, catalog freshness, downloads popover, tray and
-//! version (`UI-DIRECTION.md`).
+//! The status bar: counts (running, stopped, failed), data directory and total
+//! size, credential backend, `os arch`, app version, plus what W1-G already
+//! showed — active downloads with their popover, the offline/stale banner and
+//! the tray-unavailable note (D-25 prototype).
 
 use dblocal_core::model::CatalogStatus;
 use dblocal_core::strings;
-use gpui_kit::component::{
-    ActiveTheme, Sizable,
-    button::{Button, ButtonVariants as _},
-    h_flex,
-    popover::Popover,
-    progress::Progress,
-};
-use gpui_kit::{InteractiveElement as _, IntoElement, ParentElement, Styled};
+use gpui_kit::component::{ActiveTheme, Sizable, Theme, h_flex, popover::Popover};
+use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::component::progress::Progress;
+use gpui_kit::component::label::Label;
+use gpui_kit::prelude::*;
+use gpui_kit::{AnyElement, Context, IntoElement, ParentElement, Styled, div, px};
 
 use crate::format;
 
 use super::Workspace;
+use super::components::{icon, status_glyph};
+use gpui_kit::assets::IconName;
 
 /// Renders the bottom status bar.
-pub(super) fn render(
+pub(super) fn render(workspace: &Workspace, cx: &mut Context<Workspace>) -> impl IntoElement {
+    let theme = cx.theme().clone();
+    let counts = workspace.counts();
+    let total_bytes: u64 = workspace
+        .instances()
+        .iter()
+        .filter_map(|view| workspace.data_size(&view.id))
+        .sum();
+    let total = format::format_bytes_id(total_bytes);
+    let backend = credential_backend_label(workspace);
+    let platform = format::platform_label(std::env::consts::OS, std::env::consts::ARCH);
+
+    h_flex()
+        .id("status-bar")
+        .h(px(28.))
+        .w_full()
+        .flex_none()
+        .items_center()
+        .gap_4()
+        .px(px(14.))
+        .bg(theme.status_bar)
+        .border_t_1()
+        .border_color(theme.status_bar_border)
+        .text_xs()
+        .text_color(theme.muted_foreground)
+        .child(count_pill(counts.running, &strings::UI_RUNNING, &theme, false))
+        .child(count_pill(counts.stopped, &strings::UI_STOPPED, &theme, false))
+        .when(counts.failed > 0, |this| {
+            this.child(count_pill(counts.failed, &strings::UI_FAILED, &theme, true))
+        })
+        .child(
+            h_flex()
+                .gap_1p5()
+                .child(icon(IconName::HardDrive, 13.0, theme.muted_foreground))
+                .child(
+                    Label::new(format!("~/.dblocal · {total}"))
+                        .font_family(theme.mono_font_family.clone()),
+                ),
+        )
+        .child(div().flex_1())
+        .child(
+            h_flex()
+                .gap_1p5()
+                .child(icon(IconName::KeyRound, 13.0, theme.muted_foreground))
+                .child(Label::new(format!(
+                    "{}: {backend}",
+                    strings::UI_CREDENTIAL_BACKEND
+                ))),
+        )
+        .child(Label::new(platform))
+        .child(
+            Label::new(if workspace.tray_available() {
+                strings::UI_TRAY_ACTIVE
+            } else {
+                strings::UI_TRAY_UNAVAILABLE
+            }),
+        )
+        .child(downloads_popover(workspace, &theme, cx))
+        .child(Label::new(format!(
+            "{}{}",
+            strings::UI_VERSION_PREFIX,
+            workspace.version()
+        )))
+}
+
+/// One status-bar count: glyph plus the number and word.
+fn count_pill(count: usize, label: &str, theme: &Theme, danger: bool) -> impl IntoElement {
+    let colour = if danger {
+        theme.danger
+    } else {
+        theme.muted_foreground
+    };
+    let status = if danger {
+        dblocal_core::model::InstanceStatus::Failed
+    } else if label == strings::UI_RUNNING {
+        dblocal_core::model::InstanceStatus::Running
+    } else {
+        dblocal_core::model::InstanceStatus::Stopped
+    };
+    h_flex()
+        .gap_1p5()
+        .text_color(colour)
+        .child(status_glyph(status, 8.0, theme))
+        .child(Label::new(format!("{count} {label}")))
+}
+
+/// Which credential backend the bar reports: the file fallback wins if any
+/// instance uses it, so the note is never hidden (`F-CRD-01` AC2).
+fn credential_backend_label(workspace: &Workspace) -> &'static str {
+    let any_file = workspace
+        .instances()
+        .iter()
+        .any(|view| format::credential_is_file(view.credential_backend));
+    if any_file {
+        strings::UI_CREDENTIAL_FILE
+    } else {
+        strings::UI_CREDENTIAL_KEYCHAIN
+    }
+}
+
+/// The downloads trigger and its popover, unchanged in behaviour from W1-G.
+fn downloads_popover(
     workspace: &Workspace,
-    cx: &mut gpui_kit::Context<Workspace>,
+    _theme: &Theme,
+    cx: &mut Context<Workspace>,
 ) -> impl IntoElement {
-    let theme = cx.theme();
-    let running = workspace.running_count_value();
-    let total = workspace.instances().len();
-    let count = format!(
-        "{running} {} / {total} {}",
-        strings::UI_RUNNING,
-        strings::UI_TOTAL
-    );
-
-    let catalog_text = match workspace.catalog().status {
-        CatalogStatus::Fresh => format!(
-            "{}: {}",
-            strings::UI_CATALOG,
-            format::catalog_status_label(workspace.catalog())
-        ),
-        CatalogStatus::Stale => {
-            format!("{}: {}", strings::UI_CATALOG, strings::CATALOG_STALE)
-        }
-        CatalogStatus::Offline => {
-            format!("{}: {}", strings::UI_CATALOG, strings::CATALOG_OFFLINE)
-        }
-        _ => format!(
-            "{}: {}",
-            strings::UI_CATALOG,
-            format::catalog_status_label(workspace.catalog())
-        ),
-    };
-    let catalog_colour = match workspace.catalog().status {
-        CatalogStatus::Fresh => theme.muted_foreground,
-        CatalogStatus::Stale => theme.warning,
-        CatalogStatus::Offline => theme.danger,
-        _ => theme.muted_foreground,
-    };
-
     let downloads = workspace.downloads();
-    let download_summary = if downloads.is_empty() {
+    let summary = if downloads.is_empty() {
         strings::UI_NO_DOWNLOADS.to_owned()
     } else {
         let percent = downloads
@@ -70,14 +140,13 @@ pub(super) fn render(
                     download.progress.bytes_per_sec,
                     download.progress.eta.map(|d| d.as_secs()),
                 )
+                .percent
             })
-            .map(|row| row.percent)
             .max()
             .unwrap_or(0);
         format!("{} ({percent}%)", strings::UI_DOWNLOADS)
     };
-
-    let download_rows_inner: Vec<(String, u8, String, Option<String>)> = downloads
+    let rows: Vec<(String, u8, String, Option<String>)> = downloads
         .iter()
         .map(|download| {
             let row = format::download_row(
@@ -91,104 +160,77 @@ pub(super) fn render(
             (download.title.clone(), row.percent, row.detail, row.eta)
         })
         .collect();
-
-    let popover = Popover::new("downloads-pop")
+    let _ = cx;
+    let rows_for_popover = rows.clone();
+    Popover::new("downloads-pop")
         .anchor(gpui_kit::Anchor::TopRight)
         .trigger(
             Button::new("downloads-trigger")
-                .label(download_summary)
+                .label(summary)
                 .xsmall()
                 .ghost()
                 .compact(),
         )
         .content(move |_, _, cx| {
-            let download_rows = download_rows_inner.clone();
-            let theme = cx.theme();
+            let rows = rows_for_popover.clone();
+            let theme = cx.theme().clone();
             let mut column = gpui_kit::component::v_flex()
                 .gap_2()
                 .p_3()
-                .min_w(gpui_kit::px(280.));
+                .min_w(px(280.));
             column = column.child(
-                gpui_kit::div()
-                    .text_sm()
-                    .text_color(theme.foreground)
-                    .child(strings::UI_DOWNLOADS),
+                Label::new(strings::UI_DOWNLOADS).text_sm(),
             );
-            if download_rows.is_empty() {
+            if rows.is_empty() {
                 column = column.child(
-                    gpui_kit::div()
+                    Label::new(strings::UI_NO_DOWNLOADS)
                         .text_xs()
-                        .text_color(theme.muted_foreground)
-                        .child(strings::UI_NO_DOWNLOADS),
+                        .text_color(theme.muted_foreground),
                 );
             }
-            for (title, percent, detail, eta) in download_rows {
+            for (title, percent, detail, eta) in rows {
                 column = column.child(
                     gpui_kit::component::v_flex()
                         .gap_1()
-                        .child(gpui_kit::div().text_xs().child(title))
+                        .child(Label::new(title).text_xs())
                         .child(
                             Progress::new("download-row")
                                 .value(percent as f32)
                                 .color(theme.progress_bar)
-                                .h(gpui_kit::px(6.)),
+                                .h(px(6.)),
                         )
                         .child(
-                            gpui_kit::div()
-                                .text_xs()
-                                .text_color(theme.muted_foreground)
-                                .child(match eta {
-                                    Some(eta) => format!("{detail}  ·  {eta}"),
-                                    None => detail,
-                                }),
+                            Label::new(match eta {
+                                Some(eta) => format!("{detail}  ·  {eta}"),
+                                None => detail,
+                            })
+                            .text_xs()
+                            .text_color(theme.muted_foreground),
                         ),
                 );
             }
             column.into_any_element()
-        });
+        })
+        .into_any_element()
+}
 
-    h_flex()
-        .id("status-bar")
-        .h(gpui_kit::px(26.))
-        .w_full()
-        .items_center()
-        .justify_between()
-        .px_3()
-        .bg(theme.status_bar)
-        .border_t_1()
-        .border_color(theme.status_bar_border)
-        .text_xs()
-        .child(
-            h_flex()
-                .gap_4()
-                .items_center()
-                .child(gpui_kit::div().child(count))
-                .child(
-                    gpui_kit::div()
-                        .text_color(catalog_colour)
-                        .child(catalog_text),
-                ),
-        )
-        .child(
-            h_flex()
-                .gap_4()
-                .items_center()
-                .child(popover)
-                .child(gpui_kit::div().text_color(theme.muted_foreground).child(
-                    if workspace.tray_available() {
-                        strings::UI_TRAY_ACTIVE.to_owned()
-                    } else {
-                        strings::UI_TRAY_UNAVAILABLE.to_owned()
-                    },
-                ))
-                .child(
-                    gpui_kit::div()
-                        .text_color(theme.muted_foreground)
-                        .child(format!(
-                            "{}{}",
-                            strings::UI_VERSION_PREFIX,
-                            workspace.version()
-                        )),
-                ),
-        )
+/// Whether the offline banner should show above everything (`F-CAT-01`).
+pub(crate) fn offline_banner(workspace: &Workspace, theme: &Theme) -> Option<AnyElement> {
+    if workspace.catalog().status != CatalogStatus::Offline {
+        return None;
+    }
+    Some(
+        h_flex()
+            .id("offline-banner")
+            .w_full()
+            .gap_2()
+            .px(px(12.))
+            .py(px(4.))
+            .bg(theme.danger)
+            .text_color(theme.danger_foreground)
+            .text_xs()
+            .child(icon(IconName::WifiOff, 14.0, theme.danger_foreground))
+            .child(Label::new(strings::CATALOG_OFFLINE)),
+    )
+    .map(IntoElement::into_any_element)
 }

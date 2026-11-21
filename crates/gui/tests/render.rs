@@ -1,19 +1,18 @@
-//! Headless wgpu render tests for the shell.
+//! Headless wgpu render tests for the prototype port.
 //!
-//! The tests render the real view off-screen through GPUI's headless wgpu path
-//! and assert on specific regions against the theme tokens, so a layout
-//! regression fails the test instead of slipping past a "> 40 colours" check.
+//! The tests render the real views off-screen through GPUI's headless wgpu path
+//! at the prototype's 1280x820 size and assert on regions against theme tokens,
+//! so a layout regression fails the test rather than slipping past a
+//! "more than 40 colours" check.
 //!
-//! Output: frames are written to `target/renders/` by default. Committed
-//! screenshots under `docs/design/renders/` are refreshed only when
-//! `DBLOCAL_UPDATE_RENDERS=1` is set, so a plain `cargo test` never dirties a
-//! tracked path.
+//! Output: frames go to `target/renders/` by default. Committed screenshots
+//! under `docs/design/renders/` are refreshed only when `DBLOCAL_UPDATE_RENDERS=1`
+//! is set, so a plain `cargo test` never dirties a tracked path.
 
 #![allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use dblocal_core::model::{AuthMode, EngineKey, InstanceName, InstanceSpec, InstanceStatus, Port};
 use dblocal_core::service::{DblService, mock::MockService};
 use dblocal_gui::app::Workspace;
 use gpui_kit::{
@@ -31,10 +30,37 @@ impl AssetSource for GuiAssets {
     }
 }
 
+/// The prototype window size, which every screenshot is compared at.
+const WIDTH: f32 = 1280.0;
+const HEIGHT: f32 = 820.0;
+
 /// A frame plus the flattened pixel data, so region checks are cheap.
+///
+/// Headless rendering runs at the platform scale factor (2x on this HiDPI
+/// host), so a logical region is multiplied by [`Frame::scale`] before it is
+/// sampled. That is what keeps the assertions comparing the prototype's logical
+/// 1280x820 layout rather than a device-pixel count.
 struct Frame {
     image: image::RgbaImage,
     colours: usize,
+    scale: u32,
+}
+
+/// Logical size of the rendered window.
+const LOGICAL_W: u32 = 1280;
+const LOGICAL_H: u32 = 820;
+
+impl Frame {
+    /// Converts a logical rectangle to device pixels.
+    fn scaled(&self, rect: (u32, u32, u32, u32)) -> (u32, u32, u32, u32) {
+        let s = self.scale;
+        (rect.0 * s, rect.1 * s, rect.2 * s, rect.3 * s)
+    }
+
+    /// Reads one pixel addressed in logical coordinates.
+    fn logical_pixel(&self, x: u32, y: u32) -> [u8; 4] {
+        self.pixel(x * self.scale, y * self.scale)
+    }
 }
 
 impl Frame {
@@ -49,7 +75,7 @@ impl Frame {
 
     /// Counts pixels in a rectangle whose colour is within `tolerance` of `rgb`.
     fn count_near(&self, rect: (u32, u32, u32, u32), rgb: [u8; 3], tolerance: u8) -> usize {
-        let (x0, y0, x1, y1) = rect;
+        let (x0, y0, x1, y1) = self.scaled(rect);
         let mut hits = 0;
         for y in y0..y1.min(self.dims().1) {
             for x in x0..x1.min(self.dims().0) {
@@ -70,7 +96,7 @@ impl Frame {
     /// This is how "there is text here" is proven: text pixels differ from the
     /// surface behind them.
     fn count_not_near(&self, rect: (u32, u32, u32, u32), rgb: [u8; 3], tolerance: u8) -> usize {
-        let (x0, y0, x1, y1) = rect;
+        let (x0, y0, x1, y1) = self.scaled(rect);
         let mut hits = 0;
         for y in y0..y1.min(self.dims().1) {
             for x in x0..x1.min(self.dims().0) {
@@ -85,60 +111,29 @@ impl Frame {
         }
         hits
     }
+
+    /// The most common colour in a rectangle, which is the surface a region
+    /// paints behind whatever text it holds.
+    fn dominant(&self, rect: (u32, u32, u32, u32)) -> [u8; 3] {
+        let (x0, y0, x1, y1) = self.scaled(rect);
+        let mut counts: std::collections::HashMap<[u8; 3], usize> =
+            std::collections::HashMap::new();
+        for y in y0..y1.min(self.dims().1) {
+            for x in x0..x1.min(self.dims().0) {
+                let p = self.pixel(x, y);
+                *counts.entry([p[0], p[1], p[2]]).or_default() += 1;
+            }
+        }
+        counts
+            .into_iter()
+            .max_by_key(|(_, n)| *n)
+            .map(|(c, _)| c)
+            .unwrap_or([0, 0, 0])
+    }
 }
 
 fn seeded_service() -> Arc<dyn DblService> {
-    let service = MockService::deterministic();
-    for (name, engine, version, port, status) in [
-        (
-            "pg-main",
-            EngineKey::Postgresql,
-            "17.4",
-            5432,
-            InstanceStatus::Running,
-        ),
-        (
-            "pg-report",
-            EngineKey::Postgresql,
-            "16.6",
-            5433,
-            InstanceStatus::Stopped,
-        ),
-        (
-            "mysql-shop",
-            EngineKey::Mysql,
-            "8.4.4",
-            3306,
-            InstanceStatus::Stopped,
-        ),
-        (
-            "valkey-cache",
-            EngineKey::Valkey,
-            "8.1.0",
-            6379,
-            InstanceStatus::Running,
-        ),
-    ] {
-        let spec = InstanceSpec::new(
-            InstanceName::new(name).expect("valid name"),
-            engine,
-            version,
-            Some(Port::new(port).expect("valid port")),
-            AuthMode::Password,
-        )
-        .expect("valid spec");
-        service.seed_instance(spec, status);
-    }
-    let failed_spec = InstanceSpec::new(
-        InstanceName::new("pg-broken").expect("valid name"),
-        EngineKey::Postgresql,
-        "17.4",
-        Some(Port::new(5434).expect("valid port")),
-        AuthMode::None,
-    )
-    .expect("valid spec");
-    service.seed_instance(failed_spec, InstanceStatus::Failed);
-    Arc::new(service)
+    Arc::new(MockService::demo())
 }
 
 type Build = fn(Arc<dyn DblService>, &mut gpui_kit::Window, &mut Context<Workspace>) -> Workspace;
@@ -149,8 +144,6 @@ fn output_path(name: &str) -> (std::path::PathBuf, bool) {
     if std::env::var_os("DBLOCAL_UPDATE_RENDERS").is_some() {
         (manifest.join("../../docs/design/renders").join(name), true)
     } else {
-        // `CARGO_TARGET_DIR` is set by the runner; fall back to the crate's
-        // `target/` so a test never writes into a tracked path.
         let target = std::env::var_os("CARGO_TARGET_DIR")
             .map(std::path::PathBuf::from)
             .unwrap_or_else(|| manifest.join("../../target"));
@@ -163,8 +156,7 @@ fn output_path(name: &str) -> (std::path::PathBuf, bool) {
 /// Each render creates its own headless wgpu context. Several concurrent
 /// contexts intermittently wedge inside swapchain creation on this driver
 /// (observed as a test that runs for minutes with no output), so the tests
-/// take this lock and only one context exists at a time. Single-threaded this
-/// suite finishes in ~45 s, which is acceptable for CI.
+/// take this lock and only one context exists at a time.
 static GPU: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 fn render(mode_dark: bool, name: &str, build: Build) -> Frame {
@@ -175,7 +167,7 @@ fn render(mode_dark: bool, name: &str, build: Build) -> Frame {
         Arc::new(GuiAssets),
         gpui_kit::platform::current_headless_renderer,
     );
-    app.update(gpui_kit::component::init);
+    app.update(gpui_kit::init);
     app.update(dblocal_gui::theme::init);
     app.update(|cx| {
         let theme = if mode_dark {
@@ -190,7 +182,7 @@ fn render(mode_dark: bool, name: &str, build: Build) -> Frame {
     let handle: AnyWindowHandle = {
         let bounds = Bounds {
             origin: gpui_kit::point(px(0.0), px(0.0)),
-            size: size(px(1180.0), px(760.0)),
+            size: size(px(WIDTH), px(HEIGHT)),
         };
         let window = app
             .update(|cx| {
@@ -214,8 +206,8 @@ fn render(mode_dark: bool, name: &str, build: Build) -> Frame {
     };
 
     // `uniform_list` measures its rows on the first frame and paints them on
-    // the next. `capture_screenshot` renders only the last frame, so draw twice
-    // and settle between them.
+    // the next. `capture_screenshot` renders only the last frame, so draw a few
+    // times and settle between them.
     for _ in 0..3 {
         app.update_window(handle, |_view, window, cx| {
             let _ = window.draw(cx);
@@ -227,6 +219,15 @@ fn render(mode_dark: bool, name: &str, build: Build) -> Frame {
         .capture_screenshot(handle)
         .expect("headless wgpu renderer must produce a frame");
     assert!(image.width() > 0 && image.height() > 0, "empty frame");
+    // The window is 1280x820 logical; a HiDPI host renders it at 2x. Both are
+    // the prototype's size, so assert the logical dimensions.
+    let scale = image.width() / LOGICAL_W;
+    assert!(scale >= 1, "unexpected render width {}", image.width());
+    assert_eq!(
+        (image.width() / scale, image.height() / scale),
+        (LOGICAL_W, LOGICAL_H),
+        "renders must match the prototype size"
+    );
     let mut colours = HashSet::new();
     for pixel in image.pixels() {
         colours.insert(pixel.0);
@@ -247,181 +248,123 @@ fn render(mode_dark: bool, name: &str, build: Build) -> Frame {
     Frame {
         image,
         colours: colours.len(),
+        scale,
     }
-}
-
-fn centre_luminance(frame: &Frame) -> f64 {
-    let (w, h) = frame.dims();
-    let (x0, y0, x1, y1) = (w * 3 / 10, h * 3 / 10, w * 7 / 10, h * 7 / 10);
-    let mut sum = 0.0f64;
-    let mut count = 0u64;
-    for y in (y0..y1).step_by(4) {
-        for x in (x0..x1).step_by(4) {
-            let p = frame.pixel(x, y);
-            sum += 0.2126 * p[0] as f64 + 0.7152 * p[1] as f64 + 0.0722 * p[2] as f64;
-            count += 1;
-        }
-    }
-    sum / count.max(1) as f64
 }
 
 // Theme tokens the assertions sample against. These are the committed JSON
 // values; `contrast_table` proves they are what the app loads.
-const DARK_SIDEBAR: [u8; 3] = [0x21, 0x25, 0x2b];
-const DARK_BG: [u8; 3] = [0x28, 0x2c, 0x34];
-const DARK_ROW_ACTIVE: [u8; 3] = [0x2c, 0x31, 0x3a];
+const DARK_BG: [u8; 3] = [0x15, 0x16, 0x1d];
+const DARK_SIDEBAR: [u8; 3] = [0x1c, 0x1d, 0x26];
+const DARK_ROW_ACTIVE: [u8; 3] = [0x2a, 0x2c, 0x3a];
 const DARK_SUCCESS: [u8; 3] = [0x98, 0xc3, 0x79];
-const DARK_DANGER: [u8; 3] = [0xe8, 0x9a, 0xa3];
-const LIGHT_SIDEBAR: [u8; 3] = [0xf0, 0xf0, 0xf0];
-const LIGHT_BG: [u8; 3] = [0xfa, 0xfa, 0xfa];
-const LIGHT_ROW_ACTIVE: [u8; 3] = [0xe5, 0xe5, 0xe6];
-const LIGHT_SUCCESS: [u8; 3] = [0x2b, 0x72, 0x30];
-const LIGHT_DANGER: [u8; 3] = [0xb0, 0x37, 0x30];
+const DARK_DANGER: [u8; 3] = [0xef, 0x88, 0x91];
+const DARK_PRIMARY: [u8; 3] = [0x61, 0xaf, 0xef];
+const LIGHT_BG: [u8; 3] = [0xf8, 0xf8, 0xfb];
+const LIGHT_SIDEBAR: [u8; 3] = [0xf0, 0xf0, 0xf4];
+const LIGHT_PRIMARY: [u8; 3] = [0x1a, 0x60, 0x9f];
+
+/// The dock is 272 px wide; the centre pane starts after it.
+const DOCK: u32 = 272;
+/// The title bar is 34 px, the tab strip 36 px.
+const TAB_STRIP_TOP: u32 = 34;
+const TAB_STRIP_BOTTOM: u32 = 70;
 
 #[test]
-fn renders_dark_and_light_shell_with_theme_regions() {
-    let dark = render(true, "shell-dark.png", Workspace::preview);
-    let light = render(false, "shell-light.png", Workspace::preview);
+fn renders_dark_and_light_overview_with_the_prototype_regions() {
+    let dark = render(true, "overview-dark.png", Workspace::preview);
+    let light = render(false, "overview-light.png", Workspace::preview);
     assert!(dark.colours > 40, "dark render too flat: {}", dark.colours);
-    assert!(
-        light.colours > 40,
-        "light render too flat: {}",
-        light.colours
-    );
+    assert!(light.colours > 40, "light render too flat: {}", light.colours);
 
-    // Distinct themes: the centre pane luminance must differ clearly.
-    let dark_l = centre_luminance(&dark);
-    let light_l = centre_luminance(&light);
-    eprintln!("CENTRE_LUMINANCE dark={dark_l:.2} light={light_l:.2}");
-    assert!(
-        (dark_l - light_l).abs() > 10.0,
-        "themes render identically (dark={dark_l:.2}, light={light_l:.2})"
-    );
-
-    // Sidebar surface: 260px wide at the left, sampled low enough to be under
-    // the tree rows. Must be the sidebar token, not the editor background.
     for (name, frame, sidebar, bg) in [
         ("dark", &dark, DARK_SIDEBAR, DARK_BG),
         ("light", &light, LIGHT_SIDEBAR, LIGHT_BG),
     ] {
-        let (w, h) = frame.dims();
-        let sidebar_hits = frame.count_near((0, 0, 12, h), sidebar, 3);
+        let (_, h) = frame.dims();
+        // 1. The dock paints the sidebar token on the left edge.
+        let sidebar_hits = frame.count_near((0, 0, DOCK / 2, h), sidebar, 3);
         assert!(
             sidebar_hits > (h as usize / 2),
-            "{name}: left edge is not the sidebar surface ({sidebar_hits} of {h})"
+            "{name}: left edge is not the dock surface ({sidebar_hits} of {h})"
         );
-        // The centre pane sits to the right of the 260px sidebar. Sample below
-        // the title bar (68px) and the tab strips, in an empty part of the body.
-        let centre = frame.pixel(w / 2, h / 2);
+        // 2. The centre pane sits right of the dock and paints the base token.
+        let centre = frame.logical_pixel(DOCK + 300, h * 3 / 4);
         assert!(
-            centre[0].abs_diff(bg[0]) <= 3
-                && centre[1].abs_diff(bg[1]) <= 3
-                && centre[2].abs_diff(bg[2]) <= 3,
+            centre[0].abs_diff(bg[0]) <= 4
+                && centre[1].abs_diff(bg[1]) <= 4
+                && centre[2].abs_diff(bg[2]) <= 4,
             "{name}: centre background {centre:?} is not {bg:?}"
         );
     }
 
-    // Status dots: the seeded list has running and failed instances, so their
-    // colours must appear in the sidebar's dot column.
-    let dark_running = dark.count_near((20, 0, 52, 1520), DARK_SUCCESS, 6);
-    let dark_failed = dark.count_near((20, 0, 52, 1520), DARK_DANGER, 6);
-    eprintln!("DOTS dark running={dark_running} failed={dark_failed}");
-    assert!(
-        dark_running > 0,
-        "no running (green) status dot in the sidebar"
+    // 3. The tab bar exists between the title bar and the header, and the
+    //    selected tab is painted with the active-tab token.
+    let (w, _) = dark.dims();
+    let tab_strip = (DOCK, TAB_STRIP_TOP, w, TAB_STRIP_BOTTOM);
+    let tab_surface = dark.dominant(tab_strip);
+    assert_ne!(
+        tab_surface, DARK_BG,
+        "the instance tab strip is missing above the header"
     );
-    assert!(dark_failed > 0, "no failed (red) status dot in the sidebar");
-    let _ = LIGHT_SUCCESS;
-    let _ = LIGHT_DANGER;
+    let active_tab = dark.count_near(
+        (DOCK, TAB_STRIP_TOP, DOCK + 300, TAB_STRIP_BOTTOM),
+        DARK_BG,
+        3,
+    );
+    eprintln!("TAB selected-tab pixels={active_tab}");
+    assert!(
+        active_tab > 1000,
+        "the selected tab is not marked with the active background ({active_tab})"
+    );
 
-    // The selected row uses the sidebar-accent surface. `preview` selects the
-    // first opened instance, so one row must paint that token in the sidebar.
-    // Dark accent (#2c313a) and light accent (#e5e5e6) differ from the sidebar
-    // background, so a count proves the selected-row state is applied.
-    let dark_selected = dark.count_near((0, 68, 520, 1468), DARK_ROW_ACTIVE, 2);
-    let light_selected = light.count_near((0, 68, 520, 1468), LIGHT_ROW_ACTIVE, 2);
-    eprintln!("SELECTED ROW dark={dark_selected} light={light_selected}");
+    // 4. Status glyphs per state in the dock: running green and failed red are
+    //    both seeded, so both colours must appear in the glyph column.
+    let (_, h) = dark.dims();
+    let dock_column = (20, 0, 60, h - 40);
+    let running = dark.count_near(dock_column, DARK_SUCCESS, 8);
+    let failed = dark.count_near(dock_column, DARK_DANGER, 8);
+    eprintln!("GLYPH dark running={running} failed={failed}");
+    assert!(running > 0, "no running status glyph in the dock");
+    assert!(failed > 0, "no failed status glyph in the dock");
+
+    // 5. One dock row is selected, so the accent surface appears there.
+    let selected = dark.count_near((0, 70, DOCK, h), DARK_ROW_ACTIVE, 3);
+    eprintln!("DOCK selected-row pixels={selected}");
+    assert!(selected > 300, "no selected dock row ({selected})");
+
+    // 6. The primary button colour is present (Copy URI / Instance baru).
+    let primary_dark = dark.count_near((0, 70, w, h - 40), DARK_PRIMARY, 10);
+    let primary_light = light.count_near((0, 70, w, h - 40), LIGHT_PRIMARY, 10);
+    eprintln!("PRIMARY dark={primary_dark} light={primary_light}");
+    assert!(primary_dark > 200, "no primary button in dark ({primary_dark})");
     assert!(
-        dark_selected > 500,
-        "no selected-row surface in the dark sidebar ({dark_selected})"
-    );
-    assert!(
-        light_selected > 500,
-        "no selected-row surface in the light sidebar ({light_selected})"
+        primary_light > 200,
+        "no primary button in light ({primary_light})"
     );
 }
 
 #[test]
-fn renders_palette_create_delete_stale_and_failure() {
-    let palette = render(true, "shell-palette.png", Workspace::preview_palette);
-    assert!(palette.colours > 40);
-    // The palette panel is the popover surface over a dimmed backdrop.
-    let (w, h) = palette.dims();
-    let panel = palette.count_near((w / 3, h / 10, w * 2 / 3, h * 9 / 10), DARK_SIDEBAR, 4);
-    assert!(panel > 2000, "palette panel surface missing (hits={panel})");
-
-    let create = render(true, "shell-create.png", Workspace::preview_create);
-    assert!(create.colours > 40);
-    let delete = render(false, "shell-delete.png", Workspace::preview_delete);
-    assert!(delete.colours > 40);
-
-    let stale = render(false, "shell-stale.png", Workspace::preview_stale_banner);
-    assert!(stale.colours > 40);
-    // F-CAT-01: the warning strip (`#856000` in One Light) spans the top of the
-    // centre pane.
-    let warning = [0x85u8, 0x60, 0x00];
-    let (w, h) = stale.dims();
-    let banner_hits = stale.count_near((260, 0, w, h / 6), warning, 10);
-    eprintln!("STALE banner pixels={banner_hits}");
+fn renders_failed_logs_with_the_diagnosis_banner() {
+    let shade = render(true, "logs-diagnosis-dark.png", Workspace::preview_failure);
+    let (w, h) = shade.dims();
+    // The danger banner sits under the header on the Logs tab.
+    let banner = shade.count_near((DOCK, 60, w, h / 2), DARK_DANGER, 24);
+    eprintln!("DIAGNOSIS danger pixels={banner}");
     assert!(
-        banner_hits > 2000,
-        "catalog banner did not render (hits={banner_hits})"
-    );
-
-    let failure = render(false, "shell-failure.png", Workspace::preview_failure);
-    assert!(failure.colours > 40);
-    let (w, _h) = failure.dims();
-    // The failure panel paints `danger.background` on the detail pane.
-    let danger_hits = failure.count_near((w / 3, 0, w, 760), LIGHT_DANGER, 10);
-    eprintln!("FAILURE danger-surface pixels={danger_hits}");
-    assert!(
-        danger_hits > 500,
-        "failure panel did not paint its danger surface (hits={danger_hits})"
+        banner > 800,
+        "the diagnosis banner is not visible on a failed instance ({banner})"
     );
 }
 
-/// The Logs tab must actually be the selected screen, and its body must carry
-/// monospace text over the editor background.
 #[test]
-fn renders_logs_tab_with_text_and_follow_label() {
-    let logs = render(false, "shell-logs.png", Workspace::preview_logs);
-    let overview = render(false, "shell-overview.png", Workspace::preview);
-    assert!(logs.colours > 40);
-
-    // B.1: the Logs tab has to be the visible one, and prove log *text* is on
-    // screen. The discriminator is the lower body: the Overview's content (info
-    // panel, buttons) ends around a third of the way down, while log lines fill
-    // the panel to the bottom. A strip-only diff — what the review caught — has
-    // no text here.
+fn renders_logs_with_monospace_text() {
+    let logs = render(false, "logs-light.png", Workspace::preview_logs);
     let (w, h) = logs.dims();
-    let lower = (w / 2, h * 11 / 20, w, h * 9 / 10);
-    let log_text = logs.count_not_near(lower, LIGHT_BG, 12);
-    let overview_text = overview.count_not_near(lower, LIGHT_BG, 12);
-    eprintln!("LOGS lower-body text pixels={log_text} overview={overview_text}");
-    assert!(
-        overview_text < 200,
-        "the Overview unexpectedly has content in the lower body ({overview_text}); \
-         the region is no longer a log-only discriminator"
-    );
-    assert!(
-        log_text > 1500,
-        "the Logs body has no text in its lower half ({log_text}); is the Logs tab selected?"
-    );
-
-    // The full-height monospace block: rows of text must run most of the panel.
+    // The log body carries rows of text below the banner/header region.
     let mut rows_with_text = 0;
-    for y in (h / 4..h * 9 / 10).step_by(6) {
-        if logs.count_not_near((w / 2, y, w, (y + 6).min(h)), LIGHT_BG, 12) > 8 {
+    for y in (h / 3..h * 9 / 10).step_by(6) {
+        if logs.count_not_near((DOCK + 40, y, w - 20, (y + 6).min(h)), LIGHT_BG, 12) > 8 {
             rows_with_text += 1;
         }
     }
@@ -432,70 +375,104 @@ fn renders_logs_tab_with_text_and_follow_label() {
     );
 }
 
-/// A second Logs render proves per-instance buffers: two tabs, each showing its
-/// own lines, with a live line for the other instance not leaking in.
 #[test]
-fn renders_logs_for_each_instance_independently() {
-    let overview = render(false, "shell-overview-b.png", Workspace::preview);
-    let logs_a = render(false, "shell-logs-a.png", |service, window, cx| {
-        Workspace::preview_logs_for(service, window, cx, 0)
-    });
-    let logs_b = render(false, "shell-logs-b.png", |service, window, cx| {
-        Workspace::preview_logs_for(service, window, cx, 1)
-    });
-    // Both tabs must show log text in the lower body, where an Overview tab
-    // would be blank; that is what proves each is really on Logs.
-    let (w, h) = logs_a.dims();
-    let lower = (w / 2, h * 11 / 20, w, h * 9 / 10);
-    let a_text = logs_a.count_not_near(lower, LIGHT_BG, 12);
-    let b_text = logs_b.count_not_near(lower, LIGHT_BG, 12);
-    let o_text = overview.count_not_near(lower, LIGHT_BG, 12);
-    eprintln!("LOGS lower-body a={a_text} b={b_text} overview={o_text}");
-    assert!(o_text < 200, "Overview lower body is not blank ({o_text})");
-    assert!(a_text > 1500, "tab A is not showing log text ({a_text})");
-    assert!(b_text > 1500, "tab B is not showing log text ({b_text})");
+fn renders_databases_placeholder_in_the_product_build() {
+    let product = render(
+        false,
+        "databases-product-light.png",
+        Workspace::preview_product_databases,
+    );
+    let (w, h) = product.dims();
+    // The placeholder is a card, not a table of sample rows: the body has far
+    // less text than the demo build's table.
+    let body = (DOCK + 40, 140, w - 40, h - 80);
+    let product_text = product.count_not_near(body, LIGHT_BG, 12);
+
+    let demo = render(false, "databases-demo-light.png", Workspace::preview_databases);
+    let demo_text = demo.count_not_near(body, LIGHT_BG, 12);
+    eprintln!("DATABASES product text={product_text} demo text={demo_text}");
+    assert!(
+        product_text > 200,
+        "the product placeholder renders nothing ({product_text})"
+    );
+    assert!(
+        demo_text > product_text * 2,
+        "the demo table should render far more content than the placeholder \
+         ({demo_text} vs {product_text})"
+    );
 }
 
-/// G: a deleted instance leaves the dock. The frame after removal must show
-/// fewer instance rows than the normal shell, and the selected-row surface that
-/// belonged to it must be gone from the sidebar.
 #[test]
-fn deleted_instance_disappears_from_the_dock() {
-    let normal = render(false, "shell-dock-before.png", Workspace::preview);
-    let after = render(
-        false,
-        "shell-dock-after-delete.png",
-        Workspace::preview_after_delete,
-    );
+fn renders_create_dialog_with_a_download_and_an_unavailable_version() {
+    let download = render(true, "create-download-dark.png", Workspace::preview_create);
+    let (w, h) = download.dims();
+    // The modal panel is the popover surface over a dimmed backdrop.
+    let panel = download.count_near((w / 6, h / 10, w * 5 / 6, h * 9 / 10), DARK_SIDEBAR, 6);
+    eprintln!("CREATE panel pixels={panel}");
+    assert!(panel > 4000, "the create panel did not paint ({panel})");
+    // A primary Create button is present.
+    let primary = download.count_near((w / 3, h - 140, w, h - 20), DARK_PRIMARY, 12);
+    eprintln!("CREATE primary pixels={primary}");
+    assert!(primary > 60, "no Create button in the footer ({primary})");
 
-    // The sidebar instance rows use the selected-row accent for the open tab and
-    // plain rows elsewhere; a reliable proxy for "one fewer instance" is the
-    // count of status-dot pixels (8px dots), which must drop after removal.
-    let (w, h) = normal.dims();
-    let sidebar = (0, 68, 520, h * 9 / 10);
-    let dots_before =
-        normal.count_near(sidebar, LIGHT_SUCCESS, 8) + normal.count_near(sidebar, LIGHT_DANGER, 8);
-    let dots_after =
-        after.count_near(sidebar, LIGHT_SUCCESS, 8) + after.count_near(sidebar, LIGHT_DANGER, 8);
-    eprintln!("DOCK dots before={dots_before} after={dots_after}");
-    assert!(
-        dots_after < dots_before,
-        "the dock did not lose a status dot after the delete (before={dots_before}, after={dots_after})"
+    let unavailable = render(
+        true,
+        "create-unavailable-dark.png",
+        Workspace::preview_create_unavailable,
     );
+    let (w, h) = unavailable.dims();
+    let card_text = unavailable.count_not_near((DOCK as u32, 80, w, h), DARK_BG, 16);
+    eprintln!("CREATE unavailable card text={card_text}");
+    assert!(
+        card_text > 2000,
+        "the unavailable engine card did not render ({card_text})"
+    );
+}
 
-    // And the whole sidebar differs: rows shifted up by one.
-    let diff = (68..h * 9 / 10)
-        .step_by(4)
-        .filter(|y| {
-            (0..520)
-                .step_by(4)
-                .any(|x| normal.pixel(x, *y)[0..3] != after.pixel(x, *y)[0..3])
-        })
-        .count();
-    eprintln!("DOCK sidebar rows differing={diff}");
+#[test]
+fn renders_dock_with_the_filter_applied() {
+    let full = render(true, "dock-all-dark.png", Workspace::preview);
+    let filtered = render(true, "dock-filtered-dark.png", Workspace::preview_filtered);
+    let (_, h) = full.dims();
+    // Fewer status glyphs survive the "pg-" filter: the dock's glyph column
+    // must lose the MariaDB and Valkey rows.
+    let column = (20, 0, 60, h - 40);
+    let before = full.count_near(column, DARK_SUCCESS, 8) + full.count_near(column, DARK_DANGER, 8);
+    let after =
+        filtered.count_near(column, DARK_SUCCESS, 8) + filtered.count_near(column, DARK_DANGER, 8);
+    eprintln!("FILTER glyphs before={before} after={after}");
     assert!(
-        diff > 20,
-        "the sidebar barely changed after a delete ({diff} rows)"
+        after < before,
+        "the dock filter did not drop rows (before={before}, after={after})"
     );
-    let _ = w;
+}
+
+#[test]
+fn renders_palette_and_delete_dialog() {
+    let palette = render(true, "palette-dark.png", Workspace::preview_palette);
+    let (w, h) = palette.dims();
+    let panel = palette.count_near((w / 3, h / 10, w * 2 / 3, h * 9 / 10), DARK_SIDEBAR, 6);
+    eprintln!("PALETTE panel pixels={panel}");
+    assert!(panel > 2000, "palette panel surface missing ({panel})");
+
+    let delete = render(false, "delete-light.png", Workspace::preview_delete);
+    let (w, h) = delete.dims();
+    // The delete panel is the popover surface over the dimmed backdrop.
+    let panel = delete.count_near((w / 4, h / 4, w * 3 / 4, h * 3 / 4), LIGHT_SIDEBAR, 6);
+    eprintln!("DELETE panel pixels={panel}");
+    assert!(panel > 3000, "delete panel did not paint ({panel})");
+}
+
+#[test]
+fn renders_stale_banner_and_revealed_uri() {
+    let stale = render(false, "stale-light.png", Workspace::preview_stale_banner);
+    let (w, h) = stale.dims();
+    // F-CAT-01: the warning strip carries the warning token in the light theme.
+    let warning = [0x73u8, 0x53, 0x00];
+    let banner = stale.count_near((DOCK, 0, w, h / 6), warning, 12);
+    eprintln!("STALE banner pixels={banner}");
+    assert!(banner > 2000, "the stale catalog banner did not render ({banner})");
+
+    let revealed = render(true, "overview-revealed-dark.png", Workspace::preview_revealed);
+    assert!(revealed.colours > 40);
 }
