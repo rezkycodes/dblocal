@@ -376,19 +376,8 @@ impl Workspace {
         &self.quit
     }
 
-    /// A clone of the tray action sender, as the ksni activate closures hold it.
-    #[cfg(test)]
-    pub(crate) fn tray_sender(&self) -> flume::Sender<crate::tray::TrayAction> {
-        self.tray_actions_sender.clone()
-    }
-
-    /// Resets one instance to `Stopped` and drops caches, for the latency loop.
-    #[cfg(test)]
-    pub(crate) fn reset_for_latency(&mut self, id: &InstanceId) {
-        if let Some(view) = self.state.instances.iter_mut().find(|v| &v.id == id) {
-            view.status = dblocal_core::model::InstanceStatus::Stopped;
-        }
-    }
+    // tray_sender/reset_for_latency removed: tray latency test measures the
+    // real bridge+model path directly, no GPUI scheduler needed.
 
     pub(crate) fn open_new_instance(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.open_create_dialog(window, cx);

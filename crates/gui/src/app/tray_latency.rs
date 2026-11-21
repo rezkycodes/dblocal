@@ -5,6 +5,11 @@
 //! scheduler: it rejects cross-thread wakers, and the measured path is the
 //! bridge thread + `TrayMenuModel::from_views`, exactly what the spec names.
 //!
+//! The measurement runs with a declared parallel CPU load: 4 busy-spin threads,
+//! started inside the test (no `stress-ng`, no external process). The bridge
+//! has no poll/sleep interval; it parks on `broadcast::recv()` and forwards to
+//! flume, so the latency is the wake + model update cost, not a timer.
+//!
 //! Run: `cargo test -p dblocal-gui --lib tray_latency -- --nocapture`
 
 #![cfg(test)]
@@ -139,6 +144,42 @@ impl DblService for EchoService {
     }
 }
 
+/// Four busy-spin threads: the declared parallel load for the latency bound.
+/// No external process, no stress-ng. Dropping the guard stops them.
+struct CpuLoad {
+    stop: Arc<std::sync::atomic::AtomicBool>,
+    handles: Vec<std::thread::JoinHandle<()>>,
+}
+
+impl CpuLoad {
+    fn spawn(workers: usize) -> Self {
+        let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let mut handles = Vec::with_capacity(workers);
+        for _ in 0..workers {
+            let stop = Arc::clone(&stop);
+            handles.push(std::thread::spawn(move || {
+                let mut x: u64 = 1;
+                while !stop.load(Ordering::Relaxed) {
+                    for _ in 0..10_000 {
+                        x = x.wrapping_mul(6364136223846793005).wrapping_add(1);
+                        std::hint::black_box(x);
+                    }
+                }
+            }));
+        }
+        Self { stop, handles }
+    }
+}
+
+impl Drop for CpuLoad {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+        for handle in self.handles.drain(..) {
+            let _ = handle.join();
+        }
+    }
+}
+
 /// Measures tray-action-to-tray-model latency through the real bridge thread.
 ///
 /// The spec asks for: time from the event being emitted by the service to the
@@ -152,6 +193,7 @@ impl DblService for EchoService {
 /// is the one the spec names.
 #[test]
 fn tray_action_reaches_the_model_through_bridge() {
+    let _load = CpuLoad::spawn(4);
     let service = Arc::new(EchoService::new());
     let shared: Arc<dyn DblService> = service.clone();
     let rx = crate::service_bridge::spawn_bridge(shared);
@@ -179,7 +221,7 @@ fn tray_action_reaches_the_model_through_bridge() {
     let p50 = samples_ms[samples_ms.len() / 2];
     let max = *samples_ms.last().expect("samples");
     eprintln!(
-        "TRAY_LATENCY n={} p50={p50:.1}ms max={max:.1}ms target=1000ms",
+        "TRAY_LATENCY n={} p50={p50:.1}ms max={max:.1}ms target=1000ms load=4_busy_spin_threads",
         samples_ms.len()
     );
     assert!(max <= 1000.0, "tray action exceeded 1 s: max={max:.1}ms");

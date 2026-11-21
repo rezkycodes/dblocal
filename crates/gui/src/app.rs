@@ -122,9 +122,6 @@ pub struct Workspace {
     toast: Option<SharedString>,
     tray: TrayHandle,
     tray_actions: flume::Receiver<TrayAction>,
-    /// The sending half: the ksni menu closures hold a clone of this.
-    #[cfg_attr(not(test), allow(dead_code))]
-    tray_actions_sender: flume::Sender<TrayAction>,
     tray_note_shown: bool,
     tray_note: Option<SharedString>,
     quit: QuitMachine,
@@ -196,7 +193,6 @@ impl Workspace {
             last_failure_mirror: None,
             toast: None,
             tray: tray_start.handle,
-            tray_actions_sender: tray_start.sender.clone(),
             tray_actions: tray_start.actions,
             tray_note_shown: !tray_available,
             tray_note,
@@ -385,34 +381,8 @@ impl Workspace {
         cx.notify();
     }
 
-    /// One service call, kept here so `workspace_api` needs no field access.
-    #[allow(dead_code)]
-    pub(crate) fn service_suggest_port(&self, engine: EngineKey) -> Option<u16> {
-        self.service
-            .suggest_port(engine)
-            .ok()
-            .map(|port| port.get())
-    }
-
-    /// Reads the connection URI for one instance in the requested format.
-    #[allow(dead_code)]
-    pub(crate) fn service_connection_uri(
-        &self,
-        id: &InstanceId,
-        format: UriFormat,
-    ) -> dblocal_core::Result<dblocal_core::secret::SecretString> {
-        self.service.connection_uri(id, format)
-    }
-
-    /// Moves an instance to another port.
-    #[allow(dead_code)]
-    pub(crate) fn service_change_port(
-        &mut self,
-        id: &InstanceId,
-        port: Port,
-    ) -> dblocal_core::Result<()> {
-        self.service.change_port(id, port)
-    }
+    // No synchronous DblService wrappers: every service call must go through
+    // Workspace::bg() so the GPUI thread never blocks on SQLite/keychain.
 
     /// The three status-bar counts.
     pub(crate) fn counts(&self) -> crate::format::InstanceCounts {

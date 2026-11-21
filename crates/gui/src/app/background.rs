@@ -47,17 +47,8 @@ impl Workspace {
         self.pending_preview || self.pending.load(Ordering::SeqCst) > 0
     }
 
-    /// Reads instances and runtimes in the background (used after removals).
-    #[allow(dead_code)]
-    pub(crate) fn refresh_instances(&mut self) {
-        if let Ok(instances) = self.service.list_instances() {
-            self.state.replace_instances(instances);
-        }
-        if let Ok(runtimes) = self.service.list_runtimes() {
-            self.runtimes = runtimes;
-        }
-        self.refresh_tray();
-    }
+    // Intentionally no synchronous refresh_instances: every DblService read
+    // goes through bg() so the GPUI thread never blocks on SQLite/keychain.
 
     pub(crate) fn refresh_instances_bg(&mut self, cx: &mut Context<Self>) {
         let service = self.service.clone();
