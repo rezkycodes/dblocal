@@ -137,9 +137,9 @@ pub fn wait_operation_rx(
     loop {
         match rx.blocking_recv() {
             Ok(ServiceEvent::OperationProgress { id, stage }) if &id == op => {
-                if show_progress {
-                    stderr_line(err_out, &format!("... {}", stage.as_str()));
-                }
+                // A stage change is a plain line on every terminal; only the
+                // high-frequency download percentage is TTY-only noise.
+                stderr_line(err_out, &format!("... {}", stage.as_str()));
             }
             Ok(ServiceEvent::DownloadProgress { id, progress }) if &id == op => {
                 if show_progress {

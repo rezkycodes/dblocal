@@ -25,91 +25,96 @@ pub const EXIT_NOT_FOUND: u8 = 3;
 pub const EXIT_ENGINE_FAILED: u8 = 4;
 
 /// DBLocal command-line interface.
+///
+/// Help text is Indonesian (matching the GUI) while flags stay English.
 #[derive(Debug, Parser)]
 #[command(
     name = "dblocal",
     version,
-    about = "DBLocal — local database servers without containers",
-    long_about = None
+    about = "DBLocal — server database lokal tanpa container",
+    long_about = "DBLocal mengelola server PostgreSQL, MySQL, MariaDB, dan Valkey \n\
+                  di mesin lokal. Tanpa argumen, aplikasi GUI terbuka; dengan \n\
+                  subperintah, mode CLI yang berjalan.",
+    after_help = "Tanpa argumen, jendela DBLocal terbuka."
 )]
 pub struct Cli {
-    /// Subcommand to run. Without one, the GUI opens.
+    /// Subperintah yang dijalankan. Tanpa subperintah, GUI terbuka.
     #[command(subcommand)]
     pub command: Option<Command>,
 }
 
-/// Every subcommand in PRD §8.
+/// Setiap subperintah pada PRD §8.
 #[derive(Debug, Subcommand)]
 pub enum Command {
-    /// Lists instances.
+    /// Menampilkan daftar instance.
     List {
-        /// Emit machine-readable JSON.
+        /// Cetak JSON yang bisa dipipe.
         #[arg(long)]
         json: bool,
     },
-    /// Prints the status of one instance.
+    /// Menampilkan status satu instance.
     Status {
-        /// Instance name.
+        /// Nama instance.
         name: String,
     },
-    /// Starts an instance.
+    /// Menjalankan instance dan menunggu sampai sehat.
     Start {
-        /// Instance name.
+        /// Nama instance.
         name: String,
-        /// Seconds to wait for the instance to become healthy.
+        /// Detik menunggu sampai instance sehat.
         #[arg(long, default_value_t = 60)]
         timeout: u64,
     },
-    /// Stops an instance.
+    /// Menghentikan instance.
     Stop {
-        /// Instance name.
+        /// Nama instance.
         name: String,
     },
-    /// Prints a connection URI.
+    /// Mencetak connection URI (atau blok .env).
     Uri {
-        /// Instance name.
+        /// Nama instance.
         name: String,
-        /// Emit a `.env` block instead of a bare URI.
+        /// Cetak blok `.env` alih-alih URI saja.
         #[arg(long)]
         env: bool,
     },
-    /// Creates an instance.
+    /// Membuat instance baru tanpa interaksi.
     Create {
-        /// Engine key: postgresql, mysql, mariadb or valkey.
+        /// Engine: postgresql, mysql, mariadb, atau valkey.
         #[arg(long)]
         engine: String,
-        /// Engine version tag.
+        /// Tag versi engine, mis. 18.7.0.
         #[arg(long)]
         version: String,
-        /// Instance name.
+        /// Nama instance.
         #[arg(long)]
         name: String,
-        /// Port to bind.
+        /// Port yang dipakai; kosong berarti dipilih otomatis.
         #[arg(long)]
         port: Option<u16>,
-        /// Create without a password.
+        /// Buat tanpa password.
         #[arg(long = "no-password")]
         no_password: bool,
     },
-    /// Deletes an instance.
+    /// Menghapus instance (default mengarsipkan data).
     Delete {
-        /// Instance name.
+        /// Nama instance.
         name: String,
-        /// Skip the confirmation prompt.
+        /// Lewati konfirmasi.
         #[arg(long)]
         yes: bool,
-        /// Also delete the data directory instead of archiving it.
+        /// Hapus data juga, bukan diarsipkan.
         #[arg(long)]
         purge: bool,
     },
-    /// Prints instance logs.
+    /// Menampilkan log instance.
     Logs {
-        /// Instance name.
+        /// Nama instance.
         name: String,
-        /// Follow the log file.
+        /// Ikuti baris baru sampai Ctrl-C.
         #[arg(long, short)]
         follow: bool,
-        /// Number of lines to show from the end.
+        /// Jumlah baris terakhir yang ditampilkan.
         #[arg(long, default_value_t = 200)]
         lines: usize,
     },
