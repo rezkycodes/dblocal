@@ -158,9 +158,9 @@ static GPU: std::sync::Mutex<()> = std::sync::Mutex::new(());
 /// in CI; aborting with the case name is the only diagnostic a wedged process
 /// can emit. Arm it *after* acquiring the GPU mutex so a queued case is not
 /// blamed for time spent waiting on an earlier case. Under heavy shared-host
-/// load a healthy render can take well over 2 minutes; 5 minutes still catches
-/// a real hang without killing slow-but-progressing cases.
-const RENDER_WATCHDOG_SECS: u64 = 300;
+/// load a healthy render can take well over 2 minutes; 10 minutes still catches
+/// a real hang without killing slow-but-progressing cases on a loaded host.
+const RENDER_WATCHDOG_SECS: u64 = 600;
 
 struct RenderWatchdog {
     done: Arc<std::sync::atomic::AtomicBool>,
@@ -260,9 +260,26 @@ fn watchdog_probe_stuck_child() {
     std::thread::sleep(Duration::from_secs(5));
 }
 
+/// The platform text system, built once per process.
+///
+/// `gpui_platform::current_platform(true)` constructs a whole `LinuxPlatform`
+/// (a worker dispatcher, a timer thread and the Vulkan threads) only to borrow
+/// its text system, and dropping the `Rc` does not stop those threads. Building
+/// one per render case therefore leaks ~20 threads per case; after ten cases a
+/// later context shutdown wedges (observed: `logs-light.png`/`overview-failed-dark.png`
+/// killing the run at the 600 s watchdog). gpui's own `bench_text_system` cites
+/// the same defect. Build it once and share it.
+fn shared_text_system() -> Arc<dyn gpui_kit::PlatformTextSystem> {
+    static TEXT_SYSTEM: std::sync::OnceLock<Arc<dyn gpui_kit::PlatformTextSystem>> =
+        std::sync::OnceLock::new();
+    TEXT_SYSTEM
+        .get_or_init(|| gpui_kit::platform::current_platform(true).text_system())
+        .clone()
+}
+
 /// Builds a headless app with the DBLocal themes registered.
 fn headless_app(mode_dark: bool) -> HeadlessAppContext {
-    let text_system = gpui_kit::platform::current_platform(true).text_system();
+    let text_system = shared_text_system();
     let mut app = HeadlessAppContext::with_platform(
         text_system,
         Arc::new(GuiAssets),
@@ -284,9 +301,10 @@ fn headless_app(mode_dark: bool) -> HeadlessAppContext {
 /// Quits the app cleanly and lets the scheduler drain before the context drops.
 ///
 /// `HeadlessAppContext::drop` calls `App::shutdown`, which blocks on the test
-/// scheduler. Under parallel test threads that shutdown parked forever while
-/// the render mutex was still held, wedging every other case. Quitting and
-/// parking first, then dropping, keeps shutdown off the critical path.
+/// scheduler. Under parallel test threads a shutdown that ran while the next
+/// case had already started rendering parked forever. Quitting and parking
+/// first, then dropping, keeps shutdown off the critical path; the caller
+/// holds the GPU mutex so exactly one context is alive at a time.
 fn shutdown_headless(mut app: HeadlessAppContext) {
     app.update(|cx| cx.quit());
     app.run_until_parked();
@@ -296,12 +314,13 @@ fn shutdown_headless(mut app: HeadlessAppContext) {
 fn render(mode_dark: bool, name: &str, build: Build) -> Frame {
     let guard = GPU.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     // Arm after the mutex is acquired: queueing behind other cases must not
-    // consume the watchdog budget. A hang in draw or shutdown is still caught.
+    // consume the watchdog budget, and it stays armed through shutdown.
     let watchdog = RenderWatchdog::arm(name);
     let mut app = headless_app(mode_dark);
     let frame = draw_and_capture(&mut app, name, build);
-    // Release the render mutex before shutting the context down: the next case
-    // may start while this one drains, so a stuck shutdown cannot block it.
+    // Release the render mutex before shutting the context down: shutdown parks
+    // on the test scheduler, and holding the mutex through it serialises every
+    // other case behind a park.
     drop(guard);
     shutdown_headless(app);
     drop(watchdog);
