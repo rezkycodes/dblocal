@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use crate::clients::{
     ClientKind, DetectedClient, OpenTarget, OsKind, SystemSpawner, TerminalChoice, TerminalKind,
-    plan_open, run,
+    plan_open,
 };
 use crate::model::EngineKey;
 use crate::secret::SecretString;
@@ -86,7 +86,8 @@ exec "{term}" "$@"
     let script_name = plan.temp_file().unwrap().name_hint().to_owned();
     let script_path = launcher_dir.join(&script_name);
 
-    run(&plan, &SystemSpawner::with_launcher_dir(&launcher_dir)).unwrap();
+    super::resilient::spawn_resilient(&plan, &SystemSpawner::with_launcher_dir(&launcher_dir))
+        .unwrap();
 
     for _ in 0..100 {
         if out.exists() {
@@ -187,7 +188,8 @@ fn two_concurrent_launches_get_different_scripts_and_passwords() {
             &terminal,
         )
         .unwrap();
-        run(&plan, &SystemSpawner::with_launcher_dir(&launcher_dir)).unwrap();
+        super::resilient::spawn_resilient(&plan, &SystemSpawner::with_launcher_dir(&launcher_dir))
+            .unwrap();
         for _ in 0..100 {
             if out.exists() {
                 break;
@@ -259,7 +261,8 @@ fn real_ptyxis_receives_password_via_script() {
         &terminal,
     )
     .unwrap();
-    run(&plan, &SystemSpawner::with_launcher_dir(&launcher_dir)).unwrap();
+    super::resilient::spawn_resilient(&plan, &SystemSpawner::with_launcher_dir(&launcher_dir))
+        .unwrap();
 
     for _ in 0..200 {
         if out.exists() {

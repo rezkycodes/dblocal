@@ -1,4 +1,4 @@
-use crate::clients::{LaunchEnv, LaunchPlan};
+use crate::clients::LaunchPlan;
 
 pub fn assert_no_secret(plan: &LaunchPlan, secret: &str) {
     assert!(!secret.is_empty(), "secret must not be empty");
@@ -29,9 +29,4 @@ pub fn assert_no_secret(plan: &LaunchPlan, secret: &str) {
     if let Some(temp) = plan.temp_file() {
         let _ = temp;
     }
-}
-
-#[allow(dead_code)]
-pub fn env_names(env: &[LaunchEnv]) -> Vec<&str> {
-    env.iter().map(LaunchEnv::name).collect()
 }

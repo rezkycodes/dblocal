@@ -3,6 +3,8 @@ use std::time::Duration;
 
 use crate::clients::{LaunchPlan, SystemSpawner, run};
 
+use super::resilient::spawn_resilient;
+
 #[test]
 fn real_spawn_runs_harmless_fake_program() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -15,7 +17,7 @@ fn real_spawn_runs_harmless_fake_program() {
         fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).expect("chmod");
     }
     let plan = LaunchPlan::new(script.clone(), vec![], vec![], None, None, None);
-    run(&plan, &SystemSpawner::default()).expect("spawn");
+    spawn_resilient(&plan, &SystemSpawner::default()).expect("spawn");
     // wait briefly for script
     for _ in 0..50 {
         if out.exists() {

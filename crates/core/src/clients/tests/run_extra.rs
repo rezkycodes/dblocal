@@ -77,8 +77,8 @@ fn system_spawner_runs_with_temp_file_and_env() {
         Some(temp),
         None,
     );
-    let res = run(&plan, &SystemSpawner::with_launcher_dir(&launcher_dir));
-    res.unwrap();
+    super::resilient::spawn_resilient(&plan, &SystemSpawner::with_launcher_dir(&launcher_dir))
+        .unwrap();
     for _ in 0..50 {
         if out.exists() {
             break;
@@ -170,7 +170,8 @@ fn script_placeholder_is_substituted_from_the_injected_dir() {
         Some(temp),
         None,
     );
-    run(&plan, &SystemSpawner::with_launcher_dir(&launcher_dir)).unwrap();
+    super::resilient::spawn_resilient(&plan, &SystemSpawner::with_launcher_dir(&launcher_dir))
+        .unwrap();
     for _ in 0..100 {
         if out.exists() {
             break;

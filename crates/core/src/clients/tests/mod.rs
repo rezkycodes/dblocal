@@ -6,6 +6,7 @@ mod hostile;
 mod plan;
 mod plan_extra;
 mod real_host;
+mod resilient;
 mod run_extra;
 mod scan;
 mod spawn;
