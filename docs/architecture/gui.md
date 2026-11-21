@@ -93,6 +93,14 @@ methods. Release binaries: `dblocal` +1.52 MB, `measure` +1.51 MB. Full tables a
 
 ## Headless render evidence
 
+W2-E replaced the W1-G `shell-*.png` set with prototype-screen renders (same method, new file names),
+regenerated with `DBLOCAL_UPDATE_RENDERS=1`:
+`overview-dark`, `overview-light`, `overview-failed-dark`, `overview-revealed-dark`,
+`logs-light`, `logs-diagnosis-dark`, `databases-product-light`, `databases-demo-light`,
+`create-download-dark`, `create-unavailable-dark`, `dock-all-dark`, `dock-filtered-dark`,
+`palette-dark`, `delete-light`, `stale-light`. The old `shell-*.png` names no longer describe the
+screens and were removed.
+
 `crates/gui/tests/render.rs` renders the real view off-screen through GPUI's
 headless wgpu path. Frames are written to `target/renders/`; committed
 screenshots under `docs/design/renders/` are refreshed only with
