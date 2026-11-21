@@ -20,19 +20,30 @@ use super::quote::shell_quote;
 pub const SCRIPT_PLACEHOLDER: &str = "{script}";
 pub const SCRIPT_MAX_AGE: Duration = Duration::from_secs(10 * 60);
 
+/// Effective user id of this process, used for the launcher-directory owner check.
+///
+/// `sysinfo` is already a dependency and its `user` feature is on by default; this
+/// stays safe Rust (the workspace denies `unsafe_code`) and works on macOS, where
+/// `/proc` does not exist.
 pub fn current_uid() -> u32 {
     #[cfg(unix)]
     {
-        std::process::Command::new("id")
-            .arg("-u")
-            .output()
-            .ok()
-            .and_then(|o| {
-                if !o.status.success() {
-                    return None;
-                }
-                String::from_utf8_lossy(&o.stdout).trim().parse::<u32>().ok()
-            })
+        use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
+        let Ok(pid) = sysinfo::get_current_pid() else {
+            return u32::MAX;
+        };
+        let Ok(mut system) = System::new() else {
+            return u32::MAX;
+        };
+        system.refresh_processes_specifics(
+            ProcessesToUpdate::Some(&[pid]),
+            true,
+            ProcessRefreshKind::nothing().with_user(UpdateKind::Always),
+        );
+        system
+            .process(pid)
+            .and_then(|process| process.effective_user_id().cloned())
+            .map(|uid| *uid)
             .unwrap_or(u32::MAX)
     }
     #[cfg(not(unix))]
@@ -162,7 +173,6 @@ fn random_script_name(os: OsKind) -> String {
     };
     format!("dblocal-open-{hex}.{ext}")
 }
-
 
 fn build_posix_launcher(
     client_program: &Path,

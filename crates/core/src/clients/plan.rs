@@ -419,6 +419,7 @@ fn plan_cli(
 ) -> ClientResult<LaunchPlan> {
     let (client_program, client_argv, env) = cli_command(client, target, credential)?;
     build_terminal_plan(client_program, client_argv, env, os, terminal)
+        .map(|plan| plan.with_required_path(client.path().clone()))
 }
 
 fn cli_command(

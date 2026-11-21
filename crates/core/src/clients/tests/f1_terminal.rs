@@ -209,13 +209,23 @@ fn real_ptyxis_receives_password_via_script() {
         .into_iter()
         .map(std::path::PathBuf::from)
         .find(|p| p.exists())
-        .or_else(|| std::process::Command::new("which").arg("ptyxis").output().ok().and_then(|o| {
-            if !o.status.success() {
-                return None;
-            }
-            let s = String::from_utf8_lossy(&o.stdout).trim().to_owned();
-            if s.is_empty() { None } else { Some(std::path::PathBuf::from(s)) }
-        }))
+        .or_else(|| {
+            std::process::Command::new("which")
+                .arg("ptyxis")
+                .output()
+                .ok()
+                .and_then(|o| {
+                    if !o.status.success() {
+                        return None;
+                    }
+                    let s = String::from_utf8_lossy(&o.stdout).trim().to_owned();
+                    if s.is_empty() {
+                        None
+                    } else {
+                        Some(std::path::PathBuf::from(s))
+                    }
+                })
+        })
         .expect("ptyxis not found");
 
     let dir = tempfile::tempdir().unwrap();
@@ -239,11 +249,7 @@ fn real_ptyxis_receives_password_via_script() {
         "app",
     )
     .unwrap();
-    let client = DetectedClient::new(
-        ClientKind::Psql,
-        psql,
-        ClientKind::Psql.supported_engines(),
-    );
+    let client = DetectedClient::new(ClientKind::Psql, psql, ClientKind::Psql.supported_engines());
     let terminal = TerminalChoice::new(ptyxis, TerminalKind::Ptyxis);
     let plan = plan_open(
         &client,

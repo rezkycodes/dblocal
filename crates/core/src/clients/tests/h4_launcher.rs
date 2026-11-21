@@ -3,7 +3,9 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::time::{Duration, SystemTime};
 
-use crate::clients::{ClientKind, DetectedClient, OpenTarget, OsKind, TerminalChoice, TerminalKind, plan_open};
+use crate::clients::{
+    ClientKind, DetectedClient, OpenTarget, OsKind, TerminalChoice, TerminalKind, plan_open,
+};
 use crate::model::EngineKey;
 use crate::secret::SecretString;
 
@@ -125,7 +127,10 @@ fn h4_f_sweep_removes_only_old_launcher_scripts() {
     fs::write(&fresh, "#!/bin/sh\n").unwrap();
     fs::write(&unrelated, "keep").unwrap();
     let old_time = SystemTime::now() - Duration::from_secs(11 * 60);
-    fs::File::open(&old).unwrap().set_modified(old_time).unwrap();
+    fs::File::open(&old)
+        .unwrap()
+        .set_modified(old_time)
+        .unwrap();
 
     let psql = dir.path().join("psql");
     write_exec(&psql, "#!/bin/sh\nexit 0\n");
@@ -138,6 +143,46 @@ fn h4_f_sweep_removes_only_old_launcher_scripts() {
     assert!(unrelated.exists(), "unrelated file should remain");
     assert!(written.exists(), "new script should exist");
     let _ = fs::remove_file(written);
+}
+
+#[test]
+fn h2_cli_launcher_uses_detected_absolute_client_path() {
+    let dir = tempfile::tempdir().unwrap();
+    let psql = dir.path().join("bin").join("psql-16");
+    fs::create_dir(dir.path().join("bin")).unwrap();
+    write_exec(&psql, "#!/bin/sh\nexit 0\n");
+
+    for kind in [
+        ClientKind::Psql,
+        ClientKind::Mysql,
+        ClientKind::Mariadb,
+        ClientKind::ValkeyCli,
+        ClientKind::RedisCli,
+    ] {
+        let engine = match kind {
+            ClientKind::Psql => EngineKey::Postgresql,
+            ClientKind::Mysql | ClientKind::Mariadb => EngineKey::Mysql,
+            _ => EngineKey::Valkey,
+        };
+        let target =
+            OpenTarget::new(engine, "127.0.0.1", 5432, "postgres", "postgres", "app").unwrap();
+        let client = DetectedClient::new(kind, psql.clone(), kind.supported_engines());
+        let terminal = TerminalChoice::new("xterm", TerminalKind::Xterm);
+        let plan = plan_open(
+            &client,
+            &target,
+            Some(&SecretString::from("pw")),
+            OsKind::Linux,
+            &terminal,
+        )
+        .unwrap();
+        let script = plan.temp_file().unwrap().contents().expose();
+        assert!(
+            script.contains(&psql.to_string_lossy().into_owned()),
+            "{kind:?} must exec the detected path, got: {script}"
+        );
+        assert_eq!(plan.required_path(), Some(&psql));
+    }
 }
 
 #[test]
@@ -162,6 +207,29 @@ fn h4_g_i_secure_dir_checks() {
     let wrong_uid = dir.path().join("wrong-uid");
     fs::create_dir(&wrong_uid).unwrap();
     fs::set_permissions(&wrong_uid, fs::Permissions::from_mode(0o700)).unwrap();
-    let bad_uid = uid.saturating_add(1);
+    let bad_uid = uid.wrapping_add(1);
+    assert_ne!(bad_uid, uid);
     assert!(verify_secure_dir_for(&wrong_uid, bad_uid).is_err());
+}
+
+#[test]
+fn h1_current_uid_matches_owner_of_created_dir() {
+    use std::os::unix::fs::MetadataExt;
+    let dir = tempfile::tempdir().unwrap();
+    let meta = fs::symlink_metadata(dir.path()).unwrap();
+    assert_eq!(current_uid(), meta.uid(), "uid must come from the OS");
+    assert_ne!(current_uid(), u32::MAX);
+}
+
+#[test]
+fn materialize_creates_missing_secure_dir() {
+    let dir = tempfile::tempdir().unwrap();
+    let target = dir.path().join("created").join("dblocal");
+    let psql = dir.path().join("psql");
+    write_exec(&psql, "#!/bin/sh\nexit 0\n");
+    let plan = psql_plan("pw", &psql);
+    let temp = plan.temp_file().expect("temp");
+    let written = materialize_launcher_in(&target, temp).unwrap();
+    assert!(written.exists());
+    assert_eq!(written.parent(), Some(target.as_path()));
 }

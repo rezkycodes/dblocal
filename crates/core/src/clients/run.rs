@@ -6,7 +6,9 @@ use std::process::Command;
 use super::error::{ClientError, ClientResult};
 
 use super::plan::LaunchPlan;
-use super::terminal::{materialize_launcher, materialize_launcher_in, substitute_script_placeholder};
+use super::terminal::{
+    materialize_launcher, materialize_launcher_in, substitute_script_placeholder,
+};
 
 /// Executes a prepared launch plan.
 ///
