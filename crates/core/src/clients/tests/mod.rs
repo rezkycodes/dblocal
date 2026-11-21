@@ -1,3 +1,4 @@
+mod applescript;
 mod detect;
 mod f1_terminal;
 mod golden;
@@ -11,3 +12,4 @@ mod run_extra;
 mod scan;
 mod spawn;
 mod terminal_extra;
+mod windows_script;
