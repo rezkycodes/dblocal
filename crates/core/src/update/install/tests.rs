@@ -341,3 +341,15 @@ fn apply_failure_after_backup_keeps_target() {
         .unwrap();
     assert!(String::from_utf8_lossy(&out.stdout).contains("1.0.0"));
 }
+
+#[cfg(unix)]
+#[test]
+fn cleanup_backup_removes_old_file() {
+    let dir = tempdir().unwrap();
+    let current = dir.path().join("dblocal");
+    let backup = dir.path().join("dblocal.old");
+    write_fake_binary(&current, "1.0.0", true);
+    std::fs::write(&backup, b"old").unwrap();
+    cleanup_backup(&current).unwrap();
+    assert!(!backup.exists());
+}
