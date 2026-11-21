@@ -31,5 +31,8 @@ fn missing_client_returns_typed_error_not_panic() {
     let plan = LaunchPlan::new("nope", vec![], vec![], None, None, None)
         .with_required_path("/tmp/dblocal-definitely-missing-client-bin");
     let err = run(&plan, &SystemSpawner).unwrap_err();
-    assert!(matches!(err, crate::clients::ClientError::ClientNotFound { .. }));
+    assert!(matches!(
+        err,
+        crate::clients::ClientError::ClientNotFound { .. }
+    ));
 }

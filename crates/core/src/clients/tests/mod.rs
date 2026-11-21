@@ -3,7 +3,7 @@ mod golden;
 mod hostile;
 mod plan;
 mod real_host;
+mod run_extra;
 mod scan;
 mod spawn;
-mod run_extra;
 mod terminal_extra;

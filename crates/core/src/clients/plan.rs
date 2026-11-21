@@ -429,8 +429,9 @@ fn cli_command(
             (PathBuf::from(bin), argv)
         }
         _ => {
-            return Err(DblError::Unsupported {
-                reason: format!("{} is not a CLI client", kind.display_name()),
+            return Err(ClientError::UnsupportedClient {
+                client: kind.as_str(),
+                engine: "unknown",
             });
         }
     };

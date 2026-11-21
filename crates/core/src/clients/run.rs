@@ -24,8 +24,7 @@ impl Spawner for SystemSpawner {
         if let Some(required) = plan.required_path()
             && !required.exists()
         {
-            return Err(DblError::NotFound {
-                kind: "client",
+            return Err(ClientError::ClientNotFound {
                 name: required.display().to_string(),
             });
         }
@@ -43,9 +42,13 @@ impl Spawner for SystemSpawner {
         cmd.stderr(std::process::Stdio::null());
         let mut child = cmd.spawn().map_err(|err| {
             if err.kind() == std::io::ErrorKind::NotFound {
-                ClientError::ClientNotFound { name: plan.program().display().to_string() }
+                ClientError::ClientNotFound {
+                    name: plan.program().display().to_string(),
+                }
             } else {
-                ClientError::LaunchFailed { reason: err.kind().to_string() }
+                ClientError::LaunchFailed {
+                    reason: err.kind().to_string(),
+                }
             }
         })?;
         std::thread::spawn(move || {
@@ -65,11 +68,17 @@ fn materialize_temp_file(temp: Option<&TempFile>) -> ClientResult<Option<PathBuf
         return Ok(None);
     };
     let base = std::env::temp_dir().join("dblocal-open-client");
-    std::fs::create_dir_all(&base).map_err(|e| ClientError::LaunchFailed { reason: e.kind().to_string() })?;
+    std::fs::create_dir_all(&base).map_err(|e| ClientError::LaunchFailed {
+        reason: e.kind().to_string(),
+    })?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&base, std::fs::Permissions::from_mode(0o700)).map_err(|e| ClientError::LaunchFailed { reason: e.kind().to_string() })?;
+        std::fs::set_permissions(&base, std::fs::Permissions::from_mode(0o700)).map_err(|e| {
+            ClientError::LaunchFailed {
+                reason: e.kind().to_string(),
+            }
+        })?;
     }
     let path = base.join(temp.name_hint());
     let mut options = std::fs::OpenOptions::new();
@@ -80,22 +89,29 @@ fn materialize_temp_file(temp: Option<&TempFile>) -> ClientResult<Option<PathBuf
         options.mode(temp.mode());
     }
     use std::io::Write;
-    let mut file = options.open(&path).map_err(|e| ClientError::LaunchFailed { reason: e.kind().to_string() })?;
-    file.write_all(temp.contents().expose().as_bytes()).map_err(|e| ClientError::LaunchFailed { reason: e.kind().to_string() })?;
-    file.sync_all().map_err(|e| ClientError::LaunchFailed { reason: e.kind().to_string() })?;
+    let mut file = options.open(&path).map_err(|e| ClientError::LaunchFailed {
+        reason: e.kind().to_string(),
+    })?;
+    file.write_all(temp.contents().expose().as_bytes())
+        .map_err(|e| ClientError::LaunchFailed {
+            reason: e.kind().to_string(),
+        })?;
+    file.sync_all().map_err(|e| ClientError::LaunchFailed {
+        reason: e.kind().to_string(),
+    })?;
     Ok(Some(path))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::clients::{LaunchEnv, LaunchPlan};
+    use crate::clients::{ClientError, LaunchEnv, LaunchPlan};
     use crate::secret::SecretString;
 
     struct NoopSpawner;
 
     impl Spawner for NoopSpawner {
-        fn spawn(&self, _plan: &LaunchPlan) -> Result<()> {
+        fn spawn(&self, _plan: &LaunchPlan) -> crate::clients::ClientResult<()> {
             Ok(())
         }
     }
@@ -118,6 +134,6 @@ mod tests {
         let plan = LaunchPlan::new("missing-client", vec![], vec![], None, None, None)
             .with_required_path("/tmp/definitely-missing-dblocal-client");
         let err = SystemSpawner.spawn(&plan).unwrap_err();
-        assert!(matches!(err, DblError::NotFound { .. }), "{err:?}");
+        assert!(matches!(err, ClientError::ClientNotFound { .. }), "{err:?}");
     }
 }
