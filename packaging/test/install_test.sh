@@ -830,6 +830,49 @@ set -e
 if [ "$rc" -ne 0 ]; then pass "F3: empty readelf output fails"; else fail "F3: empty readelf output must fail"; fi
 assert_contains "$out" "could not determine GLIBC symbol versions" "F3: clear error for empty GLIBC"
 
+# G1: neither build script may invoke objdump again (readelf handles all archs).
+# Comments may mention objdump to explain why readelf is used; command usage must not.
+log "-- test: G1 no objdump in packaging scripts"
+g1_objdump_hits="$(
+  grep -nH 'objdump' "$repo_root/packaging/deb/build-deb.sh" \
+    "$repo_root/packaging/rpm/build-rpm.sh" \
+    "$repo_root/packaging/lib/glibc.sh" \
+    | grep -vE ':[0-9]+:[[:space:]]*#' || true
+)"
+if [ -n "$g1_objdump_hits" ]; then
+  printf '%s\n' "$g1_objdump_hits" >&2
+  fail "G1: objdump command/reference found in packaging scripts"
+else
+  pass "G1: no objdump command use in deb/rpm/glibc scripts"
+fi
+
+# G1: shared glibc helper exists and is sourced by both scripts.
+if grep -q 'packaging/lib/glibc.sh' "$repo_root/packaging/deb/build-deb.sh" \
+  && grep -q 'packaging/lib/glibc.sh' "$repo_root/packaging/rpm/build-rpm.sh"; then
+  pass "G1: deb and rpm scripts source shared glibc.sh"
+else
+  fail "G1: deb/rpm scripts must source packaging/lib/glibc.sh"
+fi
+
+# G1: readelf -V and readelf --dyn-syms -W agree on real binary (task evidence).
+if [ -x "$real_bin" ] && command -v readelf >/dev/null 2>&1; then
+  g1_v="$(readelf -V "$real_bin" | grep -oE 'GLIBC_[0-9]+(\.[0-9]+)+' | sort -V | tail -n 1 | sed 's/^GLIBC_//')"
+  g1_dyn="$(readelf --dyn-syms -W "$real_bin" | grep -oE 'GLIBC_[0-9]+(\.[0-9]+)+' | sort -V | tail -n 1 | sed 's/^GLIBC_//')"
+  g1_objdump=""
+  if command -v objdump >/dev/null 2>&1; then
+    g1_objdump="$(objdump -T "$real_bin" | grep -oE 'GLIBC_[0-9]+(\.[0-9]+)+' | sort -V | tail -n 1 | sed 's/^GLIBC_//')"
+  fi
+  assert_eq "$g1_v" "$g1_dyn" "G1: readelf -V == readelf --dyn-syms -W on real binary"
+  if [ -n "$g1_objdump" ]; then
+    assert_eq "$g1_v" "$g1_objdump" "G1: readelf -V == objdump -T on real binary"
+  else
+    pass "G1: objdump not available for comparison (skipped)"
+  fi
+  log "G1: real binary glibc floor readelf -V=${g1_v} dyn-syms=${g1_dyn} objdump=${g1_objdump:-n/a}"
+else
+  fail "G1: real binary/readelf missing; cannot compare readelf methods"
+fi
+
 # F4: rpm spec contains dlopen runtime Recommends.
 log "-- test: F4 rpm spec Recommends"
 if grep -q 'Recommends:[[:space:]]*libwayland-client' "$repo_root/packaging/rpm/dblocal.spec" \

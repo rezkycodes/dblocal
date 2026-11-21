@@ -130,6 +130,12 @@ jobs:
           chmod +x "dist/bin/${{ matrix.target }}/dblocal"
           ls -lh "dist/bin/${{ matrix.target }}/dblocal"
 
+      - name: Log binary ELF identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          readelf -h "dist/bin/${{ matrix.target }}/dblocal" | sed -n '1,20p'
+
       - name: Build .deb
         if: matrix.package == 'deb'
         shell: bash
