@@ -197,3 +197,35 @@ fn validate_url_rejects_unknown_scheme() {
     let err = validate_url(&url, &UpdateDownloadOptions::default()).expect_err("ftp");
     assert_eq!(err.code(), crate::update::error::CODE_UPDATE_NETWORK);
 }
+
+#[tokio::test]
+async fn download_rejects_zero_declared_size() {
+    let dir = tempdir().expect("tmp");
+    let dest = dir.path().join("asset.bin");
+    let err = download_and_verify(
+        "http://127.0.0.1:1/asset.bin",
+        &dest,
+        &"2".repeat(64),
+        0,
+        &UpdateDownloadOptions::loopback_for_tests(),
+    )
+    .await
+    .expect_err("zero");
+    assert_eq!(err.code(), crate::update::error::CODE_UPDATE_MALFORMED);
+}
+
+#[tokio::test]
+async fn download_rejects_oversized_declared_size() {
+    let dir = tempdir().expect("tmp");
+    let dest = dir.path().join("asset.bin");
+    let err = download_and_verify(
+        "http://127.0.0.1:1/asset.bin",
+        &dest,
+        &"3".repeat(64),
+        MAX_UPDATE_BYTES + 1,
+        &UpdateDownloadOptions::loopback_for_tests(),
+    )
+    .await
+    .expect_err("big");
+    assert_eq!(err.code(), crate::update::error::CODE_UPDATE_MALFORMED);
+}

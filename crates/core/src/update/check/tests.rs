@@ -228,3 +228,44 @@ fn select_platform_asset_picks_appimage_over_tarball() {
         .unwrap();
     assert_eq!(selected.kind(), UpdateAssetKind::AppImage);
 }
+
+#[tokio::test]
+async fn check_reports_non_200_status() {
+    let fetcher = MockFetcher::new(vec![Ok(FetchResponse::new(500, b"oops".to_vec()))]);
+    let err = check(&Version::parse("1.0.0").unwrap(), &fetcher, &linux_options())
+        .await
+        .expect_err("500");
+    assert_eq!(err.code(), crate::update::error::CODE_UPDATE_NETWORK);
+}
+
+#[tokio::test]
+async fn check_reports_oversized_body() {
+    let body = vec![b'a'; MAX_RELEASES_BODY_BYTES + 1];
+    let fetcher = MockFetcher::new(vec![Ok(FetchResponse::new(200, body))]);
+    let err = check(&Version::parse("1.0.0").unwrap(), &fetcher, &linux_options())
+        .await
+        .expect_err("oversized");
+    assert_eq!(err.code(), crate::update::error::CODE_UPDATE_MALFORMED);
+}
+
+#[tokio::test]
+async fn check_reports_429_rate_limit() {
+    let fetcher = MockFetcher::new(vec![Ok(FetchResponse::new(429, b"rate".to_vec()))]);
+    let err = check(&Version::parse("1.0.0").unwrap(), &fetcher, &linux_options())
+        .await
+        .expect_err("429");
+    assert_eq!(err.code(), crate::update::error::CODE_UPDATE_RATE_LIMITED);
+}
+
+#[test]
+fn releases_url_rejects_whitespace_and_backslash() {
+    assert!(releases_url("a /b").is_err());
+    assert!(releases_url("a\\b").is_err());
+    assert!(releases_url("").is_err());
+}
+
+#[test]
+fn sanitize_release_notes_handles_control_and_newlines() {
+    let out = sanitize_release_notes("a\r\nb\tc");
+    assert_eq!(out, "a b c");
+}
