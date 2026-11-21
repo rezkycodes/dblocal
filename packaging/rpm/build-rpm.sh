@@ -23,6 +23,8 @@ script_dir="$(resolve_dir "$(dirname -- "$0")")"
 repo_root="$(resolve_dir "$script_dir/../..")"
 # shellcheck source=packaging/lib/version.sh
 . "$repo_root/packaging/lib/version.sh"
+# shellcheck source=packaging/lib/glibc.sh
+. "$repo_root/packaging/lib/glibc.sh"
 
 usage() {
   cat >&2 <<'USAGE'
@@ -81,14 +83,8 @@ fi
 
 # F3: compute libc floor from the binary (same check as deb). rpmbuild
 # auto-generates GLIBC requires; we log the computed floor so the build record
-# shows the real minimum. Fail clearly if objdump is missing or finds nothing.
-command -v objdump >/dev/null 2>&1 || { echo "error: required tool not found: objdump (needed to compute libc floor)" >&2; exit 1; }
-GLIBC_FLOOR="$(objdump -T "$DBLOCAL_BIN" | grep -oE 'GLIBC_[0-9]+(\.[0-9]+)+' | sort -V | tail -n 1)"
-if [ -z "$GLIBC_FLOOR" ]; then
-  echo "error: could not determine GLIBC symbol versions from $DBLOCAL_BIN (objdump -T produced no GLIBC_*)" >&2
-  exit 1
-fi
-GLIBC_FLOOR="${GLIBC_FLOOR#GLIBC_}"
+# shows the real minimum. Fail clearly if readelf is missing or finds nothing.
+GLIBC_FLOOR="$(dblocal_glibc_floor "$DBLOCAL_BIN")"
 echo "info: computed libc floor from $DBLOCAL_BIN: GLIBC_${GLIBC_FLOOR}; rpmbuild will auto-generate matching libc requires" >&2
 
 if ! command -v rpmbuild >/dev/null 2>&1; then

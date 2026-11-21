@@ -635,6 +635,12 @@ assert_ver_invalid "1.2" "F2: incomplete version rejected"
 assert_ver_invalid "1.2.3.4" "F2: four-part version rejected"
 assert_ver_invalid "v1.2.3;rm" "F2: shell metachar version rejected"
 
+# G2: multi-line / control-char / whitespace values must be rejected as a whole.
+assert_ver_invalid $'evil\n0.2.0' "G2: embedded newline before valid line rejected"
+assert_ver_invalid $'0.2.0\nDepends: evil' "G2: embedded newline with control-field payload rejected"
+assert_ver_invalid $'0.2.0\r' "G2: carriage return rejected"
+assert_ver_invalid "0.2.0 rc1" "G2: space rejected"
+
 # Ordering: rc.1 < rc.2 < final, using dpkg --compare-versions (F1).
 if command -v dpkg >/dev/null 2>&1; then
   v_rc1="$(bash -c "source '$ver_sh'; dblocal_version_package '0.2.0-rc.1'")"
@@ -707,18 +713,46 @@ set -e
 if [ "$rc" -eq 2 ]; then pass "F2: build-msi.sh rejects 'main' with exit 2"; else fail "F2: build-msi.sh rejects 'main' with exit 2 (rc=$rc out=$out)"; fi
 assert_contains "$out" "invalid version" "F2: build-msi.sh reports invalid version"
 
+# G2: build scripts reject multi-line versions (whole-string validation).
+set +e
+out="$(DBLOCAL_BIN="$fake_bin" bash "$repo_root/packaging/deb/build-deb.sh" --version $'0.2.0\nDepends: evil' --output "$tmp_root/out-deb-g2" 2>&1)"
+rc=$?
+set -e
+if [ "$rc" -eq 2 ]; then pass "G2: build-deb.sh rejects newline version with exit 2"; else fail "G2: build-deb.sh rejects newline version with exit 2 (rc=$rc out=$out)"; fi
+assert_contains "$out" "invalid version" "G2: build-deb.sh reports invalid version for newline"
+
+set +e
+out="$(DBLOCAL_BIN="$fake_bin" bash "$repo_root/packaging/rpm/build-rpm.sh" --version $'evil\n0.2.0' --output "$tmp_root/out-rpm-g2" 2>&1)"
+rc=$?
+set -e
+if [ "$rc" -eq 2 ]; then pass "G2: build-rpm.sh rejects newline version with exit 2"; else fail "G2: build-rpm.sh rejects newline version with exit 2 (rc=$rc out=$out)"; fi
+assert_contains "$out" "invalid version" "G2: build-rpm.sh reports invalid version for newline"
+
+set +e
+out="$(bash "$repo_root/packaging/msi/build-msi.sh" $'0.2.0\r' '' "$tmp_root/out-msi-g2" 2>&1)"
+rc=$?
+set -e
+if [ "$rc" -eq 2 ]; then pass "G2: build-msi.sh rejects CR version with exit 2"; else fail "G2: build-msi.sh rejects CR version with exit 2 (rc=$rc out=$out)"; fi
+assert_contains "$out" "invalid version" "G2: build-msi.sh reports invalid version for CR"
+
 # build-msi.ps1 validation: check source contains explicit invalid-version throw (cannot run pwsh here).
 if grep -q "invalid version" "$repo_root/packaging/msi/build-msi.ps1" && grep -q '0\.0\.0~git' "$repo_root/packaging/msi/build-msi.ps1"; then
   pass "F2: build-msi.ps1 contains explicit invalid-version error and snapshot fallback"
 else
   fail "F2: build-msi.ps1 missing invalid-version error or snapshot fallback"
 fi
+# G2: ps1 must use whole-string anchored validation (\A..\z), not substring -match.
+if grep -qE '\\A\[0-9\]\+\\\.\[0-9\]\+\\\.\[0-9\]\+\(\[-~\]\[0-9A-Za-z\.\]\+\)\?\\z' "$repo_root/packaging/msi/build-msi.ps1"; then
+  pass "G2: build-msi.ps1 uses whole-string anchored version regex"
+else
+  fail "G2: build-msi.ps1 missing whole-string anchored version regex (\\A...\\z)"
+fi
 
-# F3: libc floor computed from binary via objdump.
+# F3: libc floor computed from binary via readelf.
 log "-- test: F3 computed libc floor"
 real_bin="$HOME/.cache/dblocal-target-gui/release/dblocal"
-if [ -x "$real_bin" ] && command -v objdump >/dev/null 2>&1 && command -v dpkg-deb >/dev/null 2>&1; then
-  real_glibc="$(objdump -T "$real_bin" | grep -oE 'GLIBC_[0-9]+(\.[0-9]+)+' | sort -V | tail -n 1 | sed 's/^GLIBC_//')"
+if [ -x "$real_bin" ] && command -v readelf >/dev/null 2>&1 && command -v dpkg-deb >/dev/null 2>&1; then
+  real_glibc="$(readelf -V "$real_bin" | grep -oE 'GLIBC_[0-9]+(\.[0-9]+)+' | sort -V | tail -n 1 | sed 's/^GLIBC_//')"
   if [ -n "$real_glibc" ]; then
     pass "F3: real binary has GLIBC max $real_glibc"
     # Build deb with real binary and assert Depends contains computed floor.
@@ -744,21 +778,23 @@ if [ -x "$real_bin" ] && command -v objdump >/dev/null 2>&1 && command -v dpkg-d
     fail "F3: could not compute GLIBC max from real binary"
   fi
 else
-  fail "F3: real binary/objdump/dpkg-deb missing; cannot verify computed libc floor"
+  fail "F3: real binary/readelf/dpkg-deb missing; cannot verify computed libc floor"
 fi
 
-# F3: fake objdump fixture - script must use objdump output, not hardcoded 2.31.
-log "-- test: F3 fake objdump determines floor"
+# F3: fake readelf fixture - script must use readelf output, not hardcoded 2.31.
+log "-- test: F3 fake readelf determines floor"
 f3_fake="$tmp_root/f3fake"
 mkdir -p "$f3_fake/bin"
-cat > "$f3_fake/bin/objdump" <<'FAKE'
+cat > "$f3_fake/bin/readelf" <<'FAKE'
 #!/bin/sh
 cat <<'SYM'
-0000000000000000      DF *UND*  0000000000000000  GLIBC_2.2.5 printf
-0000000000000000      DF *UND*  0000000000000000  GLIBC_2.99 something
+Version needs section '.gnu.version_r' contains 2 entries:
+  0x0000: Version: 1  File: libc.so.6  Cnt: 2
+  0x0010:   Name: GLIBC_2.2.5  Flags: none  Version: 2
+  0x0020:   Name: GLIBC_2.99    Flags: none  Version: 3
 SYM
 FAKE
-chmod +x "$f3_fake/bin/objdump"
+chmod +x "$f3_fake/bin/readelf"
 # Provide dpkg-deb passthrough by symlinking real one; we need a minimal fake binary file.
 printf 'fake' > "$f3_fake/fakebin"
 chmod +x "$f3_fake/fakebin"
@@ -766,33 +802,32 @@ set +e
 out="$(PATH="$f3_fake/bin:$PATH" DBLOCAL_BIN="$f3_fake/fakebin" bash "$repo_root/packaging/deb/build-deb.sh" --version 0.2.0 --arch amd64 --output "$tmp_root/f3-fake-out" 2>&1)"
 rc=$?
 set -e
-assert_contains "$out" "GLIBC_2.99" "F3: fake objdump floor 2.99 is reported"
-# The build will fail later because fakebin is not a real installable payload in some environments? 
+assert_contains "$out" "GLIBC_2.99" "F3: fake readelf floor 2.99 is reported"
 # dpkg-deb only packs files; it should succeed.
 if [ "$rc" -eq 0 ]; then
   deps="$(dpkg-deb -f "$tmp_root/f3-fake-out/dblocal_0.2.0_amd64.deb" Depends)"
-  assert_contains "$deps" "libc6 (>= 2.99)" "F3: fake objdump floor used in Depends"
+  assert_contains "$deps" "libc6 (>= 2.99)" "F3: fake readelf floor used in Depends"
 else
   # If dpkg-deb failed for unrelated reason, still require floor was computed.
-  assert_contains "$out" "libc6 (>= 2.99)" "F3: fake objdump floor appears in output (build failed rc=$rc)"
+  assert_contains "$out" "libc6 (>= 2.99)" "F3: fake readelf floor appears in output (build failed rc=$rc)"
 fi
 
-# F3: missing objdump / no GLIBC symbols -> clear error.
+# F3: missing readelf / no GLIBC symbols -> clear error.
 log "-- test: F3 missing/empty GLIBC detection"
 f3_empty="$tmp_root/f3empty"
 mkdir -p "$f3_empty/bin"
-cat > "$f3_empty/bin/objdump" <<'FAKE'
+cat > "$f3_empty/bin/readelf" <<'FAKE'
 #!/bin/sh
 exit 0
 FAKE
-chmod +x "$f3_empty/bin/objdump"
+chmod +x "$f3_empty/bin/readelf"
 printf 'fake' > "$f3_empty/fakebin"
 chmod +x "$f3_empty/fakebin"
 set +e
 out="$(PATH="$f3_empty/bin:$PATH" DBLOCAL_BIN="$f3_empty/fakebin" bash "$repo_root/packaging/deb/build-deb.sh" --version 0.2.0 --arch amd64 --output "$tmp_root/f3-empty-out" 2>&1)"
 rc=$?
 set -e
-if [ "$rc" -ne 0 ]; then pass "F3: empty objdump output fails"; else fail "F3: empty objdump output must fail"; fi
+if [ "$rc" -ne 0 ]; then pass "F3: empty readelf output fails"; else fail "F3: empty readelf output must fail"; fi
 assert_contains "$out" "could not determine GLIBC symbol versions" "F3: clear error for empty GLIBC"
 
 # F4: rpm spec contains dlopen runtime Recommends.

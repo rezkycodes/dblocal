@@ -63,7 +63,8 @@ if ([string]::IsNullOrWhiteSpace($rawVersion)) {
   }
 } else {
   $stripped = $rawVersion -replace '^v', ''
-  if ($stripped -notmatch '^[0-9]+\.[0-9]+\.[0-9]+([-~][0-9A-Za-z.]+)?$') {
+  # Whole-string anchor (\A..\z) so embedded newlines/control chars are rejected.
+  if ($stripped -notmatch '\A[0-9]+\.[0-9]+\.[0-9]+([-~][0-9A-Za-z.]+)?\z') {
     throw "invalid version '$rawVersion': expected MAJOR.MINOR.PATCH with optional [-~]prerelease (e.g. 0.2.0, 0.2.0-rc.1)"
   }
   $rawVersion = $stripped

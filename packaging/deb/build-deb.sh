@@ -20,6 +20,8 @@ script_dir="$(resolve_dir "$(dirname -- "$0")")"
 repo_root="$(resolve_dir "$script_dir/../..")"
 # shellcheck source=packaging/lib/version.sh
 . "$repo_root/packaging/lib/version.sh"
+# shellcheck source=packaging/lib/glibc.sh
+. "$repo_root/packaging/lib/glibc.sh"
 
 usage() {
   cat >&2 <<'USAGE'
@@ -80,7 +82,6 @@ if [ ! -x "$DBLOCAL_BIN" ]; then
 fi
 
 command -v dpkg-deb >/dev/null 2>&1 || { echo "error: required tool not found: dpkg-deb" >&2; exit 1; }
-command -v objdump >/dev/null 2>&1 || { echo "error: required tool not found: objdump (needed to compute libc floor)" >&2; exit 1; }
 
 # Depends are derived from the real binary's DT_NEEDED entries.
 # F3: compute libc floor from the binary at build time; never hardcode.
@@ -99,17 +100,7 @@ command -v objdump >/dev/null 2>&1 || { echo "error: required tool not found: ob
 # EGL/Wayland paths loaded by dlopen in the GPUI stack. Not hard Depends:
 # GPUI can fall back to X11/xcb; missing optional backends should not block
 # install on minimal/headless systems.
-compute_glibc_floor() {
-  local bin="$1" max
-  max="$(objdump -T "$bin" | grep -oE 'GLIBC_[0-9]+(\.[0-9]+)+' | sort -V | tail -n 1)"
-  if [ -z "$max" ]; then
-    echo "error: could not determine GLIBC symbol versions from $bin (objdump -T produced no GLIBC_*)" >&2
-    exit 1
-  fi
-  printf '%s' "${max#GLIBC_}"
-}
-
-GLIBC_FLOOR="$(compute_glibc_floor "$DBLOCAL_BIN")"
+GLIBC_FLOOR="$(dblocal_glibc_floor "$DBLOCAL_BIN")"
 echo "info: computed libc floor from $DBLOCAL_BIN: GLIBC_${GLIBC_FLOOR} -> Depends libc6 (>= ${GLIBC_FLOOR})" >&2
 
 case "$ARCH" in

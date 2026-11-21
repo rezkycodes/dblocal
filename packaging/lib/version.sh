@@ -13,10 +13,12 @@ dblocal_version_strip_v() {
 }
 
 # dblocal_version_is_valid: 0 if valid SemVer-like package input after v-strip.
+# Uses a bash anchored regex so the whole string is matched as one value
+# (grep -Eq matches per line and would accept embedded newlines).
 dblocal_version_is_valid() {
   local v
   v="$(dblocal_version_strip_v "$1")"
-  printf '%s' "$v" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+([-~][0-9A-Za-z.]+)?$'
+  [[ $v =~ ^[0-9]+\.[0-9]+\.[0-9]+([-~][0-9A-Za-z.]+)?$ ]]
 }
 
 # dblocal_version_require_valid <raw> <context>
