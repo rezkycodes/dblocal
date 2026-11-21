@@ -210,6 +210,12 @@ fn detect_linux(exe_path: &Path) -> InstallKind {
             reason,
         };
     }
+    if !looks_like_portable_linux(exe_path) {
+        return InstallKind::Unknown {
+            exe_path: exe_path.to_path_buf(),
+            reason: "lokasi executable Linux tidak dikenali sebagai instalasi portabel".to_owned(),
+        };
+    }
     InstallKind::PortableTarball {
         exe_path: exe_path.to_path_buf(),
     }
@@ -220,13 +226,7 @@ fn detect_linux(exe_path: &Path) -> InstallKind {
 /// Unknown.
 fn linux_deny_reason(exe_path: &Path) -> Option<String> {
     let lower = path_to_lower(exe_path);
-    let denied_prefixes = [
-        "/nix/store",
-        "/snap/",
-        "/app/",
-        "/usr/",
-        "/opt/",
-    ];
+    let denied_prefixes = ["/nix/store", "/snap/", "/app/", "/usr/", "/opt/"];
     for prefix in denied_prefixes {
         if lower.starts_with(prefix) || lower.contains(prefix) {
             return Some(format!("path berada di lokasi terkelola: {prefix}"));
@@ -242,6 +242,16 @@ fn linux_deny_reason(exe_path: &Path) -> Option<String> {
         return Some("direktori executable tidak dapat ditulis oleh pengguna saat ini".to_owned());
     }
     None
+}
+
+fn looks_like_portable_linux(exe_path: &Path) -> bool {
+    let Some(name) = exe_path.file_name().and_then(|n| n.to_str()) else {
+        return false;
+    };
+    if name != "dblocal" {
+        return false;
+    }
+    exe_path.is_file()
 }
 
 fn path_is_writable_by_current_user(exe_path: &Path) -> bool {

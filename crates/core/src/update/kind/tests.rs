@@ -139,12 +139,7 @@ fn detect_install_kind_with_ownership_fallback() {
         detect_install_kind_with(PathBuf::from("/opt/custom/dblocal"), &FixedOwnership(None))
             .unwrap();
     if cfg!(target_os = "linux") {
-        assert!(matches!(
-            kind,
-            InstallKind::PortableTarball { .. }
-                | InstallKind::Unknown { .. }
-                | InstallKind::Homebrew { .. }
-        ));
+        assert!(matches!(kind, InstallKind::Unknown { .. }));
     }
 }
 
