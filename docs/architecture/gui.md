@@ -167,8 +167,13 @@ not link `service::mock` (checked with `strings` on the built rlib: 0 `MockServi
   service called at least once).
 
 Preview/render constructors (`Workspace::new_preview`) read synchronously on purpose: they are
-not on a user path, they seed a deterministic frame, and they never start background work that
-could change the render between frames (`bg_startup = false`).
+not on a user path, they seed a deterministic frame, and they start **no** background work. The
+shared constructor is `Workspace::build(.., live: bool)`: `live = true` is the app (bridge thread,
+`startup_load`, event and tray pumps), `live = false` is a preview (a closed event channel, no
+startup load, no pumps). Before W2-B-r2 a preview went through `new()` and inherited all three, so
+the bridge and the pumps were running over a service the preview never needed — and `App::shutdown`
+then drained effects fed by that pump, which is why the headless render binary wedged in a
+load-dependent case (see "Defects found" below).
 
 ### Every `DblService` call site and its thread (W2-B-r2, deliverable 4)
 
@@ -345,13 +350,30 @@ confirmation.
    the defect in `bench_text_system`: "Building a whole platform each time only to take its text
    system leaks the platform's threads on Linux (a 20-worker dispatcher and a timer thread per
    call)". Fix: one text system per process (`shared_text_system`, `OnceLock`). Thread count after
-   the fix: 49. Render binary: 15 passed in 103–110 s, ten runs in a row.
+   the fix: 49.
 
 2. **`wait_for_running` did not measure the bridge.** The tray-latency test read
    `service.view.lock().status` as a fallback, and the service sets that field *before* it emits
    `InstanceChanged`. A mutation that sleeps 1.5 s inside `service_bridge::forward` still passed
    (p50 50.2 ms). Removing the fallback makes that mutation fail (`max=1504.3ms`) and the honest
    measurement max 2.2 ms.
+
+3. **Previews ran the live wiring, and `App::shutdown` then hung.** `new_preview` delegated to
+   `new()`, which spawned the service bridge thread, `startup_load` and both pumps — the doc
+   already claimed previews start no background work. Instrumenting `render()` showed the last
+   line for a wedged case was `logs-long-light.png: drop`, i.e. inside
+   `drop(HeadlessAppContext)` → `App::shutdown` → `flush_effects`. A pump fed by a service that
+   emits from its own threads keeps the flush loop busy. Which case wedged depended on timing, so
+   the guard blamed a different case each run. `Workspace::build(.., live)` now starts none of it
+   for a preview. Three consecutive full render runs passed at load 7.7–14.8 (113–125 s each)
+   where the binary previously aborted within ten minutes.
+
+4. **The watchdog ordering test was not load-bearing.** `watchdog_does_not_fire_for_a_queued_case`
+   used its own lock and armed only after the earlier case had released, so the real order in
+   `render()` could be reversed without the test noticing. The ordering now lives in one helper
+   (`watchdog::lock_then_arm`) used by both, and the guard takes an injectable `on_fire` so a trip
+   is observed in-process. Arming before the lock fails with "the watchdog fired for a case that was
+   only queued".
 
 ## Known issue (W2-B-r2, a11y)
 
