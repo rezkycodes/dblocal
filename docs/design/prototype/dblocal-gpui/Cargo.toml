@@ -1,0 +1,31 @@
+[package]
+name = "dblocal"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.92"
+license = "GPL-3.0-only"
+description = "DBLocal — kelola server database lokal (PostgreSQL, MySQL, MariaDB, Valkey) tanpa container. Prototipe UI dengan GPUI Kit."
+
+[[bin]]
+name = "dblocal"
+path = "src/main.rs"
+
+[dependencies]
+gpui-kit = "=0.10.0"
+anyhow = "1"
+
+# GPUI berat di mode debug; optimalkan crate UI agar `cargo run` tetap mulus.
+[profile.dev.package]
+gpui-pre = { opt-level = 3 }
+gpui-component = { opt-level = 3 }
+gpui-kit = { opt-level = 3 }
+gpui-kit-assets = { opt-level = 3 }
+gpui-pre-platform = { opt-level = 3 }
+rustybuzz = { opt-level = 3 }
+taffy = { opt-level = 3 }
+ttf-parser = { opt-level = 3 }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true
