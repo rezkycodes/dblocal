@@ -1,6 +1,7 @@
 //! Developer tasks, run through `cargo xtask`.
 
 mod catalog;
+mod e2e;
 mod limit;
 
 use std::process::ExitCode;
@@ -39,6 +40,11 @@ enum Task {
         #[command(subcommand)]
         command: catalog::CatalogCommand,
     },
+    /// Runs ignored real-engine end-to-end tests (network + cached binaries).
+    ///
+    /// Each test binary runs under a wall-clock limit so a hung e2e cannot block
+    /// the run forever.
+    E2e,
 }
 
 fn main() -> ExitCode {
@@ -53,6 +59,7 @@ fn main() -> ExitCode {
     match xtask.task {
         Task::Ci => ci(),
         Task::Catalog { command } => catalog::run(command),
+        Task::E2e => e2e::run(),
     }
 }
 
