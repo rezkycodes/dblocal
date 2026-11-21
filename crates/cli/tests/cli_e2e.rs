@@ -415,7 +415,7 @@ fn cli_drives_a_real_valkey_from_create_to_archive() {
         followed.len()
     );
     assert!(
-        followed.len() >= before.min(5) + 1,
+        followed.len() > before.min(5),
         "the append was not printed: {followed:?}"
     );
     assert_eq!(

@@ -7,12 +7,14 @@
 //! - `inspect`  — `list`, `status`, `uri`, `logs`, formatters, the exit table
 //! - `lifecycle` — `create`, `start`, `stop`, `delete`
 //! - `races`    — the F-CLI-02 AC3 start race and the cross-process wait
+//! - `statuses` — the `(command, concrete status)` exit table from `cli.md`
 
 #![cfg(test)]
 
 mod inspect;
 mod lifecycle;
 mod races;
+mod statuses;
 
 use dblocal_core::model::{
     AuthMode, EngineKey, InstanceId, InstanceName, InstanceSpec, InstanceStatus, Port,
@@ -73,4 +75,23 @@ fn assert_no_secret(code: u8, out: &str, err: &str, secret: &str) {
         !err.contains(secret),
         "stderr leaked secret on exit {code}: {err}"
     );
+}
+
+/// Runs `start`/`stop` on its own thread and fails the test if it has not
+/// finished within `limit`, so a command that waits for a timeout is a red test
+/// rather than a hang of the whole test binary.
+pub(super) fn within(
+    limit: std::time::Duration,
+    service: std::sync::Arc<dyn DblService>,
+    cmd: Command,
+) -> (u8, String) {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let result = run_cmd(service.as_ref(), &cmd, false);
+        let _ = tx.send((result.0, result.2));
+    });
+    match rx.recv_timeout(limit) {
+        Ok(result) => result,
+        Err(_) => panic!("the command did not return within {limit:?}; a timeout was ignored"),
+    }
 }
