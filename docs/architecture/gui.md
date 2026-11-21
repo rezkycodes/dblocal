@@ -334,6 +334,25 @@ confirmation.
 | `quit.rs` | the pure quit machine |
 | `tray.rs` | the pure menu model + Linux ksni glue |
 
+## Defects found and fixed in W2-B-r2
+
+1. **The render binary aborted after ~10 cases (`HeadlessAppContext::shutdown` wedged).** Each
+   `headless_app` called `gpui_kit::platform::current_platform(true)` only to borrow its text system.
+   That constructs a whole `LinuxPlatform` — a 16-worker dispatcher pool, a timer thread and the
+   Vulkan driver threads — and dropping the `Rc` does not stop them. Thread count climbed to 352
+   after a dozen cases and a later context shutdown parked forever; the watchdog named a different
+   case each run (`logs-light.png`, `overview-failed-dark.png`, `palette-dark.png`). gpui documents
+   the defect in `bench_text_system`: "Building a whole platform each time only to take its text
+   system leaks the platform's threads on Linux (a 20-worker dispatcher and a timer thread per
+   call)". Fix: one text system per process (`shared_text_system`, `OnceLock`). Thread count after
+   the fix: 49. Render binary: 15 passed in 103–110 s, ten runs in a row.
+
+2. **`wait_for_running` did not measure the bridge.** The tray-latency test read
+   `service.view.lock().status` as a fallback, and the service sets that field *before* it emits
+   `InstanceChanged`. A mutation that sleeps 1.5 s inside `service_bridge::forward` still passed
+   (p50 50.2 ms). Removing the fallback makes that mutation fail (`max=1504.3ms`) and the honest
+   measurement max 2.2 ms.
+
 ## Known issue (W2-B-r2, a11y)
 
 A debug build panic was seen once on a real desktop with accessibility enabled: `Duplicate a11y node id: ... In a release build, this node would be silently discarded from the a11y tree.` It is a `debug_assert` in gpui (release builds drop the duplicate silently); it is not diagnosed in this round. Task W2-B2 will own it.
