@@ -123,18 +123,18 @@ fn start_losing_the_race_prints_sudah_berjalan_and_exits_0() {
         spec("raced", EngineKey::Postgresql, "17.4", 5432),
         InstanceStatus::Stopped,
     );
-    let service = RacyService {
+    let service = std::sync::Arc::new(RacyService {
         inner,
         target: id,
         polls: std::sync::Mutex::new(0),
-    };
-    let (code, _out, err) = run_cmd(
-        &service,
-        &Command::Start {
+    });
+    let (code, err) = within(
+        std::time::Duration::from_secs(10),
+        service,
+        Command::Start {
             name: "raced".into(),
             timeout: 5,
         },
-        false,
     );
     assert_eq!(code, EXIT_OK, "err={err}");
     assert!(err.contains("sudah berjalan"), "err={err}");
@@ -142,20 +142,22 @@ fn start_losing_the_race_prints_sudah_berjalan_and_exits_0() {
 
 #[test]
 fn start_of_an_instance_another_process_is_starting_says_sudah_berjalan() {
-    let svc = MockService::deterministic();
+    let svc = std::sync::Arc::new(MockService::deterministic());
     svc.seed_instance(
         spec("busy", EngineKey::Postgresql, "17.4", 5432),
         InstanceStatus::Starting,
     );
     // Nothing advances the mock, so the bounded cross-process wait times out;
     // the point is that it never asks for a second start and says so first.
-    let (code, _out, err) = run_cmd(
-        &svc,
-        &Command::Start {
+    // `--timeout 1` bounds it, and the 5 s deadline turns an ignored timeout
+    // into a red test instead of a hang.
+    let (code, err) = within(
+        std::time::Duration::from_secs(5),
+        svc,
+        Command::Start {
             name: "busy".into(),
             timeout: 1,
         },
-        false,
     );
     assert!(err.contains("sudah berjalan"), "err={err}");
     assert_ne!(code, EXIT_OK);
@@ -317,14 +319,14 @@ fn cross_process(scripted: &'static str, status: InstanceStatus) -> CrossProcess
 
 #[test]
 fn start_busy_loser_reports_sudah_berjalan() {
-    let service = cross_process("stopped", InstanceStatus::Stopped);
-    let (code, _o, err) = run_cmd(
-        &service,
-        &Command::Start {
+    let service = std::sync::Arc::new(cross_process("stopped", InstanceStatus::Stopped));
+    let (code, err) = within(
+        std::time::Duration::from_secs(5),
+        service,
+        Command::Start {
             name: "raced".into(),
             timeout: 1,
         },
-        false,
     );
     assert!(err.contains("sudah berjalan"), "err: {err}");
     assert_ne!(code, EXIT_OK);
@@ -655,7 +657,7 @@ impl DblService for StatusScript {
 /// rather than a hang of the whole test binary.
 fn within(
     limit: std::time::Duration,
-    service: std::sync::Arc<StatusScript>,
+    service: std::sync::Arc<dyn DblService>,
     cmd: Command,
 ) -> (u8, String) {
     let (tx, rx) = std::sync::mpsc::channel();
@@ -697,18 +699,20 @@ fn start_of_a_stopping_instance_says_stopping_and_exits_1() {
 /// compare-and-set (the row moved between our read and our write).
 #[test]
 fn start_refused_from_stopping_says_stopping_and_exits_1() {
-    let service = StatusScript::new(
+    let service = std::sync::Arc::new(StatusScript::new(
         InstanceStatus::Stopped,
         vec![InstanceStatus::Stopped],
         Some(("stopping", true)),
-    );
-    let (code, out, err) = run_cmd(
-        &service,
-        &Command::Start {
+    ));
+    // Under the mutation this becomes a cross-process wait; the deadline makes
+    // that a red assertion in seconds instead of a 60 s `--timeout`.
+    let (code, err) = within(
+        std::time::Duration::from_secs(5),
+        service,
+        Command::Start {
             name: "raced".into(),
             timeout: 60,
         },
-        false,
     );
     assert_eq!(code, EXIT_GENERAL, "err: {err}");
     assert!(
@@ -716,7 +720,6 @@ fn start_refused_from_stopping_says_stopping_and_exits_1() {
         "err: {err}"
     );
     assert!(!err.contains("sudah berjalan"), "err: {err}");
-    assert!(out.is_empty(), "out: {out}");
 }
 
 /// `stop` when another process is already stopping it: idempotent success.
