@@ -291,12 +291,21 @@ fn restore_backup(backup: &Path, target: &Path) -> UpdateResult<()> {
 /// This is the rollback smoke check. It executes a local binary path from the
 /// install plan, not from release metadata.
 pub fn smoke_check(binary: &Path, expected: &Version) -> UpdateResult<()> {
-    let output = std::process::Command::new(binary)
-        .arg("--version")
-        .output()
-        .map_err(|source| UpdateError::ApplyFailed {
-            reason: format!("gagal menjalankan smoke check: {source}"),
-        })?;
+    let mut attempts = 0;
+    let output = loop {
+        attempts += 1;
+        match std::process::Command::new(binary).arg("--version").output() {
+            Ok(output) => break output,
+            Err(source) if source.raw_os_error() == Some(26) && attempts < 10 => {
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            Err(source) => {
+                return Err(UpdateError::ApplyFailed {
+                    reason: format!("gagal menjalankan smoke check: {source}"),
+                });
+            }
+        }
+    };
     if !output.status.success() {
         return Err(UpdateError::ApplyFailed {
             reason: format!("smoke check exited with {}", output.status),
