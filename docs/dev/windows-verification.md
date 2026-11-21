@@ -73,14 +73,18 @@ error; if Vulkan is missing, the app should show an actionable message rather th
 
 Record every row. Use `Pass`, `Fail`, or `Blocked` with notes.
 
+Rows depending on the tray and quit flow assume the GUI-wiring task (W2-B) has been merged into the commit under test; the owner must record the commit in the "Built version" row.
+
 | Area | Steps | Expected result | Outcome | Notes |
 |---|---|---|---|---|
+| Built version | Run `dblocal --version` (or `cargo run -p dblocal-cli -- --version`) in the tested checkout. | Owner records the reported version and the exact commit SHA under test. | | |
 | Window opens | `cargo run -p dblocal-cli` | Main DBLocal window appears; no crash; UI readable. | | |
 | Vulkan missing/driver issue | Run on machine/session with broken Vulkan driver if reproducible. | Actionable error, not silent crash/black window. | | |
 | Tray icon present | Start app, inspect system tray/notification area. | DBLocal tray icon appears. | | |
 | Tray menu actions | Open tray menu; exercise show/open/quit actions as available. | Actions work; no duplicate app instances; no crash. | | |
 | Close-to-tray | Click window close button. | Window hides to tray if that is the configured behavior; app keeps running. | | |
 | Quit dialog / quit action | Quit from tray/app menu. | Quit confirmation behaves as designed; app exits cleanly; engine processes stop as expected. | | |
+| Close while an engine is running | Start a real engine instance, then quit the app. | Quit dialog lists running engines; choose Stop all; engines stop and no orphan processes remain. | | |
 | Data dir creation | Start app and create/use default config. | `%USERPROFILE%\.dblocal` created as needed; no writes outside user profile except package install paths. | | |
 | Credential Manager create | Create instance/secret that stores credentials. | Credential entry appears in Windows Credential Manager with expected name/scope. | | |
 | Credential Manager remove | Delete instance/credential through app. | Corresponding Credential Manager entry removed; no orphan secret remains. | | |

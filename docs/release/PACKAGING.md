@@ -29,17 +29,25 @@ Derived from `readelf -d` DT_NEEDED on the actual release binary:
 
 | DT_NEEDED | Debian/Ubuntu | Fedora/RHEL | Why |
 |---|---|---|---|
-| `libc.so.6`, `libm.so.6`, `ld-linux-x86-64.so.2` | `libc6` | `glibc` | C runtime and dynamic loader |
+| `libc.so.6`, `libm.so.6`, `ld-linux-x86-64.so.2` | `libc6 (>= computed GLIBC floor)` | `glibc` | C runtime and dynamic loader |
 | `libgcc_s.so.1` | `libgcc-s1` | `libgcc` | GCC unwind/runtime support used by Rust std |
 | `libxcb.so.1` | `libxcb1` | `libxcb` | X11/XCB windowing (GPUI Linux backend) |
 | `libxkbcommon.so.0` | `libxkbcommon0` | `libxkbcommon` | Keyboard handling |
 | `libxkbcommon-x11.so.0` | `libxkbcommon-x11-0` | `libxkbcommon-x11` | X11 keyboard handling |
 | `libz.so.1` | `zlib1g` | `zlib` (or `zlib-ng-compat` provides) | Compression used by dependencies |
 
-`libvulkan1` / `vulkan-loader` is a **Recommends**, not a hard Depends. GPUI renders through
-Vulkan and needs a host Vulkan driver; the app is expected to report an actionable error when
-Vulkan is missing (F-SPK-01 AC2). Making it a hard dependency would block install on minimal
-headless systems where DBLocal CLI can still be useful.
+The libc floor is **computed at package build time** from the real binary (`objdump -T`, maximum
+`GLIBC_*` symbol). It is not hardcoded. The build fails if the floor cannot be determined. See
+[`docs/install/linux-packages.md`](../install/linux-packages.md) for the distro compatibility
+consequence (Ubuntu 22.04/Debian 12 cannot run a binary built on Ubuntu 24.04 glibc 2.39).
+
+Optional GUI backends loaded via `dlopen` are **Recommends**, not hard Depends: `libvulkan1`,
+`libwayland-client0`, `libegl1` (deb) and `vulkan-loader`, `libwayland-client`, `mesa-libEGL`
+(rpm). GPUI can fall back to X11/xcb; missing optional backends should not block install on
+minimal/headless systems. Vulkan absence is reported with an actionable message (F-SPK-01 AC2).
+
+Fedora/RHEL package names for the dlopen libs were checked on this Fedora machine with
+`rpm -q --whatprovides`; Debian names were not checked with `apt` on this machine.
 
 The package must not depend on engine binaries. Engines are downloaded and managed by DBLocal into
 `~/.dblocal`.
