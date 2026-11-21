@@ -209,7 +209,7 @@ fn detect_linux(exe_path: &Path) -> InstallKind {
     if let Some(reason) = linux_deny_reason(exe_path) {
         return InstallKind::Unknown {
             exe_path: exe_path.to_path_buf(),
-            reason,
+            reason: reason.message(),
         };
     }
     if !looks_like_portable_linux(exe_path) {
@@ -223,27 +223,79 @@ fn detect_linux(exe_path: &Path) -> InstallKind {
     }
 }
 
+/// Managed system prefixes: a copy of DBLocal living here is owned by the
+/// distribution, so self-update must not replace it. Matched at the start of
+/// the canonical path only, so a portable copy under `~/opt` or `~/work/app`
+/// stays updatable.
+const DENIED_PREFIXES: [&str; 5] = ["/nix/store/", "/snap/", "/app/", "/usr/", "/opt/"];
+/// Build/tooling suffixes: a binary inside a build tree or a cargo bin dir is
+/// never the installed copy. Allowed to match anywhere in the path.
+const DENIED_SUFFIXES: [&str; 3] = ["/.cargo/bin/", "/target/debug/", "/target/release/"];
+
+/// Why a Linux executable location cannot self-update. Typed so each rule can
+/// be asserted on its own instead of only through "some refusal".
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DenyReason {
+    /// Path starts with a managed system prefix.
+    ManagedPrefix { prefix: &'static str },
+    /// Path contains a build/tooling directory suffix.
+    BuildTooling { suffix: &'static str },
+    /// The executable's directory is not writable by the current user.
+    NotWritable,
+}
+
+impl DenyReason {
+    /// Indonesian explanation naming the matched rule input.
+    fn message(self) -> String {
+        match self {
+            Self::ManagedPrefix { prefix } => {
+                format!("path berada di lokasi terkelola: {prefix}")
+            }
+            Self::BuildTooling { suffix } => {
+                format!("path berada di lokasi build/tooling: {suffix}")
+            }
+            Self::NotWritable => {
+                "direktori executable tidak dapat ditulis oleh pengguna saat ini".to_owned()
+            }
+        }
+    }
+}
+
 /// Linux self-update deny-list: paths where in-place binary replacement is not
 /// safe or not the right delivery mechanism. Anything not recognised becomes
 /// Unknown.
-fn linux_deny_reason(exe_path: &Path) -> Option<String> {
-    let lower = path_to_lower(exe_path);
-    let denied_prefixes = ["/nix/store", "/snap/", "/app/", "/usr/", "/opt/"];
-    for prefix in denied_prefixes {
-        if lower.starts_with(prefix) || lower.contains(prefix) {
-            return Some(format!("path berada di lokasi terkelola: {prefix}"));
-        }
+fn linux_deny_reason(exe_path: &Path) -> Option<DenyReason> {
+    let lower = path_to_lower(&canonical_or_original(exe_path));
+    if let Some(prefix) = DENIED_PREFIXES.into_iter().find(|p| lower.starts_with(p)) {
+        return Some(DenyReason::ManagedPrefix { prefix });
     }
-    let denied_suffixes = ["/.cargo/bin/", "/target/debug/", "/target/release/"];
-    for suffix in denied_suffixes {
-        if lower.contains(suffix) {
-            return Some(format!("path berada di lokasi build/tooling: {suffix}"));
-        }
+    if let Some(suffix) = DENIED_SUFFIXES.into_iter().find(|s| lower.contains(s)) {
+        return Some(DenyReason::BuildTooling { suffix });
     }
-    if !path_is_writable_by_current_user(exe_path) {
-        return Some("direktori executable tidak dapat ditulis oleh pengguna saat ini".to_owned());
+    if !exe_path.parent().is_some_and(directory_is_writable) {
+        return Some(DenyReason::NotWritable);
     }
     None
+}
+
+/// Asks the OS whether `dir` is writable by the current user without creating
+/// anything inside it. Detection must not leave a probe file in the user's
+/// `bin` directory.
+pub(super) fn directory_is_writable(dir: &Path) -> bool {
+    match std::fs::metadata(dir) {
+        Ok(meta) if meta.is_dir() => {}
+        _ => return false,
+    }
+    #[cfg(unix)]
+    {
+        nix::unistd::access(dir, nix::unistd::AccessFlags::W_OK).is_ok()
+    }
+    #[cfg(not(unix))]
+    {
+        !std::fs::metadata(dir)
+            .map(|meta| meta.permissions().readonly())
+            .unwrap_or(true)
+    }
 }
 
 fn looks_like_portable_linux(exe_path: &Path) -> bool {
@@ -254,40 +306,6 @@ fn looks_like_portable_linux(exe_path: &Path) -> bool {
         return false;
     }
     exe_path.is_file()
-}
-
-fn path_is_writable_by_current_user(exe_path: &Path) -> bool {
-    let Some(dir) = exe_path.parent() else {
-        return false;
-    };
-    let meta = match std::fs::metadata(dir) {
-        Ok(m) => m,
-        Err(_) => return false,
-    };
-    if !meta.is_dir() {
-        return false;
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = meta.permissions().mode();
-        let probe = dir.join(format!(".dblocal-update-probe-{}", std::process::id()));
-        match std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&probe)
-        {
-            Ok(_) => {
-                let _ = std::fs::remove_file(&probe);
-                true
-            }
-            Err(_) => false,
-        }
-    }
-    #[cfg(not(unix))]
-    {
-        !meta.permissions().readonly()
-    }
 }
 
 fn canonical_or_original(path: &Path) -> PathBuf {

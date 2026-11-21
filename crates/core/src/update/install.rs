@@ -155,49 +155,13 @@ fn ensure_target_writable(target: &Path) -> UpdateResult<()> {
             reason: "direktori target pembaruan tidak valid".to_owned(),
         });
     };
-    let meta = std::fs::metadata(dir).map_err(|source| UpdateError::ApplyFailed {
-        reason: format!("gagal membaca izin direktori target pembaruan: {source}"),
-    })?;
-    if !meta.is_dir() {
-        return Err(UpdateError::ApplyFailed {
-            reason: "path direktori target pembaruan tidak valid".to_owned(),
+    if !super::kind::directory_is_writable(dir) {
+        return Err(UpdateError::UnsupportedInstallKind {
+            reason: format!(
+                "direktori target pembaruan tidak dapat ditulis: {}",
+                dir.display()
+            ),
         });
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = meta.permissions().mode();
-        let probe = dir.join(format!(".dblocal-update-probe-{}", std::process::id()));
-        let writable = match std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&probe)
-        {
-            Ok(_) => {
-                let _ = std::fs::remove_file(&probe);
-                true
-            }
-            Err(_) => false,
-        };
-        if !writable {
-            return Err(UpdateError::UnsupportedInstallKind {
-                reason: format!(
-                    "direktori target pembaruan tidak dapat ditulis: {}",
-                    dir.display()
-                ),
-            });
-        }
-    }
-    #[cfg(not(unix))]
-    {
-        if meta.permissions().readonly() {
-            return Err(UpdateError::UnsupportedInstallKind {
-                reason: format!(
-                    "direktori target pembaruan tidak dapat ditulis: {}",
-                    dir.display()
-                ),
-            });
-        }
     }
     Ok(())
 }
@@ -290,9 +254,13 @@ fn apply_linux(plan: &InstallPlan) -> UpdateResult<()> {
     let target = plan.target_path().to_path_buf();
     ensure_target_writable(&target)?;
     let backup = backup_path(&target);
+    let temp = sibling_temp_path(&target);
     let mut created_backup = false;
     for step in plan.steps() {
         if let Err(err) = apply_step(step, &mut created_backup) {
+            // A failure before the rename leaves our staged sibling behind; the
+            // install directory must look untouched to the user.
+            let _ = std::fs::remove_file(&temp);
             if created_backup {
                 let _ = restore_backup(&backup, &target);
             }
@@ -309,7 +277,12 @@ fn apply_step(step: &InstallStep, created_backup: &mut bool) -> UpdateResult<()>
             src,
             dst,
             mode_from,
-        } => copy_with_mode(src, dst, mode_from),
+        } => {
+            copy_with_mode(src, dst, mode_from)?;
+            #[cfg(test)]
+            maybe_fail_after_write()?;
+            Ok(())
+        }
         InstallStep::Fsync { path } => fsync_path(path),
         InstallStep::Backup { target, backup } => {
             create_backup(target, backup)?;
@@ -345,8 +318,22 @@ fn maybe_fail_after_backup() -> UpdateResult<()> {
 }
 
 #[cfg(test)]
+fn maybe_fail_after_write() -> UpdateResult<()> {
+    FAIL_AFTER_WRITE.with(|flag| {
+        if flag.get() {
+            flag.set(false);
+            return Err(UpdateError::ApplyFailed {
+                reason: "injected write failure".to_owned(),
+            });
+        }
+        Ok(())
+    })
+}
+
+#[cfg(test)]
 thread_local! {
     static FAIL_AFTER_BACKUP: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static FAIL_AFTER_WRITE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 #[cfg(test)]
@@ -357,6 +344,11 @@ pub fn inject_fail_after_backup_for_test() {
 #[cfg(test)]
 pub fn clear_fail_after_backup_for_test() {
     FAIL_AFTER_BACKUP.with(|flag| flag.set(false));
+}
+
+#[cfg(test)]
+pub fn inject_fail_after_write_for_test() {
+    FAIL_AFTER_WRITE.with(|flag| flag.set(true));
 }
 
 fn copy_with_mode(src: &Path, dst: &Path, mode_source: &Path) -> UpdateResult<()> {
