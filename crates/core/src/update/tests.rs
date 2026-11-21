@@ -106,16 +106,30 @@ fn checksums_missing_asset_is_reported() {
 
 #[tokio::test]
 async fn download_rejects_redirect_to_disallowed_host() {
+    let second_hits = Arc::new(AtomicUsize::new(0));
+    let second_hits_clone = second_hits.clone();
+    let second = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let second_addr = second.local_addr().unwrap();
+    tokio::spawn(async move {
+        if let Ok((mut socket, _)) = second.accept().await {
+            let mut buf = [0u8; 2048];
+            let _ = socket.read(&mut buf).await;
+            second_hits_clone.fetch_add(1, Ordering::SeqCst);
+            let resp = "HTTP/1.1 200 OK\r\nContent-Length: 4\r\nConnection: close\r\n\r\nevil";
+            let _ = socket.write_all(resp.as_bytes()).await;
+        }
+    });
+
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
-    let hits = Arc::new(AtomicUsize::new(0));
-    let counter = hits.clone();
     tokio::spawn(async move {
         if let Ok((mut socket, _)) = listener.accept().await {
             let mut buf = [0u8; 2048];
             let _ = socket.read(&mut buf).await;
-            counter.fetch_add(1, Ordering::SeqCst);
-            let resp = "HTTP/1.1 302 Found\r\nLocation: http://127.0.0.1:9/evil\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+            let resp = format!(
+                "HTTP/1.1 302 Found\r\nLocation: https://127.0.0.1:{}/evil\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                second_addr.port()
+            );
             let _ = socket.write_all(resp.as_bytes()).await;
         }
     });
@@ -132,6 +146,8 @@ async fn download_rejects_redirect_to_disallowed_host() {
     .expect_err("redirect should be rejected");
     assert_eq!(err.code(), crate::update::error::CODE_UPDATE_NETWORK);
     assert!(!dest.exists());
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    assert_eq!(second_hits.load(Ordering::SeqCst), 0);
 }
 
 #[tokio::test]
