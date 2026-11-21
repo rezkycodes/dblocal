@@ -887,6 +887,31 @@ mod handler_tests {
         );
     }
 
+    /// The preview constructor's synchronous tab open fills every cache the
+    /// Overview card reads from, and it must not need a window tick.
+    #[gpui_kit::test]
+    fn open_tab_sync_fills_every_cache(cx: &mut TestAppContext) {
+        let (view, service, cx) = fixture(cx);
+        let id = service.id_with(InstanceStatus::Stopped);
+        view.update(cx, |this, _| this.open_tab_sync(id.clone()));
+
+        let (masked, size, dotenv, port) = view.read_with(cx, |this, _| {
+            (
+                this.uri_text(&id),
+                this.data_size(&id),
+                this.dotenv_rows(&id).len(),
+                this.instance_port_proposal(&id),
+            )
+        });
+        assert!(
+            masked.contains(crate::format::SECRET_MASK),
+            "URI not masked: {masked}"
+        );
+        assert_eq!(size, Some(4096));
+        assert!(dotenv > 0, "the .env block was not cached");
+        assert_eq!(port, 5433, "the port suggestion was not cached");
+    }
+
     #[gpui_kit::test]
     fn choose_engine_switches_the_form(cx: &mut TestAppContext) {
         let (view, _service, cx) = fixture(cx);
