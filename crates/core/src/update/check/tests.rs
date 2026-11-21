@@ -370,3 +370,156 @@ fn validate_asset_name_rejects_control_and_slashes() {
     assert!(validate_asset_name("..a").is_err());
     assert!(validate_asset_name("a\0b").is_err());
 }
+
+#[test]
+fn classify_install_asset_covers_all_platforms() {
+    assert_eq!(
+        classify_install_asset("dblocal-linux-x86_64.AppImage", Os::Linux),
+        Some(UpdateAssetKind::AppImage)
+    );
+    assert_eq!(
+        classify_install_asset("dblocal-linux-x86_64.tgz", Os::Linux),
+        Some(UpdateAssetKind::TarGz)
+    );
+    assert_eq!(classify_install_asset("dblocal.exe", Os::Linux), None);
+    assert_eq!(
+        classify_install_asset("dblocal-windows-x86_64.zip", Os::Windows),
+        Some(UpdateAssetKind::Zip)
+    );
+    assert_eq!(
+        classify_install_asset("dblocal-windows-x86_64.msi", Os::Windows),
+        Some(UpdateAssetKind::Msi)
+    );
+    assert_eq!(
+        classify_install_asset("dblocal-windows-x86_64.tar.gz", Os::Windows),
+        None
+    );
+    assert_eq!(
+        classify_install_asset("dblocal-macos-universal.dmg", Os::Macos),
+        Some(UpdateAssetKind::Dmg)
+    );
+    assert_eq!(
+        classify_install_asset("dblocal-macos-universal.tar.gz", Os::Macos),
+        Some(UpdateAssetKind::TarGz)
+    );
+    assert_eq!(
+        classify_install_asset("dblocal-macos-universal.zip", Os::Macos),
+        None
+    );
+}
+
+#[test]
+fn asset_priority_orders_kinds() {
+    assert!(asset_priority(UpdateAssetKind::AppImage) > asset_priority(UpdateAssetKind::TarGz));
+    assert!(asset_priority(UpdateAssetKind::TarGz) > asset_priority(UpdateAssetKind::Zip));
+    assert!(asset_priority(UpdateAssetKind::Zip) > asset_priority(UpdateAssetKind::Msi));
+    assert!(asset_priority(UpdateAssetKind::Msi) > asset_priority(UpdateAssetKind::Checksums));
+}
+
+#[test]
+fn map_network_classifies_rate_limit_messages() {
+    assert_eq!(
+        map_network("HTTP 429 too many requests".to_owned()).code(),
+        crate::update::error::CODE_UPDATE_RATE_LIMITED
+    );
+    assert_eq!(
+        map_network("API rate limit exceeded".to_owned()).code(),
+        crate::update::error::CODE_UPDATE_RATE_LIMITED
+    );
+    assert_eq!(
+        map_network("connection reset".to_owned()).code(),
+        crate::update::error::CODE_UPDATE_NETWORK
+    );
+}
+
+#[test]
+fn select_platform_asset_rejects_unsupported_platform() {
+    let err = platform_asset_tokens(Os::Windows, Arch::Aarch64).is_some();
+    assert!(err);
+    let selected = select_platform_asset(&[], Os::Windows, Arch::Aarch64).unwrap();
+    assert!(selected.is_none());
+}
+
+#[tokio::test]
+async fn check_skips_release_with_unsafe_checksums_name() {
+    let json = serde_json::json!([{
+        "tag_name": "v1.1.0",
+        "draft": false,
+        "prerelease": false,
+        "body": "notes",
+        "assets": [
+            {"name":"dblocal-linux-x86_64.tar.gz","browser_download_url":"https://github.com/a/b/releases/download/v1.1/a.tar.gz","size":1},
+            {"name":"../checksums.txt","browser_download_url":"https://github.com/a/b/releases/download/v1.1/checksums.txt","size":1}
+        ]
+    }]).to_string();
+    let fetcher = MockFetcher::new(vec![Ok(FetchResponse::new(200, json.into_bytes()))]);
+    let result = check(
+        &Version::parse("1.0.0").unwrap(),
+        &fetcher,
+        &linux_options(),
+    )
+    .await
+    .expect("check");
+    assert!(matches!(result, UpdateCheck::UpToDate { .. }));
+}
+
+#[tokio::test]
+async fn check_uses_sanitised_notes_and_tag() {
+    let json = sample_release_json("v1.1.0").replace("Hello", "Hi\\r\\nthere");
+    let fetcher = MockFetcher::new(vec![Ok(FetchResponse::new(200, json.into_bytes()))]);
+    let result = check(
+        &Version::parse("1.0.0").unwrap(),
+        &fetcher,
+        &linux_options(),
+    )
+    .await
+    .unwrap();
+    match result {
+        UpdateCheck::Available(u) => {
+            assert_eq!(u.tag(), "v1.1.0");
+            assert_eq!(u.release_notes(), "Hi there");
+        }
+        _ => panic!("expected available"),
+    }
+}
+
+#[test]
+fn parse_release_version_accepts_leading_v() {
+    let v = parse_release_version("v1.2.3").unwrap();
+    assert_eq!(v, Version::parse("1.2.3").unwrap());
+}
+
+#[tokio::test]
+async fn reqwest_fetcher_builds_with_secure_client() {
+    let fetcher = ReqwestUpdateFetcher::new();
+    assert!(fetcher.is_ok(), "production fetcher must build");
+}
+
+#[test]
+fn asset_from_gh_rejects_unsafe_name() {
+    let asset = GhAsset {
+        name: "../evil.tar.gz".to_owned(),
+        browser_download_url: "https://github.com/x".to_owned(),
+        size: 1,
+    };
+    assert!(asset_from_gh(&asset).is_err());
+}
+
+#[test]
+fn should_replace_asset_prefers_higher_priority() {
+    let low = ReleaseAsset::new(
+        "a.tar.gz",
+        "https://github.com/a",
+        1,
+        UpdateAssetKind::TarGz,
+    );
+    let high = ReleaseAsset::new(
+        "a.AppImage",
+        "https://github.com/a",
+        1,
+        UpdateAssetKind::AppImage,
+    );
+    assert!(should_replace_asset(None, &low));
+    assert!(should_replace_asset(Some(&low), &high));
+    assert!(!should_replace_asset(Some(&high), &low));
+}

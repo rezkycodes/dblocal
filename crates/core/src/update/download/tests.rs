@@ -556,3 +556,128 @@ fn is_loopback_recognizes_localhost() {
     let url = reqwest::Url::parse("http://127.0.0.1/x").unwrap();
     assert!(is_loopback(&url));
 }
+
+#[test]
+fn staged_update_accessors() {
+    let dir = tempdir().expect("tmp");
+    let path = dir.path().join("dblocal-update.bin");
+    let staged = StagedUpdate {
+        version: semver::Version::parse("2.0.0").unwrap(),
+        staged_path: path.clone(),
+        asset_name: "dblocal-linux-x86_64.tar.gz".to_owned(),
+    };
+    assert_eq!(staged.version().to_string(), "2.0.0");
+    assert_eq!(staged.staged_path(), path.as_path());
+    assert_eq!(staged.asset_name(), "dblocal-linux-x86_64.tar.gz");
+}
+
+#[tokio::test]
+async fn read_bounded_text_rejects_oversize_and_non_utf8() {
+    let dir = tempdir().expect("tmp");
+    let big = dir.path().join("big.txt");
+    tokio::fs::write(&big, vec![b'a'; 32]).await.unwrap();
+    let err = read_bounded_text(&big, 16).await.expect_err("oversize");
+    assert_eq!(err.code(), crate::update::error::CODE_UPDATE_CHECKSUM);
+
+    let bin = dir.path().join("bin.txt");
+    tokio::fs::write(&bin, [0xff, 0xfe, 0xfd]).await.unwrap();
+    let err = read_bounded_text(&bin, 16).await.expect_err("utf8");
+    assert_eq!(err.code(), crate::update::error::CODE_UPDATE_CHECKSUM);
+
+    let missing = dir.path().join("missing.txt");
+    let err = read_bounded_text(&missing, 16).await.expect_err("missing");
+    assert_eq!(err.code(), crate::update::error::CODE_UPDATE_CHECKSUM);
+}
+
+#[test]
+fn parse_and_validate_url_rejects_garbage() {
+    let err =
+        parse_and_validate_url("not a url", &UpdateDownloadOptions::default()).expect_err("bad");
+    assert_eq!(err.code(), crate::update::error::CODE_UPDATE_MALFORMED);
+}
+
+#[test]
+fn content_range_total_parsing() {
+    use reqwest::header::HeaderValue;
+    assert_eq!(
+        content_range_total(Some(&HeaderValue::from_static("bytes 0-9/100"))),
+        Some(100)
+    );
+    assert_eq!(
+        content_range_total(Some(&HeaderValue::from_static("bytes 0-9/*"))),
+        None
+    );
+    assert_eq!(
+        content_range_total(Some(&HeaderValue::from_static("garbage"))),
+        None
+    );
+    assert_eq!(content_range_total(None), None);
+}
+
+#[test]
+fn is_loopback_handles_ipv6_and_non_network_scheme() {
+    let url = reqwest::Url::parse("https://[::1]:8443/x").unwrap();
+    assert!(is_loopback(&url));
+    let url = reqwest::Url::parse("file:///tmp/x").unwrap();
+    assert!(!is_loopback(&url));
+}
+
+#[tokio::test]
+async fn download_resumes_a_partial_file() {
+    let body = b"hello-update-full".to_vec();
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+    let addr = listener.local_addr().unwrap();
+    let full = body.clone();
+    tokio::spawn(async move {
+        loop {
+            let Ok((mut socket, _)) = listener.accept().await else {
+                break;
+            };
+            let full = full.clone();
+            tokio::spawn(async move {
+                let mut buf = [0u8; 4096];
+                let n = socket.read(&mut buf).await.unwrap_or(0);
+                let req = String::from_utf8_lossy(&buf[..n]).to_string();
+                if let Some(rest) = req.split("range: bytes=").nth(1) {
+                    let start = rest
+                        .split('-')
+                        .next()
+                        .and_then(|s| s.trim().parse::<usize>().ok())
+                        .unwrap_or(0);
+                    let slice = &full[start..];
+                    let head = format!(
+                        "HTTP/1.1 206 Partial Content\r\nContent-Length: {}\r\nContent-Range: bytes {}-{}/{}\r\nConnection: close\r\n\r\n",
+                        slice.len(),
+                        start,
+                        full.len() - 1,
+                        full.len()
+                    );
+                    let _ = socket.write_all(head.as_bytes()).await;
+                    let _ = socket.write_all(slice).await;
+                } else {
+                    let head = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        full.len()
+                    );
+                    let _ = socket.write_all(head.as_bytes()).await;
+                    let _ = socket.write_all(&full).await;
+                }
+            });
+        }
+    });
+
+    let dir = tempdir().expect("tmp");
+    let dest = dir.path().join("asset.bin");
+    tokio::fs::write(&dest, &body[..5]).await.unwrap();
+    let hash = sha2_hex(&body);
+    download_and_verify(
+        &format!("http://{addr}/asset"),
+        &dest,
+        &hash,
+        body.len() as u64,
+        &UpdateDownloadOptions::loopback_for_tests(),
+    )
+    .await
+    .expect("resume");
+    assert_eq!(tokio::fs::read(&dest).await.unwrap(), body);
+}
