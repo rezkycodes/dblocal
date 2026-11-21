@@ -96,6 +96,30 @@ and lost.
 `logs -f --lines 2` prints exactly 2 lines, and one line appended to the engine
 log while following is printed exactly once.
 
+### Verified on the real binary
+
+A real Valkey 9.2.0 instance, its log padded to 16 lines, the shipped binary:
+
+```text
+% dblocal logs probe -f --lines 2   # run for 2 s, then SIGINT
+exit after SIGINT: 0
+lines printed: 2
+```
+
+and the reported repro with one line appended while following:
+
+```text
+log lines before: 16
+exit: 0
+printed 3 lines:
+pad line 14
+pad line 15
+append-after-follow
+```
+
+Before the fix the same 16-line log printed 2 lines and then 11 more from the
+start of the file (13 in total).
+
 ## Cross-process status table
 
 `start` and `stop` both see a concrete status, either in their first
