@@ -167,11 +167,11 @@ struct RenderWatchdog {
 }
 
 impl RenderWatchdog {
-    fn arm(name: &str) -> Self {
-        Self::arm_after(name, Duration::from_secs(RENDER_WATCHDOG_SECS))
-    }
-
-    fn arm_after(name: &str, limit: Duration) -> Self {
+    /// Arms a timer that aborts the process when `limit` elapses before `Drop`.
+    ///
+    /// The callback is injectable so the ordering test can observe a firing
+    /// instead of aborting the whole test binary. Production passes `abort`.
+    fn arm_with(name: &str, limit: Duration, on_fire: impl Fn() + Send + 'static) -> Self {
         let done = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let flag = Arc::clone(&done);
         let label = name.to_owned();
@@ -186,7 +186,7 @@ impl RenderWatchdog {
                 use std::io::Write as _;
                 let _ = std::io::stderr().write_all(msg.as_bytes());
                 let _ = std::io::stderr().write_all(b"\n");
-                std::process::abort();
+                on_fire();
             }
         });
         Self { done }
@@ -199,76 +199,103 @@ impl Drop for RenderWatchdog {
     }
 }
 
+/// Locks the render mutex, **then** arms the watchdog, returning both.
+///
+/// The single ordering every render case uses: a case that queued behind others
+/// must not spend its watchdog budget while waiting. `render` keeps the guard
+/// until it has drawn and releases it before the context shutdown; the guard and
+/// watchdog both outlive the draw, so a hang in draw or shutdown still trips it.
+fn lock_then_arm<'a>(
+    mutex: &'a std::sync::Mutex<()>,
+    name: &str,
+    limit: Duration,
+    on_fire: impl Fn() + Send + 'static,
+) -> (std::sync::MutexGuard<'a, ()>, RenderWatchdog) {
+    let guard = mutex.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let watchdog = RenderWatchdog::arm_with(name, limit, on_fire);
+    (guard, watchdog)
+}
+
+/// A case that queued behind another must not be killed for the wait.
+///
+/// Case A holds the lock longer than B's limit, and B is already queued on it.
+/// Because B arms only after acquiring, A's hold never counts against B's
+/// budget. `fired` records a watchdog trip instead of aborting this binary.
+/// Arming before the lock is the defect: it sets `fired`, and the assertion
+/// fails with the same cause a healthy queued render used to die from.
 #[test]
 fn watchdog_does_not_fire_for_a_queued_case() {
-    // Simulate: case A holds the mutex; case B waits. B arms only after A
-    // releases, so B's timer does not include A's hold time.
-    let mutex = std::sync::Arc::new(std::sync::Mutex::new(()));
+    let mutex = Arc::new(std::sync::Mutex::new(()));
     let a_started = Arc::new(std::sync::atomic::AtomicBool::new(false));
-    let a_release = Arc::new(std::sync::atomic::AtomicBool::new(false));
 
-    let a_started_t = Arc::clone(&a_started);
-    let a_release_t = Arc::clone(&a_release);
-    let mutex_t = Arc::clone(&mutex);
-    let handle = std::thread::spawn(move || {
-        let _guard_a = mutex_t.lock().expect("lock a");
-        a_started_t.store(true, std::sync::atomic::Ordering::SeqCst);
-        while !a_release_t.load(std::sync::atomic::Ordering::SeqCst) {
-            std::thread::sleep(Duration::from_millis(5));
-        }
+    let started = Arc::clone(&a_started);
+    let a_mutex = Arc::clone(&mutex);
+    let a = std::thread::spawn(move || {
+        let _guard = a_mutex.lock().expect("lock a");
+        started.store(true, std::sync::atomic::Ordering::SeqCst);
+        // Longer than B's 80 ms limit.
+        std::thread::sleep(Duration::from_millis(160));
     });
 
     while !a_started.load(std::sync::atomic::Ordering::SeqCst) {
         std::thread::sleep(Duration::from_millis(1));
     }
-    // A holds the mutex longer than B's watchdog limit; B must arm after acquire.
-    std::thread::sleep(Duration::from_millis(120));
-    a_release.store(true, std::sync::atomic::Ordering::SeqCst);
-    handle.join().expect("a joined");
 
-    let _guard_b = mutex.lock().expect("lock b");
-    let watchdog = RenderWatchdog::arm_after("queued-case", Duration::from_millis(80));
-    std::thread::sleep(Duration::from_millis(40));
-    drop(watchdog);
-}
-
-#[test]
-fn watchdog_fires_for_a_stuck_case() {
-    let status = std::process::Command::new(std::env::current_exe().expect("exe"))
-        .args([
-            "--exact",
-            "watchdog_probe_stuck_child",
-            "--ignored",
-            "--nocapture",
-        ])
-        .env("DBLOCAL_WATCHDOG_PROBE", "1")
-        .status()
-        .expect("spawn probe");
+    let fired = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let fired_t = Arc::clone(&fired);
+    {
+        // B queues on the lock while A holds it; its limit is shorter than the
+        // remaining hold, so arming early would fire.
+        let (_guard_b, watchdog) = lock_then_arm(
+            &mutex,
+            "queued-case",
+            Duration::from_millis(80),
+            move || fired_t.store(true, std::sync::atomic::Ordering::SeqCst),
+        );
+        std::thread::sleep(Duration::from_millis(20));
+        drop(watchdog);
+    }
+    a.join().expect("a joined");
     assert!(
-        !status.success(),
-        "watchdog probe should abort, got {status:?}"
+        !fired.load(std::sync::atomic::Ordering::SeqCst),
+        "the watchdog fired for a case that was only queued"
     );
 }
 
+/// A case that really hangs must trip the watchdog, promptly and with no
+/// queueing involved. `on_fire` stands in for `abort`, so this stays in-process.
 #[test]
-#[ignore = "subprocess probe: aborts intentionally when DBLOCAL_WATCHDOG_PROBE=1"]
-fn watchdog_probe_stuck_child() {
-    if std::env::var_os("DBLOCAL_WATCHDOG_PROBE").is_none() {
-        return;
+fn watchdog_fires_for_a_stuck_case() {
+    let mutex = std::sync::Mutex::new(());
+    let fired = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let fired_t = Arc::clone(&fired);
+    {
+        let (_guard, _watchdog) = lock_then_arm(
+            &mutex,
+            "stuck-case",
+            Duration::from_millis(40),
+            move || fired_t.store(true, std::sync::atomic::Ordering::SeqCst),
+        );
+        // Do not drop the watchdog: a stuck case never leaves its body.
+        std::thread::sleep(Duration::from_millis(120));
+        assert!(
+            fired.load(std::sync::atomic::Ordering::SeqCst),
+            "the watchdog did not fire for a stuck case"
+        );
+        std::mem::forget(_watchdog);
     }
-    let _watchdog = RenderWatchdog::arm_after("stuck-probe", Duration::from_millis(50));
-    std::thread::sleep(Duration::from_secs(5));
 }
 
 /// The platform text system, built once per process.
 ///
 /// `gpui_platform::current_platform(true)` constructs a whole `LinuxPlatform`
 /// (a worker dispatcher, a timer thread and the Vulkan threads) only to borrow
-/// its text system, and dropping the `Rc` does not stop those threads. Building
-/// one per render case therefore leaks ~20 threads per case; after ten cases a
-/// later context shutdown wedges (observed: `logs-light.png`/`overview-failed-dark.png`
-/// killing the run at the 600 s watchdog). gpui's own `bench_text_system` cites
-/// the same defect. Build it once and share it.
+/// its text system, and dropping the `Rc` does not stop those threads. One per
+/// render case leaked ~20 threads per case; after ten cases a later
+/// `HeadlessAppContext::shutdown` wedged and the watchdog aborted the run
+/// (`logs-light.png`, `overview-failed-dark.png`, `palette-dark.png` on
+/// successive runs). gpui's own `bench_text_system` documents the same defect:
+/// build it once and share it.
 fn shared_text_system() -> Arc<dyn gpui_kit::PlatformTextSystem> {
     static TEXT_SYSTEM: std::sync::OnceLock<Arc<dyn gpui_kit::PlatformTextSystem>> =
         std::sync::OnceLock::new();
@@ -312,10 +339,12 @@ fn shutdown_headless(mut app: HeadlessAppContext) {
 }
 
 fn render(mode_dark: bool, name: &str, build: Build) -> Frame {
-    let guard = GPU.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-    // Arm after the mutex is acquired: queueing behind other cases must not
-    // consume the watchdog budget, and it stays armed through shutdown.
-    let watchdog = RenderWatchdog::arm(name);
+    let (guard, watchdog) = lock_then_arm(
+        &GPU,
+        name,
+        Duration::from_secs(RENDER_WATCHDOG_SECS),
+        || std::process::abort(),
+    );
     let mut app = headless_app(mode_dark);
     let frame = draw_and_capture(&mut app, name, build);
     // Release the render mutex before shutting the context down: shutdown parks
