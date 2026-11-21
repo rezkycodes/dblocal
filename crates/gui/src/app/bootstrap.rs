@@ -1,0 +1,78 @@
+//! Process bootstrap: open the window and hand it a `Workspace`.
+//!
+//! This is the only place that calls into `gpui_platform`; everything else is
+//! a view or a view-model, which keeps the process entry easy to audit.
+
+use std::sync::Arc;
+
+use dblocal_core::service::DblService;
+use gpui::{
+    App, AppContext as _, WindowAppearance, WindowBounds, WindowKind, WindowOptions, px, size,
+};
+use gpui_component::Root;
+
+use super::Workspace;
+
+/// Opens the GUI with the in-memory mock service.
+pub(crate) fn run_with_mock() -> dblocal_core::Result<()> {
+    let service: Arc<dyn DblService> = Arc::new(dblocal_core::service::mock::MockService::new());
+    run_with_service(service)
+}
+
+/// Opens the GUI against any [`DblService`] implementation.
+pub fn run_with_service(service: Arc<dyn DblService>) -> dblocal_core::Result<()> {
+    gpui_platform::application()
+        .with_assets(gpui_kit_assets::AllAssets)
+        .run(move |cx: &mut App| {
+            gpui_component::init(cx);
+            crate::theme::init(cx);
+            super::actions::bind_keys(cx);
+
+            let bounds = gpui::Bounds::centered(None, size(px(1180.), px(760.)), cx);
+            let options = WindowOptions {
+                window_bounds: Some(WindowBounds::Windowed(bounds)),
+                titlebar: Some(gpui_component::TitleBar::title_bar_options()),
+                kind: WindowKind::Normal,
+                window_min_size: Some(size(px(900.), px(600.))),
+                ..Default::default()
+            };
+
+            let service_for_window = service.clone();
+            let result = cx.open_window(options, move |window, cx| {
+                let workspace = cx.new(|cx| Workspace::new(service_for_window.clone(), window, cx));
+                cx.new(|cx| Root::new(workspace, window, cx))
+            });
+
+            match result {
+                Ok(_handle) => {
+                    cx.activate(true);
+                }
+                Err(err) => {
+                    tracing::error!("could not open the main window: {err:#}");
+                    cx.quit();
+                }
+            }
+        });
+    Ok(())
+}
+
+/// Returns whether a system appearance is dark.
+pub fn appearance_is_dark(appearance: WindowAppearance) -> bool {
+    matches!(
+        appearance,
+        WindowAppearance::Dark | WindowAppearance::VibrantDark
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dark_appearances_are_detected() {
+        assert!(appearance_is_dark(WindowAppearance::Dark));
+        assert!(appearance_is_dark(WindowAppearance::VibrantDark));
+        assert!(!appearance_is_dark(WindowAppearance::Light));
+        assert!(!appearance_is_dark(WindowAppearance::VibrantLight));
+    }
+}
