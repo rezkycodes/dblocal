@@ -205,3 +205,150 @@ impl Workspace {
             )
     }
 }
+
+#[cfg(test)]
+mod glue_tests {
+    #![allow(clippy::expect_used, clippy::unwrap_used)]
+
+    use std::sync::Arc;
+
+    use dblocal_core::model::InstanceStatus;
+    use dblocal_core::service::DblService;
+    use gpui_kit::TestAppContext;
+
+    use super::Workspace;
+    use crate::quit::QuitState;
+    use crate::tray::TrayAction;
+
+    /// A workspace on the emit-free service, with the tray forced unavailable so
+    /// window close is a quit rather than a hide.
+    fn fixture(
+        cx: &mut TestAppContext,
+    ) -> (
+        gpui_kit::Entity<Workspace>,
+        crate::app::test_service::QuietService,
+        &mut gpui_kit::VisualTestContext,
+    ) {
+        cx.update(gpui_kit::init);
+        cx.update(crate::theme::init);
+        let service = crate::app::test_service::QuietService::three();
+        let svc: Arc<dyn DblService> = Arc::new(service.clone());
+        let (view, cx) = cx.add_window_view(|window, cx| {
+            let mut workspace = Workspace::new_preview(svc, window, cx);
+            workspace.tray = crate::tray::TrayHandle::unavailable();
+            workspace
+        });
+        cx.run_until_parked();
+        (view, service, cx)
+    }
+
+    /// A quit with a running instance asks first: the dialog, not the exit.
+    #[gpui_kit::test]
+    fn quit_with_a_running_instance_opens_the_dialog(cx: &mut TestAppContext) {
+        let (view, _service, cx) = fixture(cx);
+        view.update(cx, |this, cx| this.request_quit(cx));
+        cx.run_until_parked();
+        assert!(matches!(
+            view.read_with(cx, |this, _| this.quit_machine().state().clone()),
+            QuitState::Confirming { .. }
+        ));
+    }
+
+    /// "Biarkan tetap berjalan" marks the machine done without stopping anything.
+    #[gpui_kit::test]
+    fn keep_running_does_not_call_stop(cx: &mut TestAppContext) {
+        let (view, service, cx) = fixture(cx);
+        view.update(cx, |this, cx| this.request_quit(cx));
+        cx.run_until_parked();
+        let before = service.calls();
+        view.update(cx, |this, cx| this.quit_keep_running(cx));
+        cx.run_until_parked();
+        assert_eq!(
+            view.read_with(cx, |this, _| this.quit_machine().state().clone()),
+            QuitState::Done
+        );
+        assert_eq!(service.calls(), before, "keep-running must not touch engines");
+    }
+
+    /// Cancel returns to Idle without a dialog and without a stop.
+    #[gpui_kit::test]
+    fn cancel_returns_to_idle(cx: &mut TestAppContext) {
+        let (view, service, cx) = fixture(cx);
+        view.update(cx, |this, cx| this.request_quit(cx));
+        cx.run_until_parked();
+        let before = service.calls();
+        view.update(cx, |this, cx| this.quit_cancel(cx));
+        cx.run_until_parked();
+        assert_eq!(
+            view.read_with(cx, |this, _| this.quit_machine().state().clone()),
+            QuitState::Idle
+        );
+        assert_eq!(service.calls(), before);
+    }
+
+    /// "Hentikan semua lalu keluar" issues a stop for every live instance and
+    /// lands in Done once the stops report back.
+    #[gpui_kit::test]
+    fn stop_all_stops_every_live_instance(cx: &mut TestAppContext) {
+        let (view, service, cx) = fixture(cx);
+        view.update(cx, |this, cx| this.request_quit(cx));
+        cx.run_until_parked();
+        let before = service.calls();
+        view.update(cx, |this, cx| this.quit_stop_all(cx));
+        for _ in 0..20 {
+            cx.run_until_parked();
+            if matches!(
+                view.read_with(cx, |this, _| this.quit_machine().state().clone()),
+                QuitState::Done
+            ) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        assert!(
+            service.calls() > before,
+            "stop-all must issue stop_instance calls"
+        );
+        assert_eq!(
+            view.read_with(cx, |this, _| this.quit_machine().state().clone()),
+            QuitState::Done
+        );
+    }
+
+    /// A tray Quit is the same entry point the window-close hook uses.
+    #[gpui_kit::test]
+    fn tray_quit_opens_the_same_dialog(cx: &mut TestAppContext) {
+        let (view, _service, cx) = fixture(cx);
+        view.update(cx, |this, cx| this.apply_tray_action(TrayAction::Quit, cx));
+        cx.run_until_parked();
+        assert!(matches!(
+            view.read_with(cx, |this, _| this.quit_machine().state().clone()),
+            QuitState::Confirming { .. }
+        ));
+    }
+
+    /// Tray start/stop route to the same handlers as the window.
+    #[gpui_kit::test]
+    fn tray_start_routes_to_start_instance(cx: &mut TestAppContext) {
+        let (view, service, cx) = fixture(cx);
+        let id = service.id_with(InstanceStatus::Stopped);
+        let before = service.calls();
+        view.update(cx, |this, cx| {
+            this.apply_tray_action(TrayAction::Start(id.to_string()), cx)
+        });
+        cx.run_until_parked();
+        assert!(service.calls() > before, "a tray Start must call the service");
+    }
+
+    /// With no tray, closing the window is a quit; with one, it hides.
+    #[gpui_kit::test]
+    fn close_without_a_tray_asks_to_quit(cx: &mut TestAppContext) {
+        let (view, _service, cx) = fixture(cx);
+        view.update(cx, |this, cx| this.handle_window_close_request(cx));
+        cx.run_until_parked();
+        assert!(matches!(
+            view.read_with(cx, |this, _| this.quit_machine().state().clone()),
+            QuitState::Confirming { .. }
+        ));
+    }
+}

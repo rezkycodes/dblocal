@@ -193,3 +193,80 @@ impl DblService for QuietService {
         self.tx.subscribe()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::expect_used, clippy::unwrap_used)]
+
+    use dblocal_core::model::{DeleteMode, EngineKey, InstanceStatus, Port};
+    use dblocal_core::service::{DblService, UriFormat};
+
+    use super::{QuietService, SECRET};
+
+    /// Every trait method answers inline, so a caller never waits on a thread —
+    /// this is what makes the handler tests deterministic.
+    #[test]
+    fn every_trait_method_answers_immediately() {
+        let service = QuietService::three();
+        let running = service.id_with(InstanceStatus::Running);
+        let spec = dblocal_core::model::InstanceSpec::new(
+            dblocal_core::model::InstanceName::new("pg-new").expect("name"),
+            EngineKey::Postgresql,
+            "17.4",
+            Some(Port::new(5500).expect("port")),
+            dblocal_core::model::AuthMode::Password,
+        )
+        .expect("spec");
+
+        assert_eq!(service.list_instances().expect("instances").len(), 3);
+        assert!(service.catalog().expect("catalog").engines.is_empty());
+        assert_eq!(service.refresh_catalog(false).expect("refresh").as_str(), "op-refresh");
+        assert!(service.validate_spec(&spec).is_ok());
+        assert_eq!(service.suggest_port(EngineKey::Mysql).expect("port").get(), 5433);
+        assert!(service.create_instance(spec).is_ok());
+        assert!(service.start_instance(&running).is_ok());
+        assert!(service.stop_instance(&running).is_ok());
+        assert!(service.delete_instance(&running, DeleteMode::ArchiveData).is_ok());
+        assert!(service.change_port(&running, Port::new(5501).expect("port")).is_ok());
+        assert_eq!(service.data_size(&running).expect("size"), 4096);
+        assert!(service.set_autostart(&running, true).is_ok());
+        assert!(service.cancel_operation(&dblocal_core::service::OperationId::new("op")).is_ok());
+        assert!(service.list_runtimes().expect("runtimes").is_empty());
+        assert!(service.remove_runtime("none").is_ok());
+        assert!(service.list_archives().expect("archives").is_empty());
+        assert!(service.purge_archive("none").is_ok());
+        assert!(service.watch_logs(&running, true).is_ok());
+        assert_eq!(service.tail_logs(&running, 10).expect("logs").len(), 2);
+        assert_eq!(service.subscribe().len(), 0);
+    }
+
+    /// Both URI formats round-trip the real builder, with the secret encoded.
+    #[test]
+    fn connection_uri_uses_the_real_builder_for_both_formats() {
+        let service = QuietService::three();
+        let id = service.id_with(InstanceStatus::Running);
+        let encoded = dblocal_core::engine::uri::encode_userinfo(SECRET);
+
+        let uri = service.connection_uri(&id, UriFormat::Uri).expect("uri");
+        assert!(uri.expose().starts_with("postgresql://"));
+        assert!(
+            uri.expose().contains(&encoded),
+            "the URI must carry the encoded secret: {}",
+            uri.expose()
+        );
+
+        let dotenv = service.connection_uri(&id, UriFormat::DotEnv).expect("dotenv");
+        assert!(dotenv.expose().contains('='), "a .env block has KEY=value rows");
+        assert!(!format!("{dotenv:?}").contains(SECRET), "Debug must hide it");
+    }
+
+    /// The counter is how the handler tests prove a call was (or was not) made.
+    #[test]
+    fn the_call_counter_counts() {
+        let service = QuietService::three();
+        assert_eq!(service.calls(), 0);
+        let _ = service.list_instances().expect("instances");
+        let _ = service.catalog().expect("catalog");
+        assert_eq!(service.calls(), 2);
+    }
+}
