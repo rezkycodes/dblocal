@@ -1,10 +1,17 @@
 //! Pure SQL builders for database and user administration.
 //!
-//! Every function in this module is side-effect free. Identifiers are validated
-//! against a strict allowlist and quoted per dialect; values that can be bound
-//! parameters are returned separately.
+//! Every function here is side-effect free. Identifiers are validated against a
+//! strict ASCII allowlist and quoted per dialect. Values that the engine accepts
+//! as a bound parameter are returned in [`SqlStatement::params`] instead of
+//! being interpolated; the only values that must be inline are DDL identifiers
+//! (`CREATE DATABASE`, `CREATE ROLE`, `GRANT`) and the `CREATE ROLE PASSWORD`
+//! literal, each produced by a tested quoting function.
+//!
+//! PostgreSQL and MySQL/MariaDB builders are both implemented and unit-tested
+//! here. The MySQL ones are not executed in this task (the adapter lands later);
+//! `docs/architecture/admin.md` records the exact SQL for each privilege level.
 
-use crate::error::{DblError, Result};
+use super::error::{AdminError, AdminResult, IdentifierReject};
 
 /// SQL dialect for quoting and privilege statements.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -18,22 +25,31 @@ pub enum Dialect {
 /// Privilege level granted to a managed database user.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PrivilegeLevel {
-    /// CONNECT/USAGE + SELECT (+ default privileges for future tables/sequences).
+    /// CONNECT/USAGE + SELECT on tables and sequences, plus matching default
+    /// privileges for objects created later.
     ReadOnly,
-    /// ReadOnly + INSERT/UPDATE/DELETE (+ sequence usage/update + defaults).
+    /// ReadOnly + INSERT/UPDATE/DELETE on tables and USAGE/UPDATE on sequences.
     ReadWrite,
 }
 
 /// A validated SQL identifier.
+///
+/// The only constructor is [`Identifier::new`], which enforces the allowlist, so
+/// an `Identifier` can only ever hold `[A-Za-z][A-Za-z0-9_]*` up to
+/// [`Identifier::MAX_LEN`] bytes and never a reserved engine name. Quoting an
+/// `Identifier` therefore cannot produce a second statement.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Identifier(String);
 
 impl Identifier {
     /// Maximum identifier length accepted by this module.
+    ///
+    /// PostgreSQL truncates at 63 bytes; MySQL allows 64. Sharing the smaller
+    /// limit keeps one name valid on both engines.
     pub const MAX_LEN: usize = 63;
 
     /// Validates and wraps a raw identifier.
-    pub fn new(raw: &str) -> Result<Self> {
+    pub fn new(raw: &str) -> AdminResult<Self> {
         validate_identifier(raw)?;
         Ok(Self(raw.to_owned()))
     }
@@ -50,30 +66,29 @@ impl std::fmt::Display for Identifier {
     }
 }
 
-fn validate_identifier(raw: &str) -> Result<()> {
+fn validate_identifier(raw: &str) -> AdminResult<()> {
     if raw.is_empty() {
-        return Err(invalid_identifier("identifier must not be empty"));
+        return Err(AdminError::InvalidIdentifier(IdentifierReject::Empty));
     }
     if raw.len() > Identifier::MAX_LEN {
-        return Err(invalid_identifier("identifier is too long"));
+        return Err(AdminError::InvalidIdentifier(IdentifierReject::TooLong));
     }
     let bytes = raw.as_bytes();
-    let Some(first) = bytes.first() else {
-        return Err(invalid_identifier("identifier must not be empty"));
-    };
-    if first.is_ascii_digit() {
-        return Err(invalid_identifier("identifier must not start with a digit"));
+    if bytes.first().is_some_and(u8::is_ascii_digit) {
+        return Err(AdminError::InvalidIdentifier(
+            IdentifierReject::StartsWithDigit,
+        ));
     }
     if !bytes
         .iter()
         .all(|b| b.is_ascii_alphabetic() || b.is_ascii_digit() || *b == b'_')
     {
-        return Err(invalid_identifier(
-            "identifier contains characters outside [A-Za-z0-9_]",
+        return Err(AdminError::InvalidIdentifier(
+            IdentifierReject::BadCharacter,
         ));
     }
     if is_reserved(raw) {
-        return Err(invalid_identifier("identifier is reserved"));
+        return Err(AdminError::InvalidIdentifier(IdentifierReject::Reserved));
     }
     Ok(())
 }
@@ -85,17 +100,7 @@ fn is_reserved(raw: &str) -> bool {
     )
 }
 
-fn invalid_identifier(reason: &str) -> DblError {
-    DblError::InvalidInput {
-        field: "identifier",
-        reason: reason.to_owned(),
-    }
-}
-
 /// Quotes an identifier for the given dialect.
-///
-/// The identifier must already be validated. This function still rejects invalid
-/// input defensively.
 pub fn quote_identifier(dialect: Dialect, ident: &Identifier) -> String {
     match dialect {
         Dialect::Postgres => quote_postgres_ident(ident.as_str()),
@@ -103,26 +108,40 @@ pub fn quote_identifier(dialect: Dialect, ident: &Identifier) -> String {
     }
 }
 
+/// Quotes a raw string as a PostgreSQL identifier (`"name"`, `""` escapes).
 fn quote_postgres_ident(raw: &str) -> String {
     let escaped = raw.replace('"', "\"\"");
     format!("\"{escaped}\"")
 }
 
+/// Quotes a raw string as a MySQL identifier (`` `name` ``, ` `` ` escapes).
 fn quote_mysql_ident(raw: &str) -> String {
     let escaped = raw.replace('`', "``");
     format!("`{escaped}`")
 }
 
-/// Quotes a SQL string literal for PostgreSQL.
+/// Quotes a value as a PostgreSQL string literal.
 ///
-/// Used only where PostgreSQL syntax requires a literal (e.g. CREATE ROLE PASSWORD).
-/// The result is a single SQL string literal.
+/// Uses the `E'...'` form so the result is unambiguous regardless of the
+/// server's `standard_conforming_strings` setting: every backslash is doubled
+/// and every single quote is doubled, and a NUL byte (which cannot appear in
+/// the wire protocol's C string) becomes `\x00`.
 pub fn quote_postgres_literal(value: &str) -> String {
-    let escaped = value.replace('\'', "''");
-    format!("'{escaped}'")
+    let mut out = String::with_capacity(value.len() + 3);
+    out.push_str("E'");
+    for ch in value.chars() {
+        match ch {
+            '\'' => out.push_str("''"),
+            '\\' => out.push_str("\\\\"),
+            '\0' => out.push_str("\\x00"),
+            other => out.push(other),
+        }
+    }
+    out.push('\'');
+    out
 }
 
-/// Quotes a SQL string literal for MySQL.
+/// Quotes a value as a MySQL string literal (backslash escapes).
 pub fn quote_mysql_literal(value: &str) -> String {
     let mut out = String::with_capacity(value.len() + 2);
     out.push('\'');
@@ -141,18 +160,18 @@ pub fn quote_mysql_literal(value: &str) -> String {
     out
 }
 
-/// A built SQL statement with optional bound parameters.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SqlStatement {
-    sql: String,
-    params: Vec<SqlParam>,
-}
-
 /// A bound parameter value.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SqlParam {
     /// UTF-8 text parameter.
     Text(String),
+}
+
+/// A built SQL statement with optional bound parameters.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SqlStatement {
+    sql: String,
+    params: Vec<SqlParam>,
 }
 
 impl SqlStatement {
@@ -183,7 +202,7 @@ impl SqlStatement {
     }
 }
 
-/// Builds `CREATE DATABASE` for PostgreSQL.
+/// Builds `CREATE DATABASE` for PostgreSQL, UTF-8 with `template0`.
 pub fn create_database_postgres(db: &Identifier) -> SqlStatement {
     let name = quote_identifier(Dialect::Postgres, db);
     SqlStatement::new(format!(
@@ -191,7 +210,7 @@ pub fn create_database_postgres(db: &Identifier) -> SqlStatement {
     ))
 }
 
-/// Builds `CREATE DATABASE` for MySQL/MariaDB.
+/// Builds `CREATE DATABASE` for MySQL/MariaDB, `utf8mb4_unicode_ci`.
 pub fn create_database_mysql(db: &Identifier) -> SqlStatement {
     let name = quote_identifier(Dialect::MySql, db);
     SqlStatement::new(format!(
@@ -211,10 +230,49 @@ pub fn drop_database_mysql(db: &Identifier) -> SqlStatement {
     SqlStatement::new(format!("DROP DATABASE {name}"))
 }
 
+/// Query listing `(datname, pg_get_userbyid(datdba), pg_database_size)` for
+/// non-template databases, bound to no parameters.
+pub fn list_databases_postgres() -> SqlStatement {
+    SqlStatement::new(
+        "SELECT d.datname::text, pg_get_userbyid(d.datdba)::text, \
+                pg_database_size(d.datname)::bigint \
+         FROM pg_database d \
+         WHERE d.datistemplate = false AND d.datallowconn = true \
+         ORDER BY d.datname",
+    )
+}
+
+/// Query counting live connections to a database, with the name bound as `$1`.
+///
+/// This is the value the engine accepts as a parameter, so it is bound rather
+/// than interpolated even though it is also validated.
+pub fn database_connection_count_postgres(db: &Identifier) -> SqlStatement {
+    SqlStatement::with_params(
+        "SELECT count(*)::bigint FROM pg_stat_activity WHERE datname = $1",
+        vec![SqlParam::Text(db.as_str().to_owned())],
+    )
+}
+
+/// Query listing login-capable roles, bound to no parameters.
+pub fn list_users_postgres() -> SqlStatement {
+    SqlStatement::new(
+        "SELECT rolname::text, rolcanlogin, rolsuper FROM pg_roles \
+         WHERE rolcanlogin ORDER BY rolname",
+    )
+}
+
+/// Query checking whether a role exists, with the name bound as `$1`.
+pub fn role_exists_postgres(user: &Identifier) -> SqlStatement {
+    SqlStatement::with_params(
+        "SELECT count(*)::bigint FROM pg_roles WHERE rolname = $1",
+        vec![SqlParam::Text(user.as_str().to_owned())],
+    )
+}
+
 /// Builds a role/user creation statement.
 ///
-/// PostgreSQL: `CREATE ROLE "name" LOGIN PASSWORD '...'`.
-/// MySQL: `CREATE USER `name`@'127.0.0.1' IDENTIFIED BY '...'`.
+/// PostgreSQL: `CREATE ROLE "name" LOGIN PASSWORD E'...'`.
+/// MySQL: ``CREATE USER `name`@'127.0.0.1' IDENTIFIED BY '...'``.
 pub fn create_user(dialect: Dialect, user: &Identifier, password: &str) -> SqlStatement {
     match dialect {
         Dialect::Postgres => {
@@ -230,7 +288,7 @@ pub fn create_user(dialect: Dialect, user: &Identifier, password: &str) -> SqlSt
     }
 }
 
-/// Builds statements that grant privileges for `user` on `db`.
+/// Builds the statements that grant privileges for `user` on `db`.
 pub fn grant_privileges(
     dialect: Dialect,
     user: &Identifier,
@@ -243,7 +301,13 @@ pub fn grant_privileges(
     }
 }
 
-fn grant_postgres(user: &Identifier, db: &Identifier, level: PrivilegeLevel) -> Vec<SqlStatement> {
+/// The exact PostgreSQL grants per level, documented in
+/// `docs/architecture/admin.md`.
+fn grant_postgres(
+    user: &Identifier,
+    db: &Identifier,
+    level: PrivilegeLevel,
+) -> Vec<SqlStatement> {
     let user_q = quote_identifier(Dialect::Postgres, user);
     let db_q = quote_identifier(Dialect::Postgres, db);
     let mut stmts = vec![
@@ -286,13 +350,12 @@ fn grant_mysql(user: &Identifier, db: &Identifier, level: PrivilegeLevel) -> Vec
         PrivilegeLevel::ReadOnly => "SELECT",
         PrivilegeLevel::ReadWrite => "SELECT, INSERT, UPDATE, DELETE",
     };
-    vec![
-        SqlStatement::new(format!("GRANT {privs} ON {db_q}.* TO {user_q}@'127.0.0.1'")),
-        SqlStatement::new("FLUSH PRIVILEGES".to_owned()),
-    ]
+    vec![SqlStatement::new(format!(
+        "GRANT {privs} ON {db_q}.* TO {user_q}@'127.0.0.1'"
+    ))]
 }
 
-/// Builds statements that revoke managed privileges for `user` on `db`.
+/// Builds the statements that revoke every managed privilege for `user` on `db`.
 pub fn revoke_privileges(
     dialect: Dialect,
     user: &Identifier,
@@ -324,12 +387,9 @@ pub fn revoke_privileges(
         Dialect::MySql => {
             let user_q = quote_identifier(Dialect::MySql, user);
             let db_q = quote_identifier(Dialect::MySql, db);
-            vec![
-                SqlStatement::new(format!(
-                    "REVOKE ALL PRIVILEGES ON {db_q}.* FROM {user_q}@'127.0.0.1'"
-                )),
-                SqlStatement::new("FLUSH PRIVILEGES".to_owned()),
-            ]
+            vec![SqlStatement::new(format!(
+                "REVOKE ALL PRIVILEGES ON {db_q}.* FROM {user_q}@'127.0.0.1'"
+            ))]
         }
     }
 }
@@ -352,164 +412,12 @@ pub fn alter_password(dialect: Dialect, user: &Identifier, password: &str) -> Sq
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn identifier_accepts_valid_names() {
-        for name in ["app", "my_db1", "_internal", "A1_b2", "a".repeat(63).as_str()] {
-            let id = Identifier::new(name).expect(name);
-            assert_eq!(id.as_str(), name);
-        }
-    }
-
-    #[test]
-    fn identifier_rejects_hostile_and_invalid() {
-        let long = "a".repeat(64);
-        let cases = [
-            "",
-            "1abc",
-            "ab-cd",
-            "ab cd",
-            "ab;cd",
-            "ab'cd",
-            "ab\"cd",
-            "ab`cd",
-            "ab\\cd",
-            "ab\0cd",
-            "ab\ncd",
-            "ab--cd",
-            "ab/*cd*/",
-            long.as_str(),
-            "postgres",
-            "template0",
-            "template1",
-            "POSTGRES",
-            "Template0",
-        ];
-        for raw in cases {
-            let err = Identifier::new(raw).expect_err(raw);
-            assert!(matches!(err, DblError::InvalidInput { .. }), "{raw}: {err:?}");
-        }
-    }
-
-    #[test]
-    fn quote_postgres_identifier_escapes_quotes() {
-        let id = Identifier::new("normal_name").expect("valid");
-        assert_eq!(quote_identifier(Dialect::Postgres, &id), "\"normal_name\"");
-    }
-
-    #[test]
-    fn quote_mysql_identifier_uses_backticks() {
-        let id = Identifier::new("normal_name").expect("valid");
-        assert_eq!(quote_identifier(Dialect::MySql, &id), "`normal_name`");
-    }
-
-    #[test]
-    fn postgres_literal_escapes_single_quote() {
-        assert_eq!(quote_postgres_literal("a'b"), "'a''b'");
-    }
-
-    #[test]
-    fn mysql_literal_escapes_special_chars() {
-        let quoted = quote_mysql_literal("a'b\\c\0\n\r\u{001a}");
-        assert_eq!(quoted, "'a''b\\\\c\\0\\n\\r\\Z'");
-    }
-
-    #[test]
-    fn build_create_database_postgres() {
-        let db = Identifier::new("mydb").expect("valid");
-        let stmt = create_database_postgres(&db);
-        assert_eq!(
-            stmt.sql(),
-            "CREATE DATABASE \"mydb\" WITH ENCODING 'UTF8' TEMPLATE template0"
-        );
-        assert!(stmt.params().is_empty());
-    }
-
-    #[test]
-    fn build_create_database_mysql() {
-        let db = Identifier::new("mydb").expect("valid");
-        let stmt = create_database_mysql(&db);
-        assert_eq!(
-            stmt.sql(),
-            "CREATE DATABASE `mydb` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci"
-        );
-    }
-
-    #[test]
-    fn build_create_user_postgres_quotes_password_literal() {
-        let user = Identifier::new("app_user").expect("valid");
-        let stmt = create_user(Dialect::Postgres, &user, "p@ss'w0rd");
-        assert_eq!(
-            stmt.sql(),
-            "CREATE ROLE \"app_user\" LOGIN PASSWORD 'p@ss''w0rd'"
-        );
-    }
-
-    #[test]
-    fn build_create_user_mysql_quotes_password_literal() {
-        let user = Identifier::new("app_user").expect("valid");
-        let stmt = create_user(Dialect::MySql, &user, "p@ss'w0rd");
-        assert_eq!(
-            stmt.sql(),
-            "CREATE USER `app_user`@'127.0.0.1' IDENTIFIED BY 'p@ss''w0rd'"
-        );
-    }
-
-    #[test]
-    fn grant_read_only_postgres_has_expected_statements() {
-        let user = Identifier::new("app_ro").expect("valid");
-        let db = Identifier::new("appdb").expect("valid");
-        let stmts = grant_privileges(Dialect::Postgres, &user, &db, PrivilegeLevel::ReadOnly);
-        let sqls: Vec<&str> = stmts.iter().map(|s| s.sql()).collect();
-        assert!(sqls.contains(&"GRANT CONNECT ON DATABASE \"appdb\" TO \"app_ro\""));
-        assert!(sqls.contains(&"GRANT USAGE ON SCHEMA public TO \"app_ro\""));
-        assert!(sqls.contains(&"GRANT SELECT ON ALL TABLES IN SCHEMA public TO \"app_ro\""));
-        assert!(sqls.iter().any(|s| s.contains("DEFAULT PRIVILEGES") && s.contains("SELECT ON TABLES")));
-        assert!(!sqls.iter().any(|s| s.contains("INSERT, UPDATE, DELETE")));
-    }
-
-    #[test]
-    fn grant_read_write_postgres_adds_write_privileges() {
-        let user = Identifier::new("app_rw").expect("valid");
-        let db = Identifier::new("appdb").expect("valid");
-        let stmts = grant_privileges(Dialect::Postgres, &user, &db, PrivilegeLevel::ReadWrite);
-        let joined = stmts.iter().map(|s| s.sql()).collect::<Vec<_>>().join("\n");
-        assert!(joined.contains("GRANT INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO \"app_rw\""));
-        assert!(joined.contains("GRANT USAGE, UPDATE ON ALL SEQUENCES IN SCHEMA public TO \"app_rw\""));
-        assert!(joined.contains("ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT INSERT, UPDATE, DELETE ON TABLES TO \"app_rw\""));
-    }
-
-    #[test]
-    fn grant_mysql_read_only_and_write() {
-        let user = Identifier::new("app").expect("valid");
-        let db = Identifier::new("appdb").expect("valid");
-        let ro = grant_privileges(Dialect::MySql, &user, &db, PrivilegeLevel::ReadOnly);
-        assert_eq!(ro[0].sql(), "GRANT SELECT ON `appdb`.* TO `app`@'127.0.0.1'");
-        let rw = grant_privileges(Dialect::MySql, &user, &db, PrivilegeLevel::ReadWrite);
-        assert_eq!(rw[0].sql(), "GRANT SELECT, INSERT, UPDATE, DELETE ON `appdb`.* TO `app`@'127.0.0.1'");
-    }
-
-    #[test]
-    fn alter_password_builders_quote() {
-        let user = Identifier::new("app").expect("valid");
-        let pg = alter_password(Dialect::Postgres, &user, "pa'ss");
-        assert_eq!(pg.sql(), "ALTER ROLE \"app\" PASSWORD 'pa''ss'");
-        let my = alter_password(Dialect::MySql, &user, "pa'ss");
-        assert_eq!(my.sql(), "ALTER USER `app`@'127.0.0.1' IDENTIFIED BY 'pa''ss'");
-    }
-
-    #[test]
-    fn drop_and_revoke_builders() {
-        let db = Identifier::new("appdb").expect("valid");
-        let user = Identifier::new("app").expect("valid");
-        assert_eq!(drop_database_postgres(&db).sql(), "DROP DATABASE \"appdb\"");
-        assert_eq!(drop_database_mysql(&db).sql(), "DROP DATABASE `appdb`");
-        let rev_pg = revoke_privileges(Dialect::Postgres, &user, &db);
-        assert!(rev_pg[0].sql().contains("REVOKE ALL PRIVILEGES ON DATABASE \"appdb\" FROM \"app\""));
-        let rev_my = revoke_privileges(Dialect::MySql, &user, &db);
-        assert!(rev_my[0].sql().contains("REVOKE ALL PRIVILEGES ON `appdb`.* FROM `app`@'127.0.0.1'"));
-    }
+/// Builds `DROP ROLE` for PostgreSQL.
+pub fn drop_user_postgres(user: &Identifier) -> SqlStatement {
+    let name = quote_identifier(Dialect::Postgres, user);
+    SqlStatement::new(format!("DROP ROLE {name}"))
 }
+
+#[cfg(test)]
+#[path = "sql/tests.rs"]
+mod tests;
