@@ -569,9 +569,8 @@ fn start_repairs_config_rewritten_but_store_not_updated_postgres() {
     let conf = data_dir.join("postgresql.conf");
     std::fs::write(
         &conf,
-        format!(
-            "# base\n# DBLocal managed settings\nlisten_addresses = '127.0.0.1'\nport = 1\nunix_socket_directories = ''\n# DBLocal managed settings end\n"
-        ),
+        "# base\n# DBLocal managed settings\nlisten_addresses = '127.0.0.1'\nport = 1\nunix_socket_directories = ''\n# DBLocal managed settings end\n"
+            .to_string(),
     )
     .expect("write stale wrong-port conf");
 
@@ -586,4 +585,64 @@ fn start_repairs_config_rewritten_but_store_not_updated_postgres() {
         !repaired.contains("port = 1\n"),
         "stale port must be gone: {repaired}"
     );
+}
+
+#[test]
+fn start_repairs_config_rewritten_but_store_not_updated_valkey() {
+    // Item 5 crash simulation for Valkey.
+    let h = Harness::new(EngineKey::Valkey);
+    let port = test_port();
+    let spec = h.spec("vkcrash", EngineKey::Valkey, port);
+    h.create(spec);
+    let inst = h
+        .instances()
+        .into_iter()
+        .find(|i| i.name().as_str() == "vkcrash")
+        .expect("instance");
+    let id = inst.id().clone();
+    let name = crate::model::InstanceName::new("vkcrash").expect("name");
+    let run_dir = h.paths.run_dir(&name);
+    std::fs::create_dir_all(&run_dir).expect("run");
+    let conf = run_dir.join("valkey.conf");
+    std::fs::write(&conf, "bind 127.0.0.1\nport 1\n# keep\n").expect("write stale conf");
+
+    start_and_wait(&h, &id);
+    let repaired = std::fs::read_to_string(&conf).expect("read");
+    assert!(
+        repaired.contains(&format!("port {port}\n")),
+        "start must repair config from store port: {repaired}"
+    );
+    assert!(
+        !repaired.contains("port 1\n"),
+        "stale port must be gone: {repaired}"
+    );
+}
+
+#[test]
+fn change_port_check_then_act_window_is_documented() {
+    // Item 9: there is a pre-existing check-then-act window in change_port. It checks
+    // holds_process()/port availability then writes; a concurrent start from another
+    // process can interleave. We do not redesign it. This test documents the current
+    // single-process behaviour: once a row is Running, change_port is refused by
+    // holds_process(), which is the guard the service relies on. Cross-process TOCTOU
+    // remains possible because port probing and config rewrite are not atomic with the
+    // store CAS; a store compare-and-set on port+status could cover it in a future
+    // redesign.
+    let h = Harness::new(EngineKey::Postgresql);
+    let port = test_port();
+    let spec = h.spec("toctou", EngineKey::Postgresql, port);
+    h.create(spec);
+    let inst = h
+        .instances()
+        .into_iter()
+        .find(|i| i.name().as_str() == "toctou")
+        .expect("instance");
+    let id = inst.id().clone();
+    start_and_wait(&h, &id);
+    let free = crate::model::Port::new(test_port()).expect("port");
+    let err = h
+        .service
+        .change_port(&id, free)
+        .expect_err("running instance refused");
+    assert_eq!(err.code(), crate::error::CODE_INVALID_TRANSITION);
 }
