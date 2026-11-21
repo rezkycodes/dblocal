@@ -5,6 +5,8 @@
 //! No engine runs here: the assertion is on which service accepted the start,
 //! not on a healthy process.
 
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
 use std::sync::{Arc, Barrier};
 
 use dblocal_core::model::{AuthMode, EngineKey, InstanceName, InstanceSpec, InstanceStatus, Port};
