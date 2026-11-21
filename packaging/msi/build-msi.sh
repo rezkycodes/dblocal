@@ -24,7 +24,6 @@ dblocal_version_default_or_validate "$VERSION_INPUT" "$repo_root" VERSION_RAW VE
 if [ "$VERSION_SNAPSHOT" = "1" ]; then
   echo "info: snapshot build; package version $VERSION_PKG (raw: $VERSION_RAW)" >&2
 fi
-VERSION="$VERSION_PKG"
 
 command -v xmllint >/dev/null 2>&1 || { echo "error: xmllint not found" >&2; exit 1; }
 xmllint --noout "$script_dir/dblocal.wxs"
