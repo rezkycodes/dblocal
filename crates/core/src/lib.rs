@@ -1,6 +1,7 @@
 //! Core domain, engine contracts, and service API for DBLocal.
 
 pub mod catalog;
+pub mod clients;
 pub mod consts;
 pub mod download;
 pub mod engine;
