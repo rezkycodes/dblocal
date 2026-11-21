@@ -265,7 +265,11 @@ mod tests {
                 this.data_sizes.contains_key(&id),
             )
         });
-        assert_eq!(cached, (false, false, false), "forget_instance left a cache");
+        assert_eq!(
+            cached,
+            (false, false, false),
+            "forget_instance left a cache"
+        );
     }
 
     /// The offline first frame is the bundled catalog plus the offline banner,

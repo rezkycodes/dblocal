@@ -154,11 +154,14 @@ impl DblService for QuietService {
             .find(|view| &view.id == id)
             .map(|view| view.engine)
             .unwrap_or(EngineKey::Postgresql);
-        let credential = dblocal_core::engine::Credential::new("postgres", SecretString::new(SECRET));
+        let credential =
+            dblocal_core::engine::Credential::new("postgres", SecretString::new(SECRET));
         Ok(match format {
-            UriFormat::DotEnv => {
-                dblocal_core::engine::uri::build_dotenv(engine, engine.canonical_port(), &credential)
-            }
+            UriFormat::DotEnv => dblocal_core::engine::uri::build_dotenv(
+                engine,
+                engine.canonical_port(),
+                &credential,
+            ),
             _ => dblocal_core::engine::uri::build_uri(engine, engine.canonical_port(), &credential),
         })
     }
@@ -220,17 +223,35 @@ mod tests {
 
         assert_eq!(service.list_instances().expect("instances").len(), 3);
         assert!(service.catalog().expect("catalog").engines.is_empty());
-        assert_eq!(service.refresh_catalog(false).expect("refresh").as_str(), "op-refresh");
+        assert_eq!(
+            service.refresh_catalog(false).expect("refresh").as_str(),
+            "op-refresh"
+        );
         assert!(service.validate_spec(&spec).is_ok());
-        assert_eq!(service.suggest_port(EngineKey::Mysql).expect("port").get(), 5433);
+        assert_eq!(
+            service.suggest_port(EngineKey::Mysql).expect("port").get(),
+            5433
+        );
         assert!(service.create_instance(spec).is_ok());
         assert!(service.start_instance(&running).is_ok());
         assert!(service.stop_instance(&running).is_ok());
-        assert!(service.delete_instance(&running, DeleteMode::ArchiveData).is_ok());
-        assert!(service.change_port(&running, Port::new(5501).expect("port")).is_ok());
+        assert!(
+            service
+                .delete_instance(&running, DeleteMode::ArchiveData)
+                .is_ok()
+        );
+        assert!(
+            service
+                .change_port(&running, Port::new(5501).expect("port"))
+                .is_ok()
+        );
         assert_eq!(service.data_size(&running).expect("size"), 4096);
         assert!(service.set_autostart(&running, true).is_ok());
-        assert!(service.cancel_operation(&dblocal_core::service::OperationId::new("op")).is_ok());
+        assert!(
+            service
+                .cancel_operation(&dblocal_core::service::OperationId::new("op"))
+                .is_ok()
+        );
         assert!(service.list_runtimes().expect("runtimes").is_empty());
         assert!(service.remove_runtime("none").is_ok());
         assert!(service.list_archives().expect("archives").is_empty());
@@ -255,9 +276,17 @@ mod tests {
             uri.expose()
         );
 
-        let dotenv = service.connection_uri(&id, UriFormat::DotEnv).expect("dotenv");
-        assert!(dotenv.expose().contains('='), "a .env block has KEY=value rows");
-        assert!(!format!("{dotenv:?}").contains(SECRET), "Debug must hide it");
+        let dotenv = service
+            .connection_uri(&id, UriFormat::DotEnv)
+            .expect("dotenv");
+        assert!(
+            dotenv.expose().contains('='),
+            "a .env block has KEY=value rows"
+        );
+        assert!(
+            !format!("{dotenv:?}").contains(SECRET),
+            "Debug must hide it"
+        );
     }
 
     /// The counter is how the handler tests prove a call was (or was not) made.

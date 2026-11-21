@@ -564,7 +564,13 @@ mod handler_tests {
     use super::super::{InnerTab, Workspace};
 
     /// A workspace on the emit-free service, plus a handle to that service.
-    fn fixture(cx: &mut TestAppContext) -> (gpui_kit::Entity<Workspace>, QuietService, &mut gpui_kit::VisualTestContext) {
+    fn fixture(
+        cx: &mut TestAppContext,
+    ) -> (
+        gpui_kit::Entity<Workspace>,
+        QuietService,
+        &mut gpui_kit::VisualTestContext,
+    ) {
         cx.update(gpui_kit::init);
         cx.update(crate::theme::init);
         let service = QuietService::three();
@@ -582,7 +588,10 @@ mod handler_tests {
         cx.run_until_parked();
 
         let text = view.read_with(cx, |this, _| this.uri_text(&id));
-        assert!(!text.is_empty(), "open_tab must fetch the URI in the background");
+        assert!(
+            !text.is_empty(),
+            "open_tab must fetch the URI in the background"
+        );
         assert!(
             text.contains(crate::format::SECRET_MASK),
             "the fetched URI must render masked: {text}"
@@ -628,7 +637,10 @@ mod handler_tests {
             .read_from_clipboard()
             .and_then(|item| item.text())
             .unwrap_or_default();
-        assert!(text.contains("://"), "the clipboard must hold the URI: {text}");
+        assert!(
+            text.contains("://"),
+            "the clipboard must hold the URI: {text}"
+        );
         assert_eq!(
             view.read_with(cx, |this, _| this.toast_text())
                 .as_deref()

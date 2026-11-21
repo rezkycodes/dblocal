@@ -23,11 +23,11 @@ mod screens;
 mod state;
 mod status_bar;
 #[cfg(test)]
-#[path = "app/tests_secret.rs"]
-mod tests_secret;
-#[cfg(test)]
 #[path = "app/test_service.rs"]
 mod test_service;
+#[cfg(test)]
+#[path = "app/tests_secret.rs"]
+mod tests_secret;
 mod title_bar;
 #[cfg(test)]
 #[path = "app/tray_latency.rs"]

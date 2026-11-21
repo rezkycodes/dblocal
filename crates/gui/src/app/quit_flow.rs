@@ -267,7 +267,11 @@ mod glue_tests {
             view.read_with(cx, |this, _| this.quit_machine().state().clone()),
             QuitState::Done
         );
-        assert_eq!(service.calls(), before, "keep-running must not touch engines");
+        assert_eq!(
+            service.calls(),
+            before,
+            "keep-running must not touch engines"
+        );
     }
 
     /// Cancel returns to Idle without a dialog and without a stop.
@@ -337,7 +341,10 @@ mod glue_tests {
             this.apply_tray_action(TrayAction::Start(id.to_string()), cx)
         });
         cx.run_until_parked();
-        assert!(service.calls() > before, "a tray Start must call the service");
+        assert!(
+            service.calls() > before,
+            "a tray Start must call the service"
+        );
     }
 
     /// With no tray, closing the window is a quit; with one, it hides.
