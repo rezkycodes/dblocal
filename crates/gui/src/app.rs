@@ -38,29 +38,11 @@ use crate::service_bridge::{self, UiEvent};
 
 pub use actions::{ROOT_CONTEXT, palette_hint};
 pub use bootstrap::{appearance_is_dark, run_with_service};
-pub use state::{ActiveDownload, ShellState};
+pub use state::{ActiveDownload, InnerTab, OpenTab, ShellState, Tabs};
 
 /// Opens the GUI on the in-memory mock service.
 pub fn run_with_mock() -> dblocal_core::Result<()> {
     bootstrap::run_with_mock()
-}
-
-/// Which inner tab of an instance is showing.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum InnerTab {
-    /// Overview: engine, port, URI, actions.
-    Overview,
-    /// Logs: virtualised tail with follow and copy.
-    Logs,
-}
-
-/// One open tab in the centre pane.
-#[derive(Debug, Clone)]
-pub struct OpenTab {
-    /// Instance the tab shows.
-    pub instance: InstanceId,
-    /// Active inner tab.
-    pub inner: InnerTab,
 }
 
 /// What the create dialog currently has selected.
@@ -89,9 +71,8 @@ pub struct Workspace {
     events: flume::Receiver<UiEvent>,
     state: ShellState,
     catalog: CatalogView,
-    open_tabs: Vec<OpenTab>,
-    selected_tab: usize,
-    selected_instance: Option<InstanceId>,
+    /// Centre-pane tabs and the current selection.
+    tabs: Tabs,
     /// Per-instance log buffers, keyed by instance so each tab shows its own.
     logs: LogStore,
     /// Scroll handle for the visible Logs list, driving follow and pause.
@@ -141,9 +122,7 @@ impl Workspace {
                 last_failure: None,
             },
             catalog,
-            open_tabs: Vec::new(),
-            selected_tab: 0,
-            selected_instance: None,
+            tabs: Tabs::default(),
             logs: LogStore::new(),
             log_scroll: gpui::UniformListScrollHandle::new(),
             create: None,
@@ -230,10 +209,14 @@ impl Workspace {
                 }
             }
             UiEvent::InstanceRemoved(id) => {
-                // The instance is gone: drop its row, any open tab and its logs.
-                self.state.instances.retain(|view| view.id != id);
-                self.close_tab_by_instance(&id);
-                self.logs.close(&id);
+                // G: a deleted (or rolled-back) instance is gone for good. Drop
+                // the row, its tab, the selection if it pointed here, and its
+                // log buffer, then stop watching it.
+                self.state
+                    .apply_removed(&id, &mut self.tabs, &mut self.logs);
+                if let Err(err) = self.service.watch_logs(&id, false) {
+                    self.report_error(&err);
+                }
             }
             UiEvent::StopForced(id) => {
                 self.toast = Some(SharedString::from(strings::UI_TOAST_STOP_FORCED));
@@ -256,35 +239,12 @@ impl Workspace {
     }
 
     fn open_tab(&mut self, id: InstanceId, cx: &mut Context<Self>) {
-        self.selected_instance = Some(id.clone());
-        if let Some(position) = self.open_tabs.iter().position(|tab| tab.instance == id) {
-            self.selected_tab = position;
-        } else {
-            self.open_tabs.push(OpenTab {
-                instance: id.clone(),
-                inner: InnerTab::Overview,
-            });
-            self.selected_tab = self.open_tabs.len().saturating_sub(1);
-        }
+        self.tabs.open_or_select(id.clone());
         self.load_logs_for(&id);
         if let Err(err) = self.service.watch_logs(&id, true) {
             self.report_error(&err);
         }
         cx.notify();
-    }
-
-    fn close_tab(&mut self, index: usize) {
-        if index >= self.open_tabs.len() {
-            return;
-        }
-        let closed = self.open_tabs.remove(index);
-        if let Err(err) = self.service.watch_logs(&closed.instance, false) {
-            self.report_error(&err);
-        }
-        self.logs.close(&closed.instance);
-        self.selected_tab = self
-            .selected_tab
-            .min(self.open_tabs.len().saturating_sub(1));
     }
 
     /// Loads one instance's tail into its own buffer.
@@ -297,7 +257,7 @@ impl Workspace {
 
     /// Whether the currently visible Logs tab is this instance and following.
     fn visible_logs_following(&self, id: &InstanceId) -> bool {
-        let Some(tab) = self.open_tabs.get(self.selected_tab) else {
+        let Some(tab) = self.tabs.selected_tab() else {
             return false;
         };
         tab.instance == *id
@@ -353,8 +313,8 @@ impl Workspace {
 
     fn copy_logs(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let text = self
-            .open_tabs
-            .get(self.selected_tab)
+            .tabs
+            .selected_tab()
             .and_then(|tab| self.logs.get(&tab.instance))
             .map(|buffer| buffer.copy_text())
             .unwrap_or_default();
@@ -510,8 +470,11 @@ impl Workspace {
     }
 
     fn close_tab_by_instance(&mut self, id: &InstanceId) {
-        if let Some(position) = self.open_tabs.iter().position(|tab| &tab.instance == id) {
-            self.close_tab(position);
+        if let Some(closed) = self.tabs.close_by_instance(id) {
+            if let Err(err) = self.service.watch_logs(&closed.instance, false) {
+                self.report_error(&err);
+            }
+            self.logs.close(&closed.instance);
         }
     }
 

@@ -158,7 +158,17 @@ fn output_path(name: &str) -> (std::path::PathBuf, bool) {
     }
 }
 
+/// Serialises the GPU-touching renders.
+///
+/// Each render creates its own headless wgpu context. Several concurrent
+/// contexts intermittently wedge inside swapchain creation on this driver
+/// (observed as a test that runs for minutes with no output), so the tests
+/// take this lock and only one context exists at a time. Single-threaded this
+/// suite finishes in ~45 s, which is acceptable for CI.
+static GPU: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 fn render(mode_dark: bool, name: &str, build: Build) -> Frame {
+    let _guard = GPU.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     let text_system = gpui_platform::current_platform(true).text_system();
     let mut app = HeadlessAppContext::with_platform(
         text_system,
@@ -444,4 +454,48 @@ fn renders_logs_for_each_instance_independently() {
     assert!(o_text < 200, "Overview lower body is not blank ({o_text})");
     assert!(a_text > 1500, "tab A is not showing log text ({a_text})");
     assert!(b_text > 1500, "tab B is not showing log text ({b_text})");
+}
+
+/// G: a deleted instance leaves the dock. The frame after removal must show
+/// fewer instance rows than the normal shell, and the selected-row surface that
+/// belonged to it must be gone from the sidebar.
+#[test]
+fn deleted_instance_disappears_from_the_dock() {
+    let normal = render(false, "shell-dock-before.png", Workspace::preview);
+    let after = render(
+        false,
+        "shell-dock-after-delete.png",
+        Workspace::preview_after_delete,
+    );
+
+    // The sidebar instance rows use the selected-row accent for the open tab and
+    // plain rows elsewhere; a reliable proxy for "one fewer instance" is the
+    // count of status-dot pixels (8px dots), which must drop after removal.
+    let (w, h) = normal.dims();
+    let sidebar = (0, 68, 520, h * 9 / 10);
+    let dots_before =
+        normal.count_near(sidebar, LIGHT_SUCCESS, 8) + normal.count_near(sidebar, LIGHT_DANGER, 8);
+    let dots_after =
+        after.count_near(sidebar, LIGHT_SUCCESS, 8) + after.count_near(sidebar, LIGHT_DANGER, 8);
+    eprintln!("DOCK dots before={dots_before} after={dots_after}");
+    assert!(
+        dots_after < dots_before,
+        "the dock did not lose a status dot after the delete (before={dots_before}, after={dots_after})"
+    );
+
+    // And the whole sidebar differs: rows shifted up by one.
+    let diff = (68..h * 9 / 10)
+        .step_by(4)
+        .filter(|y| {
+            (0..520)
+                .step_by(4)
+                .any(|x| normal.pixel(x, *y)[0..3] != after.pixel(x, *y)[0..3])
+        })
+        .count();
+    eprintln!("DOCK sidebar rows differing={diff}");
+    assert!(
+        diff > 20,
+        "the sidebar barely changed after a delete ({diff} rows)"
+    );
+    let _ = w;
 }

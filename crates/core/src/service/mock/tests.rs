@@ -53,6 +53,29 @@ async fn drain_until_finished(
     }
 }
 
+/// Collects every event up to and including `OperationFinished`.
+async fn collect_until_finished(
+    rx: &mut broadcast::Receiver<ServiceEvent>,
+) -> (
+    Vec<ServiceEvent>,
+    Result<(), crate::service::UserFacingError>,
+) {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    let mut events = Vec::new();
+    loop {
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        match tokio::time::timeout(remaining, rx.recv()).await {
+            Ok(Ok(ServiceEvent::OperationFinished { result, .. })) => {
+                return (events, result);
+            }
+            Ok(Ok(event)) => events.push(event),
+            Ok(Err(RecvError::Lagged(_))) => continue,
+            Ok(Err(RecvError::Closed)) => panic!("event channel closed"),
+            Err(_) => panic!("timed out waiting for OperationFinished"),
+        }
+    }
+}
+
 #[tokio::test]
 async fn create_with_installed_runtime_goes_straight_to_stopped() {
     let service = super::MockService::deterministic();
@@ -509,4 +532,107 @@ async fn data_size_and_autostart_only_touch_real_instances() {
     assert!(service.tail_logs(&missing, 10).is_err());
     assert!(service.watch_logs(&missing, true).is_err());
     assert!(service.connection_uri(&missing, UriFormat::Uri).is_err());
+}
+
+#[tokio::test]
+async fn delete_emits_instance_removed_before_finishing() {
+    let service = super::MockService::deterministic();
+    let id = service.seed_instance(
+        spec("gone-one", EngineKey::Postgresql, "17.4", 5432),
+        InstanceStatus::Stopped,
+    );
+    let mut rx = service.subscribe();
+    service
+        .delete_instance(&id, DeleteMode::ArchiveData)
+        .expect("delete accepted");
+    let (events, result) = collect_until_finished(&mut rx).await;
+    result.expect("delete succeeds");
+
+    let removed_at = events.iter().position(
+        |event| matches!(event, ServiceEvent::InstanceRemoved { id: gone } if gone == &id),
+    );
+    assert!(
+        removed_at.is_some(),
+        "delete must emit InstanceRemoved: {events:?}"
+    );
+    // The row is gone from the service's own read model too.
+    assert!(
+        service
+            .list_instances()
+            .expect("list")
+            .iter()
+            .all(|v| v.id != id)
+    );
+}
+
+#[tokio::test]
+async fn stop_needs_force_emits_stop_forced_before_finishing() {
+    let service = super::MockService::deterministic();
+    let id = service.seed_instance(
+        spec("forced-one", EngineKey::Valkey, "8.1.0", 6379),
+        InstanceStatus::Running,
+    );
+    let mut rx = service.subscribe();
+    service.push_failure(super::ScriptedFailure::StopNeedsForce);
+    service.stop_instance(&id).expect("stop accepted");
+    let (events, result) = collect_until_finished(&mut rx).await;
+    result.expect("stop succeeds");
+
+    let forced_at = events
+        .iter()
+        .position(|event| matches!(event, ServiceEvent::StopForced { id: f } if f == &id));
+    assert!(
+        forced_at.is_some(),
+        "a forced stop must emit StopForced: {events:?}"
+    );
+    // StopForced arrives before the InstanceChanged that carries Stopped.
+    let changed_at = events.iter().position(|event| {
+        matches!(event, ServiceEvent::InstanceChanged { view } if view.id == id && view.status == InstanceStatus::Stopped)
+    });
+    if let Some(changed_at) = changed_at {
+        assert!(
+            forced_at.unwrap() < changed_at,
+            "StopForced must precede the final InstanceChanged"
+        );
+    }
+    let view = service
+        .list_instances()
+        .expect("list")
+        .into_iter()
+        .find(|v| v.id == id)
+        .expect("instance");
+    assert_eq!(view.status, InstanceStatus::Stopped);
+}
+
+#[tokio::test]
+async fn rolled_back_create_emits_instance_removed() {
+    let service = super::MockService::deterministic();
+    let mut rx = service.subscribe();
+    service.push_failure(super::ScriptedFailure::CreateRolledBack);
+    service
+        .create_instance(spec("rollback-me", EngineKey::Postgresql, "17.4", 5432))
+        .expect("create accepted");
+    let (events, result) = collect_until_finished(&mut rx).await;
+    assert!(result.is_err(), "a rolled-back create reports failure");
+
+    let removed = events
+        .iter()
+        .filter_map(|event| match event {
+            ServiceEvent::InstanceRemoved { id } => Some(id),
+            _ => None,
+        })
+        .count();
+    assert_eq!(
+        removed, 1,
+        "the half-created row must be removed exactly once"
+    );
+    // And it is gone from the read model: no ghost row survives.
+    assert!(
+        service
+            .list_instances()
+            .expect("list")
+            .iter()
+            .all(|v| v.name != "rollback-me"),
+        "a rolled-back create must not leave a row"
+    );
 }

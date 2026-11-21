@@ -40,6 +40,10 @@ pub enum ScriptedFailure {
     DownloadFailed,
     /// Start times out and never reaches a healthy state.
     StartTimeout,
+    /// The graceful stop is ignored and the stop escalates to a forced kill.
+    StopNeedsForce,
+    /// Create fails before the instance exists, so its row is rolled back.
+    CreateRolledBack,
 }
 
 /// Controls simulated timing and deterministic randomness.

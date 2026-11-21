@@ -113,7 +113,7 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let theme = cx.theme().clone();
-        let selected = self.selected_instance.as_ref() == Some(&view.id);
+        let selected = self.tabs.selected_instance() == Some(&view.id);
         let dot = status_colour(view.status, &theme);
         let id = view.id.clone();
         let name = view.name.clone();
@@ -162,7 +162,7 @@ impl Workspace {
 
     pub(crate) fn render_center(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme().clone();
-        if self.open_tabs.is_empty() {
+        if self.tabs.is_empty() {
             return div()
                 .flex_1()
                 .h_full()
@@ -196,7 +196,7 @@ impl Workspace {
         }
 
         let mut tabs = TabBar::new("center-tabs").underline();
-        for tab in &self.open_tabs {
+        for tab in self.tabs.open() {
             let name = self
                 .instance(&tab.instance)
                 .map(|view| view.name.clone())
@@ -212,12 +212,12 @@ impl Workspace {
                     .prefix(div().mr_1().size(px(8.)).rounded_full().bg(dot)),
             );
         }
-        let tabs = tabs.selected_index(self.selected_tab).on_click(cx.listener(
-            |this, index: &usize, _window, cx| {
+        let tabs = tabs
+            .selected_index(self.tabs.selected_index())
+            .on_click(cx.listener(|this, index: &usize, _window, cx| {
                 this.select_tab(*index);
                 cx.notify();
-            },
-        ));
+            }));
 
         let content = self.render_selected_tab(cx).into_any_element();
         // F-CAT-01: a stale or offline catalog is a banner, never a modal.
@@ -262,7 +262,7 @@ impl Workspace {
 
     pub(crate) fn render_selected_tab(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme().clone();
-        let Some(tab) = self.open_tabs.get(self.selected_tab).cloned() else {
+        let Some(tab) = self.tabs.selected_tab().cloned() else {
             return div().into_any_element();
         };
         let Some(view) = self.instance(&tab.instance).cloned() else {
@@ -277,13 +277,12 @@ impl Workspace {
                 InnerTab::Logs => 1,
             })
             .on_click(cx.listener(|this, index: &usize, _window, cx| {
-                if let Some(tab) = this.open_tabs.get_mut(this.selected_tab) {
-                    tab.inner = if *index == 0 {
-                        InnerTab::Overview
-                    } else {
-                        InnerTab::Logs
-                    };
-                }
+                let inner = if *index == 0 {
+                    InnerTab::Overview
+                } else {
+                    InnerTab::Logs
+                };
+                this.tabs.set_inner(this.tabs.selected_index(), inner);
                 cx.notify();
             }));
 
@@ -491,10 +490,7 @@ impl Workspace {
     pub(crate) fn render_logs(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme().clone();
         let mono = theme.mono_font_family.clone();
-        let instance = self
-            .open_tabs
-            .get(self.selected_tab)
-            .map(|tab| tab.instance.clone());
+        let instance = self.tabs.selected_tab().map(|tab| tab.instance.clone());
         let buffer = instance.as_ref().and_then(|id| self.logs.get(id));
         let count = buffer.map(LogBuffer::len).unwrap_or(0);
         let following = buffer.is_some_and(LogBuffer::is_following);

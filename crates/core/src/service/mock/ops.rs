@@ -46,6 +46,31 @@ fn emit_port_failure(
     });
 }
 
+/// Rolls back a half-created instance: the row is removed and
+/// `InstanceRemoved` is emitted, exactly as the real service does when a
+/// create fails before the instance exists.
+fn roll_back_create(
+    tx: &broadcast::Sender<ServiceEvent>,
+    inner: &Arc<std::sync::Mutex<Inner>>,
+    op: &OperationId,
+    id: &InstanceId,
+) {
+    let mut g = lock(inner);
+    g.instances.remove(id);
+    g.views.remove(id);
+    g.credentials.remove(id);
+    g.passwords.remove(id);
+    g.logs.remove(id);
+    g.watched.remove(id);
+    g.emit(ServiceEvent::InstanceRemoved { id: id.clone() });
+    let _ = tx.send(ServiceEvent::OperationFinished {
+        id: op.clone(),
+        result: Err(UserFacingError::from(&DblError::Engine {
+            reason: "create rolled back".to_owned(),
+        })),
+    });
+}
+
 fn emit_download_failure(
     tx: &broadcast::Sender<ServiceEvent>,
     inner: &Arc<std::sync::Mutex<Inner>>,
@@ -188,7 +213,9 @@ impl DblService for MockService {
             let scripted = g.take_failure(|f| {
                 matches!(
                     f,
-                    ScriptedFailure::DownloadFailed | ScriptedFailure::PortInUse { .. }
+                    ScriptedFailure::DownloadFailed
+                        | ScriptedFailure::PortInUse { .. }
+                        | ScriptedFailure::CreateRolledBack
                 )
             });
             let needs_download = !g
@@ -240,6 +267,10 @@ impl DblService for MockService {
             MockService::step(delay).await;
             if MockService::cancelled(&inner, &op_task) {
                 finish_cancelled(&tx, &inner, &op_task, &iid);
+                return;
+            }
+            if let Some(ScriptedFailure::CreateRolledBack) = scripted {
+                roll_back_create(&tx, &inner, &op_task, &iid);
                 return;
             }
             if let Some(ScriptedFailure::PortInUse { port }) = scripted {
@@ -401,7 +432,7 @@ impl DblService for MockService {
     }
 
     fn stop_instance(&self, id: &InstanceId) -> Result<OperationId> {
-        let (op, delay, tx, inner) = {
+        let (op, delay, tx, inner, forced) = {
             let mut g = lock(&self.inner);
             let inst = g
                 .instances
@@ -412,17 +443,38 @@ impl DblService for MockService {
                 return Err(invalid_transition(inst.status(), "stopping"));
             }
             let op = g.alloc_op(super::OpKind::Stop);
+            // A scripted forced stop models an engine that ignores the graceful
+            // shutdown until the grace period elapses (F-INS-03 AC3).
+            let forced = g
+                .take_failure(|f| matches!(f, ScriptedFailure::StopNeedsForce))
+                .is_some();
             if let Ok(next) = inst.status().apply(InstanceEvent::StopRequested) {
                 g.instances.insert(id.clone(), inst.with_status(next));
             }
             g.push_log(id, "[info] menghentikan engine".to_owned());
             g.sync_view(id);
-            (op, g.step_delay, g.tx.clone(), Arc::clone(&self.inner))
+            (
+                op,
+                g.step_delay,
+                g.tx.clone(),
+                Arc::clone(&self.inner),
+                forced,
+            )
         };
         let op_task = op.clone();
         let iid = id.clone();
         self.spawn(&op, async move {
             MockService::step(delay).await;
+            if forced {
+                // `StopForced` goes out before the final `InstanceChanged` that
+                // carries the `Stopped` view, so the UI can toast and still end
+                // in the right state.
+                let _ = tx.send(ServiceEvent::StopForced { id: iid.clone() });
+                lock(&inner).push_log(
+                    &iid,
+                    "[warn] shutdown tidak selesai dalam 20 detik, kill paksa".to_owned(),
+                );
+            }
             {
                 let mut g = lock(&inner);
                 if g.apply(&iid, InstanceEvent::ShutdownClean) {
@@ -487,6 +539,9 @@ impl DblService for MockService {
                 g.passwords.remove(&iid);
                 g.logs.remove(&iid);
                 g.watched.remove(&iid);
+                // The row is gone; `InstanceChanged` cannot carry that, so tell
+                // consumers explicitly before the operation finishes.
+                g.emit(ServiceEvent::InstanceRemoved { id: iid.clone() });
             }
             let _ = tx.send(ServiceEvent::OperationFinished {
                 id: op_task,
