@@ -1,0 +1,23 @@
+//! Open-in-client detection and launch planning (F-OPN-01, F-OPN-02).
+//!
+//! This module is pure core logic: it detects installed database clients,
+//! builds a safe [`LaunchPlan`] for opening one against an instance, and runs
+//! that plan through an injected [`Spawner`]. It never touches the GUI, never
+//! embeds a password in argv/URL/command strings, and never builds a shell
+//! command by concatenation.
+
+mod detect;
+mod plan;
+mod quote;
+mod run;
+
+pub use detect::{ClientKind, DetectedClient, HostProbe, OpenMenu, detect_clients};
+pub use plan::{
+    LaunchEnv, LaunchPlan, OpenTarget, OsKind, TempFile, TerminalChoice, TerminalKind,
+    plan_open, resolve_terminal,
+};
+pub use quote::shell_quote;
+pub use run::{Spawner, SystemSpawner, run};
+
+#[cfg(test)]
+mod tests;
