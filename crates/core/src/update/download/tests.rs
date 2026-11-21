@@ -155,3 +155,27 @@ fn validate_url_allows_loopback_http_in_test_mode() {
     let url = reqwest::Url::parse("http://127.0.0.1:1234/file").unwrap();
     validate_url(&url, &UpdateDownloadOptions::loopback_for_tests()).expect("loopback");
 }
+
+#[tokio::test]
+async fn download_rejects_non_success_status() {
+    let body = b"nope".to_vec();
+    let server = start_server_with_status(404, body).await;
+    let dir = tempdir().expect("tmp");
+    let dest = dir.path().join("asset.bin");
+    let err = download_and_verify(
+        &server.url("/asset.bin"),
+        &dest,
+        &"1".repeat(64),
+        4,
+        &UpdateDownloadOptions::loopback_for_tests(),
+    )
+    .await
+    .expect_err("404");
+    assert_eq!(err.code(), crate::update::error::CODE_UPDATE_NETWORK);
+}
+
+#[test]
+fn effective_max_allows_slack_under_hard_cap() {
+    let got = effective_max(100, MAX_UPDATE_BYTES).unwrap();
+    assert_eq!(got, 100 + 1024 * 1024);
+}
