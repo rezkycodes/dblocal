@@ -288,7 +288,11 @@ fn identifier_rejects_with_a_specific_reason() {
     ];
     for (raw, expected) in cases {
         let err = Identifier::new(raw).expect_err(raw);
-        assert_eq!(err, AdminError::InvalidIdentifier(expected), "input {raw:?}");
+        assert_eq!(
+            err,
+            AdminError::InvalidIdentifier(expected),
+            "input {raw:?}"
+        );
     }
     let too_long = "a".repeat(Identifier::MAX_LEN + 1);
     assert_eq!(
@@ -353,7 +357,14 @@ fn postgres_literal_round_trips_every_hostile_value() {
 
 #[test]
 fn mysql_literal_round_trips_every_hostile_value() {
-    let hostile = ["plain", "pa'ss", "a\\b", "x'; DROP TABLE t; --", "line\nbreak", "tab\there"];
+    let hostile = [
+        "plain",
+        "pa'ss",
+        "a\\b",
+        "x'; DROP TABLE t; --",
+        "line\nbreak",
+        "tab\there",
+    ];
     for value in hostile {
         let quoted = quote_mysql_literal(value);
         // The shared tokenizer understands the standard-literal subset MySQL
@@ -451,7 +462,10 @@ fn grant_read_only_postgres_grants_select_but_not_write() {
     assert!(sqls.contains(&"GRANT CONNECT ON DATABASE \"appdb\" TO \"app_ro\""));
     assert!(sqls.contains(&"GRANT USAGE ON SCHEMA public TO \"app_ro\""));
     assert!(sqls.contains(&"GRANT SELECT ON ALL TABLES IN SCHEMA public TO \"app_ro\""));
-    assert!(sqls.iter().any(|s| s.contains("DEFAULT PRIVILEGES") && s.contains("SELECT ON TABLES")));
+    assert!(
+        sqls.iter()
+            .any(|s| s.contains("DEFAULT PRIVILEGES") && s.contains("SELECT ON TABLES"))
+    );
     assert!(!sqls.iter().any(|s| s.contains("INSERT")));
     assert!(!sqls.iter().any(|s| s.contains("UPDATE")));
     assert!(!sqls.iter().any(|s| s.contains("DELETE")));
@@ -465,11 +479,20 @@ fn grant_read_write_postgres_adds_write_and_sequence_rights() {
     let user = Identifier::new("app_rw").expect("valid");
     let db = Identifier::new("appdb").expect("valid");
     let stmts = grant_privileges(Dialect::Postgres, &user, &db, PrivilegeLevel::ReadWrite);
-    let joined = stmts.iter().map(SqlStatement::sql).collect::<Vec<_>>().join("\n");
-    assert!(joined.contains("GRANT INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO \"app_rw\""));
+    let joined = stmts
+        .iter()
+        .map(SqlStatement::sql)
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        joined
+            .contains("GRANT INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO \"app_rw\"")
+    );
     assert!(joined.contains("GRANT USAGE, UPDATE ON ALL SEQUENCES IN SCHEMA public TO \"app_rw\""));
     assert!(joined.contains("ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT INSERT, UPDATE, DELETE ON TABLES TO \"app_rw\""));
-    assert!(joined.contains("ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT USAGE, UPDATE ON SEQUENCES TO \"app_rw\""));
+    assert!(joined.contains(
+        "ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT USAGE, UPDATE ON SEQUENCES TO \"app_rw\""
+    ));
     for stmt in &stmts {
         assert_eq!(one_statement(stmt.sql()).last(), Some(&ident("app_rw")));
     }
@@ -481,7 +504,10 @@ fn grant_mysql_per_level() {
     let db = Identifier::new("appdb").expect("valid");
     let ro = grant_privileges(Dialect::MySql, &user, &db, PrivilegeLevel::ReadOnly);
     assert_eq!(ro.len(), 1);
-    assert_eq!(ro[0].sql(), "GRANT SELECT ON `appdb`.* TO `app`@'127.0.0.1'");
+    assert_eq!(
+        ro[0].sql(),
+        "GRANT SELECT ON `appdb`.* TO `app`@'127.0.0.1'"
+    );
     let rw = grant_privileges(Dialect::MySql, &user, &db, PrivilegeLevel::ReadWrite);
     assert_eq!(
         rw[0].sql(),
@@ -494,9 +520,13 @@ fn revoke_builders() {
     let db = Identifier::new("appdb").expect("valid");
     let user = Identifier::new("app").expect("valid");
     let rev_pg = revoke_privileges(Dialect::Postgres, &user, &db);
-    assert!(rev_pg[0].sql().contains("REVOKE ALL PRIVILEGES ON DATABASE \"appdb\" FROM \"app\""));
+    assert!(
+        rev_pg[0]
+            .sql()
+            .contains("REVOKE ALL PRIVILEGES ON DATABASE \"appdb\" FROM \"app\"")
+    );
     for stmt in &rev_pg {
-        assert_eq!(one_statement(stmt.sql()).len() > 3, true);
+        assert!(one_statement(stmt.sql()).len() > 3);
     }
     let rev_my = revoke_privileges(Dialect::MySql, &user, &db);
     assert_eq!(
@@ -512,10 +542,19 @@ fn alter_password_and_drop_user_builders() {
     assert_eq!(pg.sql(), "ALTER ROLE \"app\" PASSWORD E'pa''ss'");
     assert_eq!(
         one_statement(pg.sql()),
-        vec![w("ALTER"), w("ROLE"), ident("app"), w("PASSWORD"), lit("pa'ss")]
+        vec![
+            w("ALTER"),
+            w("ROLE"),
+            ident("app"),
+            w("PASSWORD"),
+            lit("pa'ss")
+        ]
     );
     let my = alter_password(Dialect::MySql, &user, "pa'ss");
-    assert_eq!(my.sql(), "ALTER USER `app`@'127.0.0.1' IDENTIFIED BY 'pa''ss'");
+    assert_eq!(
+        my.sql(),
+        "ALTER USER `app`@'127.0.0.1' IDENTIFIED BY 'pa''ss'"
+    );
     assert_eq!(drop_user_postgres(&user).sql(), "DROP ROLE \"app\"");
 }
 

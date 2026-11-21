@@ -48,9 +48,23 @@ impl Identifier {
     /// limit keeps one name valid on both engines.
     pub const MAX_LEN: usize = 63;
 
-    /// Validates and wraps a raw identifier.
+    /// Validates and wraps a raw database or object identifier.
+    ///
+    /// Rejects the reserved names `postgres`, `template0` and `template1` in
+    /// addition to the allowlist.
     pub fn new(raw: &str) -> AdminResult<Self> {
         validate_identifier(raw)?;
+        Ok(Self(raw.to_owned()))
+    }
+
+    /// Validates and wraps a raw **role** identifier.
+    ///
+    /// Role names use the same allowlist and length limit but skip the reserved
+    /// database list: `postgres` is the default superuser role and must be
+    /// addressable (`ALTER ROLE postgres ...`). Nothing else about the allowlist
+    /// is relaxed, so the value is still safe to quote.
+    pub fn role(raw: &str) -> AdminResult<Self> {
+        validate_identifier_shape(raw)?;
         Ok(Self(raw.to_owned()))
     }
 
@@ -67,6 +81,15 @@ impl std::fmt::Display for Identifier {
 }
 
 fn validate_identifier(raw: &str) -> AdminResult<()> {
+    validate_identifier_shape(raw)?;
+    if is_reserved(raw) {
+        return Err(AdminError::InvalidIdentifier(IdentifierReject::Reserved));
+    }
+    Ok(())
+}
+
+/// The allowlist and length rules, without the reserved-name check.
+fn validate_identifier_shape(raw: &str) -> AdminResult<()> {
     if raw.is_empty() {
         return Err(AdminError::InvalidIdentifier(IdentifierReject::Empty));
     }
@@ -86,9 +109,6 @@ fn validate_identifier(raw: &str) -> AdminResult<()> {
         return Err(AdminError::InvalidIdentifier(
             IdentifierReject::BadCharacter,
         ));
-    }
-    if is_reserved(raw) {
-        return Err(AdminError::InvalidIdentifier(IdentifierReject::Reserved));
     }
     Ok(())
 }
@@ -303,11 +323,7 @@ pub fn grant_privileges(
 
 /// The exact PostgreSQL grants per level, documented in
 /// `docs/architecture/admin.md`.
-fn grant_postgres(
-    user: &Identifier,
-    db: &Identifier,
-    level: PrivilegeLevel,
-) -> Vec<SqlStatement> {
+fn grant_postgres(user: &Identifier, db: &Identifier, level: PrivilegeLevel) -> Vec<SqlStatement> {
     let user_q = quote_identifier(Dialect::Postgres, user);
     let db_q = quote_identifier(Dialect::Postgres, db);
     let mut stmts = vec![
@@ -369,7 +385,9 @@ pub fn revoke_privileges(
                 SqlStatement::new(format!(
                     "REVOKE ALL PRIVILEGES ON DATABASE {db_q} FROM {user_q}"
                 )),
-                SqlStatement::new(format!("REVOKE ALL PRIVILEGES ON SCHEMA public FROM {user_q}")),
+                SqlStatement::new(format!(
+                    "REVOKE ALL PRIVILEGES ON SCHEMA public FROM {user_q}"
+                )),
                 SqlStatement::new(format!(
                     "REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM {user_q}"
                 )),

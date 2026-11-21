@@ -265,40 +265,48 @@ impl PgAdmin {
 
     /// Lists non-template, connectable databases with owner and size.
     pub fn list_databases(&self) -> AdminResult<Vec<DatabaseInfo>> {
-        self.with_client(&self.target, consts::DEFAULT_DATABASE, |client, _| async move {
-            let stmt = list_databases_postgres();
-            let rows = client
-                .query(stmt.sql(), &[])
-                .await
-                .map_err(|err| map_pg_error(&err))?;
-            let mut out = Vec::with_capacity(rows.len());
-            for row in rows {
-                let name: String = row.try_get(0).map_err(|err| map_pg_error(&err))?;
-                let owner: String = row.try_get(1).map_err(|err| map_pg_error(&err))?;
-                let size: i64 = row.try_get(2).map_err(|err| map_pg_error(&err))?;
-                out.push(DatabaseInfo::new(name, owner, size));
-            }
-            Ok(out)
-        })
+        self.with_client(
+            &self.target,
+            consts::DEFAULT_DATABASE,
+            |client, _| async move {
+                let stmt = list_databases_postgres();
+                let rows = client
+                    .query(stmt.sql(), &[])
+                    .await
+                    .map_err(|err| map_pg_error(&err))?;
+                let mut out = Vec::with_capacity(rows.len());
+                for row in rows {
+                    let name: String = row.try_get(0).map_err(|err| map_pg_error(&err))?;
+                    let owner: String = row.try_get(1).map_err(|err| map_pg_error(&err))?;
+                    let size: i64 = row.try_get(2).map_err(|err| map_pg_error(&err))?;
+                    out.push(DatabaseInfo::new(name, owner, size));
+                }
+                Ok(out)
+            },
+        )
     }
 
     /// Lists login-capable roles.
     pub fn list_users(&self) -> AdminResult<Vec<UserInfo>> {
-        self.with_client(&self.target, consts::DEFAULT_DATABASE, |client, _| async move {
-            let stmt = list_users_postgres();
-            let rows = client
-                .query(stmt.sql(), &[])
-                .await
-                .map_err(|err| map_pg_error(&err))?;
-            let mut out = Vec::with_capacity(rows.len());
-            for row in rows {
-                let name: String = row.try_get(0).map_err(|err| map_pg_error(&err))?;
-                let can_login: bool = row.try_get(1).map_err(|err| map_pg_error(&err))?;
-                let is_superuser: bool = row.try_get(2).map_err(|err| map_pg_error(&err))?;
-                out.push(UserInfo::new(name, can_login, is_superuser));
-            }
-            Ok(out)
-        })
+        self.with_client(
+            &self.target,
+            consts::DEFAULT_DATABASE,
+            |client, _| async move {
+                let stmt = list_users_postgres();
+                let rows = client
+                    .query(stmt.sql(), &[])
+                    .await
+                    .map_err(|err| map_pg_error(&err))?;
+                let mut out = Vec::with_capacity(rows.len());
+                for row in rows {
+                    let name: String = row.try_get(0).map_err(|err| map_pg_error(&err))?;
+                    let can_login: bool = row.try_get(1).map_err(|err| map_pg_error(&err))?;
+                    let is_superuser: bool = row.try_get(2).map_err(|err| map_pg_error(&err))?;
+                    out.push(UserInfo::new(name, can_login, is_superuser));
+                }
+                Ok(out)
+            },
+        )
     }
 
     /// Creates a UTF-8 database with `template0` so the encoding is honoured.
@@ -406,93 +414,36 @@ impl PgAdmin {
     /// fails, the engine is rolled back to the old password; if that rollback
     /// also fails the returned error says the state is inconsistent and carries
     /// only booleans. The old and new secrets never appear in an error.
-    pub fn reset_superuser_password(
-        &self,
-        sink: &dyn CredentialSink,
-    ) -> AdminResult<SecretString> {
+    pub fn reset_superuser_password(&self, sink: &dyn CredentialSink) -> AdminResult<SecretString> {
         let new_password = generate_password().map_err(|_| AdminError::PasswordGenerate)?;
-        let old_password = self.target.password.clone();
-        self.alter_superuser_password(&new_password)?;
-
-        // The engine now holds the new password. Verify it before trusting it.
-        let verifier = PgAdmin::new(self.target.with_password(new_password.clone()));
-        if verifier.probe().is_err() {
-            return Err(self.rollback(
-                &old_password,
-                RollbackState {
-                    engine_changed: true,
-                    sink_failed: false,
-                    rollback_failed: false,
-                },
-                AdminError::PasswordVerify,
-            ));
-        }
-
-        if sink.store(&new_password).is_err() {
-            return Err(self.rollback(
-                &old_password,
-                RollbackState {
-                    engine_changed: true,
-                    sink_failed: true,
-                    rollback_failed: false,
-                },
-                AdminError::CredentialStore,
-            ));
-        }
-        Ok(new_password)
+        reset_with(self, sink, &self.target.password, new_password)
     }
 
     /// `ALTER ROLE <superuser> PASSWORD <new>`.
     fn alter_superuser_password(&self, password: &SecretString) -> AdminResult<()> {
-        let role = Identifier::new(&self.target.superuser)
+        let role = Identifier::role(&self.target.superuser)
             .map_err(|_| AdminError::InvalidTarget(TargetProblem::EmptySuperuser))?;
         let stmt = alter_password(Dialect::Postgres, &role, password.expose());
         self.execute(&self.target, consts::DEFAULT_DATABASE, stmt.sql())
     }
 
-    /// Restores the old password and converts `cause` into the right error.
-    ///
-    /// Returns `RollbackFailed` when the restore itself fails, carrying the
-    /// original state and `rollback_failed: true`.
-    fn rollback(
-        &self,
-        old_password: &SecretString,
-        state: RollbackState,
-        cause: AdminError,
-    ) -> AdminError {
-        match self.alter_superuser_password(old_password) {
-            Ok(()) if self.probe_with(old_password) => cause,
-            _ => AdminError::RollbackFailed(RollbackState {
-                rollback_failed: true,
-                ..state
-            }),
-        }
-    }
-
     /// Opens a fresh connection and runs `SELECT 1`.
     fn probe(&self) -> AdminResult<()> {
-        self.with_client(&self.target, consts::DEFAULT_DATABASE, |client, _| async move {
-            client
-                .simple_query("SELECT 1")
-                .await
-                .map_err(|err| map_pg_error(&err))?;
-            Ok(())
-        })
-    }
-
-    /// Probes with an explicit password, returning whether it authenticated.
-    fn probe_with(&self, password: &SecretString) -> bool {
-        let target = self.target.with_password(password.clone());
-        PgAdmin::new(target).probe().is_ok()
+        self.with_client(
+            &self.target,
+            consts::DEFAULT_DATABASE,
+            |client, _| async move {
+                client
+                    .simple_query("SELECT 1")
+                    .await
+                    .map_err(|err| map_pg_error(&err))?;
+                Ok(())
+            },
+        )
     }
 
     /// Runs one statement on `dbname`.
-    fn execute(
-        &self,
-        target: &AdminTarget,
-        dbname: &str,
-        statement: &str,
-    ) -> AdminResult<()> {
+    fn execute(&self, target: &AdminTarget, dbname: &str, statement: &str) -> AdminResult<()> {
         self.with_client(target, dbname, move |client, _| async move {
             client
                 .batch_execute(statement)
@@ -568,12 +519,274 @@ fn classify_sql_state(code: &str) -> AdminError {
     }
 }
 
+/// The engine-facing half of a password reset, abstracted so the state machine
+/// can be unit-tested with injected failures instead of a live server.
+pub trait PasswordEngine {
+    /// Applies `password` to the superuser role on the engine.
+    fn apply(&self, password: &SecretString) -> AdminResult<()>;
+    /// Opens a fresh connection and confirms `password` authenticates.
+    fn verify(&self, password: &SecretString) -> AdminResult<()>;
+}
+
+impl PasswordEngine for PgAdmin {
+    fn apply(&self, password: &SecretString) -> AdminResult<()> {
+        self.alter_superuser_password(password)
+    }
+
+    fn verify(&self, password: &SecretString) -> AdminResult<()> {
+        PgAdmin::new(self.target.with_password(password.clone())).probe()
+    }
+}
+
+/// The pure F-DBU-03 AC2 state machine: apply → verify → store, rolling back to
+/// `old_password` on any failure after the engine changed.
+///
+/// Every failure point returns a typed error carrying only booleans, and the
+/// rollback path itself is exercised by the injected-failure tests below.
+fn reset_with(
+    engine: &dyn PasswordEngine,
+    sink: &dyn CredentialSink,
+    old_password: &SecretString,
+    new_password: SecretString,
+) -> AdminResult<SecretString> {
+    // 1. Apply. If this fails nothing changed yet, so nothing to roll back.
+    engine.apply(&new_password)?;
+
+    let state = RollbackState {
+        engine_changed: true,
+        sink_failed: false,
+        rollback_failed: false,
+    };
+
+    // 2. The engine now holds the new password. Prove it before persisting it.
+    if engine.verify(&new_password).is_err() {
+        return Err(rollback(
+            engine,
+            old_password,
+            state,
+            AdminError::PasswordVerify,
+        ));
+    }
+
+    // 3. Persist. If the sink refuses, restore the old password so the stored
+    //    credential and the engine never disagree.
+    if sink.store(&new_password).is_err() {
+        let state = RollbackState {
+            sink_failed: true,
+            ..state
+        };
+        return Err(rollback(
+            engine,
+            old_password,
+            state,
+            AdminError::CredentialStore,
+        ));
+    }
+
+    Ok(new_password)
+}
+
+/// Restores the old password and returns the error that explains the failure.
+///
+/// When the restore also fails, the returned error is `RollbackFailed` and says
+/// the state is inconsistent. Only booleans travel, never a secret.
+fn rollback(
+    engine: &dyn PasswordEngine,
+    old_password: &SecretString,
+    state: RollbackState,
+    cause: AdminError,
+) -> AdminError {
+    let restored = engine
+        .apply(old_password)
+        .and_then(|()| engine.verify(old_password));
+    match restored {
+        Ok(()) => cause,
+        Err(_) => AdminError::RollbackFailed(RollbackState {
+            rollback_failed: true,
+            ..state
+        }),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicBool, Ordering};
 
     fn target(host: &str) -> AdminResult<AdminTarget> {
-        AdminTarget::new(host, 5432, "postgres", SecretString::from("secret-password"))
+        AdminTarget::new(
+            host,
+            5432,
+            "postgres",
+            SecretString::from("secret-password"),
+        )
+    }
+
+    // ---- Injected doubles for the reset state machine --------------------
+
+    struct FakeEngine {
+        apply_fails: AtomicBool,
+        verify_fails: AtomicBool,
+        applied: std::sync::Mutex<Vec<String>>,
+    }
+
+    impl FakeEngine {
+        fn new() -> Self {
+            Self {
+                apply_fails: AtomicBool::new(false),
+                verify_fails: AtomicBool::new(false),
+                applied: std::sync::Mutex::new(Vec::new()),
+            }
+        }
+
+        fn failing_apply() -> Self {
+            let engine = Self::new();
+            engine.apply_fails.store(true, Ordering::SeqCst);
+            engine
+        }
+
+        fn failing_verify() -> Self {
+            let engine = Self::new();
+            engine.verify_fails.store(true, Ordering::SeqCst);
+            engine
+        }
+
+        fn applied(&self) -> Vec<String> {
+            self.applied.lock().expect("lock").clone()
+        }
+    }
+
+    impl PasswordEngine for FakeEngine {
+        fn apply(&self, password: &SecretString) -> AdminResult<()> {
+            self.applied
+                .lock()
+                .expect("lock")
+                .push(password.expose().to_owned());
+            if self.apply_fails.load(Ordering::SeqCst) {
+                return Err(AdminError::Connect);
+            }
+            Ok(())
+        }
+
+        fn verify(&self, password: &SecretString) -> AdminResult<()> {
+            // Fail only the new password's verification, so the rollback's own
+            // verification of the old password still succeeds.
+            if self.verify_fails.load(Ordering::SeqCst)
+                && password.expose() == "new-canary-password"
+            {
+                return Err(AdminError::Connect);
+            }
+            Ok(())
+        }
+    }
+
+    struct StubSink {
+        fail: bool,
+    }
+
+    impl CredentialSink for StubSink {
+        fn store(&self, _password: &SecretString) -> crate::error::Result<()> {
+            if self.fail {
+                Err(crate::error::DblError::Secret {
+                    reason: "keychain locked".to_owned(),
+                })
+            } else {
+                Ok(())
+            }
+        }
+    }
+
+    fn new_password() -> SecretString {
+        SecretString::from("new-canary-password")
+    }
+
+    #[test]
+    fn reset_succeeds_and_returns_the_password_once() {
+        let engine = FakeEngine::new();
+        let sink = StubSink { fail: false };
+        let old = SecretString::from("old-canary");
+        let returned = reset_with(&engine, &sink, &old, new_password()).expect("reset");
+        assert_eq!(returned.expose(), "new-canary-password");
+        // Applied exactly once (no rollback).
+        assert_eq!(engine.applied(), vec!["new-canary-password".to_owned()]);
+    }
+
+    #[test]
+    fn apply_failure_changes_nothing_and_does_not_roll_back() {
+        let engine = FakeEngine::failing_apply();
+        let sink = StubSink { fail: false };
+        let old = SecretString::from("old-canary");
+        let err = reset_with(&engine, &sink, &old, new_password()).expect_err("apply fails");
+        assert_eq!(err, AdminError::Connect);
+        // Only the (failing) new password was attempted: no rollback write.
+        assert_eq!(engine.applied(), vec!["new-canary-password".to_owned()]);
+    }
+
+    #[test]
+    fn verify_failure_rolls_back_to_the_old_password() {
+        let engine = FakeEngine::failing_verify();
+        let sink = StubSink { fail: false };
+        let old = SecretString::from("old-canary");
+        let err = reset_with(&engine, &sink, &old, new_password()).expect_err("verify fails");
+        assert_eq!(err, AdminError::PasswordVerify);
+        // Applied new, then the old password was restored.
+        assert_eq!(
+            engine.applied(),
+            vec!["new-canary-password".to_owned(), "old-canary".to_owned()]
+        );
+    }
+
+    #[test]
+    fn sink_failure_rolls_back_to_the_old_password() {
+        let engine = FakeEngine::new();
+        let sink = StubSink { fail: true };
+        let old = SecretString::from("old-canary");
+        let err = reset_with(&engine, &sink, &old, new_password()).expect_err("sink fails");
+        assert_eq!(err, AdminError::CredentialStore);
+        assert_eq!(
+            engine.applied(),
+            vec!["new-canary-password".to_owned(), "old-canary".to_owned()]
+        );
+    }
+
+    #[test]
+    fn a_rollback_that_also_fails_reports_inconsistent_state_without_secrets() {
+        struct FailsOnRollback {
+            applied: std::sync::Mutex<Vec<String>>,
+        }
+        impl PasswordEngine for FailsOnRollback {
+            fn apply(&self, password: &SecretString) -> AdminResult<()> {
+                self.applied
+                    .lock()
+                    .expect("lock")
+                    .push(password.expose().to_owned());
+                if password.expose() == "old-canary" {
+                    Err(AdminError::Connect)
+                } else {
+                    Ok(())
+                }
+            }
+            fn verify(&self, _password: &SecretString) -> AdminResult<()> {
+                Ok(())
+            }
+        }
+        let engine = FailsOnRollback {
+            applied: std::sync::Mutex::new(Vec::new()),
+        };
+        let sink = StubSink { fail: true };
+        let old = SecretString::from("old-canary");
+        let err = reset_with(&engine, &sink, &old, new_password()).expect_err("rollback fails");
+        match &err {
+            AdminError::RollbackFailed(state) => {
+                assert!(state.engine_changed);
+                assert!(state.sink_failed);
+                assert!(state.rollback_failed);
+            }
+            other => panic!("expected RollbackFailed, got {other:?}"),
+        }
+        let surfaces = format!("{err:?} {err} {}", err.user_message());
+        assert!(!surfaces.contains("new-canary-password"));
+        assert!(!surfaces.contains("old-canary"));
     }
 
     #[test]
@@ -586,7 +799,14 @@ mod tests {
 
     #[test]
     fn remote_hosts_are_rejected() {
-        for host in ["0.0.0.0", "192.168.1.5", "10.0.0.1", "example.com", "::", ""] {
+        for host in [
+            "0.0.0.0",
+            "192.168.1.5",
+            "10.0.0.1",
+            "example.com",
+            "::",
+            "",
+        ] {
             let err = target(host).expect_err(host);
             assert!(
                 matches!(
@@ -601,14 +821,12 @@ mod tests {
 
     #[test]
     fn target_validation_rejects_empty_superuser_and_zero_port() {
-        let err = AdminTarget::new(
-            "127.0.0.1",
-            5432,
-            "",
-            SecretString::from("x"),
-        )
-        .expect_err("empty superuser");
-        assert_eq!(err, AdminError::InvalidTarget(TargetProblem::EmptySuperuser));
+        let err = AdminTarget::new("127.0.0.1", 5432, "", SecretString::from("x"))
+            .expect_err("empty superuser");
+        assert_eq!(
+            err,
+            AdminError::InvalidTarget(TargetProblem::EmptySuperuser)
+        );
 
         let err = AdminTarget::new("127.0.0.1", 0, "postgres", SecretString::from("x"))
             .expect_err("zero port");

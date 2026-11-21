@@ -22,5 +22,5 @@ pub mod postgres;
 pub mod sql;
 
 pub use error::{AdminError, AdminResult, CODE_RANGE};
-pub use postgres::{AdminTarget, CredentialSink, DatabaseInfo, PgAdmin, UserInfo};
+pub use postgres::{AdminTarget, CredentialSink, DatabaseInfo, PasswordEngine, PgAdmin, UserInfo};
 pub use sql::{Dialect, Identifier, PrivilegeLevel};

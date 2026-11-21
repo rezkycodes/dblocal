@@ -347,7 +347,10 @@ mod tests {
             CODE_PASSWORD_GENERATE,
         ];
         for code in declared {
-            assert!(seen.contains(code), "declared code {code} is never produced");
+            assert!(
+                seen.contains(code),
+                "declared code {code} is never produced"
+            );
         }
         assert_eq!(seen.len(), declared.len());
     }
@@ -411,8 +414,14 @@ mod tests {
 
     #[test]
     fn sql_state_accepts_only_five_uppercase_alphanumerics() {
-        assert_eq!(SqlStateCode::parse("42P04").expect("valid").as_str(), "42P04");
-        assert_eq!(SqlStateCode::parse("08006").expect("valid").as_str(), "08006");
+        assert_eq!(
+            SqlStateCode::parse("42P04").expect("valid").as_str(),
+            "42P04"
+        );
+        assert_eq!(
+            SqlStateCode::parse("08006").expect("valid").as_str(),
+            "08006"
+        );
         for bad in ["", "42P0", "42P044", "42p04", "42P0-", "42P0\n", "42 04"] {
             assert!(SqlStateCode::parse(bad).is_none(), "accepted {bad:?}");
         }
@@ -447,7 +456,10 @@ mod tests {
                     !surface.contains(PASSWORD),
                     "password leaked through {surface:?}"
                 );
-                assert!(!surface.contains(URI), "connection string leaked through {surface:?}");
+                assert!(
+                    !surface.contains(URI),
+                    "connection string leaked through {surface:?}"
+                );
             }
         }
     }
