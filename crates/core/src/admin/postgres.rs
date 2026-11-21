@@ -419,14 +419,6 @@ impl PgAdmin {
         reset_with(self, sink, &self.target.password, new_password)
     }
 
-    /// `ALTER ROLE <superuser> PASSWORD <new>`.
-    fn alter_superuser_password(&self, password: &SecretString) -> AdminResult<()> {
-        let role = Identifier::role(&self.target.superuser)
-            .map_err(|_| AdminError::InvalidTarget(TargetProblem::EmptySuperuser))?;
-        let stmt = alter_password(Dialect::Postgres, &role, password.expose());
-        self.execute(&self.target, consts::DEFAULT_DATABASE, stmt.sql())
-    }
-
     /// Opens a fresh connection and runs `SELECT 1`.
     fn probe(&self) -> AdminResult<()> {
         self.with_client(
@@ -521,16 +513,25 @@ fn classify_sql_state(code: &str) -> AdminError {
 
 /// The engine-facing half of a password reset, abstracted so the state machine
 /// can be unit-tested with injected failures instead of a live server.
+///
+/// `apply` takes the password to **connect with** as well as the one to set,
+/// because the connection credential and the role password diverge mid-reset:
+/// after the engine holds the new password, a rollback must connect with the new
+/// one to set the old one back.
 pub trait PasswordEngine {
-    /// Applies `password` to the superuser role on the engine.
-    fn apply(&self, password: &SecretString) -> AdminResult<()>;
-    /// Opens a fresh connection and confirms `password` authenticates.
+    /// Connects using `connect_as` and sets the superuser password to `target`.
+    fn apply(&self, connect_as: &SecretString, target: &SecretString) -> AdminResult<()>;
+    /// Opens a fresh connection with `password` and confirms it authenticates.
     fn verify(&self, password: &SecretString) -> AdminResult<()>;
 }
 
 impl PasswordEngine for PgAdmin {
-    fn apply(&self, password: &SecretString) -> AdminResult<()> {
-        self.alter_superuser_password(password)
+    fn apply(&self, connect_as: &SecretString, target: &SecretString) -> AdminResult<()> {
+        let role = Identifier::role(&self.target.superuser)
+            .map_err(|_| AdminError::InvalidTarget(TargetProblem::EmptySuperuser))?;
+        let stmt = alter_password(Dialect::Postgres, &role, target.expose());
+        let connector = PgAdmin::new(self.target.with_password(connect_as.clone()));
+        connector.execute(&connector.target, consts::DEFAULT_DATABASE, stmt.sql())
     }
 
     fn verify(&self, password: &SecretString) -> AdminResult<()> {
@@ -549,8 +550,9 @@ fn reset_with(
     old_password: &SecretString,
     new_password: SecretString,
 ) -> AdminResult<SecretString> {
-    // 1. Apply. If this fails nothing changed yet, so nothing to roll back.
-    engine.apply(&new_password)?;
+    // 1. Apply. Connect with the old password, set the new one. If this fails
+    //    nothing changed yet, so there is nothing to roll back.
+    engine.apply(old_password, &new_password)?;
 
     let state = RollbackState {
         engine_changed: true,
@@ -562,6 +564,7 @@ fn reset_with(
     if engine.verify(&new_password).is_err() {
         return Err(rollback(
             engine,
+            &new_password,
             old_password,
             state,
             AdminError::PasswordVerify,
@@ -577,6 +580,7 @@ fn reset_with(
         };
         return Err(rollback(
             engine,
+            &new_password,
             old_password,
             state,
             AdminError::CredentialStore,
@@ -588,16 +592,19 @@ fn reset_with(
 
 /// Restores the old password and returns the error that explains the failure.
 ///
-/// When the restore also fails, the returned error is `RollbackFailed` and says
-/// the state is inconsistent. Only booleans travel, never a secret.
+/// The rollback connects with `current` (the password the engine now holds) to
+/// set `old_password` back. When the restore also fails, the returned error is
+/// `RollbackFailed` and says the state is inconsistent. Only booleans travel,
+/// never a secret.
 fn rollback(
     engine: &dyn PasswordEngine,
+    current: &SecretString,
     old_password: &SecretString,
     state: RollbackState,
     cause: AdminError,
 ) -> AdminError {
     let restored = engine
-        .apply(old_password)
+        .apply(current, old_password)
         .and_then(|()| engine.verify(old_password));
     match restored {
         Ok(()) => cause,
@@ -657,11 +664,11 @@ mod tests {
     }
 
     impl PasswordEngine for FakeEngine {
-        fn apply(&self, password: &SecretString) -> AdminResult<()> {
+        fn apply(&self, _connect_as: &SecretString, target: &SecretString) -> AdminResult<()> {
             self.applied
                 .lock()
                 .expect("lock")
-                .push(password.expose().to_owned());
+                .push(target.expose().to_owned());
             if self.apply_fails.load(Ordering::SeqCst) {
                 return Err(AdminError::Connect);
             }
@@ -755,12 +762,12 @@ mod tests {
             applied: std::sync::Mutex<Vec<String>>,
         }
         impl PasswordEngine for FailsOnRollback {
-            fn apply(&self, password: &SecretString) -> AdminResult<()> {
+            fn apply(&self, _connect_as: &SecretString, target: &SecretString) -> AdminResult<()> {
                 self.applied
                     .lock()
                     .expect("lock")
-                    .push(password.expose().to_owned());
-                if password.expose() == "old-canary" {
+                    .push(target.expose().to_owned());
+                if target.expose() == "old-canary" {
                     Err(AdminError::Connect)
                 } else {
                     Ok(())
