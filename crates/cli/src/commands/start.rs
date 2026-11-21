@@ -9,7 +9,7 @@ use crate::messages;
 use crate::output;
 
 /// How often a cross-process wait re-reads the shared state.
-const CROSS_PROCESS_POLL: Duration = Duration::from_millis(100);
+const CROSS_PROCESS_POLL: Duration = Duration::from_millis(crate::consts::CROSS_PROCESS_POLL_MS);
 
 pub fn run(ctx: &mut Ctx<'_>, name: &str, timeout: u64) -> u8 {
     let view = match find_instance(ctx, name) {

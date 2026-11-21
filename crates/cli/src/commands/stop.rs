@@ -26,7 +26,7 @@ pub fn run(ctx: &mut Ctx<'_>, name: &str) -> u8 {
         op: &op,
         instance_id: &view.id,
         ok_statuses: &[InstanceStatus::Stopped],
-        timeout: Duration::from_secs(120),
+        timeout: Duration::from_secs(crate::consts::STOP_TIMEOUT_SECS),
         show_progress: ctx.stderr_is_tty,
     };
     match output::wait_for_status_rx(&mut rx, ctx.service, wait, ctx.err) {

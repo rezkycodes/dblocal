@@ -5,5 +5,6 @@
 
 pub mod cli;
 pub mod commands;
+pub mod consts;
 pub mod messages;
 pub mod output;

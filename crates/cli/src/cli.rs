@@ -62,7 +62,7 @@ pub enum Command {
         /// Nama instance.
         name: String,
         /// Detik menunggu sampai instance sehat.
-        #[arg(long, default_value_t = 60)]
+        #[arg(long, default_value_t = crate::consts::DEFAULT_START_TIMEOUT_SECS)]
         timeout: u64,
     },
     /// Menghentikan instance.
@@ -115,7 +115,7 @@ pub enum Command {
         #[arg(long, short)]
         follow: bool,
         /// Jumlah baris terakhir yang ditampilkan.
-        #[arg(long, default_value_t = 200)]
+        #[arg(long, default_value_t = crate::consts::DEFAULT_LOG_LINES)]
         lines: usize,
     },
 }

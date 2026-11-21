@@ -8,10 +8,10 @@ use crate::commands::{Ctx, find_instance};
 use crate::output;
 
 /// How often the follower asks the service for the current tail.
-const FOLLOW_INTERVAL: Duration = Duration::from_millis(250);
+const FOLLOW_INTERVAL: Duration = Duration::from_millis(crate::consts::LOG_FOLLOW_INTERVAL_MS);
 /// How many lines the follower re-reads each time. A window this size is enough
 /// to see an append between polls; the first print already showed the history.
-const FOLLOW_WINDOW: usize = 200;
+const FOLLOW_WINDOW: usize = crate::consts::LOG_FOLLOW_WINDOW;
 
 pub fn run(ctx: &mut Ctx<'_>, name: &str, follow: bool, lines: usize) -> u8 {
     let view = match find_instance(ctx, name) {
