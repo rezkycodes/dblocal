@@ -108,7 +108,12 @@ pub fn status_label(status: InstanceStatus) -> &'static str {
     }
 }
 
-pub fn format_list_json(instances: &[InstanceView]) -> Result<String, serde_json::Error> {
+/// One JSON line: an array of objects with the stable English keys.
+///
+/// Infallible on purpose: every value is a string or an integer inside a
+/// `serde_json::Value`, so serialization cannot fail. A `Result` here would be
+/// a branch no input can reach, and the caller would carry a dead error path.
+pub fn format_list_json(instances: &[InstanceView]) -> String {
     let items: Vec<serde_json::Value> = instances
         .iter()
         .map(|v| {
@@ -121,7 +126,7 @@ pub fn format_list_json(instances: &[InstanceView]) -> Result<String, serde_json
             })
         })
         .collect();
-    serde_json::to_string(&items)
+    serde_json::Value::Array(items).to_string()
 }
 
 pub fn is_tty_stdout() -> bool {

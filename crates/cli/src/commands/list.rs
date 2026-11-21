@@ -8,22 +8,8 @@ pub fn run(ctx: &mut Ctx<'_>, json: bool) -> u8 {
         Err(e) => return output::report_error(ctx.err, &e),
     };
     if json {
-        match output::format_list_json(&instances) {
-            Ok(s) => {
-                output::stdout_line(ctx.out, &s);
-                EXIT_OK
-            }
-            Err(e) => {
-                output::stderr_line(
-                    ctx.err,
-                    &crate::messages::code_line(
-                        dblocal_core::error::CODE_IO,
-                        &format!("json: {e}"),
-                    ),
-                );
-                crate::cli::EXIT_GENERAL
-            }
-        }
+        output::stdout_line(ctx.out, &output::format_list_json(&instances));
+        EXIT_OK
     } else {
         let table = output::format_list_table(&instances);
         output::stdout_line(ctx.out, &table);

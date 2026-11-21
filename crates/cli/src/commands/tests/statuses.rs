@@ -18,6 +18,12 @@ struct StatusScript {
     statuses: Vec<InstanceStatus>,
     polls: std::sync::Mutex<usize>,
     refuse: Option<(&'static str, bool)>,
+    /// Poll index (0-based) from which the instance is no longer listed.
+    vanish_from: Option<usize>,
+    /// Poll index (0-based) from which `list_instances` fails.
+    read_error_from: Option<usize>,
+    /// Whether a `Failed` view carries failure details.
+    failure_details: bool,
 }
 
 impl StatusScript {
@@ -35,7 +41,25 @@ impl StatusScript {
             statuses,
             polls: std::sync::Mutex::new(0),
             refuse,
+            vanish_from: None,
+            read_error_from: None,
+            failure_details: false,
         }
+    }
+
+    fn vanishing_from(mut self, index: usize) -> Self {
+        self.vanish_from = Some(index);
+        self
+    }
+
+    fn failing_reads_from(mut self, index: usize) -> Self {
+        self.read_error_from = Some(index);
+        self
+    }
+
+    fn with_failure_details(mut self) -> Self {
+        self.failure_details = true;
+        self
     }
 
     fn transition(
@@ -58,12 +82,29 @@ impl DblService for StatusScript {
     fn list_instances(&self) -> dblocal_core::Result<Vec<dblocal_core::service::InstanceView>> {
         let mut views = self.inner.list_instances()?;
         let mut polls = self.polls.lock().expect("polls");
-        let index = (*polls).min(self.statuses.len().saturating_sub(1));
+        let poll = *polls;
         *polls += 1;
-        let status = self.statuses[index];
+        if self.read_error_from.is_some_and(|from| poll >= from) {
+            return Err(dblocal_core::DblError::Storage {
+                reason: "store unavailable".to_owned(),
+            });
+        }
+        if self.vanish_from.is_some_and(|from| poll >= from) {
+            views.retain(|v| v.id != self.target);
+            return Ok(views);
+        }
+        let status = self.statuses[poll.min(self.statuses.len().saturating_sub(1))];
         for view in &mut views {
             if view.id == self.target {
                 view.status = status;
+                if status == InstanceStatus::Failed && self.failure_details {
+                    view.failure = Some(dblocal_core::service::FailureInfo {
+                        code: "DBL-4001".to_owned(),
+                        message: "engine failed".to_owned(),
+                        diagnosis: dblocal_core::model::StartFailure::PortInUse,
+                        log_tail: Vec::new(),
+                    });
+                }
             }
         }
         Ok(views)
@@ -254,4 +295,93 @@ fn stop_refused_from_stopped_is_idempotent_success() {
     );
     assert_eq!(code, EXIT_OK, "err: {err}");
     assert!(err.contains("sudah berhenti"), "err: {err}");
+}
+
+/// `stop` refused with the concrete `stopping` (the row moved under us) is the
+/// idempotent success too, and it waits for the settle.
+#[test]
+fn stop_refused_from_stopping_waits_then_exits_0() {
+    let service = std::sync::Arc::new(StatusScript::new(
+        InstanceStatus::Running,
+        vec![
+            InstanceStatus::Running,
+            InstanceStatus::Stopped,
+            InstanceStatus::Stopped,
+        ],
+        Some(("stopping", true)),
+    ));
+    let (code, err) = within(
+        std::time::Duration::from_secs(5),
+        service,
+        Command::Stop {
+            name: "raced".into(),
+        },
+    );
+    assert_eq!(code, EXIT_OK, "err: {err}");
+    assert!(
+        err.contains("sedang dihentikan oleh proses lain"),
+        "err: {err}"
+    );
+}
+
+/// A wait for another process's stop that ends in `Failed` is an error, and it
+/// prints the failure's code.
+#[test]
+fn stop_wait_reports_a_failed_stop() {
+    let service = StatusScript::new(
+        InstanceStatus::Stopping,
+        vec![InstanceStatus::Stopping, InstanceStatus::Failed],
+        None,
+    )
+    .with_failure_details();
+    let (code, out, err) = run_cmd(
+        &service,
+        &Command::Stop {
+            name: "raced".into(),
+        },
+        false,
+    );
+    assert_eq!(code, EXIT_GENERAL, "err: {err}");
+    assert!(err.contains("DBL-4001"), "err: {err}");
+    assert!(out.is_empty(), "out: {out}");
+}
+
+/// The instance disappearing during the wait is success: it is gone, which is
+/// what a stop wanted.
+#[test]
+fn stop_wait_treats_a_vanished_instance_as_success() {
+    let service = StatusScript::new(
+        InstanceStatus::Stopping,
+        vec![InstanceStatus::Stopping, InstanceStatus::Stopping],
+        None,
+    )
+    .vanishing_from(1);
+    let (code, _out, err) = run_cmd(
+        &service,
+        &Command::Stop {
+            name: "raced".into(),
+        },
+        false,
+    );
+    assert_eq!(code, EXIT_OK, "err: {err}");
+}
+
+/// A store that fails mid-wait is reported, not swallowed.
+#[test]
+fn stop_wait_reports_a_store_failure() {
+    let service = StatusScript::new(
+        InstanceStatus::Stopping,
+        vec![InstanceStatus::Stopping, InstanceStatus::Stopping],
+        None,
+    )
+    .failing_reads_from(1);
+    let (code, _out, err) = run_cmd(
+        &service,
+        &Command::Stop {
+            name: "raced".into(),
+        },
+        false,
+    );
+    assert_eq!(code, EXIT_GENERAL, "err: {err}");
+    assert!(err.contains("DBL-3003"), "err: {err}");
 }

@@ -304,7 +304,7 @@ fn formatters_table_and_json_golden() {
     assert!(table.contains("5432"));
     assert!(table.contains("running"));
 
-    let json = output::format_list_json(&views).unwrap();
+    let json = output::format_list_json(&views);
     assert_eq!(
         json,
         "[{\"name\":\"app\",\"engine\":\"postgresql\",\"version\":\"17.4\",\"port\":5432,\"status\":\"running\"}]"
