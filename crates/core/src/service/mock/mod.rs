@@ -8,6 +8,7 @@
 
 mod catalog;
 mod clock;
+pub mod demo;
 mod ops;
 mod uri;
 

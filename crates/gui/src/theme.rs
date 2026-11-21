@@ -1,20 +1,37 @@
-//! Loads the DBLocal One Dark / One Light themes and follows the system
-//! appearance. Colors come from the JSON files under `assets/themes/`, the same
-//! ones `contrast` verifies.
+//! DBLocal themes and the tokens custom views draw with.
+//!
+//! Two themes ship, `DBLocal Dark` (base `#15161d`, the prototype palette) and
+//! `DBLocal Light` in the same visual language. The app follows the system
+//! appearance (`F-PLH-02` AC1). Both files are the same ones
+//! [`crate::contrast`] parses, so a colour that fails 4.5:1 fails the build.
+//!
+//! Views must not contain colour literals: every paint comes either from a
+//! `gpui_kit::component::Theme` field or from [`tokens`], which derives its
+//! values from the active theme and therefore switches with it.
 
 use gpui_kit::component::theme::{Theme, ThemeRegistry};
-use gpui_kit::{App, Hsla, SharedString};
-
-use crate::contrast::THEME_FILES;
+use gpui_kit::{App, Hsla, SharedString, WindowAppearance};
 
 /// Dark theme name as declared in the JSON.
-pub const DARK_THEME: &str = "DBLocal One Dark";
+pub const DARK_THEME: &str = "DBLocal Dark";
 /// Light theme name as declared in the JSON.
-pub const LIGHT_THEME: &str = "DBLocal One Light";
+pub const LIGHT_THEME: &str = "DBLocal Light";
 
-/// Parses every embedded theme file into a single JSON document the registry
+/// Theme JSON files, embedded so the binary needs no data directory.
+pub const THEME_FILES: [(&str, &str); 2] = [
+    (
+        "crates/gui/assets/themes/dblocal-dark.json",
+        include_str!("../assets/themes/dblocal-dark.json"),
+    ),
+    (
+        "crates/gui/assets/themes/dblocal-light.json",
+        include_str!("../assets/themes/dblocal-light.json"),
+    ),
+];
+
+/// Parses every embedded theme file into a single document the registry
 /// accepts, so both files reach the registry through one call.
-fn merged_theme_set() -> String {
+pub fn merged_theme_set() -> String {
     let mut themes: Vec<serde_json::Value> = Vec::new();
     for (path, text) in THEME_FILES {
         match serde_json::from_str::<serde_json::Value>(text) {
@@ -122,20 +139,14 @@ pub fn apply_named(cx: &mut App, name: &str) {
 
 /// Applies the theme that matches the current system appearance.
 pub fn sync_to_system(cx: &mut App) {
-    let appearance = cx.window_appearance();
-    let is_dark = matches!(
-        appearance,
-        gpui_kit::WindowAppearance::Dark | gpui_kit::WindowAppearance::VibrantDark
-    );
-    let wanted = if is_dark { DARK_THEME } else { LIGHT_THEME };
+    let wanted = match cx.window_appearance() {
+        WindowAppearance::Dark | WindowAppearance::VibrantDark => DARK_THEME,
+        _ => LIGHT_THEME,
+    };
     apply_named(cx, wanted);
 }
 
 /// Logs the UI and monospace families GPUI actually resolved.
-///
-/// W0-C reported the system font as "Segoe UI" on a Fedora host, which is a
-/// Windows family; this records what the text system truly selects so the
-/// claim can be checked instead of assumed.
 pub fn log_resolved_fonts(cx: &App) {
     let theme = Theme::global(cx);
     let ui = theme.font_family.clone();
@@ -166,6 +177,79 @@ pub fn hex_to_hsla(hex: &str) -> Hsla {
     gpui_kit::rgba(((r as u32) << 24) | ((g as u32) << 16) | ((b as u32) << 8) | a as u32).into()
 }
 
+/// Derived paints for the views, all taken from the active theme.
+///
+/// Each function reads a `gpui_kit` theme token and only adjusts alpha, so the
+/// same call produces the dark and the light value and no view needs a literal.
+pub mod tokens {
+    use gpui_kit::component::{ActiveTheme, Theme};
+    use gpui_kit::{App, Hsla};
+
+    /// Alpha applied to a status tint behind a badge or banner.
+    const TINT: f32 = 0.14;
+    /// Alpha applied to a banner border.
+    const BORDER_TINT: f32 = 0.45;
+    /// Alpha of the modal scrim.
+    const SCRIM: f32 = 0.45;
+
+    /// Sets only the alpha of a theme colour.
+    pub fn tint(color: Hsla, alpha: f32) -> Hsla {
+        let mut out = color;
+        out.a = alpha;
+        out
+    }
+
+    /// The modal backdrop.
+    pub fn scrim(cx: &App) -> Hsla {
+        tint(cx.theme().background, SCRIM)
+    }
+
+    /// The modal backdrop from a theme the caller already holds.
+    pub fn scrim_from(theme: &gpui_kit::component::Theme) -> Hsla {
+        tint(theme.background, SCRIM)
+    }
+
+    /// Surface behind a raised card inside a page.
+    pub fn card(theme: &Theme) -> Hsla {
+        theme.background
+    }
+
+    /// Surface of a dock or a chrome strip.
+    pub fn panel(theme: &Theme) -> Hsla {
+        theme.sidebar
+    }
+
+    /// Elevated surface: popovers, banners inside cards, hover fills.
+    pub fn elevated(theme: &Theme) -> Hsla {
+        theme.muted
+    }
+
+    /// A badge fill for a status colour.
+    pub fn badge_fill(color: Hsla) -> Hsla {
+        tint(color, TINT)
+    }
+
+    /// A banner fill for a semantic colour.
+    pub fn banner_fill(color: Hsla) -> Hsla {
+        tint(color, TINT)
+    }
+
+    /// A banner border for a semantic colour.
+    pub fn banner_border(color: Hsla) -> Hsla {
+        tint(color, BORDER_TINT)
+    }
+
+    /// Selection fill inside a dock or a list.
+    pub fn selection(theme: &Theme) -> Hsla {
+        theme.sidebar_accent
+    }
+
+    /// Hairline border inside a card.
+    pub fn hairline(theme: &Theme) -> Hsla {
+        theme.table_row_border
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -177,6 +261,25 @@ mod tests {
         assert!(merged.contains(LIGHT_THEME));
         let value: serde_json::Value = serde_json::from_str(&merged).expect("valid json");
         assert_eq!(value["themes"].as_array().expect("themes").len(), 2);
+    }
+
+    #[test]
+    fn the_dark_theme_is_the_first_and_default() {
+        let merged = merged_theme_set();
+        let value: serde_json::Value = serde_json::from_str(&merged).expect("valid json");
+        let themes = value["themes"].as_array().expect("themes");
+        assert_eq!(themes[0]["name"], DARK_THEME);
+        assert_eq!(themes[0]["is_default"], true);
+        assert_eq!(themes[1]["name"], LIGHT_THEME);
+        assert_eq!(themes[1]["mode"], "light");
+    }
+
+    #[test]
+    fn dark_theme_uses_the_prototype_base_colour() {
+        let merged = merged_theme_set();
+        let value: serde_json::Value = serde_json::from_str(&merged).expect("valid json");
+        let themes = value["themes"].as_array().expect("themes");
+        assert_eq!(themes[0]["colors"]["background"], "#15161d");
     }
 
     #[test]
@@ -206,8 +309,6 @@ mod tests {
 
     #[test]
     fn windows_font_is_never_preferred_over_a_linux_family() {
-        // Even when Segoe UI is installed (this review host has it under
-        // ~/.local/share/fonts), a desktop family earlier in the stack wins.
         let installed: Vec<String> = vec!["Segoe UI".into(), "Cantarell".into()];
         let picked = first_installed(&UI_FONT_STACK, &installed).expect("family");
         assert_eq!(picked, SharedString::from("Cantarell"));
@@ -221,5 +322,13 @@ mod tests {
         assert!((opaque.a - 1.0).abs() < f32::EPSILON);
         let translucent = hex_to_hsla("#282c3480");
         assert!((translucent.a - 0.5).abs() < 0.01);
+    }
+
+    #[test]
+    fn tints_change_only_alpha() {
+        let base = hex_to_hsla("#61afef");
+        let soft = tokens::tint(base, 0.14);
+        assert!((soft.a - 0.14).abs() < f32::EPSILON);
+        assert_eq!((soft.h, soft.s, soft.l), (base.h, base.s, base.l));
     }
 }

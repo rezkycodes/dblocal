@@ -93,6 +93,14 @@ methods. Release binaries: `dblocal` +1.52 MB, `measure` +1.51 MB. Full tables a
 
 ## Headless render evidence
 
+W2-E replaced the W1-G `shell-*.png` set with prototype-screen renders (same method, new file names),
+regenerated with `DBLOCAL_UPDATE_RENDERS=1`:
+`overview-dark`, `overview-light`, `overview-failed-dark`, `overview-revealed-dark`,
+`logs-light`, `logs-diagnosis-dark`, `databases-product-light`, `databases-demo-light`,
+`create-download-dark`, `create-unavailable-dark`, `dock-all-dark`, `dock-filtered-dark`,
+`palette-dark`, `delete-light`, `stale-light`. The old `shell-*.png` names no longer describe the
+screens and were removed.
+
 `crates/gui/tests/render.rs` renders the real view off-screen through GPUI's
 headless wgpu path. Frames are written to `target/renders/`; committed
 screenshots under `docs/design/renders/` are refreshed only with
@@ -166,8 +174,45 @@ gpui-kit-assets 0.10.0). The direct `gpui`, `gpui-component`, `gpui-kit-assets` 
 - **`gpui-fast`:** measured with the same probe, **not adopted** (+2.2 MB floor / +2.7 MB shell idle
   vs the default backend, so no floor improvement); see `docs/spikes/gpui-kit/gpui-fast-notes.md`.
 
+## W2-E prototype port (D-25)
+
+The W2-E port replaced the W1-G placeholder views with the user's prototype layout, keeping the frozen
+`DblService` boundary and the event pump. The prototype's `model.rs` and sample data are not used in
+the product build; views render `InstanceView`, `CatalogView`, `Runtime`, `LogStore` and service events.
+
+### Screen map
+
+| Prototype screen | Implementation | Headless render test |
+|---|---|---|
+| Overview (running) | `crates/gui/src/app/screens/overview.rs` | `renders_dark_and_light_overview_with_the_prototype_regions` |
+| Overview (failed, diagnosis in Logs) | `crates/gui/src/app/screens/logs.rs` banner + `screens.rs` header | `renders_failed_logs_with_the_diagnosis_banner` |
+| Logs | `crates/gui/src/app/screens/logs.rs`, `crates/gui/src/logs.rs` | `renders_logs_with_monospace_text` |
+| Databases placeholder (product) | `crates/gui/src/app/screens/databases.rs` (`demo_content == false`) | `renders_databases_placeholder_in_the_product_build`, `format::placeholder_layout` / `placeholder_labels` |
+| Databases demo | `crates/gui/src/app/screens/databases.rs` (`demo_content == true`) | `renders_databases_placeholder_in_the_product_build` (demo frame) |
+| Config placeholder | `crates/gui/src/app/screens/databases.rs` (`demo_content == false`) | `format::placeholder_layout` / `placeholder_labels` (exact disabled control list) |
+| New instance dialog (download needed) | `crates/gui/src/app/create_dialog.rs` | `renders_create_dialog_with_a_download_and_an_unavailable_version` |
+| New instance dialog (unavailable version) | `crates/gui/src/app/create_dialog.rs` + preview forcing unavailable engine | `renders_create_dialog_with_a_download_and_an_unavailable_version` |
+| Dock with filter | `crates/gui/src/app/dock.rs`, `format::filter_instances` | `renders_dock_with_the_filter_applied` |
+| Light theme Overview | same Overview path, `DBLocal Light` | `renders_dark_and_light_overview_with_the_prototype_regions` |
+| Delete dialog | `crates/gui/src/app/delete_dialog.rs` | `renders_palette_and_delete_dialog` |
+| Command palette | `crates/gui/src/app/palette.rs` | `renders_palette_and_delete_dialog` |
+| Stale catalog banner | `crates/gui/src/app/status_bar.rs` | `renders_stale_banner_and_revealed_uri` |
+| Revealed URI | `crates/gui/src/app/screens/overview.rs`, `UriView` | `renders_stale_banner_and_revealed_uri` |
+
+### Honest placeholders (Phase 2/3, no frozen-service backend)
+
+| Surface | Phase | Product build | Demo build | Fills when |
+|---|---:|---|---|---|
+| Databases tab (`F-DBU`) | 2 | Prototype card structure: Database card (disabled name field + "Buat database", empty state "belum tersedia di versi ini (Fase 2)"), "User & hak akses" card (disabled "User baru"), "Password superuser" card (disabled "Reset password"), footer boundary card with disabled "Open in…". No sample rows. | Prototype layout with sample rows for review | `DblService` gains database/user operations |
+| Config tab (`F-CFG`) | 3 | Prototype card structure: restart-required banner (disabled "Nanti"/"Restart sekarang"), "Setting penting" card (column header + empty state "belum tersedia di versi ini (Fase 3)"), footer actions (disabled "Buka file konfigurasi"/"Kembalikan konfigurasi sebelumnya"/"Buang perubahan"/"Simpan"). No sample rows. | Prototype layout with sample config rows for review | `DblService` gains config read/write |
+| "Open in…" (`F-OPN`) | 2 | Menu disabled with placeholder reason | Menu entries visible but disabled | Client detection/open integration lands |
+
+The placeholder rule is enforced by `Workspace::demo_content`: render tests use preview constructors that
+set it explicitly; the product build never sets it.
+
 ## Unverified here
 
 X11 now builds and runs here (Xwayland `:0`, verified in W2-D). Windows and macOS cannot be built or
 run on this Linux host; `gpui-fast` is measured but has no render-parity or 40× evidence; non-AMD
-GPUs unverified. Tray wiring, quit dialogs and the real service are Wave 2.
+GPUs unverified. Tray wiring, quit dialogs and the real service are Wave 2. Light theme is verified
+by headless renders and the contrast test, not on real hardware.

@@ -1,21 +1,21 @@
 //! Process bootstrap: open the window and hand it a `Workspace`.
 //!
-//! This is the only place that calls into `gpui_kit::platform`; everything else is
-//! a view or a view-model, which keeps the process entry easy to audit.
+//! This is the only place that calls into `gpui_kit::platform`; everything else
+//! is a view or a view-model, which keeps the process entry easy to audit.
 
 use std::sync::Arc;
 
 use dblocal_core::service::DblService;
-use gpui_kit::component::Root;
+use gpui_kit::component::{Root, TitleBar};
 use gpui_kit::{
     App, AppContext as _, WindowAppearance, WindowBounds, WindowKind, WindowOptions, px, size,
 };
 
 use super::Workspace;
 
-/// Opens the GUI with the in-memory mock service.
+/// Opens the GUI with the in-memory demo service.
 pub(crate) fn run_with_mock() -> dblocal_core::Result<()> {
-    let service: Arc<dyn DblService> = Arc::new(dblocal_core::service::mock::MockService::new());
+    let service: Arc<dyn DblService> = Arc::new(dblocal_core::service::mock::MockService::demo());
     run_with_service(service)
 }
 
@@ -24,18 +24,19 @@ pub fn run_with_service(service: Arc<dyn DblService>) -> dblocal_core::Result<()
     gpui_kit::platform::application()
         .with_assets(gpui_kit::assets::AllAssets)
         .run(move |cx: &mut App| {
-            gpui_kit::component::init(cx);
+            gpui_kit::init(cx);
             crate::theme::init(cx);
             super::actions::bind_keys(cx);
 
-            let bounds = gpui_kit::Bounds::centered(None, size(px(1180.), px(760.)), cx);
+            // The prototype's window: 1280x820, the size the screenshots use.
+            let bounds = gpui_kit::Bounds::centered(None, size(px(1280.), px(820.)), cx);
             let options = WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
-                titlebar: Some(gpui_kit::component::TitleBar::title_bar_options()),
-                kind: WindowKind::Normal,
                 window_min_size: Some(size(px(900.), px(600.))),
-                ..Default::default()
+                app_id: Some("dev.dblocal.DBLocal".to_owned()),
+                ..TitleBar::window_options()
             };
+            let _ = WindowKind::Normal;
 
             let service_for_window = service.clone();
             let result = cx.open_window(options, move |window, cx| {

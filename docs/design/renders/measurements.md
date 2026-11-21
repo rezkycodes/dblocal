@@ -39,3 +39,24 @@ Earlier run before the font stack change: FLOOR 166.0 / 0.20 %, IDLE 178.6 / 0.1
 
 - Before the fix: `UI font family: "Segoe UI"`, `Monospace font family: "Noto Sans Mono"`. GPUI maps `.SystemUIFont` through a stack that contains `Segoe UI`; this review host happens to have Segoe UI installed under `~/.local/share/fonts`, so the spike's "Segoe UI on Fedora" claim was literally reproducible here but is not a Linux font.
 - After the fix: `UI font family: "Adwaita Sans"`, `Monospace font family: "Adwaita Mono"`. `theme::init` now names the first installed family from an explicit stack (`Adwaita Sans`, `Cantarell`, `Noto Sans`, `Ubuntu`, `DejaVu Sans`, …, `.SystemUIFont`), keeping the system font as the final fallback. Windows and macOS keep their native system font.
+
+## W2-E re-measurement (prototype port, 2026-11-21)
+
+Same method and host as above: `cargo build -p dblocal-gui --release --example measure`, Wayland
+`wayland-0`, AMD RADV Renoir, 15 s FLOOR / 20 s IDLE / 8 s AFTER_DOWNLOAD. Only `crates/gui` changed
+(the prototype UI); the measurement harness is unchanged.
+
+| Phase | W1-G VmRSS | W2-E VmRSS | W1-G CPU | W2-E CPU | Target |
+|---|---:|---:|---:|---:|---|
+| FLOOR (empty GPUI window) | 165.4 MB | 166.7 MB | 0.20 % | 0.27 % | <150 MB, <1 % |
+| IDLE (DBLocal shell, mock demo) | 178.6 MB | **183.7 MB** | 0.10 % | **0.10 %** | <150 MB, <1 % |
+| AFTER_DOWNLOAD | 178.7 MB | 184.2 MB | 0.00 % | 0.00 % | <150 MB, <1 % |
+
+- **CPU: no regression.** Idle stays at 0.10 %, far under the 1 % target; the flume-parked event
+  pump is unchanged, so there is still no timer while idle.
+- **RSS: +5.1 MB at idle (178.6 → 183.7 MB), above the 150 MB target.** The extra memory is the
+  richer prototype UI (dock with glyphs/badges, header, four tab screens, modal chrome, Lucide icon
+  atlas) rendering the six-instance demo cast plus a live download row. The floor itself moved only
+  +1.3 MB (166.7 vs 165.4), so the increase is app UI, not the toolkit. As in W1-G, the 150 MB
+  target is below the empty-window floor on this host and is reported with evidence rather than
+  worked around (OPEN-08).

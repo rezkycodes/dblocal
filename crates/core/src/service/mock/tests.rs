@@ -349,7 +349,8 @@ async fn connection_uri_and_dotenv_are_secret_bearing() {
         .expect("env")
         .expose()
         .to_owned();
-    assert!(env.contains("DB_CONNECTION=postgresql"));
+    assert!(env.contains("DATABASE_URL=postgresql://"));
+    assert!(env.contains("DB_DATABASE=postgres"));
     assert!(env.contains("DB_PASSWORD="));
 }
 
