@@ -40,10 +40,12 @@ impl EngineAdapter for ValkeyAdapter {
     fn initialize(&self, ctx: &InitContext) -> Result<()> {
         let run_dir = sibling_dir(&ctx.data_dir, consts::DIR_RUN);
         let logs_dir = sibling_dir(&ctx.data_dir, consts::DIR_LOGS);
-        for dir in [&ctx.data_dir, &run_dir, &logs_dir] {
-            fs::create_dir_all(dir).map_err(|e| DblError::Engine {
-                reason: format!("cannot create {}: {e}", dir.display()),
-            })?;
+        for (dir, label) in [
+            (&ctx.data_dir, "data"),
+            (&run_dir, "run"),
+            (&logs_dir, "logs"),
+        ] {
+            ensure_private_dir(dir, label)?;
         }
         let params = ConfigParams {
             port: ctx.port.get(),
@@ -192,21 +194,97 @@ pub fn logfile_path(logs_dir: &Path) -> PathBuf {
 /// `spawn_command` cannot fail; the service can call this before spawning to get
 /// a clear error when the instance layout is damaged.
 pub fn prepare_run(ctx: &RunContext) -> Result<()> {
-    fs::create_dir_all(&ctx.data_dir).map_err(|e| DblError::Engine {
-        reason: format!(
-            "cannot create data directory {}: {e}",
-            ctx.data_dir.display()
-        ),
+    ensure_private_dir(&ctx.data_dir, "data")?;
+    ensure_private_dir(&ctx.run_dir, "run")?;
+    ensure_private_dir(&ctx.logs_dir, "logs")?;
+    Ok(())
+}
+
+fn ensure_private_dir(dir: &Path, label: &str) -> Result<()> {
+    fs::create_dir_all(dir).map_err(|e| DblError::Engine {
+        reason: format!("cannot create {label} directory {}: {e}", dir.display()),
     })?;
-    fs::create_dir_all(&ctx.run_dir).map_err(|e| DblError::Engine {
-        reason: format!("cannot create run directory {}: {e}", ctx.run_dir.display()),
+    #[cfg(unix)]
+    {
+        fs::set_permissions(dir, fs::Permissions::from_mode(0o700)).map_err(|e| {
+            DblError::Engine {
+                reason: format!("cannot chmod {label} directory {}: {e}", dir.display()),
+            }
+        })?;
+    }
+    Ok(())
+}
+
+/// Rewrites the managed `port` line in `run_dir/valkey.conf`.
+///
+/// Atomic: temp file in the same directory, fsync, rename. Other settings and
+/// comments are preserved. Idempotent. Fails if the config is missing or has no
+/// `port` directive (the caller should treat that as a config-drift error).
+pub fn sync_port(run_dir: &Path, port: u16) -> Result<()> {
+    let path = config_path(run_dir);
+    let contents = fs::read_to_string(&path).map_err(|e| DblError::Engine {
+        reason: format!("cannot read {}: {e}", path.display()),
     })?;
-    fs::create_dir_all(&ctx.logs_dir).map_err(|e| DblError::Engine {
-        reason: format!(
-            "cannot create logs directory {}: {e}",
-            ctx.logs_dir.display()
-        ),
+    let mut replaced = false;
+    let mut out = String::with_capacity(contents.len() + 16);
+    for line in contents.lines() {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with("port ") {
+            let _ = writeln!(out, "port {port}");
+            replaced = true;
+        } else {
+            out.push_str(line);
+            out.push('\n');
+        }
+    }
+    if !replaced {
+        return Err(DblError::Engine {
+            reason: format!("{} has no `port` directive to rewrite", path.display()),
+        });
+    }
+    write_atomic(&path, &out)
+}
+
+fn write_atomic(path: &Path, contents: &str) -> Result<()> {
+    let parent = path.parent().ok_or_else(|| DblError::Engine {
+        reason: format!("config path has no parent: {}", path.display()),
     })?;
+    let nonce: u64 = rand::random();
+    let tmp = parent.join(format!(
+        ".{}.tmp-{:016x}",
+        path.file_name().and_then(|s| s.to_str()).unwrap_or("conf"),
+        nonce
+    ));
+    let mut opts = OpenOptions::new();
+    opts.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+    let mut file = opts.open(&tmp).map_err(|e| DblError::Engine {
+        reason: format!("cannot write {}: {e}", tmp.display()),
+    })?;
+    if let Err(e) = file
+        .write_all(contents.as_bytes())
+        .and_then(|_| file.sync_all())
+    {
+        let _ = fs::remove_file(&tmp);
+        return Err(DblError::Engine {
+            reason: format!("cannot write {}: {e}", tmp.display()),
+        });
+    }
+    drop(file);
+    if let Err(e) = fs::rename(&tmp, path) {
+        let _ = fs::remove_file(&tmp);
+        return Err(DblError::Engine {
+            reason: format!("cannot rename {} into place: {e}", path.display()),
+        });
+    }
+    #[cfg(unix)]
+    if let Ok(dir) = std::fs::File::open(parent) {
+        let _ = dir.sync_all();
+    }
     Ok(())
 }
 
@@ -595,5 +673,81 @@ mod tests {
             diagnose_failure_text("# WARNING Memory overcommit must be enabled!\n"),
             StartFailure::Unknown
         );
+    }
+
+    #[test]
+    fn sync_port_rewrites_only_port_line_atomically() {
+        let dir = tempdir().expect("tempdir");
+        let run = dir.path().join("run");
+        fs::create_dir_all(&run).expect("run");
+        let mut conf = render_config(&ConfigParams {
+            port: 41000,
+            data_dir: dir.path().join("data").as_path(),
+            run_dir: run.as_path(),
+            logs_dir: dir.path().join("logs").as_path(),
+            password: None,
+            auth: AuthMode::None,
+        })
+        .expose()
+        .to_owned();
+        conf.push_str("# keep-me\n");
+        fs::write(config_path(&run), conf).expect("write");
+        sync_port(&run, 42000).expect("sync");
+        let text = fs::read_to_string(config_path(&run)).expect("read");
+        assert!(text.contains("port 42000\n"));
+        assert!(!text.contains("port 41000\n"));
+        assert!(text.contains("# keep-me"));
+        assert_eq!(text.matches("\nport ").count(), 1);
+        sync_port(&run, 42000).expect("idempotent");
+        let again = fs::read_to_string(config_path(&run)).expect("read");
+        assert_eq!(text, again);
+    }
+
+    #[test]
+    fn sync_port_refuses_missing_port_directive() {
+        let dir = tempdir().expect("tempdir");
+        let run = dir.path().join("run");
+        fs::create_dir_all(&run).expect("run");
+        fs::write(config_path(&run), "bind 127.0.0.1\n").expect("write");
+        let err = sync_port(&run, 42000).unwrap_err();
+        assert!(matches!(err, DblError::Engine { .. }));
+    }
+
+    #[test]
+    fn prepare_run_tightens_existing_permissive_dirs() {
+        let dir = tempdir().expect("tempdir");
+        let data = dir.path().join("data");
+        let run = dir.path().join("run");
+        let logs = dir.path().join("logs");
+        fs::create_dir_all(&data).expect("data");
+        fs::create_dir_all(&run).expect("run");
+        fs::create_dir_all(&logs).expect("logs");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            for p in [&data, &run, &logs] {
+                fs::set_permissions(p, fs::Permissions::from_mode(0o755)).expect("chmod");
+            }
+        }
+        let ctx = RunContext {
+            instance_name: "app".into(),
+            runtime_dir: PathBuf::from("/opt/valkey"),
+            data_dir: data.clone(),
+            logs_dir: logs.clone(),
+            run_dir: run.clone(),
+            port: Port::new(41000).expect("port"),
+            superuser: "default".into(),
+            auth: AuthMode::None,
+            credential: None,
+        };
+        prepare_run(&ctx).expect("prepare");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            for p in [&data, &run, &logs] {
+                let mode = fs::metadata(p).expect("meta").permissions().mode() & 0o777;
+                assert_eq!(mode, 0o700, "{} must be 0700", p.display());
+            }
+        }
     }
 }

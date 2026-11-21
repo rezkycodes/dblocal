@@ -131,7 +131,7 @@ async fn create_body(
     check_cancel(token)?;
 
     for dir in [&data_dir, &logs_dir, &run_dir] {
-        std::fs::create_dir_all(dir).map_err(|source| DblError::Io { source })?;
+        super::helpers::ensure_private_dir(dir)?;
     }
 
     let password = secret_for(spec.auth())?;

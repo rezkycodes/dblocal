@@ -187,66 +187,53 @@ Valkey:     pids=[…] listening_sockets=2, all loopback
             KNOWN DEFECT: data directory 0755 (see D-3)
 ```
 
-## Defects found
+## Defects found (W2-C), fixed in W2-F
 
-These are **not patched**: extraction, `change_port`/`start` and the adapters are
-non-test code in `dblocal-core`, which W2-C may not change. Each has a minimal
-reproduction in the suite (`repro_*`) that asserts the current, wrong behaviour so
-it cannot silently regress into "fixed" without someone noticing.
+W2-C recorded three real defects; W2-F fixed them and converted the `repro_*`
+cases into regression tests.
 
-### D-1 (blocking) — the extractor rejects every tar hard link, so PostgreSQL cannot be installed
+### D-1 (fixed) — safe in-tree tar hard links
 
-- **Reproduction:** `repro_a_safe_in_tree_hard_link_is_rejected` builds a 2-entry
-  `.tar.gz` (`root/bin/engine` plus `root/bin/alias -> root/bin/engine`) and
-  extracts it through `download::extract_runtime`.
-- **Observed:** `[DBL-2002]…`, with the raw `Display` naming the entry:
-  `unsafe archive entry: …/share/timezone/Europe/Skopje: hard links are not allowed`.
-- **Real artifact:** every shipped PostgreSQL tarball carries 253 hard links
-  (Linux x86_64 18.7.0 and 17.12.0 both), all under `share/timezone/`, none under
-  `bin/` or `lib/`. Minimum reproduction against the real archive:
-  `repro_the_shipped_postgres_archive_fails_extraction`.
-- **Effect:** `create_instance` for PostgreSQL always ends
-  `["queued", "downloading", "verifying", "failed"]` — Phase 1's primary engine
-  cannot be created at all. This is why case 1's download test fails.
-- **Location:** `crates/core/src/download/extract/tarball.rs`, the
-  `EntryType::Link` arm.
-- **Fix direction (for the owner):** allow a hard link whose target resolves
-  inside the extraction root (the normal `..`-free, non-absolute case), and keep
-  rejecting one that escapes; the zip-slip guarantee is unchanged because the
-  target is validated the same way a symlink target already is.
+- **Was:** `download::extract::tarball` rejected every tar hard link
+  (`CODE_UNSAFE_ARCHIVE`). Every shipped PostgreSQL tarball carries 253 in-tree
+  hard links under `share/timezone/`, so PostgreSQL could not be installed.
+- **Fix:** accept a hard link only when its own path is safe, its target is a
+  relative in-root path that normalises inside the staging root, the target was
+  already extracted earlier as a regular file (verified with `symlink_metadata`),
+  the destination does not already exist, and the link is created inside the
+  staging root. If the OS/filesystem refuses hard links, extraction falls back to
+  copying the target bytes. Hard-link entries count against the entry quota;
+  copy fallback bytes count against the total-bytes quota. Any violation fails
+  with `CODE_UNSAFE_ARCHIVE` and leaves no final runtime.
+- **Regression:** `repro_a_safe_in_tree_hard_link_is_accepted`,
+  `repro_the_shipped_postgres_archive_extracts`, and the hostile hard-link unit
+  tests in `crates/core/src/download/tests/extraction.rs`.
 
-### D-2 (functional) — `change_port` does not reconfigure the engine
+### D-2 (fixed) — `change_port` reconfigures the engine
 
-- **Reproduction:** `repro_change_port_does_not_reconfigure_the_engine`, no
-  foreign listener involved: create on port A, `change_port` to port B (both
-  free), read `postgresql.conf`, start.
-- **Observed:** the row says B, `postgresql.conf` still says `port = A`, and the
-  start waits for a health check on B until it times out:
-  `[DBL-4001]`, nothing listening on B.
-- **Location:** `instance/read_ops.rs::change_port` persists the port and emits
-  `InstanceChanged`; nothing re-renders `postgresql.conf`/`valkey.conf`.
-  `start.rs::prepare` only creates directories, and both adapters bake the port in
-  at `initialize`.
-- **Effect:** `F-PRT-02` AC2 — the one-click "move to 5433 and start" — always
-  fails, which is the single most common start failure the port manager exists to
-  prevent (`D-16`).
-- **Fix direction:** rewrite the engine config (or pass the port on the start
-  command) when the port changes, before the health check.
+- **Was:** `change_port` updated the store but not `postgresql.conf`/`valkey.conf`,
+  so the next start health-checked the new port while the engine listened on the
+  old one.
+- **Fix:** `change_port` rewrites the engine config before persisting the new
+  port (atomic write in the same directory; failure leaves store and file
+  unchanged). `start` re-syncs the engine config from the store before spawning,
+  repairing a crash between config rewrite and store update. PostgreSQL rewrites
+  the managed block in `postgresql.conf` (keeping other settings/comments);
+  Valkey rewrites the `port` line in `valkey.conf`.
+- **Regression:** `repro_change_port_reconfigures_the_engine` and unit tests for
+  config rewrite/idempotence in engine and instance tests.
 
-### D-3 (defence in depth) — the Valkey data directory is not `0700`
+### D-3 (fixed) — private data/run/logs/instances dirs
 
-- **Reproduction:** `repro_data_directory_mode_depends_on_the_engine`.
-- **Observed:** PostgreSQL data dir `0700` (initdb chooses it), Valkey data dir
-  `0755` (the process umask).
-- **Location:** `instance/create.rs` and `engine/valkey.rs` create the data, log
-  and run dirs with `create_dir_all`, which inherits the umask.
-- **Exposure:** limited, because the DBLocal root (`~/.dblocal`) is created
-  `0700` by `Store::open`, so a `0755` child is not traversable while that holds.
-  It is still a gap against the stated invariant and an inconsistency between the
-  two engines. The security audit prints it (as a known defect) and does not fail
-  the run on it, so anything *new* still fails loudly.
-- **Fix direction:** create those directories `0700` explicitly, as the secrets
-  backend already does.
+- **Was:** Valkey data/run/logs dirs and some service-created dirs inherited the
+  process umask (0755 observed for Valkey data and `instances/`).
+- **Fix:** instance data/logs/run dirs are created/tightened to 0700 on Unix;
+  Valkey `initialize`/`prepare_run`/`ensure_private_dir` enforce 0700; the
+  service tightens `instances/`, `archive/`, `runtimes/`, `downloads/` at
+  startup. PostgreSQL data dir remains 0700 (initdb), now also consistent with
+  explicit service layout tightening.
+- **Regression:** `repro_data_directory_mode_depends_on_the_engine` now asserts
+  0700 for data/logs/run/instances for both engines.
 
 ## What this suite does not prove
 

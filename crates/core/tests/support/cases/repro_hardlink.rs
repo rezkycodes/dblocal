@@ -1,25 +1,11 @@
-//! Minimal reproduction of a defect this suite found (W2-C).
+//! Regression tests for D-1 (W2-F): safe in-tree tar hard links.
 //!
-//! **Defect:** `download::extract_runtime` rejects *every* tar hard link with
-//! `UnsafeArchive` (`crates/core/src/download/extract/tarball.rs`, the
-//! `EntryType::Link` arm). Every shipped PostgreSQL artifact from
-//! `theseus-rs/postgresql-binaries` contains hard links — 253 in the Linux
-//! x86_64 18.7.0 tarball, all under `share/timezone/`, none under `bin/` or
-//! `lib/`. Creating a PostgreSQL instance from the shipped catalog therefore
-//! always fails at the `Extracting` stage with `DBL-2002`, so Phase 1's primary
-//! engine cannot be created at all.
+//! The shipped PostgreSQL archives contain in-tree hard links (253 in the
+//! Linux x86_64 17.12.0 tarball, all under `share/timezone/`). The extractor
+//! must accept them when they satisfy the containment rules documented in
+//! `docs/architecture/download.md`, and still reject unsafe hard links.
 //!
-//! The links are *in-tree*: each one points at a sibling inside the same
-//! `postgresql-…/share/timezone/` directory, so there is no escape to guard
-//! against. Rejecting them is stricter than zip-slip safety requires, and it is
-//! what blocks PostgreSQL. An in-tree hard link is not an escape vector; the
-//! unsafe cases are a link whose target is outside the extraction root, or an
-//! absolute target.
-//!
-//! **Not patched here.** Extraction belongs to W1-C, and this task may not
-//! change non-test code in `dblocal-core`.
-//!
-//! Run the reproduction:
+//! Run:
 //!
 //! ```sh
 //! DBLOCAL_E2E=1 cargo test -p dblocal-core --test service_e2e -- --ignored \
@@ -96,10 +82,14 @@ fn extract(
     ))
 }
 
-/// The minimal case: one safe, in-tree hard link is rejected.
+/// A safe, in-tree hard link must extract and preserve content.
+///
+/// This used to be D-1's minimal reproduction (it asserted rejection). It is now
+/// a regression test: the extractor accepts the link and both names resolve to
+/// the same regular-file content.
 #[test]
 #[ignore = "e2e: run with DBLOCAL_E2E=1 cargo test --test service_e2e -- --ignored repro::hardlink"]
-fn repro_a_safe_in_tree_hard_link_is_rejected() {
+fn repro_a_safe_in_tree_hard_link_is_accepted() {
     super::require_e2e();
 
     let dir = tempfile::tempdir().expect("tempdir");
@@ -107,47 +97,37 @@ fn repro_a_safe_in_tree_hard_link_is_rejected() {
     std::fs::write(&archive, fixture_with_in_tree_hard_link()).expect("write the fixture");
     let final_dir = dir.path().join("runtime");
 
-    let result = extract(&archive, &final_dir, &extract_options());
-    match result {
-        Err(err) => {
-            // Characterisation of the defect: this test documents what the code
-            // does today, and must start failing (or be deleted) once W1-C
-            // relaxes the rule. The message spells out the trigger so nobody has
-            // to reverse-engineer it from a red run.
-            eprintln!(
-                "DEFECT CONFIRMED: extracting `root/bin/engine` + hard link \
-                 `root/bin/alias -> root/bin/engine` failed with [{}] {}",
-                err.code(),
-                err.user_message()
-            );
-            assert_eq!(
-                err.code(),
-                dblocal_core::error::CODE_UNSAFE_ARCHIVE,
-                "the rejection must be the typed UnsafeArchive error"
-            );
-            assert!(
-                !final_dir.exists(),
-                "a rejected archive must leave no finalised runtime"
-            );
-        }
-        Ok(_) => {
-            assert!(
-                final_dir.join("bin/alias").is_file(),
-                "when hard links are accepted, the alias must exist"
-            );
-            eprintln!(
-                "the extractor accepts in-tree hard links now — remove this reproduction \
-                 and re-enable the PostgreSQL cases"
-            );
-        }
+    extract(&archive, &final_dir, &extract_options()).expect("safe in-tree hard link must extract");
+    assert_eq!(
+        std::fs::read(final_dir.join("bin/engine")).expect("engine"),
+        b"#!/bin/sh\nexit 0\n"
+    );
+    assert_eq!(
+        std::fs::read(final_dir.join("bin/alias")).expect("alias"),
+        b"#!/bin/sh\nexit 0\n",
+        "hard link alias must carry the same content"
+    );
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let a = std::fs::metadata(final_dir.join("bin/engine")).expect("meta a");
+        let b = std::fs::metadata(final_dir.join("bin/alias")).expect("meta b");
+        assert_eq!(
+            a.ino(),
+            b.ino(),
+            "safe hard link should share inode on Unix"
+        );
     }
 }
 
-/// The real artifact through the production extraction path, reporting the first
-/// entry the extractor refuses.
+/// The shipped PostgreSQL artifact must extract through the production path.
+///
+/// This used to reproduce D-1 by expecting `CODE_UNSAFE_ARCHIVE`. It is now a
+/// regression test: the real archive extracts, the expected binaries exist, and
+/// hard-linked timezone files remain readable.
 #[test]
 #[ignore = "e2e: run with DBLOCAL_E2E=1 cargo test --test service_e2e -- --ignored repro::hardlink"]
-fn repro_the_shipped_postgres_archive_fails_extraction() {
+fn repro_the_shipped_postgres_archive_extracts() {
     super::require_e2e();
 
     let Some(archive) = cached_archive("postgresql-18.7.0-x86_64-unknown-linux-gnu.tar.gz") else {
@@ -167,54 +147,28 @@ fn repro_the_shipped_postgres_archive_fails_extraction() {
         max_entries: None,
     };
 
-    match extract(&archive, &final_dir, &options) {
-        Err(err) => {
-            eprintln!(
-                "DEFECT CONFIRMED: the shipped archive {} failed extraction with [{}] {}",
-                archive.display(),
-                err.code(),
-                err.user_message()
-            );
-            // The raw `Display` form carries the offending entry, which the
-            // user-facing message deliberately drops.
-            eprintln!("rejected entry, as the extractor named it: {err}");
-            assert_eq!(err.code(), dblocal_core::error::CODE_UNSAFE_ARCHIVE);
-            // The tar listing proves *which* entries are hard links, since the
-            // error itself only carries the code.
-            let listing = std::process::Command::new("tar")
-                .arg("-tvzf")
-                .arg(&archive)
-                .output()
-                .expect("tar -tvzf");
-            let text = String::from_utf8_lossy(&listing.stdout);
-            let hard_links: Vec<&str> = text.lines().filter(|line| line.starts_with('h')).collect();
-            let outside_bin_lib = hard_links
-                .iter()
-                .filter(|line| {
-                    !line.contains("/bin/") && !line.contains("/lib/") && !line.contains("/lib64/")
-                })
-                .count();
-            eprintln!(
-                "{}: {} hard links, {outside_bin_lib} of them outside bin/, lib/ and lib64/",
-                archive.display(),
-                hard_links.len()
-            );
-            for line in hard_links.iter().take(3) {
-                eprintln!("  {line}");
-            }
-            assert!(
-                !hard_links.is_empty(),
-                "the archive must contain the hard links that trigger the rejection"
-            );
-            assert!(
-                !final_dir.exists(),
-                "a rejected archive must leave no finalised runtime"
-            );
-        }
-        Ok(_) => {
-            eprintln!(
-                "the shipped PostgreSQL archive extracts now — the defect is fixed; \
-                 re-enable the PostgreSQL e2e cases"
+    extract(&archive, &final_dir, &options).expect("shipped PostgreSQL archive must extract");
+    for bin in ["bin/postgres", "bin/initdb", "bin/pg_ctl"] {
+        let path = final_dir.join(bin);
+        assert!(
+            path.is_file(),
+            "expected binary missing: {}",
+            path.display()
+        );
+    }
+
+    // Spot-check a known hard-linked timezone pair from the shipped archive.
+    let a = final_dir.join("share/postgresql/timezone/America/Santa_Isabel");
+    let b = final_dir.join("share/postgresql/timezone/America/Tijuana");
+    if a.exists() && b.exists() {
+        assert_eq!(std::fs::read(&a).unwrap(), std::fs::read(&b).unwrap());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            assert_eq!(
+                std::fs::metadata(&a).unwrap().ino(),
+                std::fs::metadata(&b).unwrap().ino(),
+                "timezone hard link should share inode"
             );
         }
     }

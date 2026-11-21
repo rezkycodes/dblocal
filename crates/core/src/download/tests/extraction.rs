@@ -161,7 +161,67 @@ async fn absolute_symlink_target_rejected_tar_gz() {
 }
 
 #[tokio::test]
-async fn hard_link_rejected_tar_gz() {
+async fn hard_link_to_earlier_regular_file_is_allowed() {
+    let data = make_tar_gz(vec![
+        TarEntry::File {
+            path: "root/a".to_owned(),
+            data: b"same-bytes".to_vec(),
+            mode: 0o644,
+        },
+        TarEntry::Hardlink {
+            path: "root/b".to_owned(),
+            target: "root/a".to_owned(),
+        },
+    ]);
+    let run = run_extract(
+        &data,
+        ArchiveFormat::TarGz,
+        Some("root"),
+        &["a", "b"],
+        None,
+        None,
+    )
+    .await;
+    let final_dir = run.result.as_ref().expect("safe hard link must extract");
+    assert_eq!(std::fs::read(final_dir.join("a")).unwrap(), b"same-bytes");
+    assert_eq!(std::fs::read(final_dir.join("b")).unwrap(), b"same-bytes");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let a = std::fs::metadata(final_dir.join("a")).unwrap();
+        let b = std::fs::metadata(final_dir.join("b")).unwrap();
+        assert_eq!(a.ino(), b.ino(), "hard link must share inode");
+        assert!(a.nlink() >= 2);
+    }
+    let _ = tokio::fs::remove_dir_all(&run.base).await;
+}
+
+#[tokio::test]
+async fn hard_link_rejected_absolute_target() {
+    let mut h = tar::Header::new_gnu();
+    h.set_entry_type(tar::EntryType::Link);
+    h.set_size(0);
+    h.set_path("root/b").expect("path");
+    h.set_link_name("/etc/passwd").expect("link");
+    h.set_cksum();
+    let data = make_tar_gz(vec![
+        TarEntry::File {
+            path: "root/a".to_owned(),
+            data: b"x".to_vec(),
+            mode: 0o644,
+        },
+        TarEntry::Raw {
+            header: Box::new(h),
+            data: vec![],
+        },
+    ]);
+    let run = run_extract(&data, ArchiveFormat::TarGz, Some("root"), &[], None, None).await;
+    assert_rejected(&run, "hard link absolute target");
+    let _ = tokio::fs::remove_dir_all(&run.base).await;
+}
+
+#[tokio::test]
+async fn hard_link_rejected_parent_dir_escape_target() {
     let data = make_tar_gz(vec![
         TarEntry::File {
             path: "root/a".to_owned(),
@@ -170,17 +230,17 @@ async fn hard_link_rejected_tar_gz() {
         },
         TarEntry::Hardlink {
             path: "root/b".to_owned(),
-            target: "root/a".to_owned(),
+            target: "../outside".to_owned(),
         },
     ]);
     let run = run_extract(&data, ArchiveFormat::TarGz, Some("root"), &[], None, None).await;
-    assert_rejected(&run, "tar.gz hard link");
+    assert_rejected(&run, "hard link .. target");
     let _ = tokio::fs::remove_dir_all(&run.base).await;
 }
 
 #[tokio::test]
-async fn hard_link_rejected_tar_xz() {
-    let data = make_tar_xz(vec![
+async fn hard_link_rejected_target_outside_root() {
+    let data = make_tar_gz(vec![
         TarEntry::File {
             path: "root/a".to_owned(),
             data: b"x".to_vec(),
@@ -188,11 +248,193 @@ async fn hard_link_rejected_tar_xz() {
         },
         TarEntry::Hardlink {
             path: "root/b".to_owned(),
+            target: "root/../../etc/passwd".to_owned(),
+        },
+    ]);
+    let run = run_extract(&data, ArchiveFormat::TarGz, Some("root"), &[], None, None).await;
+    assert_rejected(&run, "hard link outside root");
+    let _ = tokio::fs::remove_dir_all(&run.base).await;
+}
+
+#[tokio::test]
+async fn hard_link_rejected_forward_reference() {
+    let data = make_tar_gz(vec![
+        TarEntry::Hardlink {
+            path: "root/b".to_owned(),
+            target: "root/a".to_owned(),
+        },
+        TarEntry::File {
+            path: "root/a".to_owned(),
+            data: b"x".to_vec(),
+            mode: 0o644,
+        },
+    ]);
+    let run = run_extract(&data, ArchiveFormat::TarGz, Some("root"), &[], None, None).await;
+    assert_rejected(&run, "hard link forward ref");
+    let _ = tokio::fs::remove_dir_all(&run.base).await;
+}
+
+#[tokio::test]
+async fn hard_link_rejected_target_is_directory() {
+    let data = make_tar_gz(vec![
+        TarEntry::Dir {
+            path: "root/sub".to_owned(),
+            mode: 0o755,
+        },
+        TarEntry::Hardlink {
+            path: "root/b".to_owned(),
+            target: "root/sub".to_owned(),
+        },
+    ]);
+    let run = run_extract(&data, ArchiveFormat::TarGz, Some("root"), &[], None, None).await;
+    assert_rejected(&run, "hard link dir target");
+    let _ = tokio::fs::remove_dir_all(&run.base).await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn hard_link_rejected_target_is_symlink_on_disk() {
+    // Target was extracted as a symlink; hard-linking to it must be refused
+    // because the on-disk target is not a regular file.
+    let data = make_tar_gz(vec![
+        TarEntry::File {
+            path: "root/real".to_owned(),
+            data: b"x".to_vec(),
+            mode: 0o644,
+        },
+        TarEntry::Symlink {
+            path: "root/alias".to_owned(),
+            target: "real".to_owned(),
+        },
+        TarEntry::Hardlink {
+            path: "root/h".to_owned(),
+            target: "root/alias".to_owned(),
+        },
+    ]);
+    let run = run_extract(&data, ArchiveFormat::TarGz, Some("root"), &[], None, None).await;
+    assert_rejected(&run, "hard link symlink target");
+    let _ = tokio::fs::remove_dir_all(&run.base).await;
+}
+
+#[tokio::test]
+async fn hard_link_rejected_target_does_not_exist() {
+    let data = make_tar_gz(vec![TarEntry::Hardlink {
+        path: "root/b".to_owned(),
+        target: "root/missing".to_owned(),
+    }]);
+    let run = run_extract(&data, ArchiveFormat::TarGz, Some("root"), &[], None, None).await;
+    assert_rejected(&run, "hard link missing target");
+    let _ = tokio::fs::remove_dir_all(&run.base).await;
+}
+
+#[tokio::test]
+async fn hard_link_rejected_duplicate_destination() {
+    let data = make_tar_gz(vec![
+        TarEntry::File {
+            path: "root/a".to_owned(),
+            data: b"x".to_vec(),
+            mode: 0o644,
+        },
+        TarEntry::File {
+            path: "root/b".to_owned(),
+            data: b"y".to_vec(),
+            mode: 0o644,
+        },
+        TarEntry::Hardlink {
+            path: "root/b".to_owned(),
             target: "root/a".to_owned(),
         },
     ]);
-    let run = run_extract(&data, ArchiveFormat::TarXz, Some("root"), &[], None, None).await;
-    assert_rejected(&run, "tar.xz hard link");
+    let run = run_extract(&data, ArchiveFormat::TarGz, Some("root"), &[], None, None).await;
+    assert_rejected(&run, "hard link duplicate dest");
+    let _ = tokio::fs::remove_dir_all(&run.base).await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn hard_link_rejected_path_through_symlinked_directory() {
+    let data = make_tar_gz(vec![
+        TarEntry::Dir {
+            path: "root/sub".to_owned(),
+            mode: 0o755,
+        },
+        TarEntry::Symlink {
+            path: "root/linkdir".to_owned(),
+            target: "sub".to_owned(),
+        },
+        TarEntry::File {
+            path: "root/a".to_owned(),
+            data: b"x".to_vec(),
+            mode: 0o644,
+        },
+        TarEntry::Hardlink {
+            path: "root/linkdir/b".to_owned(),
+            target: "root/a".to_owned(),
+        },
+    ]);
+    let run = run_extract(&data, ArchiveFormat::TarGz, Some("root"), &[], None, None).await;
+    assert_rejected(&run, "hard link through symlink dir");
+    let _ = tokio::fs::remove_dir_all(&run.base).await;
+}
+
+#[tokio::test]
+async fn hard_link_chain_to_hard_link_target_is_allowed() {
+    // A hard link to a hard link: the first link becomes a regular file on disk
+    // and is recorded in regular_files, so the second is allowed.
+    let data = make_tar_gz(vec![
+        TarEntry::File {
+            path: "root/a".to_owned(),
+            data: b"chain".to_vec(),
+            mode: 0o644,
+        },
+        TarEntry::Hardlink {
+            path: "root/b".to_owned(),
+            target: "root/a".to_owned(),
+        },
+        TarEntry::Hardlink {
+            path: "root/c".to_owned(),
+            target: "root/b".to_owned(),
+        },
+    ]);
+    let run = run_extract(
+        &data,
+        ArchiveFormat::TarGz,
+        Some("root"),
+        &["a", "b", "c"],
+        None,
+        None,
+    )
+    .await;
+    let final_dir = run.result.as_ref().expect("hard link chain must extract");
+    assert_eq!(std::fs::read(final_dir.join("c")).unwrap(), b"chain");
+    let _ = tokio::fs::remove_dir_all(&run.base).await;
+}
+
+#[tokio::test]
+async fn hard_link_entry_count_quota_enforced() {
+    // Many hard links must hit the entry quota.
+    let mut entries = vec![TarEntry::File {
+        path: "root/a".to_owned(),
+        data: b"x".to_vec(),
+        mode: 0o644,
+    }];
+    for i in 0..20 {
+        entries.push(TarEntry::Hardlink {
+            path: format!("root/h{i}"),
+            target: "root/a".to_owned(),
+        });
+    }
+    let data = make_tar_gz(entries);
+    let run = run_extract(
+        &data,
+        ArchiveFormat::TarGz,
+        Some("root"),
+        &[],
+        None,
+        Some(5),
+    )
+    .await;
+    assert_rejected(&run, "hard link entry quota");
     let _ = tokio::fs::remove_dir_all(&run.base).await;
 }
 

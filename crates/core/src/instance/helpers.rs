@@ -256,6 +256,67 @@ pub(crate) fn run_context(
     }
 }
 
+/// Rewrites the engine config so its port matches the store.
+///
+/// Idempotent: safe to call before every start and from `change_port`.
+/// Only engines with on-disk port config are touched; others are no-ops.
+/// If the engine config file does not exist yet, this is a no-op: the port
+/// will be written when the engine is initialised or when the config appears.
+pub(crate) fn sync_instance_port(paths: &DblPaths, instance: &Instance) -> Result<()> {
+    let name = instance.name();
+    let port = instance.port().get();
+    match instance.engine() {
+        EngineKey::Postgresql => {
+            let conf = paths.data_dir(name).join("postgresql.conf");
+            if conf.exists() {
+                crate::engine::sync_postgres_port(
+                    &paths.data_dir(name),
+                    &paths.run_dir(name),
+                    port,
+                )?;
+            }
+        }
+        EngineKey::Valkey => {
+            let conf = paths.run_dir(name).join("valkey.conf");
+            if conf.exists() {
+                crate::engine::sync_valkey_port(&paths.run_dir(name), port)?;
+            }
+        }
+        EngineKey::Mysql | EngineKey::Mariadb => {}
+    }
+    Ok(())
+}
+
+/// Best-effort private directory creation (0700 on Unix). Used for instance
+/// layout directories that hold data, sockets, logs or secrets.
+pub(crate) fn ensure_private_dir(path: &Path) -> Result<()> {
+    std::fs::create_dir_all(path).map_err(|source| DblError::Io { source })?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))
+            .map_err(|source| DblError::Io { source })?;
+    }
+    Ok(())
+}
+
+/// Tightens the instance-layout root directories to 0700 on Unix.
+///
+/// `instances/` and `archive/` only contain DBLocal-owned subdirectories, but
+/// they are easy to create with a permissive umask in older builds; we tighten
+/// them explicitly so instance names are not enumerable by other local users.
+pub(crate) fn ensure_private_layout(paths: &DblPaths) -> Result<()> {
+    for dir in [
+        paths.instances_dir(),
+        paths.archive_dir(),
+        paths.runtimes_dir(),
+        paths.downloads_dir(),
+    ] {
+        ensure_private_dir(&dir)?;
+    }
+    Ok(())
+}
+
 pub(crate) fn runtime_dir_for(paths: &DblPaths, engine: EngineKey, version: &str) -> PathBuf {
     paths
         .runtime_dir(engine, version, crate::platform::Arch::current())

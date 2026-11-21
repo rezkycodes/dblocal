@@ -32,6 +32,11 @@ diagnose failures.
 
 Spike refs: README C-06..C-09, `docs/spikes/engines/postgres.md`.
 
+- **Port/config sync (D-2):** `sync_port(data_dir, run_dir, port)` rewrites the
+  DBLocal-managed block in `postgresql.conf` atomically (temp file in the same
+  directory, fsync, rename). It preserves other settings and comments. `start`
+  calls it before spawning so the config can never disagree with the store.
+
 - **Initialize (`initdb`):**
   - Runs `bin/initdb -D <data_dir> -U <superuser> --encoding=UTF8 --locale=<loc>
     --auth-local=<a> --auth-host=<a>` with `--pwfile=<path>` when

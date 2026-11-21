@@ -55,6 +55,66 @@ pub(super) fn create_symlink(target: &Path, link: &Path) -> Result<()> {
     std::os::unix::fs::symlink(target, link).map_err(|source| DblError::Io { source })
 }
 
+/// Creates a hard link `link -> target`, both inside the staging root.
+///
+/// If the OS or filesystem refuses hard links (common on some Windows volumes,
+/// or cross-device situations which cannot occur here but are handled
+/// defensively), falls back to copying the target's bytes into `link`. The
+/// fallback reads the already-extracted target file; it never follows a
+/// symlink because callers must prove the target is a regular file first.
+pub(super) fn create_hard_link(
+    target: &Path,
+    link: &Path,
+    caps: &ExtractCaps,
+    state: &mut ExtractState,
+    raw_name: &str,
+) -> Result<()> {
+    if link.exists() || std::fs::symlink_metadata(link).is_ok() {
+        return Err(DblError::UnsafeArchive {
+            entry: format!("{raw_name}: hard link destination already exists"),
+        });
+    }
+    match std::fs::hard_link(target, link) {
+        Ok(()) => Ok(()),
+        Err(err) if hard_link_fallback(&err) => {
+            copy_target_as_fallback(target, link, caps, state, raw_name)
+        }
+        Err(source) => Err(DblError::Io { source }),
+    }
+}
+
+fn hard_link_fallback(err: &std::io::Error) -> bool {
+    // Windows filesystems without hard-link support return ERROR_INVALID_FUNCTION
+    // (1) or ERROR_NOT_SUPPORTED (50); cross-device is EXDEV. We fall back to a
+    // byte copy only for cases where hard links are impossible, not for
+    // transient I/O failures.
+    matches!(err.raw_os_error(), Some(1) | Some(17) | Some(18) | Some(50))
+        || matches!(
+            err.kind(),
+            std::io::ErrorKind::Unsupported | std::io::ErrorKind::CrossesDevices
+        )
+}
+
+fn copy_target_as_fallback(
+    target: &Path,
+    link: &Path,
+    caps: &ExtractCaps,
+    state: &mut ExtractState,
+    raw_name: &str,
+) -> Result<()> {
+    // Read through a regular File; open follows the final target but callers
+    // have already verified target is a regular non-symlink file.
+    let mut src = std::fs::File::open(target).map_err(|source| DblError::Io { source })?;
+    let written = write_regular_file(&mut src, link, caps, state, raw_name)?;
+    tracing::debug!(
+        target = %target.display(),
+        link = %link.display(),
+        bytes = written,
+        "hard link fell back to byte copy"
+    );
+    Ok(())
+}
+
 #[cfg(windows)]
 pub(super) fn create_symlink(target: &Path, link: &Path) -> Result<()> {
     // Windows distinguishes file/dir symlinks and may require privileges; treat

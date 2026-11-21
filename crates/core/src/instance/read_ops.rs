@@ -87,6 +87,26 @@ pub(crate) fn change_port(inner: &Inner, id: &InstanceId, port: Port) -> Result<
         });
     }
     ensure_port_is_free(inner, port, Some(id))?;
+
+    // Rewrite the engine config before persisting the new port. If the rewrite
+    // fails, neither the file nor the store is changed. The config only exists
+    // after initialisation; before that (Provisioning/initialising edge cases are
+    // not reachable because holds_process() is false only for Stopped/Failed and
+    // create never leaves a port-bearing stopped row without a config) the sync
+    // is best treated as required when the config exists.
+    let name = instance.name();
+    let config_exists = match instance.engine() {
+        crate::model::EngineKey::Postgresql => {
+            inner.paths.data_dir(name).join("postgresql.conf").exists()
+        }
+        crate::model::EngineKey::Valkey => inner.paths.run_dir(name).join("valkey.conf").exists(),
+        crate::model::EngineKey::Mysql | crate::model::EngineKey::Mariadb => false,
+    };
+    if config_exists {
+        let updated = instance.with_port(port);
+        super::helpers::sync_instance_port(&inner.paths, &updated)?;
+    }
+
     inner.db(|store| store.update_port(id, port))?;
     emit_changed(inner, id);
     Ok(())

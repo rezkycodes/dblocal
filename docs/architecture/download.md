@@ -154,9 +154,32 @@ For each entry:
    directory, stays inside the staging root. Absolute targets are rejected. PostgreSQL's archive
    ships relative in-tree symlinks (for its shared libraries), and that is exactly the shape that
    is allowed.
-5. **Hard links** (`tar` `Link` entries) are rejected outright. **Character/block devices and
-   FIFOs** are rejected; `GNUSparse` and `Continuous` entries are treated as regular files because
-   the `tar` crate has already reconstructed their contents.
+5. **Hard links** (`tar` `Link` entries) are accepted only when all of these hold; any violation
+   fails the whole extraction with `CODE_UNSAFE_ARCHIVE` and the staging directory is removed
+   (no partial runtime is left behind):
+   - the link's own path passes the same validation as any other entry (no absolute path, no `..`,
+     stays inside the staging root, no symlinked parent component);
+   - the link target is a relative archive path that, after the same normalisation and strip-prefix
+     handling, resolves inside the staging root (absolute targets and `..` escapes are rejected);
+   - the target was already extracted earlier in the same archive as a **regular file**. Forward
+     references, directory targets, symlink targets, device/FIFO targets and missing targets are
+     rejected. The check uses `symlink_metadata` on the extracted target so a symlink on disk is
+     never accepted as the target;
+   - the link is created with `std::fs::hard_link` between two paths inside the staging root only.
+     If the OS or filesystem refuses hard links (for example a Windows volume without hard-link
+     support, or `EXDEV`/unsupported), extraction falls back to copying the target's bytes into the
+     destination. The fallback never follows a symlink because the target has already been proven
+     to be a regular file. The destination must not already exist;
+   - every hard link entry counts against the entry-count quota (`MAX_EXTRACT_ENTRIES`). A real hard
+     link adds no extracted bytes; a copy fallback counts the copied bytes against the total-bytes
+     quota.
+
+   This keeps the zip-slip/symlink-escape guarantee (the target is validated the same way as any
+   other path and must be an already-extracted regular file inside the root) while allowing
+   in-tree hard links shipped by real PostgreSQL archives (`share/timezone/*`).
+
+   **Character/block devices and FIFOs** are rejected; `GNUSparse` and `Continuous` entries are
+   treated as regular files because the `tar` crate has already reconstructed their contents.
 6. **Entry count and total bytes** are capped. `max_entries` defaults to
    `MAX_EXTRACT_ENTRIES = 200_000`. The byte cap is
    `artifact_size_bytes * MAX_EXTRACT_BYTES_MULTIPLIER` clamped to `[256 MiB, 8 GiB]`; tests can
@@ -221,8 +244,17 @@ All tests run offline against an in-process TCP server on `127.0.0.1:0`.
 | `zip` symlink with target `../../outside` | `UnsafeArchive` |
 | `tar.gz` symlink with absolute target `/etc/passwd` | `UnsafeArchive` |
 | `tar.gz` symlink with no target field | `UnsafeArchive` |
-| `tar.gz` hard link | `UnsafeArchive`, before any follow-up entry is written |
-| `tar.xz` hard link | same |
+| `tar.gz` in-tree hard link to an earlier regular file | **allowed**; target and link share content (same inode on Unix) |
+| `tar.gz` hard link, absolute target | `UnsafeArchive`, staging removed |
+| `tar.gz` hard link, `..` / outside-root target | `UnsafeArchive`, staging removed |
+| `tar.gz` hard link, forward reference (target not extracted yet) | `UnsafeArchive`, staging removed |
+| `tar.gz` hard link, target is a directory | `UnsafeArchive`, staging removed |
+| `tar.gz` hard link, target is a symlink on disk | `UnsafeArchive`, staging removed |
+| `tar.gz` hard link, missing target | `UnsafeArchive`, staging removed |
+| `tar.gz` hard link, destination already exists | `UnsafeArchive`, staging removed |
+| `tar.gz` hard link, path traverses a symlinked directory | `UnsafeArchive`, staging removed |
+| `tar.gz` hard link chain (hard link to a hard link) | **allowed** when the earlier link resolved to a regular file |
+| `tar.gz` hard-link entry flood | `UnsafeArchive` when the entry-count quota is exceeded |
 | `tar.gz` FIFO / device entry | `UnsafeArchive` |
 | `tar.gz` entry count over cap | `UnsafeArchive`, staging removed |
 | `tar.gz` extracted bytes over cap | `UnsafeArchive`, staging removed |
