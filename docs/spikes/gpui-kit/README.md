@@ -29,7 +29,7 @@ gpui-kit = { workspace = true, features = ["test-support"] }     # dev-dependenc
 Removed edges: direct `gpui` (`gpui-pre`), `gpui-component`, `gpui-kit-assets`, and the per-OS
 `gpui-platform` (`gpui-pre-platform`) targets. Imports moved to `gpui_kit::*`,
 `gpui_kit::component::{...}`, `gpui_kit::assets::AllAssets`, `gpui_kit::platform::application()`,
-and `gpui_kit::actions!`. The local `x11` feature is now a no-op (see Backends).
+and `gpui_kit::actions!`. `dblocal-gui` no longer declares any local feature for a backend.
 
 Verified: `cargo check -p dblocal-gui --all-targets` green; `cargo test -p dblocal-gui` → 83 lib +
 1 contrast + 5 render tests pass; release build links; all 14 committed render PNGs byte-identical.
@@ -37,8 +37,8 @@ Verified: `cargo check -p dblocal-gui --all-targets` green; `cargo test -p dbloc
 ### Why it failed earlier and works now
 
 Earlier in this task the host lacked `libxkbcommon-x11-devel`, so `-lxkbcommon-x11` did not link
-(exact error in `evidence.md`); the migration was reverted then. The coordinator has since
-installed `libxkbcommon-x11-devel` (`pkg-config --exists xkbcommon-x11` → 1.13.1;
+(exact error in `evidence.md`); the migration was reverted then. `libxkbcommon-x11-devel` is now
+installed on this host (`pkg-config --exists xkbcommon-x11` → 1.13.1;
 `/usr/lib64/libxkbcommon-x11.so` symlink present). Re-running the same migration now links and
 runs; no code change beyond the import rewrite was needed.
 
@@ -62,7 +62,7 @@ umbrella did not.
 - **Wayland and X11 are both compiled in** and selected at runtime from the session
   (`WAYLAND_DISPLAY` / `DISPLAY`). Both verified on this host — see X11 below.
 - `docs/dev/linux-build-deps.md` now lists `libxkbcommon-x11-devel` / `libxkbcommon-x11-dev` as a
-  **required** build dependency (not only for an optional `x11` feature): the umbrella forces it.
+  **required** build dependency: the umbrella forces it.
 
 ### X11 (old unverified item, now closed)
 
@@ -95,26 +95,59 @@ max 404). The headless render tests still run through the headless wgpu path, un
   `deny.toml` unchanged; no new licence. New crates are Apache-2.0 (`gpui-kit`, `gpui-fast*`) and
   Apache-2.0/MIT (`wasm_thread`, wasm-only and not built on desktop) — all already allowed.
 
-### Release size and cold start (W0-C method), before → after
+### Release size, RSS and cold start — same-method A/B
 
-| Metric | Direct deps (before) | Umbrella `gpui-kit` (after) | Δ |
+The only sound comparison is the same binary built twice with the same source and run in one
+session, alternating A B A B A B (3 reps each). Until now this section compared numbers taken
+by **different** methods, which was wrong; the corrected measurement follows.
+
+**Method.** `crates/gui/examples/measure` built from two trees: `main @ b7b18a7` (direct deps:
+`gpui-pre`/`gpui-component`/`gpui-kit-assets`) and this branch (umbrella `gpui-kit`). The two
+`measure.rs` files differ **only in import paths** (`gpui::`/`gpui_component::` → `gpui_kit::`), so FLOOR (empty window, 15 s),
+IDLE (real shell on the mock, 20 s) and AFTER_DOWNLOAD are the same code. Release, strip,
+`lto=thin`; `VmRSS`/`VmHWM` from `/proc/self/status`, CPU from `utime+stime`. Same session, no
+other build/test process running.
+
+| Phase | Direct deps (mean [min–max]) | Umbrella (mean [min–max]) | Δ mean |
 |---|---:|---:|---:|
-| `release/dblocal` | 58,685,208 B | 60,207,104 B | +1.52 MB |
-| `release/examples/measure` | 59,311,840 B | 60,823,448 B | +1.51 MB |
-| Cold start p50, Wayland (20 runs) | W0-C 361 ms ref | **464.8 ms** (p95 525.0, min 444, max 2059) | target <1500 ✅ |
-| Cold start p50, X11 (20 runs) | — | **383.7 ms** (p95 384.2, min 363, max 404) | target <1500 ✅ |
-| Empty window RSS (FLOOR) | 167.5 MB | 167.6 MB | ~0 |
-| Shell idle RSS | 167.7 MB | **180.5 MB** | +12.8 MB |
-| After download RSS | 168.0 MB | 181.2 MB | +13.2 MB |
-| Idle CPU | 0.15 % | 0.25 % | +0.10 pp |
+| FLOOR (empty window) | 176.8 MB [176.6–176.9] | 177.3 MB [177.2–177.5] | **+0.5 MB** |
+| IDLE (shell, mock) | 188.0 MB [187.9–188.1] | 188.7 MB [188.6–188.8] | **+0.7 MB** |
+| AFTER_DOWNLOAD | 188.2 MB [188.1–188.3] | 188.9 MB [188.8–189.0] | **+0.7 MB** |
+| Idle CPU | 0.08 % | 0.12 % | +0.04 pp |
+| Floor CPU | 0.13 % | 0.09 % | −0.04 pp |
 
-The size and idle-RSS increase come from compiling **both** Linux backends (X11 code + its atlas);
-the umbrella cannot drop X11. CPU stays far under 1 %; RSS remains above the 150 MB floor, unchanged
-in character. Method: `examples/measure` (release, strip, lto=thin), `VmRSS`/`VmHWM` from
-`/proc/self/status`, CPU from `utime+stime`. Cold start is wall-clock from process spawn to the
-`FIRST_FRAME_MS` log, using a single-window probe that opens the real `Workspace` and exits after
-5 s (same window/theme/service as the app) — **the only change from W0-C's method is that the probe
-opens one window instead of the two-phase `measure` binary**; the metric definition is identical.
+**Cold start, same probe, interleaved 20 runs per edge** (spawn → `FIRST_FRAME_MS`, Wayland):
+
+| Edge | p50 | p95 | mean | min–max |
+|---|---:|---:|---:|---:|
+| Direct deps | 494.2 ms | 561.3 ms | 501.5 ms | 448.6–571.7 |
+| Umbrella | 489.1 ms | 530.4 ms | 493.7 ms | 449.4–538.8 |
+
+Cold start is indistinguishable between the edges (p50 within 5 ms, noise > that). Earlier drafts
+quoted W0-C's 361 ms as a "before": that was a different machine load and a different probe, so it
+is **not** a valid baseline and is withdrawn from this comparison.
+
+**Release binaries (same profile):** `dblocal` 58,685,208 → 60,207,104 B (+1.52 MB);
+`examples/measure` 59,311,840 → 60,823,448 B (+1.51 MB). The size delta is real and reproducible and
+is the only cost this A/B attributes to the umbrella edge.
+
+### Reconciliation with `docs/architecture/gui.md` (165.4 / 178.6 MB)
+
+`gui.md` records FLOOR 165.4 MB and shell idle 178.6 MB (W1-G). Today, on this host, **main's own
+`measure` binary** reports FLOOR 167.6 MB / IDLE 180.0 MB, and in the paired run above the direct
+edge measured FLOOR 176.8 / IDLE 188.0 MB. So:
+
+- The absolute RSS of the *same* binary moves by up to ~8 MB between sessions (page cache, GPU
+  driver state, desktop compositor load). Cross-session absolute numbers are not comparable at the
+  1 MB level, which is why an A/B in one session is the only defensible measurement.
+- `gui.md`'s 165.4 / 178.6 is a valid historical data point but is **stale by ~1–2 MB** on today's
+  host, and it was produced before the `font-kit` text system and X11 code were linked in.
+- Against the merged baseline the umbrella edge costs **≈ +0.5 MB floor / +0.7 MB shell**, not the
+  +12.8 MB in the earlier draft. That draft compared an umbrella shell figure measured one way with
+  a direct-deps shell figure measured another (and ~11 MB below the documented baseline), so its
+  delta was an artefact, and its causal claim ("X11 code and its atlas") was untested. **The causal
+  claim is withdrawn**: the floor moved by +0.5 MB, so a shell-only widget explanation cannot hold,
+  and no allocation profile was taken to identify the cause.
 
 ## 3. `gpui-fast` measurement (spike, not adoption)
 
@@ -124,14 +157,16 @@ real shell (Wayland, AMD RADV, 60 s idle):
 
 | Metric | Default (`gpui-pre`) | `gpui-fast` | Target |
 |---|---:|---:|---:|
-| Shell idle VmRSS | 180.5 MB | **183.6 MB** | < 150 MB |
-| Idle CPU (60 s) | 0.25 % | 0.08 % | < 1 % |
-| Cold start p50 (20 runs) | 464.8 ms | **535.3 ms** | < 1500 ms |
-| Probe binary (real shell) | 45.84 MB | 48.77 MB (+2.9 MB) | — |
+| Floor VmRSS (empty window) | 181.9 MB | 184.1 MB | < 150 MB |
+| Shell idle VmRSS | 184.8 MB | 187.5 MB | < 150 MB |
+| Idle CPU (60 s) | 0.06–0.10 % | 0.05–0.08 % | < 1 % |
+| Cold start p50 (20 runs) | 489–494 ms | ~535 ms | < 1500 ms |
+| Probe binary (real shell) | 45.84 MB | 48.78 MB (+2.9 MB) | — |
 
-Fast does **not** lower the RSS floor (it is 3.1 MB higher and still above 150 MB), adds ~2.9 MB
-of binary and ~70 ms of cold start; render parity and 40× lib stability under Fast were not run.
-Recommendation: **do not adopt**; details in `gpui-fast-notes.md`.
+Measured with the **same probe and session** as the default edge, Fast does **not** lower the RSS
+floor (it is 2–3 MB *higher* and still above 150 MB), adds ~2.9 MB of binary and is slower to
+start. Render parity and 40× lib stability were not run, because the RSS result made adoption
+moot. Recommendation: **do not adopt**; details in `gpui-fast-notes.md`.
 
 ## 4. Design-rule checklist (scope changed by D-25 — W2-E fills status)
 
@@ -202,10 +237,12 @@ archive-extraction invariants, not a replacement.
 - **Umbrella crate `gpui-kit = "=0.10.0"`: ADOPT (done).** It links and runs now that
   `libxkbcommon-x11-devel` is installed; one pinned dependency replaces four direct edges, the
   same GPUI stack sits underneath, all 89 tests pass and every committed render PNG is
-  byte-identical. Cost: +1.5 MB binary and +12.8 MB idle RSS (both Linux backends compiled in),
-  and X11 becomes an unavoidable build dependency.
-- **`gpui-fast`: do not enable by default.** See `gpui-fast-notes.md`; the idle RSS floor is still
-  above 150 MB (180.5 MB shell idle on the umbrella stack).
+  byte-identical. Cost: +1.5 MB binary and, by the same-session A/B, **+0.5 MB floor / +0.7 MB
+  shell idle RSS** — not a material regression (an earlier draft's +12.8 MB was a method
+  artefact; see the reconciliation note above). X11 becomes an unavoidable build dependency.
+- **`gpui-fast`: do not enable by default.** See `gpui-fast-notes.md`. With the same probe its
+  floor is **+2.2 MB** and its shell idle RSS **+2.7 MB** versus the default backend in one
+  session — i.e. higher, not lower, and still above the 150 MB target.
 
 ## Quality gates
 
@@ -230,5 +267,6 @@ archive-extraction invariants, not a replacement.
 
 - `Cargo.toml`, `crates/gui/Cargo.toml`, `crates/gui/src/**`, `crates/gui/tests/**`,
   `crates/gui/examples/measure.rs` (imports/constructors only)
-- `docs/spikes/gpui-kit/{README.md,design-rules.md,gpui-fast-notes.md,evidence.md}`
+- `docs/spikes/gpui-kit/{README.md,gpui-fast-notes.md,evidence.md}` (the design-rule table is
+  section 4 of this README)
 - `docs/architecture/gui.md`, `docs/dev/linux-build-deps.md`

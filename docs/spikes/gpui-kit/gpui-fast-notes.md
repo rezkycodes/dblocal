@@ -10,31 +10,40 @@
 
 ## Build
 
-With `libxkbcommon-x11-devel` installed the Fast stack resolves and builds. A standalone probe that
+With `libxkbcommon-x11-devel` installed on this host the Fast stack resolves and builds. A probe that
 opens the **real** `crates/gui` shell against `gpui-kit = {features=["gpui-fast"]}` compiled in
-5m 33s (release, strip, lto=thin). No `[patch]` or crate alias was needed; `use gpui_kit::*` is
+~5 min (release, strip, lto=thin). No `[patch]` or crate alias was needed; `use gpui_kit::*` is
 unchanged. `wgpu` had to be pinned `=30.0.1` in the probe manifest (both stacks resolve 30.0.1).
 
-## Measured (this host, Wayland, AMD RADV RENOIR)
+## Measured — same probe and session as the default edge
+
+Both numbers come from the **identical shared probe body** (only the dependency-edge module
+differs), 60 s idle sample each, alternating, one session. Earlier drafts compared figures taken
+with different harnesses; this table supersedes them.
 
 | Metric | Default (`gpui-pre`) | `gpui-fast` | Target |
 |---|---:|---:|---:|
-| Shell idle VmRSS (60 s idle, real shell+mock) | 180.5 MB | **183.6 MB** (HWM 183.6) | < 150 MB |
-| Idle CPU (60 s sample) | 0.25 % | **0.08 %** | < 1 % |
-| Probe binary (real shell, stripped) | 45,842,472 B | **48,765,544 B** (+2.9 MB) | — |
-| Cold start p50, Wayland (20 runs) | 464.8 ms (p95 525.0) | **535.3 ms** (p95 749.9, min 464, max 2059) | < 1500 ms |
+| Floor VmRSS (empty window) | 181.9 MB (median of 3) | 184.1 MB (median of 3) | < 150 MB |
+| Shell idle VmRSS (real shell + mock) | 184.8 MB (median, n=9) | 187.5 MB (median, n=7) | < 150 MB |
+| Idle CPU (60 s) | 0.06–0.10 % | 0.05–0.08 % | < 1 % |
+| Probe binary (real shell, stripped) | 45,842,472 B | 48,779,064 B (+2.9 MB) | — |
+| Cold start p50, Wayland (20 runs) | 489–494 ms | ~535 ms | < 1500 ms |
 
-Shell idle RSS is **higher** with `gpui-fast` (183.6 vs 180.5 MB), so the "Fast may lower the
-memory floor" hypothesis is **not supported by this measurement**; it does not reach the 150 MB
-target either. Idle CPU is lower (0.08 % vs 0.25 %), both far under 1 %. Cold start is ~15 %
-slower (535 vs 465 ms p50), still well under the 1500 ms target.
+Same-probe verdict: `gpui-fast` is **+2.2 MB on the empty-window floor and +2.7 MB on shell idle
+RSS** versus the default backend in the same session — it moves *away* from the 150 MB target, not
+toward it. Idle CPU is marginally lower (0.05–0.08 % vs 0.06–0.10 %), both far under 1 %.
 
-## Render parity / tests
+Measurement caveat: the host's zram swap was fully exhausted (8191/8191 MB) by other workers during
+these runs, so a minority of samples showed 60–155 MB after page reclaim. Those are not an idle
+footprint; the medians above use only un-reclaimed readings (≥180 MB). The delta's sign and rough
+size were stable across every run (earlier harness: +3.1 MB; same probe: +2.7 MB).
 
-- Render tests: not re-baselined under Fast in this pass (the Fast build is a probe binary, not
-  the crate's own test target). Pixel parity against `docs/design/renders/*.png` is **unverified**
-  for Fast.
-- GUI lib suite 40× under Fast: **not run** (the 40× run is on the adopted default stack).
+## Render parity / tests — not run, deliberately
+
+- Render parity against `docs/design/renders/*.png` and the GUI lib suite 40× under Fast were
+  **not run, because the RSS result made adoption moot**: Fast measured +2.7 MB *more* shell idle
+  RSS than the default backend in the same session and did not approach the 150 MB target, so there
+  was no adoption path for the result to gate.
 
 ## Windows / macOS
 
@@ -43,8 +52,9 @@ Not verifiable on this Fedora/Wayland host: `gpui-fast` advertises the same desk
 
 ## Recommendation
 
-**Do not adopt.** `gpui-fast` builds and runs, but it does **not** reduce the idle RSS floor
-(183.6 MB vs 180.5 MB default, both above the 150 MB target), it adds ~2.9 MB to the binary and
-~70 ms to cold start, and render parity / 40× test stability on the real shell are unmeasured. Revisit only if a memory
-investigation specifically targets the retained-rendering structures and a real-shell A/B (RSS,
-CPU, render pixel diff, 40× lib, Windows/macOS build) clears the bar.
+**Do not adopt.** `gpui-fast` builds and runs, but it does **not** reduce the idle RSS floor: with
+the same probe it measured 2.2 MB higher on the floor and 2.7 MB higher on shell idle than the
+default backend in one session (both above the 150 MB target), plus ~2.9 MB of binary and a slower
+start. Render parity and 40× stability were not run because the RSS result left no adoption path.
+Revisit only if a memory investigation specifically targets the retained-rendering structures and a
+real-shell A/B (RSS, CPU, render pixel diff, 40× lib, Windows/macOS build) clears the bar.
