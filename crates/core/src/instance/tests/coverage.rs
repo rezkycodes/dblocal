@@ -434,3 +434,122 @@ fn local_service_new_tightens_preexisting_layout_dirs() {
         );
     }
 }
+
+/// Item 10: through the real `LocalService` and the real adapter (not the mock),
+/// a no-password instance still has a URI for both engines and both formats.
+#[test]
+fn local_service_renders_a_no_password_uri_for_both_engines() {
+    use crate::model::{InstanceSpec, Port};
+    use crate::service::UriFormat;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let paths = crate::paths::DblPaths::with_root(dir.path());
+    let service =
+        crate::service::LocalService::new(paths.clone(), crate::service::ServiceOptions::default())
+            .expect("service");
+
+    let cases: [(EngineKey, &str, &str); 2] = [
+        (EngineKey::Postgresql, "nopass-pg", "postgres"),
+        (EngineKey::Valkey, "nopass-vk", "redis"),
+    ];
+    for (engine, name, scheme) in cases {
+        let port = test_port();
+        let spec = InstanceSpec::new(
+            InstanceName::new(name).expect("name"),
+            engine,
+            "18.7",
+            Some(Port::new(port).expect("port")),
+            crate::model::AuthMode::None,
+        )
+        .expect("spec");
+        let id = crate::model::InstanceId::new();
+        let instance = crate::model::Instance::new(
+            &spec,
+            id.clone(),
+            InstanceStatus::Stopped,
+            SystemTime::now(),
+        );
+        // A no-password instance is persisted with no credential row.
+        crate::store::Store::open(&paths)
+            .expect("store")
+            .insert_instance(&instance)
+            .expect("insert");
+
+        let uri = service
+            .connection_uri(&id, UriFormat::Uri)
+            .expect("no-password URI must exist")
+            .expose()
+            .to_owned();
+        assert!(
+            uri.starts_with(scheme),
+            "{engine:?} URI scheme wrong: {uri}"
+        );
+        assert!(
+            !uri.contains(":@"),
+            "{engine:?} URI has an empty password: {uri}"
+        );
+        assert!(uri.contains(&format!("127.0.0.1:{port}")), "{uri}");
+
+        let env = service
+            .connection_uri(&id, UriFormat::DotEnv)
+            .expect("no-password .env must exist")
+            .expose()
+            .to_owned();
+        let password_key = if engine == EngineKey::Valkey {
+            "REDIS_PASSWORD"
+        } else {
+            "DB_PASSWORD"
+        };
+        assert!(
+            !env.contains(password_key),
+            "{engine:?} .env carries a password key: {env}"
+        );
+        assert!(
+            !env.contains(":@"),
+            "{engine:?} .env has an empty password: {env}"
+        );
+    }
+}
+
+/// Item 10: a password-mode instance with no credential row stays a typed
+/// `NotFound` for the `credential` kind, never a silently empty password.
+#[test]
+fn local_service_password_instance_without_a_credential_is_a_typed_error() {
+    use crate::model::{InstanceSpec, Port};
+    use crate::service::UriFormat;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let paths = crate::paths::DblPaths::with_root(dir.path());
+    let service =
+        crate::service::LocalService::new(paths.clone(), crate::service::ServiceOptions::default())
+            .expect("service");
+    let port = test_port();
+    let spec = InstanceSpec::new(
+        InstanceName::new("no-cred").expect("name"),
+        EngineKey::Postgresql,
+        "18.7",
+        Some(Port::new(port).expect("port")),
+        crate::model::AuthMode::Password,
+    )
+    .expect("spec");
+    let id = crate::model::InstanceId::new();
+    let instance = crate::model::Instance::new(
+        &spec,
+        id.clone(),
+        InstanceStatus::Stopped,
+        SystemTime::now(),
+    );
+    crate::store::Store::open(&paths)
+        .expect("store")
+        .insert_instance(&instance)
+        .expect("insert");
+
+    let err = service
+        .connection_uri(&id, UriFormat::Uri)
+        .expect_err("missing credential must fail typed");
+    assert_eq!(err.code(), crate::error::CODE_NOT_FOUND);
+    assert!(
+        matches!(&err, crate::DblError::NotFound { kind, .. } if *kind == "credential"),
+        "{err:?}"
+    );
+}

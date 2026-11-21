@@ -193,6 +193,18 @@ pub trait EngineAdapter: Send + Sync {
         format: UriFormat,
     ) -> SecretString;
 
+    /// Builds a connection URI or `.env` block for an instance with no password
+    /// (auth mode [`AuthMode::None`], PRD `F-CRD-03`).
+    ///
+    /// There is no credential to pass, so the default renders through
+    /// [`uri::render_no_password`]: the userinfo carries only the username and
+    /// no password key appears in the `.env` block. The service only calls this
+    /// when the instance's auth mode is `None`; a password instance with a
+    /// missing credential stays a typed error.
+    fn connection_uri_no_password(&self, ctx: &RunContext, format: UriFormat) -> SecretString {
+        uri::render_no_password(self.key(), ctx.port.get(), &ctx.superuser, format)
+    }
+
     /// Classifies raw start output so the UI can offer a fix (PRD `F-LOG-02`).
     ///
     /// `output` is the combined stdout/stderr captured during a failed start.
