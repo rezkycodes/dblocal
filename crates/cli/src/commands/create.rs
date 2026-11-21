@@ -86,8 +86,13 @@ pub fn run(
         }
         Err(e) => {
             output::stderr_line(ctx.err, &format!("[{}] {}", e.code, e.message));
-            if e.code == "DBL-1001" || e.code == "DBL-1003" || e.code == "DBL-1005" {
+            if matches!(
+                e.code.as_str(),
+                "DBL-1001" | "DBL-1003" | "DBL-1005" | "DBL-6001"
+            ) {
                 EXIT_BAD_ARGS
+            } else if e.code == "DBL-4001" {
+                crate::cli::EXIT_ENGINE_FAILED
             } else {
                 EXIT_GENERAL
             }

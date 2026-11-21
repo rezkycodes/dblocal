@@ -31,7 +31,11 @@ pub fn code_for(err: &DblError) -> u8 {
     match err {
         DblError::NotFound { .. } => EXIT_NOT_FOUND,
         DblError::Engine { .. } => EXIT_ENGINE_FAILED,
-        DblError::InvalidInput { .. } | DblError::InvalidTransition { .. } => EXIT_BAD_ARGS,
+        DblError::InvalidInput { .. }
+        | DblError::InvalidTransition { .. }
+        | DblError::AlreadyExists { .. }
+        | DblError::PortInUse { .. }
+        | DblError::Unsupported { .. } => EXIT_BAD_ARGS,
         DblError::Cancelled { .. } => EXIT_GENERAL,
         _ => EXIT_GENERAL,
     }
@@ -276,3 +280,6 @@ pub fn wait_for_status_rx(
 pub fn is_interactive_stdin() -> bool {
     std::io::stdin().is_terminal()
 }
+
+#[cfg(test)]
+mod tests;

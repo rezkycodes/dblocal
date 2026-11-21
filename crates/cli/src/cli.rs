@@ -196,6 +196,40 @@ pub fn run_with(
     stdout_is_tty: bool,
     stderr_is_tty: bool,
 ) -> u8 {
+    run_with_confirm(
+        service,
+        command,
+        out,
+        err,
+        is_interactive,
+        stdout_is_tty,
+        stderr_is_tty,
+        &read_confirmation,
+    )
+}
+
+/// Reads one line from stdin, or `None` when stdin is not readable.
+fn read_confirmation() -> Option<String> {
+    use std::io::BufRead as _;
+    let mut line = String::new();
+    match std::io::stdin().lock().read_line(&mut line) {
+        Ok(_) if !line.is_empty() => Some(line),
+        _ => None,
+    }
+}
+
+/// The injectable form: `confirm` supplies the typed delete confirmation.
+#[allow(clippy::too_many_arguments)]
+pub fn run_with_confirm(
+    service: &dyn DblService,
+    command: &Command,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+    is_interactive: bool,
+    stdout_is_tty: bool,
+    stderr_is_tty: bool,
+    confirm: commands::Confirm<'_>,
+) -> u8 {
     let mut ctx = Ctx {
         service,
         out,
@@ -203,6 +237,7 @@ pub fn run_with(
         is_interactive,
         stdout_is_tty,
         stderr_is_tty,
+        confirm,
     };
     commands::dispatch(&mut ctx, command)
 }

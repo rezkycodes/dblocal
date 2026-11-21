@@ -1,5 +1,3 @@
-use std::io;
-
 use dblocal_core::model::DeleteMode;
 
 use crate::cli::{EXIT_BAD_ARGS, EXIT_GENERAL, EXIT_OK};
@@ -22,11 +20,10 @@ pub fn run(ctx: &mut Ctx<'_>, name: &str, yes: bool, purge: bool) -> u8 {
             return EXIT_BAD_ARGS;
         }
         output::stderr_line(ctx.err, messages::PROMPT_DELETE);
-        let mut input = String::new();
-        if io::stdin().read_line(&mut input).is_err() {
+        let Some(input) = (ctx.confirm)() else {
             output::stderr_line(ctx.err, "[DBL-1001] gagal membaca konfirmasi");
             return EXIT_BAD_ARGS;
-        }
+        };
         if input.trim() != name {
             output::stderr_line(
                 ctx.err,

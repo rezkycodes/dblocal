@@ -17,6 +17,12 @@ use dblocal_core::service::DblService;
 use crate::cli::Command;
 use crate::output;
 
+/// Reads the typed confirmation for `delete` when it is interactive.
+///
+/// Injected so a test can prove the refusal and the accept path without
+/// touching stdin; production reads one line from the terminal.
+pub type Confirm<'a> = &'a dyn Fn() -> Option<String>;
+
 /// Context passed to every command handler.
 pub struct Ctx<'a> {
     pub service: &'a dyn DblService,
@@ -25,6 +31,8 @@ pub struct Ctx<'a> {
     pub is_interactive: bool,
     pub stdout_is_tty: bool,
     pub stderr_is_tty: bool,
+    /// Source of the typed instance name for an interactive delete.
+    pub confirm: Confirm<'a>,
 }
 
 /// Dispatches a parsed command. Returns an exit code.
