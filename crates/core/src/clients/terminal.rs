@@ -393,59 +393,49 @@ fn sweep_old_scripts(dir: &Path) -> ClientResult<()> {
     Ok(())
 }
 
+/// Writes a launcher script with `O_CREAT|O_EXCL` so an existing name is never reused.
 pub fn write_script_file(dir: &Path, temp: &TempFile) -> ClientResult<PathBuf> {
     let path = dir.join(temp.name_hint());
-    #[cfg(unix)]
-    {
-        use std::io::Write;
-        use std::os::unix::fs::OpenOptionsExt;
-        let mut file = std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(temp.mode())
-            .open(&path)
-            .map_err(|e| ClientError::ScriptError {
-                reason: e.kind().to_string(),
-            })?;
-        file.write_all(temp.contents().expose().as_bytes())
-            .map_err(|e| {
-                let _ = std::fs::remove_file(&path);
-                ClientError::ScriptError {
-                    reason: e.kind().to_string(),
-                }
-            })?;
-        file.sync_all().map_err(|e| {
-            let _ = std::fs::remove_file(&path);
-            ClientError::ScriptError {
-                reason: e.kind().to_string(),
-            }
-        })?;
-    }
-    #[cfg(not(unix))]
-    {
-        use std::io::Write;
-        let mut file = std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&path)
-            .map_err(|e| ClientError::ScriptError {
-                reason: e.kind().to_string(),
-            })?;
-        file.write_all(temp.contents().expose().as_bytes())
-            .map_err(|e| {
-                let _ = std::fs::remove_file(&path);
-                ClientError::ScriptError {
-                    reason: e.kind().to_string(),
-                }
-            })?;
-        file.sync_all().map_err(|e| {
-            let _ = std::fs::remove_file(&path);
-            ClientError::ScriptError {
-                reason: e.kind().to_string(),
-            }
-        })?;
-    }
+    let mut file = open_new_script(&path, temp.mode())?;
+    write_and_sync(&mut file, &path, temp.contents().expose())?;
     Ok(path)
+}
+
+#[cfg(unix)]
+fn open_new_script(path: &Path, mode: u32) -> ClientResult<std::fs::File> {
+    use std::os::unix::fs::OpenOptionsExt;
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(mode)
+        .open(path)
+        .map_err(|e| ClientError::ScriptError {
+            reason: e.kind().to_string(),
+        })
+}
+
+#[cfg(not(unix))]
+fn open_new_script(path: &Path, _mode: u32) -> ClientResult<std::fs::File> {
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+        .map_err(|e| ClientError::ScriptError {
+            reason: e.kind().to_string(),
+        })
+}
+
+/// Writes and flushes the contents, removing the partial file if either step fails.
+fn write_and_sync(file: &mut std::fs::File, path: &Path, contents: &str) -> ClientResult<()> {
+    use std::io::Write;
+    file.write_all(contents.as_bytes())
+        .and_then(|()| file.sync_all())
+        .map_err(|e| {
+            let _ = std::fs::remove_file(path);
+            ClientError::ScriptError {
+                reason: e.kind().to_string(),
+            }
+        })
 }
 
 /// Substitute the script placeholder in an argv element.

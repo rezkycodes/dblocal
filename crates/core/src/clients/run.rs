@@ -60,35 +60,14 @@ impl Spawner for SystemSpawner {
             });
         }
         let script_path = self.materialize_temp_file(plan)?;
-        let mut cmd = Command::new(plan.program());
-        for arg in plan.argv() {
-            if let Some(ref sp) = script_path {
-                cmd.arg(substitute_script_placeholder(arg, sp));
-            } else {
-                cmd.arg(arg);
-            }
-        }
-        for env in plan.env() {
-            cmd.env(env.name(), env.value().expose());
-        }
-        cmd.stdin(std::process::Stdio::null());
-        cmd.stdout(std::process::Stdio::null());
-        cmd.stderr(std::process::Stdio::null());
+        let mut cmd = build_command(plan, script_path.as_deref());
         let mut child = match cmd.spawn() {
             Ok(c) => c,
             Err(err) => {
                 if let Some(ref sp) = script_path {
                     let _ = std::fs::remove_file(sp);
                 }
-                return Err(if err.kind() == std::io::ErrorKind::NotFound {
-                    ClientError::ClientNotFound {
-                        name: plan.program().display().to_string(),
-                    }
-                } else {
-                    ClientError::LaunchFailed {
-                        reason: err.kind().to_string(),
-                    }
-                });
+                return Err(spawn_error(plan, &err));
             }
         };
         std::thread::Builder::new()
@@ -100,6 +79,35 @@ impl Spawner for SystemSpawner {
                 reason: e.kind().to_string(),
             })?;
         Ok(())
+    }
+}
+
+fn build_command(plan: &LaunchPlan, script_path: Option<&std::path::Path>) -> Command {
+    let mut cmd = Command::new(plan.program());
+    for arg in plan.argv() {
+        match script_path {
+            Some(sp) => cmd.arg(substitute_script_placeholder(arg, sp)),
+            None => cmd.arg(arg),
+        };
+    }
+    for env in plan.env() {
+        cmd.env(env.name(), env.value().expose());
+    }
+    cmd.stdin(std::process::Stdio::null());
+    cmd.stdout(std::process::Stdio::null());
+    cmd.stderr(std::process::Stdio::null());
+    cmd
+}
+
+fn spawn_error(plan: &LaunchPlan, err: &std::io::Error) -> ClientError {
+    if err.kind() == std::io::ErrorKind::NotFound {
+        ClientError::ClientNotFound {
+            name: plan.program().display().to_string(),
+        }
+    } else {
+        ClientError::LaunchFailed {
+            reason: err.kind().to_string(),
+        }
     }
 }
 
