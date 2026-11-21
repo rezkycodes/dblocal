@@ -284,9 +284,9 @@ this task's `cli_e2e`), three consecutive runs on a seeded runtime cache:
 
 | Run | service_e2e | cli_e2e | Result |
 |---|---|---|---|
-| 1 | 15 passed, 96.6 s | 1 passed, 5.1 s | every target passed |
-| 2 | 15 passed, 94.8 s | 1 passed, 4.9 s | every target passed |
-| 3 | 15 passed, 86.8 s | 1 passed, 4.6 s | every target passed |
+| 1 | 15 passed, 82.8 s | 1 passed, 4.9 s | every target passed |
+| 2 | 15 passed, 86.3 s | 1 passed, 4.6 s | every target passed |
+| 3 | 15 passed, 86.2 s | 1 passed, 4.8 s | every target passed |
 
 The CLI case creates a real Valkey 9.2.0 through the **installed binary**, starts
 it, asserts `status` exits 0 and the URI connects with the production `redis`
