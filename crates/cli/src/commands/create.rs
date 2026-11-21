@@ -1,4 +1,3 @@
-
 use dblocal_core::model::{AuthMode, EngineKey, InstanceName, InstanceSpec, Port};
 use dblocal_core::service::UriFormat;
 
@@ -18,7 +17,10 @@ pub fn run(
     let engine_key = match engine.parse::<EngineKey>() {
         Ok(e) => e,
         Err(_) => {
-            output::stderr_line(ctx.err, &format!("[DBL-1001] {}: {engine}", messages::ERR_UNKNOWN_ENGINE));
+            output::stderr_line(
+                ctx.err,
+                &format!("[DBL-1001] {}: {engine}", messages::ERR_UNKNOWN_ENGINE),
+            );
             return EXIT_BAD_ARGS;
         }
     };
@@ -33,7 +35,11 @@ pub fn run(
         },
         None => None,
     };
-    let auth = if no_password { AuthMode::None } else { AuthMode::Password };
+    let auth = if no_password {
+        AuthMode::None
+    } else {
+        AuthMode::Password
+    };
     let spec = match InstanceSpec::new(inst_name, engine_key, version.to_owned(), port, auth) {
         Ok(s) => s,
         Err(e) => return output::report_error(ctx.err, &e),

@@ -1,5 +1,5 @@
-use crate::commands::Ctx;
 use crate::cli::EXIT_OK;
+use crate::commands::Ctx;
 use crate::output;
 
 pub fn run(ctx: &mut Ctx<'_>, json: bool) -> u8 {

@@ -1,13 +1,10 @@
 //! User-facing CLI strings (Indonesian, per AGENTS.md). Flags stay English.
 
-/// Banner/separator not needed; keep messages short and actionable.
-
 pub const ERR_SERVICE_OPEN: &str = "Gagal membuka layanan DBLocal.";
 pub const ERR_INSTANCE_NOT_FOUND: &str = "Instance tidak ditemukan.";
 pub const ERR_ALREADY_RUNNING: &str = "sudah berjalan";
 pub const ERR_NAME_CONFIRMATION: &str = "Penghapusan dibatalkan: nama instance tidak cocok.";
-pub const ERR_DELETE_NEEDS_YES: &str =
-    "Penghapusan memerlukan --yes pada sesi non-interaktif.";
+pub const ERR_DELETE_NEEDS_YES: &str = "Penghapusan memerlukan --yes pada sesi non-interaktif.";
 pub const ERR_UNKNOWN_ENGINE: &str = "Engine tidak dikenal.";
 pub const MSG_ARCHIVED_TO: &str = "Data diarsipkan ke";
 pub const MSG_DELETED: &str = "Instance dihapus.";

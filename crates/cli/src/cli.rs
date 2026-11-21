@@ -5,9 +5,9 @@ use std::io::{self, Write};
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
+use dblocal_core::DblError;
 use dblocal_core::paths::DblPaths;
 use dblocal_core::service::{DblService, LocalService, ServiceOptions};
-use dblocal_core::DblError;
 
 use crate::commands::{self, Ctx};
 use crate::messages;
@@ -134,7 +134,14 @@ pub fn run(args: Vec<OsString>) -> ExitCode {
 fn run_command(command: Command) -> ExitCode {
     let mut out = io::stdout().lock();
     let mut err = io::stderr().lock();
-    let code = run_with_service(&command, &mut out, &mut err, output::is_interactive_stdin(), output::is_tty_stdout(), output::is_tty_stderr());
+    let code = run_with_service(
+        &command,
+        &mut out,
+        &mut err,
+        output::is_interactive_stdin(),
+        output::is_tty_stdout(),
+        output::is_tty_stderr(),
+    );
     ExitCode::from(code)
 }
 
@@ -161,7 +168,15 @@ fn run_with_service(
             return EXIT_GENERAL;
         }
     };
-    run_with(&service, command, out, err, is_interactive, stdout_is_tty, stderr_is_tty)
+    run_with(
+        &service,
+        command,
+        out,
+        err,
+        is_interactive,
+        stdout_is_tty,
+        stderr_is_tty,
+    )
 }
 
 /// Dispatches a command against an injected service. This is the library entry
@@ -189,7 +204,11 @@ pub fn run_with(
 
 fn clap_exit(err: clap::Error) -> ExitCode {
     // `--help` and `--version` are successful outcomes, not failures.
-    let code = if err.use_stderr() { EXIT_BAD_ARGS } else { EXIT_OK };
+    let code = if err.use_stderr() {
+        EXIT_BAD_ARGS
+    } else {
+        EXIT_OK
+    };
     let _ = err.print();
     ExitCode::from(code)
 }
@@ -305,7 +324,13 @@ mod tests {
             }),
             EXIT_BAD_ARGS
         );
-        assert_eq!(code_for(&DblError::NotImplemented("x".into())), EXIT_GENERAL);
-        assert_eq!(code_for(&DblError::Storage { reason: "x".into() }), EXIT_GENERAL);
+        assert_eq!(
+            code_for(&DblError::NotImplemented("x".into())),
+            EXIT_GENERAL
+        );
+        assert_eq!(
+            code_for(&DblError::Storage { reason: "x".into() }),
+            EXIT_GENERAL
+        );
     }
 }

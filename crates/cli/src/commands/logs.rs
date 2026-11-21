@@ -2,7 +2,7 @@ use std::io::{self, Write};
 use std::time::Duration;
 
 use crate::cli::EXIT_OK;
-use crate::commands::{find_instance, Ctx};
+use crate::commands::{Ctx, find_instance};
 use crate::output;
 
 pub fn run(ctx: &mut Ctx<'_>, name: &str, follow: bool, lines: usize) -> u8 {
@@ -41,8 +41,8 @@ pub fn run(ctx: &mut Ctx<'_>, name: &str, follow: bool, lines: usize) -> u8 {
 
 #[cfg(unix)]
 fn follow_loop(ctx: &mut Ctx<'_>, view: &dblocal_core::service::InstanceView) -> u8 {
-    use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
     let stop = Arc::new(AtomicBool::new(false));
     let stop2 = stop.clone();
     let handle = std::thread::spawn(move || {
@@ -70,7 +70,11 @@ fn follow_loop(ctx: &mut Ctx<'_>, view: &dblocal_core::service::InstanceView) ->
                 let joined = chunk.join("\n");
                 if joined != last_seen {
                     // print only new suffix; compute common prefix lines
-                    let old: Vec<&str> = if last_seen.is_empty() { vec![] } else { last_seen.split('\n').collect() };
+                    let old: Vec<&str> = if last_seen.is_empty() {
+                        vec![]
+                    } else {
+                        last_seen.split('\n').collect()
+                    };
                     let new_lines: Vec<&str> = joined.split('\n').collect();
                     // find overlap
                     let start = common_suffix_prefix(&old, &new_lines);
@@ -99,7 +103,11 @@ fn follow_loop(ctx: &mut Ctx<'_>, view: &dblocal_core::service::InstanceView) ->
             Ok(chunk) => {
                 let joined = chunk.join("\n");
                 if joined != last_seen {
-                    let old: Vec<&str> = if last_seen.is_empty() { vec![] } else { last_seen.split('\n').collect() };
+                    let old: Vec<&str> = if last_seen.is_empty() {
+                        vec![]
+                    } else {
+                        last_seen.split('\n').collect()
+                    };
                     let new_lines: Vec<&str> = joined.split('\n').collect();
                     let start = common_suffix_prefix(&old, &new_lines);
                     for line in &new_lines[start..] {

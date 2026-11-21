@@ -1,7 +1,7 @@
 use dblocal_core::model::InstanceStatus;
 
 use crate::cli::{EXIT_GENERAL, EXIT_OK};
-use crate::commands::{find_instance, Ctx};
+use crate::commands::{Ctx, find_instance};
 use crate::output::{self, status_label};
 
 pub fn run(ctx: &mut Ctx<'_>, name: &str) -> u8 {

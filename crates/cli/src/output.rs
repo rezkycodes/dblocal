@@ -6,9 +6,9 @@
 use std::io::{IsTerminal, Write};
 use std::time::Duration;
 
+use dblocal_core::DblError;
 use dblocal_core::model::InstanceStatus;
 use dblocal_core::service::{InstanceView, OperationId, ServiceEvent, UserFacingError};
-use dblocal_core::DblError;
 
 use crate::cli::{EXIT_BAD_ARGS, EXIT_ENGINE_FAILED, EXIT_GENERAL, EXIT_NOT_FOUND};
 
@@ -167,22 +167,35 @@ pub fn wait_operation_rx(
 
 /// Waits for an instance to reach a desired status or for an operation to fail.
 /// Also observes the operation finish; `ok_statuses` determines success on finish.
+pub struct StatusWait<'a> {
+    pub op: &'a OperationId,
+    pub instance_id: &'a dblocal_core::model::InstanceId,
+    pub ok_statuses: &'a [InstanceStatus],
+    pub timeout: Duration,
+    pub show_progress: bool,
+}
+
 pub fn wait_for_status_rx(
     rx: &mut tokio::sync::broadcast::Receiver<ServiceEvent>,
     service: &dyn dblocal_core::service::DblService,
-    op: &OperationId,
-    instance_id: &dblocal_core::model::InstanceId,
-    ok_statuses: &[InstanceStatus],
-    timeout: Duration,
+    wait: StatusWait<'_>,
     err_out: &mut dyn Write,
-    show_progress: bool,
 ) -> Result<InstanceStatus, UserFacingError> {
+    let StatusWait {
+        op,
+        instance_id,
+        ok_statuses,
+        timeout,
+        show_progress,
+    } = wait;
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_time()
         .build()
-        .map_err(|e| UserFacingError::from(&DblError::Engine {
-            reason: format!("runtime: {e}"),
-        }))?;
+        .map_err(|e| {
+            UserFacingError::from(&DblError::Engine {
+                reason: format!("runtime: {e}"),
+            })
+        })?;
     rt.block_on(async {
         let deadline = tokio::time::Instant::now() + timeout;
         let mut last_status: Option<InstanceStatus> = None;
@@ -223,20 +236,21 @@ pub fn wait_for_status_rx(
                         }));
                     }
                 }
-                Ok(Ok(ServiceEvent::OperationFinished { id, result })) if &id == op => match result {
+                Ok(Ok(ServiceEvent::OperationFinished { id, result })) if &id == op => match result
+                {
                     Ok(()) => {
-                        if let Ok(views) = service.list_instances() {
-                            if let Some(v) = views.into_iter().find(|v| &v.id == instance_id) {
-                                if ok_statuses.contains(&v.status) {
-                                    return Ok(v.status);
-                                }
-                                last_status = Some(v.status);
+                        if let Ok(views) = service.list_instances()
+                            && let Some(v) = views.into_iter().find(|v| &v.id == instance_id)
+                        {
+                            if ok_statuses.contains(&v.status) {
+                                return Ok(v.status);
                             }
+                            last_status = Some(v.status);
                         }
-                        if let Some(status) = last_status {
-                            if ok_statuses.contains(&status) {
-                                return Ok(status);
-                            }
+                        if let Some(status) = last_status
+                            && ok_statuses.contains(&status)
+                        {
+                            return Ok(status);
                         }
                         return Ok(last_status.unwrap_or(InstanceStatus::Running));
                     }

@@ -3,7 +3,7 @@ use std::time::Duration;
 use dblocal_core::model::InstanceStatus;
 
 use crate::cli::{EXIT_GENERAL, EXIT_OK};
-use crate::commands::{find_instance, Ctx};
+use crate::commands::{Ctx, find_instance};
 use crate::messages;
 use crate::output;
 
@@ -22,16 +22,14 @@ pub fn run(ctx: &mut Ctx<'_>, name: &str) -> u8 {
         Ok(op) => op,
         Err(e) => return output::report_error(ctx.err, &e),
     };
-    match output::wait_for_status_rx(
-        &mut rx,
-        ctx.service,
-        &op,
-        &view.id,
-        &[InstanceStatus::Stopped],
-        Duration::from_secs(120),
-        ctx.err,
-        ctx.stderr_is_tty,
-    ) {
+    let wait = output::StatusWait {
+        op: &op,
+        instance_id: &view.id,
+        ok_statuses: &[InstanceStatus::Stopped],
+        timeout: Duration::from_secs(120),
+        show_progress: ctx.stderr_is_tty,
+    };
+    match output::wait_for_status_rx(&mut rx, ctx.service, wait, ctx.err) {
         Ok(_) => {
             output::stderr_line(ctx.err, messages::MSG_READY);
             EXIT_OK

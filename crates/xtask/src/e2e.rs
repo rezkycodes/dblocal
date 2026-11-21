@@ -18,8 +18,23 @@ use std::time::{Duration, Instant};
 /// Wall-clock limit for one e2e target.
 const E2E_LIMIT: Duration = Duration::from_secs(45 * 60);
 
+/// One e2e test binary: its package and its target name.
+struct Target {
+    package: &'static str,
+    test: &'static str,
+}
+
 /// The e2e test binaries to run.
-const TARGETS: &[&str] = &["service_e2e", "cli_e2e"];
+const TARGETS: &[Target] = &[
+    Target {
+        package: "dblocal-core",
+        test: "service_e2e",
+    },
+    Target {
+        package: "dblocal-cli",
+        test: "cli_e2e",
+    },
+];
 
 /// Prefix every e2e temp home uses, so a leaked engine is identifiable.
 const TEMP_HOME_PREFIX: &str = "dblocal-e2e-";
@@ -29,15 +44,16 @@ pub fn run() -> ExitCode {
     let mut failed = false;
     for target in TARGETS {
         println!(
-            "==> cargo test -p dblocal-core --test {target} -- --ignored --test-threads=1 --nocapture"
+            "==> cargo test -p {} --test {} -- --ignored --test-threads=1 --nocapture",
+            target.package, target.test
         );
         let mut command = Command::new("cargo");
         command.args([
             "test",
             "-p",
-            "dblocal-core",
+            target.package,
             "--test",
-            target,
+            target.test,
             "--",
             "--ignored",
             "--test-threads=1",
@@ -46,7 +62,7 @@ pub fn run() -> ExitCode {
         // The tests refuse to run without this switch; set it here so
         // `cargo xtask e2e` is the one command a developer needs.
         command.env("DBLOCAL_E2E", "1");
-        match run_target(target, command) {
+        match run_target(target.test, command) {
             Ok(true) => {}
             Ok(false) => failed = true,
             Err(failure) => {

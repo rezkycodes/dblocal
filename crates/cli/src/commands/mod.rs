@@ -43,7 +43,11 @@ pub fn dispatch(ctx: &mut Ctx<'_>, command: &Command) -> u8 {
             no_password,
         } => create::run(ctx, engine, version, name, *port, *no_password),
         Command::Delete { name, yes, purge } => delete::run(ctx, name, *yes, *purge),
-        Command::Logs { name, follow, lines } => logs::run(ctx, name, *follow, *lines),
+        Command::Logs {
+            name,
+            follow,
+            lines,
+        } => logs::run(ctx, name, *follow, *lines),
     }
 }
 
@@ -61,7 +65,10 @@ pub fn find_instance(
         None => {
             output::stderr_line(
                 ctx.err,
-                &format!("[DBL-1002] {}: {name}", crate::messages::ERR_INSTANCE_NOT_FOUND),
+                &format!(
+                    "[DBL-1002] {}: {name}",
+                    crate::messages::ERR_INSTANCE_NOT_FOUND
+                ),
             );
             Err(crate::cli::EXIT_NOT_FOUND)
         }

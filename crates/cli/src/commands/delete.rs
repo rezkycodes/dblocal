@@ -3,7 +3,7 @@ use std::io;
 use dblocal_core::model::DeleteMode;
 
 use crate::cli::{EXIT_BAD_ARGS, EXIT_GENERAL, EXIT_OK};
-use crate::commands::{find_instance, Ctx};
+use crate::commands::{Ctx, find_instance};
 use crate::messages;
 use crate::output;
 
@@ -15,7 +15,10 @@ pub fn run(ctx: &mut Ctx<'_>, name: &str, yes: bool, purge: bool) -> u8 {
 
     if !yes {
         if !ctx.is_interactive {
-            output::stderr_line(ctx.err, &format!("[DBL-1001] {}", messages::ERR_DELETE_NEEDS_YES));
+            output::stderr_line(
+                ctx.err,
+                &format!("[DBL-1001] {}", messages::ERR_DELETE_NEEDS_YES),
+            );
             return EXIT_BAD_ARGS;
         }
         output::stderr_line(ctx.err, messages::PROMPT_DELETE);
@@ -25,12 +28,19 @@ pub fn run(ctx: &mut Ctx<'_>, name: &str, yes: bool, purge: bool) -> u8 {
             return EXIT_BAD_ARGS;
         }
         if input.trim() != name {
-            output::stderr_line(ctx.err, &format!("[DBL-1001] {}", messages::ERR_NAME_CONFIRMATION));
+            output::stderr_line(
+                ctx.err,
+                &format!("[DBL-1001] {}", messages::ERR_NAME_CONFIRMATION),
+            );
             return EXIT_BAD_ARGS;
         }
     }
 
-    let mode = if purge { DeleteMode::PurgeData } else { DeleteMode::ArchiveData };
+    let mode = if purge {
+        DeleteMode::PurgeData
+    } else {
+        DeleteMode::ArchiveData
+    };
     let mut rx = ctx.service.subscribe();
     let op = match ctx.service.delete_instance(&view.id, mode) {
         Ok(op) => op,
@@ -45,7 +55,9 @@ pub fn run(ctx: &mut Ctx<'_>, name: &str, yes: bool, purge: bool) -> u8 {
                 // find archive path best-effort
                 match ctx.service.list_archives() {
                     Ok(archives) => {
-                        if let Some(a) = archives.iter().find(|a| a.instance_name().as_str() == name) {
+                        if let Some(a) =
+                            archives.iter().find(|a| a.instance_name().as_str() == name)
+                        {
                             output::stderr_line(
                                 ctx.err,
                                 &format!("{} {}", messages::MSG_ARCHIVED_TO, a.path().display()),
