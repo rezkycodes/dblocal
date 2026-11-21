@@ -7,8 +7,8 @@
 use dblocal_core::model::{AuthMode, DeleteMode, EngineKey, InstanceId, Port, Runtime};
 use dblocal_core::service::{CatalogView, InstanceView, UriFormat};
 use dblocal_core::strings;
-use gpui_kit::component::{command::CommandState, input::InputState};
 use gpui_kit::component::ActiveTheme as _;
+use gpui_kit::component::{command::CommandState, input::InputState};
 use gpui_kit::{App, Context, Entity, SharedString, Window};
 
 use crate::format::{self, PaletteAction};
@@ -233,8 +233,7 @@ impl Workspace {
     /// Next free port for an instance's engine, falling back to its port + 1.
     pub(crate) fn instance_port_proposal(&self, id: &InstanceId) -> u16 {
         let engine = self.instance(id).map(|view| view.engine);
-        let suggestion = engine
-            .and_then(|engine| self.service_suggest_port(engine));
+        let suggestion = engine.and_then(|engine| self.service_suggest_port(engine));
         match self.instance(id) {
             Some(view) => format::suggested_fix_port(view, suggestion),
             None => suggestion.unwrap_or(0),
@@ -326,6 +325,11 @@ impl Workspace {
     /// The offline/stale catalog strip above the workspace (`F-CAT-01`).
     pub(crate) fn offline_banner(&self, cx: &App) -> Option<gpui_kit::AnyElement> {
         super::status_bar::offline_banner(self, cx.theme())
+    }
+
+    /// The stale-catalog strip shown inside the centre pane (`F-CAT-01`).
+    pub(crate) fn catalog_banner_el(&self, cx: &App) -> Option<gpui_kit::AnyElement> {
+        super::status_bar::stale_banner(self, cx.theme())
     }
 
     pub(crate) fn version(&self) -> &'static str {

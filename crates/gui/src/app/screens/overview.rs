@@ -6,21 +6,21 @@
 
 use dblocal_core::model::{AuthMode, InstanceStatus};
 use dblocal_core::strings;
-use gpui_kit::component::{ActiveTheme, Sizable, Theme, h_flex, v_flex};
+use gpui_kit::assets::IconName;
 use gpui_kit::component::button::Button;
 use gpui_kit::component::button::ButtonVariants;
 use gpui_kit::component::checkbox::Checkbox;
-use gpui_kit::assets::IconName;
 use gpui_kit::component::label::Label;
+use gpui_kit::component::{ActiveTheme, Sizable, Theme, h_flex, v_flex};
 use gpui_kit::prelude::*;
 use gpui_kit::{Context, IntoElement, ParentElement, Styled, div, px};
 
 use crate::format;
 
 use super::Workspace;
-use crate::app::components::{card, icon, kv, mono_themed};
 use super::hint_row;
 use super::page;
+use crate::app::components::{card, icon, kv, mono_themed};
 
 impl Workspace {
     pub(crate) fn render_overview(
@@ -36,8 +36,18 @@ impl Workspace {
                     .gap_4()
                     .items_start()
                     .flex_wrap()
-                    .child(div().flex_1().min_w(px(320.)).child(self.render_detail(view, &theme)))
-                    .child(div().flex_1().min_w(px(320.)).child(self.render_process(view, &theme, cx))),
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w(px(320.))
+                            .child(self.render_detail(view, &theme)),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w(px(320.))
+                            .child(self.render_process(view, &theme, cx)),
+                    ),
             )
             .child(self.render_recent_logs(view, &theme, cx))
     }
@@ -75,10 +85,7 @@ impl Workspace {
             .border_color(theme.table_row_border)
             .font_family(mono_font)
             .text_xs()
-            .child(
-                Label::new(strings::UI_OVERVIEW_DOTENV)
-                    .text_color(theme.muted_foreground),
-            );
+            .child(Label::new(strings::UI_OVERVIEW_DOTENV).text_color(theme.muted_foreground));
         for row in self.dotenv_rows(&view.id) {
             env_block = env_block.child(match row.key {
                 Some(key) => h_flex()
@@ -153,7 +160,12 @@ impl Workspace {
                             .label(strings::UI_COPY_URI)
                             .tooltip(strings::UI_COPY_URI)
                             .on_click(cx.listener(move |this, _, window, cx| {
-                                this.copy_uri(id_copy.clone(), dblocal_core::service::UriFormat::Uri, window, cx);
+                                this.copy_uri(
+                                    id_copy.clone(),
+                                    dblocal_core::service::UriFormat::Uri,
+                                    window,
+                                    cx,
+                                );
                             })),
                     )
                     .child(
@@ -228,11 +240,7 @@ impl Workspace {
                     .truncate(),
                 theme,
             ))
-            .child(kv(
-                strings::UI_OVERVIEW_DATA_SIZE,
-                Label::new(size),
-                theme,
-            ))
+            .child(kv(strings::UI_OVERVIEW_DATA_SIZE, Label::new(size), theme))
     }
 
     /// The Process card: PID, health, process mode, credential reference and
@@ -301,18 +309,21 @@ impl Workspace {
         let buffer = self.log_lines(&view.id);
         let total = buffer.len();
         let start = total.saturating_sub(5);
-        let mut lines = v_flex().font_family(theme.mono_font_family.clone()).text_xs();
+        let mut lines = v_flex()
+            .font_family(theme.mono_font_family.clone())
+            .text_xs();
         for index in start..total {
             if let Some(line) = buffer.line(index) {
                 lines = lines.child(
-                    Label::new(line.clone()).py_0p5().text_color(theme.foreground),
+                    Label::new(line.clone())
+                        .py_0p5()
+                        .text_color(theme.foreground),
                 );
             }
         }
         if total == 0 {
-            lines = lines.child(
-                Label::new(strings::UI_LOGS_EMPTY).text_color(theme.muted_foreground),
-            );
+            lines =
+                lines.child(Label::new(strings::UI_LOGS_EMPTY).text_color(theme.muted_foreground));
         }
         card(Some(strings::UI_OVERVIEW_RECENT_LOGS), theme)
             .child(

@@ -24,10 +24,15 @@ use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Instant;
 
-use dblocal_core::model::{AuthMode, CatalogStatus, DeleteMode, EngineKey, InstanceId, Port, Runtime};
+use dblocal_core::model::{
+    AuthMode, CatalogStatus, DeleteMode, EngineKey, InstanceId, Port, Runtime,
+};
 use dblocal_core::service::{CatalogView, DblService, InstanceView, UriFormat, UserFacingError};
 use dblocal_core::strings;
-use gpui_kit::component::{ActiveTheme, WindowExt, command::CommandState, h_flex, input::InputState, notification::Notification};
+use gpui_kit::component::{
+    ActiveTheme, WindowExt, command::CommandState, h_flex, input::InputState,
+    notification::Notification,
+};
 use gpui_kit::{
     App, AppContext as _, ClipboardItem, Context, Entity, FocusHandle, Focusable, IntoElement,
     ParentElement, Render, SharedString, Subscription, Window, div, prelude::*,
@@ -125,9 +130,8 @@ impl Workspace {
         let runtimes = service.list_runtimes().unwrap_or_default();
         let focus_handle = cx.focus_handle();
         let command_state = cx.new(|cx| CommandState::new(window, cx));
-        let filter_input = cx.new(|cx| {
-            InputState::new(window, cx).placeholder(strings::UI_DOCK_FILTER.to_owned())
-        });
+        let filter_input = cx
+            .new(|cx| InputState::new(window, cx).placeholder(strings::UI_DOCK_FILTER.to_owned()));
         cx.observe(&filter_input, |_, _, cx| cx.notify()).detach();
         let mut workspace = Self {
             service,
@@ -421,12 +425,10 @@ impl Workspace {
         let engine = EngineKey::Postgresql;
         let (version, port) = self.default_engine_version(engine);
         let suggested = self.service.suggest_port(engine).ok();
-        let name_input = cx.new(|cx| {
-            InputState::new(window, cx).placeholder(strings::UI_FIELD_NAME.to_owned())
-        });
-        let port_input = cx.new(|cx| {
-            InputState::new(window, cx).placeholder(strings::UI_FIELD_PORT.to_owned())
-        });
+        let name_input =
+            cx.new(|cx| InputState::new(window, cx).placeholder(strings::UI_FIELD_NAME.to_owned()));
+        let port_input =
+            cx.new(|cx| InputState::new(window, cx).placeholder(strings::UI_FIELD_PORT.to_owned()));
         let name = crate::format::suggested_name(engine, &version);
         name_input.update(cx, |state, cx| state.set_value(name, window, cx));
         if let Some(port) = suggested.or(port) {
@@ -512,9 +514,7 @@ impl Workspace {
             input.update(cx, |state, cx| state.set_value(name.to_owned(), window, cx));
         }
         if let Some(input) = port_input.filter(|_| !port.is_empty()) {
-            input.update(cx, |state, cx| {
-                state.set_value(port.to_owned(), window, cx)
-            });
+            input.update(cx, |state, cx| state.set_value(port.to_owned(), window, cx));
         }
     }
 
@@ -642,7 +642,10 @@ impl Workspace {
 
     /// One service call, kept here so `workspace_api` needs no field access.
     pub(crate) fn service_suggest_port(&self, engine: EngineKey) -> Option<u16> {
-        self.service.suggest_port(engine).ok().map(|port| port.get())
+        self.service
+            .suggest_port(engine)
+            .ok()
+            .map(|port| port.get())
     }
 
     /// Reads the connection URI for one instance in the requested format.
@@ -679,7 +682,6 @@ impl Workspace {
         self.delete_target = None;
         self.delete_name_input = None;
     }
-
 }
 
 impl Focusable for Workspace {
@@ -731,9 +733,7 @@ impl Render for Workspace {
                 cx.notify();
             }))
             .child(self.render_title_bar(cx))
-            .when_some(self.offline_banner(cx), |this, banner| {
-                this.child(banner)
-            })
+            .when_some(self.offline_banner(cx), |this, banner| this.child(banner))
             .child(
                 h_flex()
                     .flex_1()
@@ -746,7 +746,9 @@ impl Render for Workspace {
             .child(self.render_status_bar(cx))
             .when(creating, |this| this.child(create_dialog::render(self, cx)))
             .when(deleting, |this| this.child(delete_dialog::render(self, cx)))
-            .when(self.palette_open, |this| this.child(palette::render(self, cx)))
+            .when(self.palette_open, |this| {
+                this.child(palette::render(self, cx))
+            })
     }
 }
 
@@ -769,4 +771,3 @@ pub(crate) fn masked_env_rows(block: &str, revealed: bool) -> Vec<crate::format:
     };
     crate::format::env_lines(&text)
 }
-

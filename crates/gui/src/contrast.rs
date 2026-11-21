@@ -290,7 +290,10 @@ pub(crate) fn check_all() -> (Vec<CheckedPair>, Vec<CheckedPair>) {
 /// clears 4.5:1 here clears it in every badge, banner and card that uses it.
 /// The derived surfaces are the muted and accent fills a card or a selection
 /// row paints behind text.
-pub(crate) fn derived_pairs(theme_name: &str, colors: &HashMap<String, String>) -> Vec<CheckedPair> {
+pub(crate) fn derived_pairs(
+    theme_name: &str,
+    colors: &HashMap<String, String>,
+) -> Vec<CheckedPair> {
     const DERIVED_SURFACES: [&str; 2] = ["muted.background", "sidebar.accent.background"];
     // `gpui_kit` reads `theme.success` from `success.background`, so that token
     // is the one the views paint status text with; the same holds for the rest.
@@ -454,7 +457,11 @@ mod tests {
                 }
             }
         }
-        assert!(failing.is_empty(), "derived contrast failures:\n{}", failing.join("\n"));
+        assert!(
+            failing.is_empty(),
+            "derived contrast failures:\n{}",
+            failing.join("\n")
+        );
     }
 
     #[test]
@@ -492,7 +499,10 @@ mod tests {
         let themes = parse_themes();
         for (name, colours) in &themes {
             let pairs = derived_pairs(name, colours);
-            assert!(pairs.len() >= 14, "{name}: expected every text/surface pair");
+            assert!(
+                pairs.len() >= 14,
+                "{name}: expected every text/surface pair"
+            );
             assert!(
                 pairs.iter().any(|p| p.label.contains("muted.foreground")
                     && p.label.contains("muted.background")),

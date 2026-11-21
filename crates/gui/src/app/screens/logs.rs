@@ -7,11 +7,13 @@
 
 use dblocal_core::model::InstanceStatus;
 use dblocal_core::strings;
-use gpui_kit::component::{ActiveTheme, Sizable, Theme, WindowExt, h_flex, notification::Notification, v_flex};
+use gpui_kit::assets::IconName;
 use gpui_kit::component::button::Button;
 use gpui_kit::component::button::ButtonVariants;
-use gpui_kit::assets::IconName;
 use gpui_kit::component::label::Label;
+use gpui_kit::component::{
+    ActiveTheme, Sizable, Theme, WindowExt, h_flex, notification::Notification, v_flex,
+};
 use gpui_kit::prelude::*;
 use gpui_kit::{Context, IntoElement, ParentElement, SharedString, Styled, div, px};
 
@@ -19,8 +21,8 @@ use crate::format;
 use crate::logs::LogBuffer;
 
 use super::Workspace;
-use crate::app::components::{banner, icon, mono_themed};
 use super::page;
+use crate::app::components::{banner, icon, mono_themed};
 
 impl Workspace {
     pub(crate) fn render_logs(
@@ -152,15 +154,11 @@ impl Workspace {
                                     .text_sm()
                                     .font_weight(gpui_kit::FontWeight::SEMIBOLD),
                             )
-                            .child(
-                                Label::new(follow_word)
-                                    .text_xs()
-                                    .text_color(if following {
-                                        theme.success
-                                    } else {
-                                        theme.muted_foreground
-                                    }),
-                            ),
+                            .child(Label::new(follow_word).text_xs().text_color(if following {
+                                theme.success
+                            } else {
+                                theme.muted_foreground
+                            })),
                     )
                     .child(
                         h_flex()
@@ -217,7 +215,10 @@ impl Workspace {
                 .child(mono_themed(path, theme))
                 .child(Label::new(strings::UI_LOGS_ROTATION))
                 .child(div().flex_1())
-                .child(Label::new(format!("{count} {}", strings::UI_LOGS_LINE_COUNT))),
+                .child(Label::new(format!(
+                    "{count} {}",
+                    strings::UI_LOGS_LINE_COUNT
+                ))),
         )
     }
 
@@ -238,11 +239,7 @@ impl Workspace {
                         .id(("log-line", index))
                         .h(px(18.))
                         .px(px(8.))
-                        .child(
-                            Label::new(text)
-                                .font_family(mono.clone())
-                                .text_xs(),
-                        )
+                        .child(Label::new(text).font_family(mono.clone()).text_xs())
                 })
                 .collect::<Vec<_>>()
         })

@@ -7,11 +7,11 @@
 //! `false` until Wave 2 wires it, and the status bar says so.
 
 use dblocal_core::strings;
-use gpui_kit::component::{ActiveTheme, Sizable, TitleBar, h_flex};
+use gpui_kit::assets::IconName;
 use gpui_kit::component::button::Button;
 use gpui_kit::component::button::ButtonVariants;
-use gpui_kit::assets::IconName;
 use gpui_kit::component::label::Label;
+use gpui_kit::component::{ActiveTheme, Sizable, TitleBar, h_flex};
 use gpui_kit::prelude::*;
 use gpui_kit::{App, Context, IntoElement, ParentElement, Styled, div, px};
 

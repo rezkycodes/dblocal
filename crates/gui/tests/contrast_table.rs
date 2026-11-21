@@ -8,8 +8,8 @@ fn theme_contrast_table_is_aa_and_printable() {
     match dblocal_gui::verify_theme_contrast() {
         Ok(table) => {
             println!("\n{table}");
-            assert!(table.contains("DBLocal One Dark"));
-            assert!(table.contains("DBLocal One Light"));
+            assert!(table.contains("DBLocal Dark"));
+            assert!(table.contains("DBLocal Light"));
         }
         Err(failures) => panic!("contrast failures:\n{failures}"),
     }

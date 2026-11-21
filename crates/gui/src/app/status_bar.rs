@@ -5,10 +5,10 @@
 
 use dblocal_core::model::CatalogStatus;
 use dblocal_core::strings;
-use gpui_kit::component::{ActiveTheme, Sizable, Theme, h_flex, popover::Popover};
 use gpui_kit::component::button::{Button, ButtonVariants};
-use gpui_kit::component::progress::Progress;
 use gpui_kit::component::label::Label;
+use gpui_kit::component::progress::Progress;
+use gpui_kit::component::{ActiveTheme, Sizable, Theme, h_flex, popover::Popover};
 use gpui_kit::prelude::*;
 use gpui_kit::{AnyElement, Context, IntoElement, ParentElement, Styled, div, px};
 
@@ -44,10 +44,20 @@ pub(super) fn render(workspace: &Workspace, cx: &mut Context<Workspace>) -> impl
         .border_color(theme.status_bar_border)
         .text_xs()
         .text_color(theme.muted_foreground)
-        .child(count_pill(counts.running, &strings::UI_RUNNING, &theme, false))
-        .child(count_pill(counts.stopped, &strings::UI_STOPPED, &theme, false))
+        .child(count_pill(
+            counts.running,
+            strings::UI_RUNNING,
+            &theme,
+            false,
+        ))
+        .child(count_pill(
+            counts.stopped,
+            strings::UI_STOPPED,
+            &theme,
+            false,
+        ))
         .when(counts.failed > 0, |this| {
-            this.child(count_pill(counts.failed, &strings::UI_FAILED, &theme, true))
+            this.child(count_pill(counts.failed, strings::UI_FAILED, &theme, true))
         })
         .child(
             h_flex()
@@ -69,13 +79,11 @@ pub(super) fn render(workspace: &Workspace, cx: &mut Context<Workspace>) -> impl
                 ))),
         )
         .child(Label::new(platform))
-        .child(
-            Label::new(if workspace.tray_available() {
-                strings::UI_TRAY_ACTIVE
-            } else {
-                strings::UI_TRAY_UNAVAILABLE
-            }),
-        )
+        .child(Label::new(if workspace.tray_available() {
+            strings::UI_TRAY_ACTIVE
+        } else {
+            strings::UI_TRAY_UNAVAILABLE
+        }))
         .child(downloads_popover(workspace, &theme, cx))
         .child(Label::new(format!(
             "{}{}",
@@ -174,13 +182,8 @@ fn downloads_popover(
         .content(move |_, _, cx| {
             let rows = rows_for_popover.clone();
             let theme = cx.theme().clone();
-            let mut column = gpui_kit::component::v_flex()
-                .gap_2()
-                .p_3()
-                .min_w(px(280.));
-            column = column.child(
-                Label::new(strings::UI_DOWNLOADS).text_sm(),
-            );
+            let mut column = gpui_kit::component::v_flex().gap_2().p_3().min_w(px(280.));
+            column = column.child(Label::new(strings::UI_DOWNLOADS).text_sm());
             if rows.is_empty() {
                 column = column.child(
                     Label::new(strings::UI_NO_DOWNLOADS)
@@ -219,7 +222,7 @@ pub(crate) fn offline_banner(workspace: &Workspace, theme: &Theme) -> Option<Any
     if workspace.catalog().status != CatalogStatus::Offline {
         return None;
     }
-    Some(
+    Some(IntoElement::into_any_element(
         h_flex()
             .id("offline-banner")
             .w_full()
@@ -231,6 +234,27 @@ pub(crate) fn offline_banner(workspace: &Workspace, theme: &Theme) -> Option<Any
             .text_xs()
             .child(icon(IconName::WifiOff, 14.0, theme.danger_foreground))
             .child(Label::new(strings::CATALOG_OFFLINE)),
-    )
-    .map(IntoElement::into_any_element)
+    ))
+}
+
+/// The stale-catalog banner shown at the top of the centre pane (`F-CAT-01`).
+pub(crate) fn stale_banner(workspace: &Workspace, theme: &Theme) -> Option<AnyElement> {
+    if workspace.catalog().status != CatalogStatus::Stale {
+        return None;
+    }
+    Some(IntoElement::into_any_element(
+        h_flex()
+            .id("catalog-stale-banner")
+            .w_full()
+            .gap_2()
+            .items_center()
+            .px(px(12.))
+            .py(px(4.))
+            .bg(crate::theme::tokens::banner_fill(theme.warning))
+            .border_b_1()
+            .border_color(crate::theme::tokens::banner_border(theme.warning))
+            .text_xs()
+            .child(icon(IconName::Info, 14.0, theme.warning))
+            .child(Label::new(strings::CATALOG_STALE.to_owned()).text_color(theme.warning)),
+    ))
 }

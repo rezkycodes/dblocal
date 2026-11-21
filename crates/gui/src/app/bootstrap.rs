@@ -32,8 +32,7 @@ pub fn run_with_service(service: Arc<dyn DblService>) -> dblocal_core::Result<()
             let bounds = gpui_kit::Bounds::centered(None, size(px(1280.), px(820.)), cx);
             let options = WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
-                window_min_size: Some(size(px(900.), px(600.)),
-                ),
+                window_min_size: Some(size(px(900.), px(600.))),
                 app_id: Some("dev.dblocal.DBLocal".to_owned()),
                 ..TitleBar::window_options()
             };

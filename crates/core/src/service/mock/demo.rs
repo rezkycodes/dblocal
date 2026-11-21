@@ -194,7 +194,14 @@ impl MockService {
                         code: failure.code.to_owned(),
                         message: crate::strings::ERR_PORT_IN_USE.to_owned(),
                         diagnosis: failure.diagnosis,
-                        log_tail: entry.log.iter().rev().take(4).rev().map(|l| (*l).to_owned()).collect(),
+                        log_tail: entry
+                            .log
+                            .iter()
+                            .rev()
+                            .take(4)
+                            .rev()
+                            .map(|l| (*l).to_owned())
+                            .collect(),
                     },
                 );
             }
@@ -210,8 +217,10 @@ impl MockService {
         if !g.instances.contains_key(id) {
             return;
         }
-        g.logs
-            .insert(id.clone(), VecDeque::from_iter(lines.iter().map(|l| (*l).to_owned())));
+        g.logs.insert(
+            id.clone(),
+            VecDeque::from_iter(lines.iter().map(|l| (*l).to_owned())),
+        );
     }
 
     /// Attaches a failure detail to a `failed` instance, as a bad start would.
@@ -306,7 +315,10 @@ mod tests {
             "wp-blog",
             "cache-dev",
         ] {
-            assert!(names.contains(&expected.to_owned()), "missing {expected}: {names:?}");
+            assert!(
+                names.contains(&expected.to_owned()),
+                "missing {expected}: {names:?}"
+            );
         }
     }
 
@@ -352,7 +364,11 @@ mod tests {
             .find(|view| view.name == "pg-app")
             .expect("pg-app is seeded");
         let lines = service.tail_logs(&app.id, 100).expect("log tail");
-        assert!(lines.iter().any(|line| line.contains("ready to accept connections")));
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("ready to accept connections"))
+        );
     }
 
     #[test]
@@ -437,4 +453,3 @@ mod tests {
         }
     }
 }
-

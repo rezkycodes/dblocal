@@ -6,11 +6,11 @@
 
 use dblocal_core::model::EngineKey;
 use dblocal_core::strings;
-use gpui_kit::component::{ActiveTheme, Sizable, Theme, h_flex, input::Input, v_flex};
+use gpui_kit::assets::IconName;
 use gpui_kit::component::button::Button;
 use gpui_kit::component::button::ButtonVariants;
-use gpui_kit::assets::IconName;
 use gpui_kit::component::label::Label;
+use gpui_kit::component::{ActiveTheme, Sizable, Theme, h_flex, input::Input, v_flex};
 use gpui_kit::prelude::*;
 use gpui_kit::{Context, Div, IntoElement, ParentElement, SharedString, Styled, div, px};
 
@@ -29,7 +29,12 @@ impl Workspace {
         let visible = format::filter_instances(&self.state.instances, &query);
         let groups = format::group_by_engine_refs(&visible);
 
-        let mut tree = v_flex().id("instance-tree").gap_1().flex_1().min_h_0().overflow_y_scroll();
+        let mut tree = v_flex()
+            .id("instance-tree")
+            .gap_1()
+            .flex_1()
+            .min_h_0()
+            .overflow_y_scroll();
         if groups.is_empty() {
             tree = tree.child(
                 Label::new(strings::UI_DOCK_NO_MATCHES)
@@ -183,11 +188,7 @@ impl Workspace {
                 v_flex()
                     .flex_1()
                     .min_w_0()
-                    .child(
-                        Label::new(view.name.clone())
-                            .text_sm()
-                            .truncate(),
-                    )
+                    .child(Label::new(view.name.clone()).text_sm().truncate())
                     .child(
                         Label::new(format::status_label(view.status))
                             .text_size(px(10.))
@@ -212,12 +213,13 @@ impl Workspace {
     /// The runtime list: title, instance count, "tak terpakai" when unused.
     fn render_runtimes(&self, theme: &Theme) -> impl IntoElement {
         let rows = format::runtime_rows(self.runtimes(), &self.state.instances);
-        let mut list = v_flex().id("runtime-list").gap_0p5().child(
-            div()
-                .px(px(8.))
-                .pb_1()
-                .child(section_label(strings::UI_DOCK_RUNTIMES).text_color(theme.muted_foreground)),
-        );
+        let mut list =
+            v_flex()
+                .id("runtime-list")
+                .gap_0p5()
+                .child(div().px(px(8.)).pb_1().child(
+                    section_label(strings::UI_DOCK_RUNTIMES).text_color(theme.muted_foreground),
+                ));
         if rows.is_empty() {
             list = list.child(
                 Label::new(strings::UI_RUNTIME_UNUSED)
@@ -239,11 +241,7 @@ impl Workspace {
                     .gap_2()
                     .child(icon(IconName::Package, 14.0, theme.muted_foreground))
                     .child(Label::new(row.title).flex_1().text_xs())
-                    .child(
-                        Label::new(row.usage)
-                            .text_xs()
-                            .text_color(usage_colour),
-                    ),
+                    .child(Label::new(row.usage).text_xs().text_color(usage_colour)),
             );
         }
         list

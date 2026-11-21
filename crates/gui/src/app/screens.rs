@@ -14,15 +14,16 @@ mod databases;
 mod logs;
 mod overview;
 
-
 use dblocal_core::model::InstanceStatus;
 use dblocal_core::strings;
-use gpui_kit::component::{
-    ActiveTheme, Disableable, Sizable, Theme, h_flex, tab::{Tab, TabBar}, v_flex,
-};
+use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::label::Label;
-use gpui_kit::assets::IconName;
+use gpui_kit::component::{
+    ActiveTheme, Disableable, Sizable, Theme, h_flex,
+    tab::{Tab, TabBar},
+    v_flex,
+};
 use gpui_kit::prelude::*;
 use gpui_kit::{Context, IntoElement, ParentElement, SharedString, Styled, div, px};
 
@@ -47,6 +48,7 @@ impl Workspace {
             .min_w_0()
             .bg(theme.background)
             .child(self.render_instance_tabs(&theme, cx))
+            .when_some(self.catalog_banner_el(cx), |this, b| this.child(b))
             .child(self.render_selected(cx))
             .into_any_element()
     }
@@ -113,7 +115,8 @@ impl Workspace {
                     .border_color(theme.border)
                     .cursor_pointer()
                     .when(active, |s| {
-                        s.bg(theme.tab_active).text_color(theme.tab_active_foreground)
+                        s.bg(theme.tab_active)
+                            .text_color(theme.tab_active_foreground)
                     })
                     .when(!active, |s| {
                         s.text_color(theme.tab_foreground)
@@ -301,7 +304,11 @@ impl Workspace {
                         this.set_inner_tab(InnerTab::from_index(*index));
                         cx.notify();
                     }))
-                    .children(InnerTab::ALL.iter().map(|tab| Tab::new().label(tab.label()))),
+                    .children(
+                        InnerTab::ALL
+                            .iter()
+                            .map(|tab| Tab::new().label(tab.label())),
+                    ),
             )
     }
 

@@ -6,10 +6,10 @@
 
 use dblocal_core::model::DeleteMode;
 use dblocal_core::strings;
-use gpui_kit::component::{ActiveTheme, Disableable, Sizable, h_flex, input::Input, v_flex};
 use gpui_kit::component::button::Button;
 use gpui_kit::component::button::ButtonVariants;
 use gpui_kit::component::label::Label;
+use gpui_kit::component::{ActiveTheme, Disableable, Sizable, h_flex, input::Input, v_flex};
 use gpui_kit::{
     AnyElement, Context, InteractiveElement, IntoElement, MouseButton, ParentElement, SharedString,
     Styled, div, prelude::*, px,
@@ -147,12 +147,19 @@ fn mode_card(
 ) -> impl IntoElement {
     let selected = candidate == mode;
     div()
-        .id(SharedString::from(format!("delete-mode-{}", candidate.as_str())))
+        .id(SharedString::from(format!(
+            "delete-mode-{}",
+            candidate.as_str()
+        )))
         .p_3()
         .rounded(px(6.))
         .cursor_pointer()
         .border_1()
-        .border_color(if selected { theme.primary } else { theme.border })
+        .border_color(if selected {
+            theme.primary
+        } else {
+            theme.border
+        })
         .when(selected, |this| this.bg(theme.muted))
         .on_mouse_down(
             MouseButton::Left,

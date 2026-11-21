@@ -651,7 +651,10 @@ mod tests {
         let a = instance_id();
         let b = instance_id();
         state.set_uri(&a, &secret());
-        state.set_uri(&b, &SecretString::new("redis://default:other@127.0.0.1:6379"));
+        state.set_uri(
+            &b,
+            &SecretString::new("redis://default:other@127.0.0.1:6379"),
+        );
         assert!(state.uri(&a).is_some());
         assert!(state.uri(&b).is_some());
         assert_ne!(
@@ -659,10 +662,7 @@ mod tests {
             state.uri(&b).map(UriView::text)
         );
 
-        state
-            .uri_mut(&a)
-            .expect("a")
-            .reveal(secret());
+        state.uri_mut(&a).expect("a").reveal(secret());
         assert!(state.uri(&a).expect("a").is_revealed());
 
         state.forget_uri(&a);

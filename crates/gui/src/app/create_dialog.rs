@@ -13,10 +13,10 @@
 use dblocal_core::model::AuthMode;
 use dblocal_core::service::EngineEntry;
 use dblocal_core::strings;
-use gpui_kit::component::{ActiveTheme, Sizable, Theme, h_flex, input::Input, v_flex};
-use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::assets::IconName;
+use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::label::Label;
+use gpui_kit::component::{ActiveTheme, Sizable, Theme, h_flex, input::Input, v_flex};
 use gpui_kit::{
     AnyElement, Context, InteractiveElement, IntoElement, MouseButton, ParentElement, SharedString,
     Styled, div, prelude::*, px,
@@ -35,7 +35,10 @@ pub(super) fn render(workspace: &Workspace, cx: &mut Context<Workspace>) -> AnyE
     };
     let catalog = workspace.catalog().clone();
     let entries = catalog.engines.clone();
-    let selected_entry = entries.iter().find(|entry| entry.engine == form.engine).cloned();
+    let selected_entry = entries
+        .iter()
+        .find(|entry| entry.engine == form.engine)
+        .cloned();
     let installed = selected_entry
         .as_ref()
         .and_then(|entry| {
@@ -51,10 +54,7 @@ pub(super) fn render(workspace: &Workspace, cx: &mut Context<Workspace>) -> AnyE
         .gap_5()
         .p(px(20.))
         .text_size(px(13.))
-        .child(
-            Label::new(strings::UI_CREATE_INTRO)
-                .text_color(theme.muted_foreground),
-        )
+        .child(Label::new(strings::UI_CREATE_INTRO).text_color(theme.muted_foreground))
         .child(
             v_flex()
                 .gap_2()
@@ -131,7 +131,11 @@ fn render_engine_cards(
             .rounded(px(8.))
             .border_1()
             .cursor_pointer()
-            .border_color(if selected { theme.primary } else { theme.border })
+            .border_color(if selected {
+                theme.primary
+            } else {
+                theme.border
+            })
             .bg(if selected {
                 crate::theme::tokens::tint(theme.primary, 0.08)
             } else {
@@ -152,10 +156,7 @@ fn render_engine_cards(
                         this.child(icon(IconName::Check, 16.0, theme.primary))
                     }),
             )
-            .child(
-                Label::new(engine.display_name())
-                    .font_weight(gpui_kit::FontWeight::SEMIBOLD),
-            )
+            .child(Label::new(engine.display_name()).font_weight(gpui_kit::FontWeight::SEMIBOLD))
             .child(
                 Label::new(format!("Port kanonik {}", engine.canonical_port()))
                     .text_xs()
@@ -201,10 +202,7 @@ fn render_versions(
         let badge = if version_unavailable {
             None
         } else if version.installed {
-            Some((
-                strings::UI_VERSION_INSTALLED.to_owned(),
-                theme.success,
-            ))
+            Some((strings::UI_VERSION_INSTALLED.to_owned(), theme.success))
         } else {
             Some((
                 format::create_download_badge(&format::format_bytes_id(version.size_bytes)),
@@ -300,10 +298,7 @@ fn render_fields(
             v_flex()
                 .flex_1()
                 .gap_1p5()
-                .child(
-                    Label::new(strings::UI_FIELD_NAME)
-                        .font_weight(gpui_kit::FontWeight::MEDIUM),
-                )
+                .child(Label::new(strings::UI_FIELD_NAME).font_weight(gpui_kit::FontWeight::MEDIUM))
                 .child(input_or_empty(form.name_input.as_ref()))
                 .child(
                     Label::new(strings::UI_CREATE_NAME_HINT)
@@ -315,10 +310,7 @@ fn render_fields(
             v_flex()
                 .w(px(160.))
                 .gap_1p5()
-                .child(
-                    Label::new(strings::UI_FIELD_PORT)
-                        .font_weight(gpui_kit::FontWeight::MEDIUM),
-                )
+                .child(Label::new(strings::UI_FIELD_PORT).font_weight(gpui_kit::FontWeight::MEDIUM))
                 .child(input_or_empty(form.port_input.as_ref()))
                 .child(
                     Label::new(strings::UI_CREATE_PORT_HINT)
@@ -422,12 +414,7 @@ fn render_footer(
         .py(px(12.))
         .border_t_1()
         .border_color(theme.border)
-        .child(
-            Label::new(note)
-                .flex_1()
-                .text_xs()
-                .text_color(note_colour),
-        )
+        .child(Label::new(note).flex_1().text_xs().text_color(note_colour))
         .child(
             Button::new("ni-cancel")
                 .label(strings::UI_CANCEL)
@@ -447,7 +434,9 @@ fn render_footer(
 }
 
 /// The input, or an empty spacer when a headless preview has no entity.
-fn input_or_empty(input: Option<&gpui_kit::Entity<gpui_kit::component::input::InputState>>) -> AnyElement {
+fn input_or_empty(
+    input: Option<&gpui_kit::Entity<gpui_kit::component::input::InputState>>,
+) -> AnyElement {
     match input {
         Some(input) => Input::new(input).small().into_any_element(),
         None => div().h(px(32.)).into_any_element(),

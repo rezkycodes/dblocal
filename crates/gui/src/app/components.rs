@@ -7,9 +7,9 @@
 //! Every text node goes through [`Label`], which is what exposes it to assistive
 //! technology (Kit design rule A1); a bare `div().child("...")` does not.
 
-use gpui_kit::component::{Theme, h_flex, v_flex};
 use gpui_kit::assets::IconName;
 use gpui_kit::component::label::Label;
+use gpui_kit::component::{Theme, h_flex, v_flex};
 use gpui_kit::{Div, Hsla, IntoElement, ParentElement, SharedString, Styled, div, px, svg};
 
 use dblocal_core::model::{EngineKey, InstanceStatus};
@@ -40,12 +40,9 @@ pub fn engine_colour(engine: EngineKey, theme: &Theme) -> Hsla {
 
 /// An icon at an explicit size and colour.
 pub fn icon(name: IconName, size: f32, colour: Hsla) -> Div {
-    div().flex_none().child(
-        svg()
-            .path(name.path())
-            .size(px(size))
-            .text_color(colour),
-    )
+    div()
+        .flex_none()
+        .child(svg().path(name.path()).size(px(size)).text_color(colour))
 }
 
 /// A status glyph whose *shape* also differs per state (`F-PLH-02` AC2).
@@ -57,9 +54,11 @@ pub fn status_glyph(status: InstanceStatus, size: f32, theme: &Theme) -> Div {
     let colour = status_colour(status, theme);
     let side = px(size);
     match format::status_glyph(status) {
-        StatusGlyph::Running => div().flex_none().flex().items_center().child(
-            div().size(side).rounded_full().bg(colour),
-        ),
+        StatusGlyph::Running => div()
+            .flex_none()
+            .flex()
+            .items_center()
+            .child(div().size(side).rounded_full().bg(colour)),
         StatusGlyph::Stopped => div().flex_none().flex().items_center().child(
             div()
                 .size(side)
@@ -177,4 +176,3 @@ pub fn banner(colour: Hsla) -> Div {
         .border_color(tokens::banner_border(colour))
         .bg(tokens::banner_fill(colour))
 }
-

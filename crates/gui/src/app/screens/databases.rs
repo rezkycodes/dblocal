@@ -11,17 +11,17 @@
 
 use dblocal_core::model::EngineKey;
 use dblocal_core::strings;
-use gpui_kit::component::{ActiveTheme, Theme, h_flex, v_flex};
+use gpui_kit::component::Disableable;
+use gpui_kit::component::Sizable;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::label::Label;
+use gpui_kit::component::{ActiveTheme, Theme, h_flex, v_flex};
 use gpui_kit::prelude::*;
-use gpui_kit::component::Sizable;
-use gpui_kit::component::Disableable;
 use gpui_kit::{AnyElement, Context, IntoElement, ParentElement, Styled, div, px};
 
 use super::Workspace;
-use crate::app::components::{card, icon, section_label};
 use super::page;
+use crate::app::components::{card, icon, section_label};
 use gpui_kit::assets::IconName;
 
 impl Workspace {
@@ -182,11 +182,7 @@ fn demo_databases_table(theme: &Theme) -> impl IntoElement {
                 .px(px(14.))
                 .border_t_1()
                 .border_color(theme.table_row_border)
-                .child(
-                    Label::new(name)
-                        .flex_1()
-                        .font_family(mono.clone()),
-                )
+                .child(Label::new(name).flex_1().font_family(mono.clone()))
                 .child(
                     Label::new(strings::UI_DATABASES_ENCODING)
                         .w(px(160.))
@@ -251,7 +247,12 @@ fn demo_config_table(
         _ => vec![
             ("port", port, "3306", "Diuji bind sebelum disimpan"),
             ("max_connections", "151".into(), "151", "Butuh restart"),
-            ("innodb_buffer_pool_size", "256M".into(), "128M", "Butuh restart"),
+            (
+                "innodb_buffer_pool_size",
+                "256M".into(),
+                "128M",
+                "Butuh restart",
+            ),
         ],
     };
     let mut table = v_flex()

@@ -347,7 +347,8 @@ pub const UI_OVERVIEW_RECENT_LOGS: &str = "Log terbaru";
 /// Acknowledge the local-only bind (F-INS-02 AC4).
 pub const UI_OVERVIEW_LOOPBACK_ONLY: &str = "Hanya mendengarkan 127.0.0.1 dan ::1";
 /// Note that the connection URI is available although the instance is stopped.
-pub const UI_OVERVIEW_URI_STOPPED_NOTE: &str = "URI tetap bisa disalin, tetapi instance belum berjalan.";
+pub const UI_OVERVIEW_URI_STOPPED_NOTE: &str =
+    "URI tetap bisa disalin, tetapi instance belum berjalan.";
 /// Label for the `.env` block preview.
 pub const UI_OVERVIEW_DOTENV: &str = "# .env";
 /// Detail row label: engine.
@@ -432,8 +433,7 @@ pub const UI_LOGS_FOLLOW_HINT: &str = "Ikuti baris baru";
 /// One-click fix heading for a port conflict (F-PRT-02 AC1).
 pub const UI_DIAGNOSIS_PORT_HEADING: &str = "Port {port} sedang dipakai";
 /// Explanation under the port-conflict heading.
-pub const UI_DIAGNOSIS_PORT_BODY: &str =
-    "Uji bind ke 127.0.0.1:{port} gagal sebelum engine dijalankan. Port ditempati proses di luar DBLocal. Port bebas terdekat: {suggested}.";
+pub const UI_DIAGNOSIS_PORT_BODY: &str = "Uji bind ke 127.0.0.1:{port} gagal sebelum engine dijalankan. Port ditempati proses di luar DBLocal. Port bebas terdekat: {suggested}.";
 /// One-click fix action: move to the next port and start (F-PRT-02 AC2).
 pub const UI_DIAGNOSIS_MOVE_AND_START: &str = "Pindah ke {port} & start";
 /// Report-issue action for an unrecognised failure (F-LOG-02 AC2).
@@ -502,8 +502,7 @@ pub const UI_DATABASES_USERS: &str = "User & hak akses";
 /// Databases tab: new user action.
 pub const UI_DATABASES_NEW_USER: &str = "User baru";
 /// Databases tab: the boundary note that DBLocal manages servers, not data.
-pub const UI_DATABASES_BOUNDARY: &str =
-    "DBLocal mengelola server, bukan isi data. Untuk menjelajah tabel, buka instance di client Anda.";
+pub const UI_DATABASES_BOUNDARY: &str = "DBLocal mengelola server, bukan isi data. Untuk menjelajah tabel, buka instance di client Anda.";
 /// Databases tab: superuser password card heading.
 pub const UI_DATABASES_PASSWORD_HEADING: &str = "Password superuser";
 /// Databases tab: superuser password card body.
@@ -535,7 +534,8 @@ pub const UI_CONFIG_COLUMNS: &str = "Nilai saat ini · Default";
 /// Config table: changed badge.
 pub const UI_CONFIG_CHANGED: &str = "diubah";
 /// Config banner after saving (F-CFG-01 AC2).
-pub const UI_CONFIG_RESTART_REQUIRED: &str = "Tersimpan. Restart diperlukan agar perubahan berlaku.";
+pub const UI_CONFIG_RESTART_REQUIRED: &str =
+    "Tersimpan. Restart diperlukan agar perubahan berlaku.";
 /// Config banner: restart later.
 pub const UI_CONFIG_LATER: &str = "Nanti";
 /// Config banner: restart now.
@@ -573,8 +573,7 @@ pub const UI_CREATE_SUBMIT_PROTOTYPE: &str = "Create";
 /// The no-password option label.
 pub const UI_CREATE_NO_PASSWORD: &str = "Izinkan koneksi tanpa password";
 /// The full warning under the no-password option (F-CRD-03 AC1).
-pub const UI_CREATE_NO_PASSWORD_WARNING: &str =
-    "Proses dan user lain di mesin ini bisa terhubung tanpa kredensial. Tidak bisa diubah setelah dibuat.";
+pub const UI_CREATE_NO_PASSWORD_WARNING: &str = "Proses dan user lain di mesin ini bisa terhubung tanpa kredensial. Tidak bisa diubah setelah dibuat.";
 
 /// Formats the version-list heading.
 pub fn create_versions(engine: &str) -> String {
@@ -634,4 +633,3 @@ pub const PLACEHOLDERS: [(&str, &str); 3] = [
     ("Config", "F-CFG · Phase 3"),
     ("Open in…", "F-OPN · Phase 2"),
 ];
-
