@@ -202,16 +202,16 @@ fn tray_action_reaches_the_model_through_bridge() {
 
     // Warm-up: pay bridge thread startup and first channel wake.
     service.start_instance(&id).expect("warm start");
-    wait_for_running(&rx, &service, &id, Duration::from_secs(2));
+    wait_for_running(&rx, &id, Duration::from_secs(2));
 
     let mut samples_ms = Vec::with_capacity(50);
     for _ in 0..50 {
         // Reset to Stopped so each round observes a real transition.
-        service.view.lock().unwrap().status = InstanceStatus::Stopped;
+        service.view.lock().expect("view").status = InstanceStatus::Stopped;
 
         let start = Instant::now();
         service.start_instance(&id).expect("start");
-        let running = wait_for_running(&rx, &service, &id, Duration::from_secs(2));
+        let running = wait_for_running(&rx, &id, Duration::from_secs(2));
         let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
         assert!(running, "round did not land: {elapsed_ms:.1}ms");
         samples_ms.push(elapsed_ms);
@@ -227,9 +227,15 @@ fn tray_action_reaches_the_model_through_bridge() {
     assert!(max <= 1000.0, "tray action exceeded 1 s: max={max:.1}ms");
 }
 
+/// Waits for `InstanceChanged(Running)` to arrive off the **bridge channel**.
+///
+/// It must not read the service's own state: a fallback that returns when the
+/// service says "Running" measures nothing, because the service flipped that
+/// field before it emitted the event. A mutation that sleeps 1.5 s inside the
+/// bridge passed this test while that fallback existed — the measurement has to
+/// depend on the bridge delivering the view.
 fn wait_for_running(
     rx: &flume::Receiver<crate::service_bridge::UiEvent>,
-    service: &EchoService,
     id: &InstanceId,
     timeout: Duration,
 ) -> bool {
@@ -249,13 +255,6 @@ fn wait_for_running(
             Ok(_) => {}
             Err(flume::RecvTimeoutError::Timeout) => {}
             Err(flume::RecvTimeoutError::Disconnected) => return false,
-        }
-        // Also check service state directly in case the event was coalesced/lost
-        // in a way that shouldn't happen but keeps the test honest.
-        if service.view.lock().unwrap().status == InstanceStatus::Running {
-            let view = service.view.lock().unwrap().clone();
-            let _model = crate::tray::TrayMenuModel::from_views(&[view]);
-            return true;
         }
     }
     false
