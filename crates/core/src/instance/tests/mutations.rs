@@ -221,7 +221,8 @@ fn change_port_rewrites_postgres_config_and_start_repairs_stale_config() {
     crate::engine::sync_postgres_port(&data_dir, &run_dir, free.get()).expect("sync_port");
     let text = std::fs::read_to_string(&conf).expect("read conf");
     let before_block = text
-        .split("# DBLocal managed settings")
+        .split("# DBLocal managed settings
+")
         .next()
         .expect("prefix");
     assert_eq!(
@@ -229,7 +230,8 @@ fn change_port_rewrites_postgres_config_and_start_repairs_stale_config() {
         "content before managed block must be byte-identical"
     );
     assert_eq!(
-        text.matches("# DBLocal managed settings").count(),
+        text.matches("# DBLocal managed settings
+").count(),
         1,
         "exactly one managed block start"
     );
