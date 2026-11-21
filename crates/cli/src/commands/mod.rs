@@ -67,3 +67,6 @@ pub fn find_instance(
         }
     }
 }
+
+#[cfg(test)]
+mod tests;
