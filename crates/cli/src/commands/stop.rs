@@ -27,18 +27,7 @@ pub fn run(ctx: &mut Ctx<'_>, name: &str) -> u8 {
     let mut rx = ctx.service.subscribe();
     let op = match ctx.service.stop_instance(&view.id) {
         Ok(op) => op,
-        // The compare-and-set refused because another writer moved the row
-        // between our read and the write.
-        Err(DblError::InvalidTransition {
-            from: "stopped", ..
-        }) => {
-            output::stderr_line(ctx.err, messages::MSG_ALREADY_STOPPED);
-            return EXIT_OK;
-        }
-        Err(DblError::InvalidTransition {
-            from: "stopping", ..
-        }) => return already_being_stopped(ctx, &view.id),
-        Err(e) => return output::report_error(ctx.err, &e),
+        Err(e) => return stop_refused(ctx, &e, &view.id),
     };
     let wait = output::StatusWait {
         op: &op,
@@ -56,6 +45,26 @@ pub fn run(ctx: &mut Ctx<'_>, name: &str) -> u8 {
             output::stderr_line(ctx.err, &messages::code_line(&e.code, &e.message));
             EXIT_GENERAL
         }
+    }
+}
+
+/// Handles a refused `stop_instance`.
+///
+/// The compare-and-set refuses when another writer moved the row between our
+/// read and the write. Both concrete shapes it can report are the idempotent
+/// success the user asked for, not bad arguments.
+fn stop_refused(ctx: &mut Ctx<'_>, err: &DblError, id: &InstanceId) -> u8 {
+    match err {
+        DblError::InvalidTransition {
+            from: "stopped", ..
+        } => {
+            output::stderr_line(ctx.err, messages::MSG_ALREADY_STOPPED);
+            EXIT_OK
+        }
+        DblError::InvalidTransition {
+            from: "stopping", ..
+        } => already_being_stopped(ctx, id),
+        other => output::report_error(ctx.err, other),
     }
 }
 

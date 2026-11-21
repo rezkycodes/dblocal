@@ -189,15 +189,7 @@ pub fn wait_operation_rx(
             }
             Ok(ServiceEvent::DownloadProgress { id, progress }) if &id == op => {
                 if show_progress {
-                    let pct = (progress.fraction() * 100.0).round() as u64;
-                    stderr_line(
-                        err_out,
-                        &messages::download_progress(
-                            pct,
-                            progress.bytes_done,
-                            progress.bytes_total,
-                        ),
-                    );
+                    report_download(err_out, &progress);
                 }
             }
             Ok(ServiceEvent::OperationFinished { id, result }) if &id == op => return result,
@@ -270,13 +262,6 @@ pub fn wait_for_status_rx(
     wait: StatusWait<'_>,
     err_out: &mut dyn Write,
 ) -> Result<InstanceStatus, UserFacingError> {
-    let StatusWait {
-        op,
-        instance_id,
-        ok_statuses,
-        timeout,
-        show_progress,
-    } = wait;
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_time()
         .build()
@@ -290,72 +275,103 @@ pub fn wait_for_status_rx(
             )
         })?;
     rt.block_on(async {
-        let deadline = tokio::time::Instant::now() + timeout;
+        let deadline = tokio::time::Instant::now() + wait.timeout;
         let mut last_status: Option<InstanceStatus> = None;
         loop {
             let now = tokio::time::Instant::now();
             if now >= deadline {
-                return Err(UserFacingError::new(
-                    messages::CODE_TIMEOUT,
-                    messages::ERR_TIMEOUT,
-                ));
+                return Err(timeout_error());
             }
             let remaining = deadline - now;
             let recv = tokio::time::timeout(remaining, rx.recv()).await;
-            match recv {
-                Ok(Ok(ServiceEvent::OperationProgress { id, stage })) if &id == op => {
-                    if show_progress {
-                        stderr_line(err_out, &messages::stage_line(stage.as_str()));
-                    }
-                }
-                Ok(Ok(ServiceEvent::DownloadProgress { id, progress })) if &id == op => {
-                    if show_progress {
-                        let pct = (progress.fraction() * 100.0).round() as u64;
-                        stderr_line(
-                            err_out,
-                            &messages::download_progress(
-                                pct,
-                                progress.bytes_done,
-                                progress.bytes_total,
-                            ),
-                        );
-                    }
-                }
-                Ok(Ok(ServiceEvent::InstanceChanged { view })) if &view.id == instance_id => {
-                    last_status = Some(view.status);
-                    if let Some(done) = decide(view, ok_statuses) {
-                        return done;
-                    }
-                }
-                Ok(Ok(ServiceEvent::OperationFinished { id, result })) if &id == op => {
-                    return finish(result, service, instance_id, ok_statuses, last_status);
-                }
-                Ok(Ok(_)) => {}
-                Ok(Err(tokio::sync::broadcast::error::RecvError::Lagged(_))) => {
-                    // The final event may be one of the dropped ones: the store
-                    // is the authority, not the stream.
-                    match reread(service, instance_id, ok_statuses) {
-                        Some(Outcome::Status(status)) => {
-                            last_status = Some(status);
-                        }
-                        Some(Outcome::Done(result)) => return result,
-                        None => {}
-                    }
-                }
-                Ok(Err(tokio::sync::broadcast::error::RecvError::Closed)) => {
-                    return Err(UserFacingError::from(&DblError::Storage {
-                        reason: "event stream closed".to_owned(),
-                    }));
-                }
-                Err(_) => {
-                    return Err(UserFacingError::new(
-                        messages::CODE_TIMEOUT,
-                        messages::ERR_TIMEOUT,
-                    ));
-                }
+            let event = match recv {
+                Ok(event) => event,
+                Err(_) => return Err(timeout_error()),
+            };
+            if let Some(done) = observe(event, service, &wait, &mut last_status, err_out) {
+                return done;
             }
         }
     })
+}
+
+/// One download-progress line, TTY-only.
+fn report_download(err_out: &mut dyn Write, progress: &dblocal_core::model::DownloadProgress) {
+    let pct = (progress.fraction() * 100.0).round() as u64;
+    stderr_line(
+        err_out,
+        &messages::download_progress(pct, progress.bytes_done, progress.bytes_total),
+    );
+}
+
+fn timeout_error() -> UserFacingError {
+    UserFacingError::new(messages::CODE_TIMEOUT, messages::ERR_TIMEOUT)
+}
+
+/// Handles one event; `Some` ends the wait.
+fn observe(
+    event: Result<ServiceEvent, tokio::sync::broadcast::error::RecvError>,
+    service: &dyn DblService,
+    wait: &StatusWait<'_>,
+    last_status: &mut Option<InstanceStatus>,
+    err_out: &mut dyn Write,
+) -> Option<Result<InstanceStatus, UserFacingError>> {
+    match event {
+        Ok(ServiceEvent::OperationProgress { id, stage }) if &id == wait.op => {
+            if wait.show_progress {
+                stderr_line(err_out, &messages::stage_line(stage.as_str()));
+            }
+        }
+        Ok(ServiceEvent::DownloadProgress { id, progress }) if &id == wait.op => {
+            if wait.show_progress {
+                report_download(err_out, &progress);
+            }
+        }
+        Ok(ServiceEvent::InstanceChanged { view }) if &view.id == wait.instance_id => {
+            *last_status = Some(view.status);
+            return decide(view, wait.ok_statuses);
+        }
+        Ok(ServiceEvent::OperationFinished { id, result }) if &id == wait.op => {
+            return Some(finish(
+                result,
+                service,
+                wait.instance_id,
+                wait.ok_statuses,
+                *last_status,
+            ));
+        }
+        Ok(_) => {}
+        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+            if let Some(result) = reread_decides(service, wait, last_status) {
+                return Some(result);
+            }
+        }
+        Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+            return Some(Err(UserFacingError::from(&DblError::Storage {
+                reason: "event stream closed".to_owned(),
+            })));
+        }
+    }
+    None
+}
+
+/// Re-reads the store after a dropped event; `Some` when the wait is over.
+///
+/// The final event may be one of the dropped ones, so the store, not the
+/// stream, is the authority.
+fn reread_decides(
+    service: &dyn DblService,
+    wait: &StatusWait<'_>,
+    last_status: &mut Option<InstanceStatus>,
+) -> Option<Result<InstanceStatus, UserFacingError>> {
+    match reread(service, wait.instance_id, wait.ok_statuses) {
+        Some(Outcome::Status(status)) => {
+            *last_status = Some(status);
+            None
+        }
+        Some(Outcome::Done(result)) => Some(result),
+        None => None,
+    }
 }
 
 /// Verdict from one view: `Some` when the wait is over, `None` to keep waiting.

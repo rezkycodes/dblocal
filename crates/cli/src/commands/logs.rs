@@ -82,18 +82,22 @@ fn follow_tail(ctx: &mut Ctx<'_>, id: &InstanceId, mut follower: Follower) -> u8
                 _ = &mut ctrl_c => return EXIT_OK,
                 _ = ticker.tick() => {}
             }
-            match follower.poll(ctx.service, id) {
+            let lines = match follower.poll(ctx.service, id) {
                 Poll::Gone => return EXIT_OK,
                 Poll::Retry => continue,
-                Poll::Lines(lines) => {
-                    for line in &lines {
-                        output::stdout_line(ctx.out, line);
-                    }
-                    let _ = ctx.out.flush();
-                }
-            }
+                Poll::Lines(lines) => lines,
+            };
+            print_lines(ctx, &lines);
         }
     })
+}
+
+/// Prints new lines and flushes, so a piped reader sees them without delay.
+fn print_lines(ctx: &mut Ctx<'_>, lines: &[String]) {
+    for line in lines {
+        output::stdout_line(ctx.out, line);
+    }
+    let _ = ctx.out.flush();
 }
 
 /// The follower's state: the last snapshot, plus the diff needed to print only

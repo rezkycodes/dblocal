@@ -305,7 +305,21 @@ fn cli_drives_a_real_valkey_from_create_to_archive() {
     let home = Home::new();
     let started = Instant::now();
 
-    // The URI alone, and the version/help paths, need no engine.
+    let port = reserve_port();
+    let name = NAME;
+    create_started(&home, name, port);
+    follow_checks(&home, name);
+    stop_and_expect_status_running_fails(port, name);
+    delete_archives(&home, port, name);
+
+    eprintln!("cli_e2e: whole run {:.1}s", started.elapsed().as_secs_f64());
+}
+
+/// Name of the instance the whole e2e lifecycle uses.
+const NAME: &str = "cli-e2e-vk";
+
+/// The paths and flags that need no engine.
+fn cli_surface_without_an_engine() {
     let version = ok(&run(&["--version"]), "--version");
     eprintln!("cli_e2e: {version}");
     ok(&run(&["--help"]), "--help");
@@ -313,9 +327,11 @@ fn cli_drives_a_real_valkey_from_create_to_archive() {
     assert_eq!(bad.status.code(), Some(2));
     let empty = ok(&run(&["list", "--json"]), "list --json on an empty home");
     assert_eq!(empty.trim(), "[]");
+}
 
-    let port = reserve_port();
-    let name = "cli-e2e-vk";
+/// Creates the instance, starts it, and proves the printed URI works.
+fn create_started(home: &Home, name: &str, port: u16) {
+    cli_surface_without_an_engine();
     // Seed the cached runtime when the core e2e already downloaded it.
     let seeded = seed_cached_runtime(home.path(), "9.2.0");
     eprintln!("cli_e2e: cached valkey runtime seeded: {seeded}");
@@ -352,9 +368,12 @@ fn cli_drives_a_real_valkey_from_create_to_archive() {
     let status = ok(&run(&["status", name]), "status after start");
     assert_eq!(status.trim(), "running");
     assert!(wait_tcp(port, Duration::from_secs(20)));
+    assert_uri_is_real(&uri);
+}
 
-    // The URI is real: pipe it into the production redis client.
-    let mut client = redis::Client::open(uri.as_str())
+/// The printed URI is real: the production `redis` client accepts it.
+fn assert_uri_is_real(uri: &str) {
+    let mut client = redis::Client::open(uri)
         .expect("parse the CLI URI")
         .get_connection_with_timeout(Duration::from_secs(5))
         .expect("connect with the CLI URI");
@@ -364,11 +383,11 @@ fn cli_drives_a_real_valkey_from_create_to_archive() {
         client.get::<_, Option<String>>("cli-e2e:key").expect("GET"),
         Some("v1".to_owned())
     );
-    drop(client);
+}
 
-    // K1: `logs -f --lines 2` prints exactly the 2 requested lines and, with
-    // nothing appended during the window, nothing else. Before the fix the
-    // first tick reprinted the whole 200-line follow window.
+/// K1 on the real binary: the history is exactly `--lines`, and one line
+/// appended while following is printed exactly once.
+fn follow_checks(home: &Home, name: &str) {
     let history = follow_logs(name, 2, || {});
     eprintln!(
         "cli_e2e: logs -f --lines 2 printed {} lines after one follow tick: {history:?}",
@@ -381,7 +400,6 @@ fn cli_drives_a_real_valkey_from_create_to_archive() {
         history.len()
     );
 
-    // K1: a line appended while following is printed exactly once.
     let log = home
         .path()
         .join("instances")
@@ -392,22 +410,7 @@ fn cli_drives_a_real_valkey_from_create_to_archive() {
         .expect("read valkey.log")
         .lines()
         .count();
-    let followed = follow_logs(name, 5, || {
-        let mut file = std::fs::OpenOptions::new()
-            .append(true)
-            .open(&log)
-            .expect("open valkey.log for append");
-        // The engine always ends its lines, but a missing newline would fuse
-        // the append onto the last line and make this test prove nothing.
-        if !std::fs::read_to_string(&log)
-            .map(|text| text.ends_with('\n'))
-            .unwrap_or(false)
-        {
-            writeln!(file).expect("newline before append");
-        }
-        writeln!(file, "{}", APPENDED_LINE).expect("append");
-        file.flush().expect("flush");
-    });
+    let followed = follow_logs(name, 5, || append_line(&log));
     // History (at most 5) plus the append. An engine that logs on its own could
     // add more, so the count is a lower bound and the append is the assertion.
     eprintln!(
@@ -426,8 +429,28 @@ fn cli_drives_a_real_valkey_from_create_to_archive() {
         1,
         "the appended line must be printed exactly once: {followed:?}"
     );
+}
 
-    // status is non-zero while stopped.
+/// Appends one known line to the engine log, ending the previous line first.
+fn append_line(log: &Path) {
+    let mut file = std::fs::OpenOptions::new()
+        .append(true)
+        .open(log)
+        .expect("open valkey.log for append");
+    // The engine always ends its lines, but a missing newline would fuse the
+    // append onto the last line and make this test prove nothing.
+    if !std::fs::read_to_string(log)
+        .map(|text| text.ends_with('\n'))
+        .unwrap_or(false)
+    {
+        writeln!(file).expect("newline before append");
+    }
+    writeln!(file, "{APPENDED_LINE}").expect("append");
+    file.flush().expect("flush");
+}
+
+/// `status` must be non-zero once the instance is stopped.
+fn stop_and_expect_status_running_fails(port: u16, name: &str) {
     ok(&run(&["stop", name]), "stop");
     let status = run(&["status", name]);
     assert!(
@@ -436,8 +459,10 @@ fn cli_drives_a_real_valkey_from_create_to_archive() {
     );
     assert_eq!(String::from_utf8_lossy(&status.stdout).trim(), "stopped");
     assert!(wait_tcp_gone(port, Duration::from_secs(20)));
+}
 
-    // The default delete archives and reports where.
+/// The default delete archives, reports where, and leaves no engine.
+fn delete_archives(home: &Home, port: u16, name: &str) {
     let delete = run(&["delete", name, "--yes"]);
     ok(&delete, "delete --yes");
     let delete_err = String::from_utf8_lossy(&delete.stderr).into_owned();
@@ -455,8 +480,6 @@ fn cli_drives_a_real_valkey_from_create_to_archive() {
         archives.display()
     );
     assert!(wait_tcp_gone(port, Duration::from_secs(20)));
-
-    eprintln!("cli_e2e: whole run {:.1}s", started.elapsed().as_secs_f64());
 }
 
 /// Runs `dblocal logs <name> -f --lines <lines>`, lets `during` happen, then

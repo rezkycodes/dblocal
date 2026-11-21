@@ -28,36 +28,14 @@ fn two_services_on_one_home_accept_exactly_one_start() {
 fn race_one_round(round: usize) {
     let dir = tempfile::TempDir::new().expect("temp home");
     let paths = DblPaths::with_root(dir.path());
-
     let first = LocalService::new(paths.clone(), ServiceOptions::default()).expect("first service");
     let second =
         LocalService::new(paths.clone(), ServiceOptions::default()).expect("second service");
-
-    let spec = InstanceSpec::new(
-        InstanceName::new(format!("shared-{round:02}")).expect("name"),
-        EngineKey::Postgresql,
-        "17.4",
-        Some(Port::new(20451 + round as u16).expect("port")),
-        AuthMode::None,
-    )
-    .expect("spec");
-    // Insert the row directly as `Stopped`, bypassing create so the test needs no
-    // runtime, adapter or network. This is the row shape a real create leaves.
-    let instance = dblocal_core::model::Instance::new(
-        &spec,
-        dblocal_core::model::InstanceId::new(),
-        InstanceStatus::Stopped,
-        std::time::SystemTime::now(),
-    );
-    dblocal_core::store::Store::open(&paths)
-        .expect("store")
-        .insert_instance(&instance)
-        .expect("insert row");
+    let id = seed_stopped_row(&paths, round);
 
     let barrier = Arc::new(Barrier::new(2));
     let a = Arc::new(first);
     let b = Arc::new(second);
-    let id = instance.id().clone();
 
     let run =
         |service: Arc<LocalService>, barrier: Arc<Barrier>, id: dblocal_core::model::InstanceId| {
@@ -92,4 +70,28 @@ fn race_one_round(round: usize) {
         message.contains("busy") || message.contains("starting"),
         "the loser must report a refusal: {message}"
     );
+}
+
+/// Inserts the row directly as `Stopped`, bypassing create so the round needs no
+/// runtime, adapter or network. This is the row shape a real create leaves.
+fn seed_stopped_row(paths: &DblPaths, round: usize) -> dblocal_core::model::InstanceId {
+    let spec = InstanceSpec::new(
+        InstanceName::new(format!("shared-{round:02}")).expect("name"),
+        EngineKey::Postgresql,
+        "17.4",
+        Some(Port::new(20451 + round as u16).expect("port")),
+        AuthMode::None,
+    )
+    .expect("spec");
+    let instance = dblocal_core::model::Instance::new(
+        &spec,
+        dblocal_core::model::InstanceId::new(),
+        InstanceStatus::Stopped,
+        std::time::SystemTime::now(),
+    );
+    dblocal_core::store::Store::open(paths)
+        .expect("store")
+        .insert_instance(&instance)
+        .expect("insert row");
+    instance.id().clone()
 }

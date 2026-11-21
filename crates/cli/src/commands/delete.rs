@@ -11,29 +11,8 @@ pub fn run(ctx: &mut Ctx<'_>, name: &str, yes: bool, purge: bool) -> u8 {
         Err(code) => return code,
     };
 
-    if !yes {
-        if !ctx.is_interactive {
-            output::stderr_line(
-                ctx.err,
-                &messages::code_line("DBL-1001", messages::ERR_DELETE_NEEDS_YES),
-            );
-            return EXIT_BAD_ARGS;
-        }
-        output::stderr_line(ctx.err, messages::PROMPT_DELETE);
-        let Some(input) = (ctx.confirm)() else {
-            output::stderr_line(
-                ctx.err,
-                &messages::code_line("DBL-1001", messages::ERR_CONFIRM_READ),
-            );
-            return EXIT_BAD_ARGS;
-        };
-        if input.trim() != name {
-            output::stderr_line(
-                ctx.err,
-                &messages::code_line("DBL-1001", messages::ERR_NAME_CONFIRMATION),
-            );
-            return EXIT_BAD_ARGS;
-        }
+    if !yes && let Err(code) = confirm(ctx, name) {
+        return code;
     }
 
     let mode = if purge {
@@ -57,28 +36,7 @@ pub fn run(ctx: &mut Ctx<'_>, name: &str, yes: bool, purge: bool) -> u8 {
         ctx.stderr_is_tty,
     ) {
         Ok(()) => {
-            if purge {
-                output::stderr_line(ctx.err, messages::MSG_DELETED);
-            } else {
-                // find archive path best-effort
-                match ctx.service.list_archives() {
-                    Ok(archives) => {
-                        if let Some(a) =
-                            archives.iter().find(|a| a.instance_name().as_str() == name)
-                        {
-                            output::stderr_line(
-                                ctx.err,
-                                &format!("{} {}", messages::MSG_ARCHIVED_TO, a.path().display()),
-                            );
-                        } else {
-                            output::stderr_line(ctx.err, messages::MSG_ARCHIVED_TO);
-                        }
-                    }
-                    Err(_) => {
-                        output::stderr_line(ctx.err, messages::MSG_ARCHIVED_TO);
-                    }
-                }
-            }
+            report_deleted(ctx, name, purge);
             EXIT_OK
         }
         Err(e) => {
@@ -86,4 +44,47 @@ pub fn run(ctx: &mut Ctx<'_>, name: &str, yes: bool, purge: bool) -> u8 {
             EXIT_GENERAL
         }
     }
+}
+
+/// Reports the delete outcome: purged, or archived and where.
+fn report_deleted(ctx: &mut Ctx<'_>, name: &str, purge: bool) {
+    if purge {
+        output::stderr_line(ctx.err, messages::MSG_DELETED);
+        return;
+    }
+    // Best effort: the archive path is a convenience, not the outcome.
+    let archive = ctx.service.list_archives().ok().and_then(|archives| {
+        archives
+            .into_iter()
+            .find(|a| a.instance_name().as_str() == name)
+            .map(|a| a.path().display().to_string())
+    });
+    match archive {
+        Some(path) => {
+            output::stderr_line(ctx.err, &format!("{} {path}", messages::MSG_ARCHIVED_TO))
+        }
+        None => output::stderr_line(ctx.err, messages::MSG_ARCHIVED_TO),
+    }
+}
+
+/// Requires `--yes` or the exact typed instance name (F-CLI-03 AC3).
+fn confirm(ctx: &mut Ctx<'_>, name: &str) -> Result<(), u8> {
+    let refuse = |ctx: &mut Ctx<'_>, message: &str| {
+        output::stderr_line(
+            ctx.err,
+            &messages::code_line(dblocal_core::error::CODE_INVALID_INPUT, message),
+        );
+        Err(EXIT_BAD_ARGS)
+    };
+    if !ctx.is_interactive {
+        return refuse(ctx, messages::ERR_DELETE_NEEDS_YES);
+    }
+    output::stderr_line(ctx.err, messages::PROMPT_DELETE);
+    let Some(input) = (ctx.confirm)() else {
+        return refuse(ctx, messages::ERR_CONFIRM_READ);
+    };
+    if input.trim() != name {
+        return refuse(ctx, messages::ERR_NAME_CONFIRMATION);
+    }
+    Ok(())
 }
