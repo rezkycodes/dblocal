@@ -32,15 +32,21 @@ This document describes the `dblocal` command-line interface implemented in
   prints `sudah berjalan` and exits 0. Failure prints DBL code, Indonesian
   message and diagnosis when present; exit 4 for engine/start failures.
 - `stop` waits for `Stopped`.
-- `create` is non-interactive: prints download/init progress on stderr (TTY only
-  for progress noise; plain lines otherwise), prints URI on stdout on success.
-  Unknown engine/version, bad name/port, duplicate name: mapped through exit-code
-  table, never a stack trace.
+- `create` is non-interactive: stage names print on stderr as plain lines; the
+  high-frequency download percentage is only printed when stderr is a TTY (so a
+  captured log is not flooded). The URI goes to stdout on success. Unknown
+  engine, bad name/port, duplicate name, port in use and no installable artifact
+  all exit 2; a failed download exits 1; a rolled-back create exits 4.
+  Never a stack trace.
 - `delete` refuses without `--yes` when not interactive (exit 2). Default mode
   archives data and reports archive path; `--purge` deletes data. Interactive
   sessions prompt for exact instance name confirmation.
-- `logs <name> [-f] [--lines N]` shows last N lines (default 200) via service
-  `tail_logs`. `-f` follows by polling `tail_logs` and exits 0 on SIGINT.
+- `logs <name> [-f] [--lines N]` shows last N lines (default 200) via the
+  service's own reader, `tail_logs` — no ad-hoc file reads, so rotation and
+  truncation stay in `process::logs`. `-f` re-reads a 200-line window every
+  250 ms and prints only the lines past the previous snapshot, so a followed log
+  is not duplicated; it selects on SIGINT and the interval (no busy loop), exits
+  0 on Ctrl-C, and returns when the instance is deleted.
 
 ## Exit codes
 
@@ -104,11 +110,12 @@ test result: FAILED. 67 passed; 1 failed
 
 ## Start race — what the loser really sees
 
-`shared_store_race.rs` runs two `LocalService` instances over one temp home and
-releases both `start_instance` calls from a `Barrier`, 20+ rounds. Exactly one
-wins. The loser gets `DBL-1004`; the wording is either `busy` (the row moved
+`shared_store_race.rs` runs 20 rounds of two `LocalService` instances over one
+temp home, releasing both `start_instance` calls from a `Barrier` each round.
+Exactly one wins every time. The loser gets `DBL-1004`; the wording is either `busy` (the row moved
 between its read and the CAS) or the concrete `starting -> starting` (it read
 the row just after the winner persisted `Starting`). The first 40-run sweep
 found the second shape, so `start.rs` now treats `busy`, `starting`, `running`
 and `stopping` as "another process owns it": print `sudah berjalan`, wait on the
-shared store, exit 0. A 40-run sweep after the fix was 0 failures.
+shared store, exit 0. Ten sweeps of the 20-round test (200 races) were green
+after the fix.

@@ -1586,6 +1586,10 @@ dependencies = [
  "clap",
  "dblocal-core",
  "dblocal-gui",
+ "redis",
+ "serde_json",
+ "tempfile",
+ "tokio",
 ]
 
 [[package]]

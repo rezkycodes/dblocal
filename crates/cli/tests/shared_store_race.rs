@@ -11,8 +11,19 @@ use dblocal_core::model::{AuthMode, EngineKey, InstanceName, InstanceSpec, Insta
 use dblocal_core::paths::DblPaths;
 use dblocal_core::service::{DblService, LocalService, ServiceOptions};
 
+const ROUNDS: usize = 20;
+
 #[test]
 fn two_services_on_one_home_accept_exactly_one_start() {
+    // Many independent rounds, because a single barrier release can get lucky
+    // (the first 40-run sweep found the `starting -> starting` wording only
+    // once). Each round gets its own name and port so rows cannot interfere.
+    for round in 0..ROUNDS {
+        race_one_round(round);
+    }
+}
+
+fn race_one_round(round: usize) {
     let dir = tempfile::TempDir::new().expect("temp home");
     let paths = DblPaths::with_root(dir.path());
 
@@ -21,10 +32,10 @@ fn two_services_on_one_home_accept_exactly_one_start() {
         LocalService::new(paths.clone(), ServiceOptions::default()).expect("second service");
 
     let spec = InstanceSpec::new(
-        InstanceName::new("shared-race").expect("name"),
+        InstanceName::new(format!("shared-{round:02}")).expect("name"),
         EngineKey::Postgresql,
         "17.4",
-        Some(Port::new(20451).expect("port")),
+        Some(Port::new(20451 + round as u16).expect("port")),
         AuthMode::None,
     )
     .expect("spec");
