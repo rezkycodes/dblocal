@@ -148,9 +148,7 @@ fn ensure_target_writable(target: &Path) -> UpdateResult<()> {
         });
     };
     let meta = std::fs::metadata(dir).map_err(|source| UpdateError::ApplyFailed {
-        reason: format!(
-            "gagal membaca izin direktori target pembaruan: {source}"
-        ),
+        reason: format!("gagal membaca izin direktori target pembaruan: {source}"),
     })?;
     if !meta.is_dir() {
         return Err(UpdateError::ApplyFailed {
@@ -309,14 +307,12 @@ fn apply_step(step: &InstallStep, created_backup: &mut bool) -> UpdateResult<()>
             maybe_fail_after_backup()?;
             Ok(())
         }
-        InstallStep::RenameOver { src, dst } => {
-            std::fs::rename(src, dst).map_err(|source| {
-                let _ = std::fs::remove_file(src);
-                UpdateError::ApplyFailed {
-                    reason: format!("gagal mengganti binary: {source}"),
-                }
-            })
-        }
+        InstallStep::RenameOver { src, dst } => std::fs::rename(src, dst).map_err(|source| {
+            let _ = std::fs::remove_file(src);
+            UpdateError::ApplyFailed {
+                reason: format!("gagal mengganti binary: {source}"),
+            }
+        }),
         InstallStep::KeepBackup { .. }
         | InstallStep::SpawnWindowsHelper { .. }
         | InstallStep::ReplaceMacBundle { .. }

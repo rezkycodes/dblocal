@@ -261,7 +261,12 @@ fn apply_preserves_symlinked_executable() {
     )
     .unwrap();
     apply(&plan).expect("apply");
-    assert!(std::fs::symlink_metadata(&link).unwrap().file_type().is_symlink());
+    assert!(
+        std::fs::symlink_metadata(&link)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
     let real_out = std::process::Command::new(&real)
         .arg("--version")
         .output()
@@ -311,7 +316,10 @@ fn apply_continuity_while_replacing() {
     }
     stop.store(true, Ordering::SeqCst);
     reader.join().unwrap();
-    assert!(!missing.load(Ordering::SeqCst), "target went missing during swap");
+    assert!(
+        !missing.load(Ordering::SeqCst),
+        "target went missing during swap"
+    );
 }
 
 #[cfg(unix)]

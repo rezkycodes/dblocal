@@ -144,9 +144,7 @@ impl UpdateFetcher for ReqwestUpdateFetcher {
             if let Some(len) = response.content_length()
                 && len > MAX_RELEASES_BODY_BYTES as u64
             {
-                return Err(format!(
-                    "respons rilis terlalu besar: {len} byte"
-                ));
+                return Err(format!("respons rilis terlalu besar: {len} byte"));
             }
             let mut body: Vec<u8> = Vec::new();
             let mut stream = response;

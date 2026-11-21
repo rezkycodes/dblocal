@@ -199,7 +199,9 @@ fn detect_from_path_windows_branch_via_direct_call() {
     assert!(matches!(kind, InstallKind::WindowsZip { .. }));
     let kind = detect_windows(Path::new("C:\\Program Files\\DBLocal\\dblocal.exe"));
     assert!(matches!(kind, InstallKind::WindowsMsi { .. }));
-    let kind = detect_windows(Path::new("C:\\Users\\me\\AppData\\Local\\DBLocal\\dblocal.exe"));
+    let kind = detect_windows(Path::new(
+        "C:\\Users\\me\\AppData\\Local\\DBLocal\\dblocal.exe",
+    ));
     assert!(matches!(kind, InstallKind::WindowsMsi { .. }));
 }
 

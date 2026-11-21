@@ -111,14 +111,14 @@ pub async fn download_update(
         })?;
 
     let checksums = fetch_checksums(update, staging_dir, options).await?;
-    let expected = checksums
-        .digest_for(update.asset().name())
-        .ok_or_else(|| UpdateError::ChecksumMetadata {
+    let expected = checksums.digest_for(update.asset().name()).ok_or_else(|| {
+        UpdateError::ChecksumMetadata {
             reason: format!(
                 "checksums.txt tidak berisi entri untuk aset {}",
                 update.asset().name()
             ),
-        })?;
+        }
+    })?;
 
     let staged_path = staging_dir.join(STAGED_ASSET_NAME);
     download_and_verify(
@@ -167,10 +167,7 @@ async fn read_bounded_text(path: &Path, max_bytes: u64) -> UpdateResult<String> 
     if meta.len() > max_bytes {
         let _ = tokio::fs::remove_file(path).await;
         return Err(UpdateError::ChecksumMetadata {
-            reason: format!(
-                "checksums.txt melebihi batas {} byte",
-                max_bytes
-            ),
+            reason: format!("checksums.txt melebihi batas {} byte", max_bytes),
         });
     }
     let bytes = tokio::fs::read(path)

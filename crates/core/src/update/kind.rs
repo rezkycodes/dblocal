@@ -171,7 +171,9 @@ fn detect_from_env_with(
             && exe_path_inside_appdir(exe_path, lookup("APPDIR").as_deref())
             && path.is_file()
         {
-            return Some(InstallKind::AppImage { appimage_path: path });
+            return Some(InstallKind::AppImage {
+                appimage_path: path,
+            });
         }
     }
     if is_homebrew_path(exe_path) {

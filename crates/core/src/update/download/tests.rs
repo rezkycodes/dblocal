@@ -357,10 +357,17 @@ async fn download_update_uses_checksums_and_fixed_staging_name() {
             UpdateAssetKind::Checksums,
         ),
     );
-    let staged = download_update(&update, dir.path(), &UpdateDownloadOptions::loopback_for_tests())
-        .await
-        .expect("download");
-    assert_eq!(staged.staged_path().file_name().unwrap(), "dblocal-update.bin");
+    let staged = download_update(
+        &update,
+        dir.path(),
+        &UpdateDownloadOptions::loopback_for_tests(),
+    )
+    .await
+    .expect("download");
+    assert_eq!(
+        staged.staged_path().file_name().unwrap(),
+        "dblocal-update.bin"
+    );
     assert_eq!(tokio::fs::read(staged.staged_path()).await.unwrap(), body);
 }
 
@@ -386,15 +393,19 @@ async fn download_update_rejects_missing_checksum_entry() {
             UpdateAssetKind::Checksums,
         ),
     );
-    let err = download_update(&update, dir.path(), &UpdateDownloadOptions::loopback_for_tests())
-        .await
-        .expect_err("missing checksum");
+    let err = download_update(
+        &update,
+        dir.path(),
+        &UpdateDownloadOptions::loopback_for_tests(),
+    )
+    .await
+    .expect_err("missing checksum");
     assert_eq!(err.code(), crate::update::error::CODE_UPDATE_CHECKSUM);
 }
 
 #[tokio::test]
 async fn download_update_rejects_oversized_checksums() {
-    let big = vec![b'a'; (MAX_CHECKSUMS_BODY_BYTES as usize) + 1];
+    let big = vec![b'a'; MAX_CHECKSUMS_BODY_BYTES + 1];
     let checksums_server = start_server(big).await;
     let dir = tempdir().expect("tmp");
     let update = AvailableUpdate::new(
@@ -414,9 +425,13 @@ async fn download_update_rejects_oversized_checksums() {
             UpdateAssetKind::Checksums,
         ),
     );
-    let err = download_update(&update, dir.path(), &UpdateDownloadOptions::loopback_for_tests())
-        .await
-        .expect_err("big checksums");
+    let err = download_update(
+        &update,
+        dir.path(),
+        &UpdateDownloadOptions::loopback_for_tests(),
+    )
+    .await
+    .expect_err("big checksums");
     assert_eq!(err.code(), crate::update::error::CODE_UPDATE_CHECKSUM);
 }
 
@@ -444,9 +459,13 @@ async fn download_update_rejects_wrong_digest() {
             UpdateAssetKind::Checksums,
         ),
     );
-    let err = download_update(&update, dir.path(), &UpdateDownloadOptions::loopback_for_tests())
-        .await
-        .expect_err("bad digest");
+    let err = download_update(
+        &update,
+        dir.path(),
+        &UpdateDownloadOptions::loopback_for_tests(),
+    )
+    .await
+    .expect_err("bad digest");
     assert_eq!(err.code(), crate::update::error::CODE_UPDATE_VERIFY_FAILED);
     assert!(!dir.path().join("dblocal-update.bin").exists());
 }
