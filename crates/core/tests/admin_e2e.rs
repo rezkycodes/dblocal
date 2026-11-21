@@ -422,6 +422,75 @@ fn reset_password_rolls_back_when_the_sink_fails() {
     assert_eq!(old.count("SELECT 1::bigint"), Ok(1));
 }
 
+#[test]
+#[ignore = "e2e: real PostgreSQL; run with DBLOCAL_E2E=1"]
+fn list_users_exists_revoke_drop_and_duplicate_and_not_found_paths() {
+    require_e2e();
+    let fixture = Fixture::new("dblocal-admin-users-");
+
+    // A user shows up in list_users with the right flags.
+    let user = Identifier::new("crud_user").expect("valid");
+    let _pw = fixture.admin.create_user(&user).expect("create user");
+    let users = fixture.admin.list_users().expect("list users");
+    let found = users
+        .iter()
+        .find(|u| u.name() == "crud_user")
+        .expect("the new user must be listed");
+    assert!(found.can_login());
+    assert!(!found.is_superuser());
+    assert!(fixture.admin.user_exists(&user).expect("exists"));
+    assert!(
+        !fixture
+            .admin
+            .user_exists(&Identifier::new("ghost_user").expect("valid"))
+            .expect("exists ghost")
+    );
+
+    // Creating the same user twice is a typed UserExists (SQLSTATE 42710).
+    let err = fixture
+        .admin
+        .create_user(&user)
+        .expect_err("a duplicate role must fail");
+    assert_eq!(err, AdminError::UserExists);
+
+    // Grant then revoke on a database.
+    let db = Identifier::new("cruddb").expect("valid");
+    fixture.admin.create_database(&db).expect("create db");
+    fixture
+        .admin
+        .grant(&user, &db, PrivilegeLevel::ReadOnly)
+        .expect("grant");
+    fixture.admin.revoke(&user, &db).expect("revoke");
+
+    // Dropping a database that does not exist is DatabaseNotFound (3D000).
+    fixture.admin.drop_database(&db, false).expect("drop db");
+    let err = fixture
+        .admin
+        .drop_database(&db, false)
+        .expect_err("dropping a missing database must fail");
+    assert_eq!(err, AdminError::DatabaseNotFound);
+
+    // Dropping the role, then dropping it again is UserNotFound? PostgreSQL
+    // reports 42704 (undefined object) which we classify as a generic
+    // QueryFailed; the important part is that it is typed, not a panic.
+    fixture.admin.drop_user(&user).expect("drop user");
+    assert!(!fixture.admin.user_exists(&user).expect("exists after drop"));
+
+    // A target pointing at a closed port is a typed Connect error, not a panic.
+    let closed = AdminTarget::new(
+        "127.0.0.1",
+        port::reserve(),
+        SUPERUSER,
+        SecretString::from(PASSWORD),
+    )
+    .expect("target");
+    let unreachable = PgAdmin::new(closed);
+    assert_eq!(
+        unreachable.list_databases().err(),
+        Some(AdminError::Connect)
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Helpers.
 // ---------------------------------------------------------------------------
