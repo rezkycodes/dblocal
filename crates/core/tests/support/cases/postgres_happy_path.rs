@@ -91,16 +91,8 @@ fn postgres_download_and_extract_from_the_catalog() {
     );
 
     if let Err(err) = &run.result {
-        let hint = if err.code == dblocal_core::error::CODE_UNSAFE_ARCHIVE {
-            "\n\nThis is the hard-link defect, not a test error. The shipped PostgreSQL \
-             artifact contains 253 in-tree hard links under share/timezone/, and \
-             `download::extract::tarball` rejects every hard link before checking whether \
-             it escapes. See `support/cases/repro_hardlink.rs` for the minimal reproduction."
-        } else {
-            ""
-        };
         panic!(
-            "create failed after a complete download: [{}] {}; stages {stages:?}{hint}",
+            "create failed after a complete download: [{}] {}; stages {stages:?}",
             err.code, err.message
         );
     }

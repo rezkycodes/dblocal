@@ -1,25 +1,8 @@
-//! Minimal reproduction of a third defect this suite found (W2-C).
+//! Regression tests for D-3 (W2-F): data/run/logs/instances dirs must be 0700.
 //!
-//! **Defect (defence in depth):** the task's invariant is "`0700` for the secrets
-//! and data directories". The secrets directory honours it (the `0600` file
-//! backend tightens it). The **data directory does not**, and the answer depends
-//! on the engine:
-//!
-//! - PostgreSQL: `initdb` creates the data directory itself and leaves it `0700`,
-//!   so the invariant holds by accident of the engine.
-//! - Valkey: the service creates the data directory with
-//!   `std::fs::create_dir_all` (`crates/core/src/instance/create.rs` for
-//!   `data/logs/run`, and again in `engine/valkey.rs`), which inherits the process
-//!   umask. On this host (`umask 0022`) the result is `0755`.
-//!
-//! Practical exposure is limited: the DBLocal root (`~/.dblocal`) is created
-//! `0700` by `Store::open` → `ensure_private_dir`, so a `0755` child is not
-//! traversable by another user while the root stays `0700`. It is still a gap
-//! against the task's stated invariant, and it is inconsistent: the same
-//! directory means different things for the two engines.
-//!
-//! **Not patched here.** `instance/create.rs` and `engine/valkey.rs` are non-test
-//! code in `dblocal-core`.
+//! The security invariant requires data and secrets directories to be 0700 on
+//! Unix. PostgreSQL's data dir was 0700 only because initdb chose it; Valkey and
+//! the service-created instance layout dirs inherited the process umask.
 //!
 //! Run:
 //!
@@ -43,7 +26,14 @@ use crate::support::ports;
 fn repro_data_directory_mode_depends_on_the_engine() {
     super::require_e2e();
 
-    let mut observed = Vec::new();
+    let mode = |path: &std::path::Path| {
+        std::fs::symlink_metadata(path)
+            .expect("stat")
+            .permissions()
+            .mode()
+            & 0o777
+    };
+
     for engine in [EngineKey::Postgresql, EngineKey::Valkey] {
         let harness = Harness::new(&format!("dblocal-e2e-mode-{}-", engine.as_str()));
         let version = newest_version(&harness.service, engine);
@@ -69,62 +59,28 @@ fn repro_data_directory_mode_depends_on_the_engine() {
         let created = harness.create(spec);
         super::expect_ok(&created, "create");
         let id = harness.instance(&name).expect("row").id().clone();
-
         let instance_name = InstanceName::new(&name).expect("name");
-        let mode = |path: &std::path::Path| {
-            std::fs::symlink_metadata(path)
-                .expect("stat")
-                .permissions()
-                .mode()
-                & 0o777
-        };
+
         let data = harness.paths.data_dir(&instance_name);
-        let root = harness.paths.root().to_path_buf();
+        let logs = harness.paths.logs_dir(&instance_name);
+        let run = harness.paths.run_dir(&instance_name);
         let instances = harness.paths.instances_dir();
-        let secrets = harness.paths.secrets_dir();
-        let secrets_mode = if secrets.exists() {
-            format!("{:o}", mode(&secrets))
-        } else {
-            "absent".to_owned()
-        };
-        eprintln!(
-            "{}: root={:o} instances={:o} data={:o} secrets={secrets_mode}",
-            engine.display_name(),
-            mode(&root),
-            mode(&instances),
-            mode(&data),
-        );
-        observed.push((engine, mode(&data)));
+        for (label, path) in [
+            ("instances", instances.as_path()),
+            ("data", data.as_path()),
+            ("logs", logs.as_path()),
+            ("run", run.as_path()),
+        ] {
+            assert_eq!(
+                mode(path),
+                0o700,
+                "{} {label} dir must be 0700, got {:o}",
+                engine.display_name(),
+                mode(path)
+            );
+        }
 
         let delete = harness.delete(&id, DeleteMode::PurgeData);
         super::expect_ok(&delete, "cleanup delete");
-    }
-
-    let postgres = observed
-        .iter()
-        .find(|(engine, _)| *engine == EngineKey::Postgresql)
-        .map(|(_, mode)| *mode);
-    let valkey = observed
-        .iter()
-        .find(|(engine, _)| *engine == EngineKey::Valkey)
-        .map(|(_, mode)| *mode);
-
-    match (postgres, valkey) {
-        (Some(postgres), Some(valkey)) if postgres == 0o700 && valkey == 0o700 => {
-            eprintln!("both data directories are 0700 now; remove this reproduction");
-        }
-        (Some(postgres), Some(valkey)) => {
-            eprintln!(
-                "DEFECT CONFIRMED: data directory mode differs by engine — PostgreSQL {postgres:o}, Valkey {valkey:o}; \
-                 the task requires 0700 for the data directory. Valkey is created by `create_dir_all` in \
-                 instance/create.rs and engine/valkey.rs, which inherits the umask; PostgreSQL is 0700 only because \
-                 initdb chooses that. The 0700 DBLocal root limits the practical exposure."
-            );
-            assert_ne!(
-                postgres, valkey,
-                "the two engines would agree; nothing to report"
-            );
-        }
-        _ => panic!("both engines must have produced a data directory"),
     }
 }

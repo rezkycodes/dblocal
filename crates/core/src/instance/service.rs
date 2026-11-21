@@ -398,6 +398,7 @@ impl LocalService {
             Ok((store, catalog, host_glibc))
         })?;
         let (store, catalog, host_glibc) = initialized;
+        super::helpers::ensure_private_layout(&paths)?;
 
         let (events, _) = broadcast::channel(consts::SERVICE_EVENT_CHANNEL_CAPACITY);
 

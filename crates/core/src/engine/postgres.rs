@@ -5,8 +5,9 @@
 //! start-failure diagnosis from the spike findings (C-06, C-07, C-08, C-09).
 
 use std::collections::HashSet;
+use std::fmt::Write as _;
 use std::fs::{self, OpenOptions};
-use std::io::Write;
+use std::io::Write as IoWrite;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
@@ -476,27 +477,169 @@ fn write_pwfile(data_dir: &Path, password: Option<&SecretString>) -> Result<Path
     Ok(path)
 }
 
-fn configure_after_init(ctx: &InitContext, socket_plan: &SocketDir) -> Result<()> {
-    let conf = ctx.data_dir.join("postgresql.conf");
-    let mut file = OpenOptions::new()
-        .append(true)
-        .open(&conf)
-        .map_err(|e| DblError::Engine {
-            reason: format!("cannot open postgresql.conf: {e}"),
-        })?;
-    writeln!(file).ok();
-    writeln!(file, "# DBLocal managed settings").ok();
-    writeln!(file, "listen_addresses = '127.0.0.1'").ok();
-    writeln!(file, "port = {}", ctx.port.get()).ok();
-    writeln!(
-        file,
+const MANAGED_BEGIN: &str = "# DBLocal managed settings";
+const MANAGED_END: &str = "# DBLocal managed settings end";
+
+fn managed_block(port: u16, socket_plan: &SocketDir) -> String {
+    let mut block = String::new();
+    let _ = writeln!(block, "{MANAGED_BEGIN}");
+    let _ = writeln!(block, "listen_addresses = '127.0.0.1'");
+    let _ = writeln!(block, "port = {port}");
+    let _ = writeln!(
+        block,
         "unix_socket_directories = '{}'",
         escape_single_quotes(&socket_plan.config_value())
-    )
-    .ok();
-    file.sync_all().map_err(|e| DblError::Engine {
-        reason: format!("cannot sync postgresql.conf: {e}"),
+    );
+    let _ = write!(block, "{MANAGED_END}");
+    block
+}
+
+fn configure_after_init(ctx: &InitContext, socket_plan: &SocketDir) -> Result<()> {
+    let conf = ctx.data_dir.join("postgresql.conf");
+    let mut contents = fs::read_to_string(&conf).map_err(|e| DblError::Engine {
+        reason: format!("cannot read postgresql.conf: {e}"),
     })?;
+    if !contents.ends_with('\n') {
+        contents.push('\n');
+    }
+    contents.push('\n');
+    contents.push_str(&managed_block(ctx.port.get(), socket_plan));
+    contents.push('\n');
+    write_atomic(&conf, &contents)
+}
+
+/// Rewrites the DBLocal-managed port/socket settings in `postgresql.conf`.
+///
+/// Atomic: writes a temp file in the same directory, fsyncs it, then renames.
+/// Other settings and comments are preserved. If the managed block is missing
+/// (older layout), it is appended. Idempotent.
+pub fn sync_port(data_dir: &Path, run_dir: &Path, port: u16) -> Result<SocketDir> {
+    let plan = choose_socket_dir(&socket_dir_for_run(run_dir), port);
+    if let Some(dir) = plan.path() {
+        ensure_socket_dir(dir)?;
+    }
+    let conf = data_dir.join("postgresql.conf");
+    let contents = fs::read_to_string(&conf).map_err(|e| DblError::Engine {
+        reason: format!("cannot read postgresql.conf: {e}"),
+    })?;
+    let block = managed_block(port, &plan);
+    let updated = replace_managed_block(&contents, &block);
+    write_atomic(&conf, &updated)?;
+    Ok(plan)
+}
+
+fn replace_managed_block(contents: &str, block: &str) -> String {
+    if let Some(start) = contents.find(MANAGED_BEGIN)
+        && let Some(end_rel) = contents[start..].find(MANAGED_END)
+    {
+        let end = start + end_rel + MANAGED_END.len();
+        let mut out = String::with_capacity(contents.len() + block.len());
+        out.push_str(&contents[..start]);
+        out.push_str(block);
+        out.push_str(&contents[end..]);
+        return out;
+    }
+    // Legacy layout: replace individual managed keys if present, else append.
+    let mut replaced_port = false;
+    let mut replaced_socket = false;
+    let mut replaced_listen = false;
+    let mut lines: Vec<String> = contents.lines().map(|l| l.to_owned()).collect();
+    for line in &mut lines {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with("port =") {
+            *line = format!("port = {port}", port = extract_port_from_block(block));
+            replaced_port = true;
+        } else if trimmed.starts_with("unix_socket_directories =") {
+            *line = extract_line(block, "unix_socket_directories =").to_owned();
+            replaced_socket = true;
+        } else if trimmed.starts_with("listen_addresses =") && trimmed.contains("127.0.0.1") {
+            *line = "listen_addresses = '127.0.0.1'".to_owned();
+            replaced_listen = true;
+        }
+    }
+    if replaced_port && replaced_socket && replaced_listen {
+        let mut out = lines.join("\n");
+        if contents.ends_with('\n') {
+            out.push('\n');
+        }
+        return out;
+    }
+    let mut out = contents.to_owned();
+    if !out.ends_with('\n') {
+        out.push('\n');
+    }
+    out.push('\n');
+    out.push_str(block);
+    out.push('\n');
+    out
+}
+
+fn extract_port_from_block(block: &str) -> u16 {
+    for line in block.lines() {
+        if let Some(v) = line.trim().strip_prefix("port = ")
+            && let Ok(p) = v.trim().parse()
+        {
+            return p;
+        }
+    }
+    0
+}
+
+fn extract_line<'a>(block: &'a str, prefix: &str) -> &'a str {
+    block
+        .lines()
+        .find(|l| l.trim_start().starts_with(prefix))
+        .unwrap_or("")
+}
+
+fn write_atomic(path: &Path, contents: &str) -> Result<()> {
+    let parent = path.parent().ok_or_else(|| DblError::Engine {
+        reason: format!("config path has no parent: {}", path.display()),
+    })?;
+    let nonce: u64 = rand::random();
+    let tmp = parent.join(format!(
+        ".{}.tmp-{:016x}",
+        path.file_name().and_then(|s| s.to_str()).unwrap_or("conf"),
+        nonce
+    ));
+    let mut opts = OpenOptions::new();
+    opts.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+    let mut file = match opts.open(&tmp) {
+        Ok(f) => f,
+        Err(e) => {
+            return Err(DblError::Engine {
+                reason: format!("cannot write {}: {e}", tmp.display()),
+            });
+        }
+    };
+    if let Err(e) = file
+        .write_all(contents.as_bytes())
+        .and_then(|_| file.sync_all())
+    {
+        let _ = fs::remove_file(&tmp);
+        return Err(DblError::Engine {
+            reason: format!("cannot write {}: {e}", tmp.display()),
+        });
+    }
+    drop(file);
+    if let Err(e) = fs::rename(&tmp, path) {
+        let _ = fs::remove_file(&tmp);
+        return Err(DblError::Engine {
+            reason: format!("cannot rename {} into place: {e}", path.display()),
+        });
+    }
+    #[cfg(unix)]
+    {
+        // Best-effort directory fsync.
+        if let Ok(dir) = std::fs::File::open(parent) {
+            let _ = dir.sync_all();
+        }
+    }
     Ok(())
 }
 

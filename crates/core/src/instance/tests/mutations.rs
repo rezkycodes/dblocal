@@ -178,6 +178,69 @@ fn change_port_is_refused_while_running() {
 }
 
 #[test]
+fn change_port_rewrites_postgres_config_and_start_repairs_stale_config() {
+    let h = Harness::new(EngineKey::Postgresql);
+    let port = test_port();
+    let spec = h.spec("pgcfg", EngineKey::Postgresql, port);
+    h.create(spec);
+    let inst = h
+        .instances()
+        .into_iter()
+        .find(|i| i.name().as_str() == "pgcfg")
+        .expect("instance");
+    let id = inst.id().clone();
+    let name = crate::model::InstanceName::new("pgcfg").expect("name");
+    let conf = h.paths.data_dir(&name).join("postgresql.conf");
+    std::fs::write(&conf, "# user\nmax_connections = 42\nport = {port}\nlisten_addresses = '127.0.0.1'\nunix_socket_directories = '/tmp/s'\n").expect("write conf");
+
+    let free = crate::model::Port::new(test_port()).expect("port");
+    h.service.change_port(&id, free).expect("change port");
+    let text = std::fs::read_to_string(&conf).expect("read conf");
+    assert!(text.contains(&format!("port = {}", free.get())));
+    assert!(!text.contains(&format!("port = {port}")));
+    assert!(
+        text.contains("max_connections = 42"),
+        "other settings preserved: {text}"
+    );
+
+    // Simulate crash between config rewrite and start: stale config port.
+    let stale = text.replace(&format!("port = {}", free.get()), "port = 1");
+    std::fs::write(&conf, stale).expect("write stale");
+    start_and_wait(&h, &id);
+    let repaired = std::fs::read_to_string(&conf).expect("read repaired");
+    assert!(
+        repaired.contains(&format!("port = {}", free.get())),
+        "start must repair stale config: {repaired}"
+    );
+}
+
+#[test]
+fn change_port_rewrites_valkey_config() {
+    let h = Harness::new(EngineKey::Valkey);
+    let port = test_port();
+    let spec = h.spec("vkcfg", EngineKey::Valkey, port);
+    h.create(spec);
+    let inst = h
+        .instances()
+        .into_iter()
+        .find(|i| i.name().as_str() == "vkcfg")
+        .expect("instance");
+    let id = inst.id().clone();
+    let name = crate::model::InstanceName::new("vkcfg").expect("name");
+    let run_dir = h.paths.run_dir(&name);
+    std::fs::create_dir_all(&run_dir).expect("run dir");
+    let conf = run_dir.join("valkey.conf");
+    std::fs::write(&conf, format!("bind 127.0.0.1\nport {port}\n# keep\n")).expect("write conf");
+
+    let free = crate::model::Port::new(test_port()).expect("port");
+    h.service.change_port(&id, free).expect("change port");
+    let text = std::fs::read_to_string(&conf).expect("read conf");
+    assert!(text.contains(&format!("port {}", free.get())));
+    assert!(!text.contains(&format!("port {port}\n")));
+    assert!(text.contains("# keep"));
+}
+
+#[test]
 fn data_size_and_autostart_read_and_write_state() {
     let h = Harness::new(EngineKey::Postgresql);
     let port = test_port();

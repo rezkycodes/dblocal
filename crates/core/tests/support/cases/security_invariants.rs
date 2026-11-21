@@ -18,7 +18,6 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -217,7 +216,7 @@ fn audit(
     password: &str,
 ) -> Audit {
     let mut violations = Vec::new();
-    let mut known_defects = Vec::new();
+    let known_defects: Vec<String> = Vec::new();
 
     // Engine processes, found by validated command line under the temp home.
     let processes = proc::under(home.path());
@@ -275,33 +274,21 @@ fn audit(
     }
 
     // 4. Modes.
-    //
-    // The secrets directory and every credential file are asserted strictly.
-    // The data directory is asserted strictly for PostgreSQL (`initdb` leaves it
-    // `0700`), and for Valkey it is *recorded* against the same invariant with a
-    // named known defect: the service creates that directory with
-    // `create_dir_all`, so it inherits the umask (`0755` here) instead of `0700`.
-    // `repro_data_dir_mode` proves it. It is kept out of `violations` so the rest
-    // of the audit keeps failing loudly on anything new, while the gap itself is
-    // still printed and is part of the report.
-    let data_dir = paths.data_dir(&InstanceName::new(name).expect("name"));
+    let instance_name = InstanceName::new(name).expect("name");
+    let data_dir = paths.data_dir(&instance_name);
+    let logs_dir = paths.logs_dir(&instance_name);
+    let run_dir = paths.run_dir(&instance_name);
     let secrets_dir = paths.secrets_dir();
-    let data_mode = std::fs::symlink_metadata(&data_dir)
-        .map(|meta| format!("{:o}", meta.permissions().mode() & 0o777))
-        .unwrap_or_else(|_| "absent".to_owned());
-    if engine == EngineKey::Postgresql {
-        if let Some(violation) = dir_mode_violation(&data_dir, 0o700) {
-            violations.push(format!("data directory: {violation}"));
+    for (label, dir) in [
+        ("instances directory", paths.instances_dir().as_path()),
+        ("data directory", data_dir.as_path()),
+        ("logs directory", logs_dir.as_path()),
+        ("run directory", run_dir.as_path()),
+        ("secrets directory", secrets_dir.as_path()),
+    ] {
+        if let Some(violation) = dir_mode_violation(dir, 0o700) {
+            violations.push(format!("{label}: {violation}"));
         }
-    } else {
-        known_defects.push(format!(
-            "data directory {} has mode {data_mode}, expected 700: created by `create_dir_all` \
-             in instance/create.rs, which inherits the umask (see repro_data_dir_mode)",
-            data_dir.display()
-        ));
-    }
-    if let Some(violation) = dir_mode_violation(&secrets_dir, 0o700) {
-        violations.push(format!("secrets directory: {violation}"));
     }
     for credential in credential_files(paths) {
         if let Some(violation) = file_mode_violation(&credential, 0o600) {

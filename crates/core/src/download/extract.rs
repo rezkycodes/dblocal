@@ -193,6 +193,9 @@ struct ExtractState {
     entries: u64,
     seen_dirs: HashSet<PathBuf>,
     stripped_any: bool,
+    /// Canonicalized relative paths of regular files extracted so far (after
+    /// strip_prefix). Hard links may only target these.
+    regular_files: HashSet<PathBuf>,
 }
 
 impl ExtractState {

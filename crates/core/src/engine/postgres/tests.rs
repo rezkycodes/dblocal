@@ -455,3 +455,41 @@ fn diagnose_unknown_for_unrelated_text() {
         StartFailure::Unknown
     );
 }
+
+#[test]
+fn sync_port_rewrites_managed_block_atomically_and_keeps_comments() {
+    let dir = tempdir().expect("tempdir");
+    let data = dir.path().join("data");
+    let run = dir.path().join("run");
+    fs::create_dir_all(&data).expect("data");
+    fs::create_dir_all(&run).expect("run");
+    fs::write(
+        data.join("postgresql.conf"),
+        "# user comment\nmax_connections = 100\n\n# DBLocal managed settings\nlisten_addresses = '127.0.0.1'\nport = 5432\nunix_socket_directories = '/old'\n# DBLocal managed settings end\n",
+    )
+    .expect("conf");
+    let plan = sync_port(&data, &run, 5544).expect("sync");
+    assert!(matches!(plan, SocketDir::Enabled(_)) || matches!(plan, SocketDir::Disabled));
+    let text = fs::read_to_string(data.join("postgresql.conf")).expect("read");
+    assert!(text.contains("# user comment"));
+    assert!(text.contains("max_connections = 100"));
+    assert!(text.contains("port = 5544"));
+    assert!(!text.contains("port = 5432"));
+    assert_eq!(text.matches("port = ").count(), 1);
+}
+
+#[test]
+fn sync_port_is_idempotent() {
+    let dir = tempdir().expect("tempdir");
+    let data = dir.path().join("data");
+    let run = dir.path().join("run");
+    fs::create_dir_all(&data).expect("data");
+    fs::create_dir_all(&run).expect("run");
+    fs::write(data.join("postgresql.conf"), "# base\n").expect("conf");
+    sync_port(&data, &run, 5544).expect("first");
+    let once = fs::read_to_string(data.join("postgresql.conf")).expect("read");
+    sync_port(&data, &run, 5544).expect("second");
+    let twice = fs::read_to_string(data.join("postgresql.conf")).expect("read");
+    assert_eq!(once, twice);
+    assert_eq!(once.matches("port = 5544").count(), 1);
+}
