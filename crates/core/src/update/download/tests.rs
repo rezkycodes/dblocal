@@ -135,3 +135,23 @@ fn effective_max_rejects_declared_over_hard_cap() {
     let err = effective_max(MAX_UPDATE_BYTES + 1, MAX_UPDATE_BYTES).expect_err("over");
     assert_eq!(err.code(), crate::update::error::CODE_UPDATE_MALFORMED);
 }
+
+#[test]
+fn effective_max_rejects_zero() {
+    let err = effective_max(0, MAX_UPDATE_BYTES).expect_err("zero");
+    assert_eq!(err.code(), crate::update::error::CODE_UPDATE_MALFORMED);
+}
+
+#[test]
+fn redact_url_strips_query() {
+    let url = reqwest::Url::parse("https://github.com/a/b?token=secret#frag").unwrap();
+    let r = redact_url(&url);
+    assert!(!r.contains("secret"));
+    assert!(!r.contains("frag"));
+}
+
+#[test]
+fn validate_url_allows_loopback_http_in_test_mode() {
+    let url = reqwest::Url::parse("http://127.0.0.1:1234/file").unwrap();
+    validate_url(&url, &UpdateDownloadOptions::loopback_for_tests()).expect("loopback");
+}
