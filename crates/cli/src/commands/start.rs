@@ -32,11 +32,17 @@ pub fn run(ctx: &mut Ctx<'_>, name: &str, timeout: u64) -> u8 {
     let mut rx = ctx.service.subscribe();
     let op = match ctx.service.start_instance(&view.id) {
         Ok(op) => op,
-        Err(DblError::InvalidTransition { from: "busy", .. }) => {
-            // The compare-and-set refused because another writer (another
-            // process, or a sibling service) claimed the row between our read
-            // and the write. F-CLI-02 AC3: the loser must not start a second
-            // engine; it waits for the winner and exits 0.
+        Err(DblError::InvalidTransition {
+            from: "busy" | "starting" | "running" | "stopping",
+            ..
+        }) => {
+            // The compare-and-set refused: another writer (another process, or
+            // a sibling service) claimed the row between our read and the write,
+            // so the status the service saw was already a process-holding one.
+            // `busy` is the documented shape; the concrete status is what a
+            // loser sees when it read the row just after the winner persisted
+            // it. F-CLI-02 AC3: the loser must not start a second engine; it
+            // waits for the winner and exits 0.
             output::stderr_line(ctx.err, messages::ERR_ALREADY_RUNNING);
             return wait_cross_process(ctx, &view.id, timeout);
         }

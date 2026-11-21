@@ -73,3 +73,42 @@ mechanism. This worker does not implement GUI behaviour.
   `list`/`list --json` over empty temp `DBLOCAL_HOME`.
 - E2e (ignored): real binary, real Valkey lifecycle, temp home, ports 20000-29999,
   cleanup guard. Run via `DBLOCAL_E2E=1 cargo xtask e2e`.
+
+## Mutation checks
+
+Two reversions were applied and the red output pasted here, so the tests are
+known to pin the behaviour rather than pass by accident.
+
+**1. `code_for` mapping `NotFound` to 1 instead of 3** (`output.rs`):
+
+```text
+% sed -i 's/DblError::NotFound { .. } => EXIT_NOT_FOUND/DblError::NotFound { .. } => EXIT_GENERAL/' crates/cli/src/output.rs
+% cargo test -p dblocal-cli --lib
+test cli::tests::exit_codes_follow_the_contract ... FAILED
+test commands::tests::inspect::exit_code_table_maps_codes ... FAILED
+  left: 1
+ right: 3
+test result: FAILED. 66 passed; 2 failed
+```
+
+**2. The non-interactive `delete` refusal made unreachable** (`delete.rs`,
+`if !ctx.is_interactive` -> `if !ctx.is_interactive && false`):
+
+```text
+% cargo test -p dblocal-cli --lib
+test commands::tests::inspect::delete_refuses_without_yes_when_not_interactive ... FAILED
+thread '...delete_refuses_without_yes_when_not_interactive' panicked at
+  crates/cli/src/commands/tests/inspect.rs:160:5
+test result: FAILED. 67 passed; 1 failed
+```
+
+## Start race — what the loser really sees
+
+`shared_store_race.rs` runs two `LocalService` instances over one temp home and
+releases both `start_instance` calls from a `Barrier`, 20+ rounds. Exactly one
+wins. The loser gets `DBL-1004`; the wording is either `busy` (the row moved
+between its read and the CAS) or the concrete `starting -> starting` (it read
+the row just after the winner persisted `Starting`). The first 40-run sweep
+found the second shape, so `start.rs` now treats `busy`, `starting`, `running`
+and `stopping` as "another process owns it": print `sudah berjalan`, wait on the
+shared store, exit 0. A 40-run sweep after the fix was 0 failures.

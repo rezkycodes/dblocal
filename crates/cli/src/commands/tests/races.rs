@@ -359,3 +359,140 @@ fn cross_process_wait_reports_a_vanished_instance() {
     );
     assert_eq!(code, EXIT_NOT_FOUND);
 }
+
+/// A service that reports the row already `Starting` when the start is refused,
+/// i.e. the loser read the row just after the winner persisted it.
+struct AlreadyClaimed {
+    inner: MockService,
+    target: InstanceId,
+    polls: std::sync::Mutex<usize>,
+}
+
+impl DblService for AlreadyClaimed {
+    fn list_instances(&self) -> dblocal_core::Result<Vec<dblocal_core::service::InstanceView>> {
+        let mut views = self.inner.list_instances()?;
+        let mut polls = self.polls.lock().expect("polls");
+        *polls += 1;
+        for view in &mut views {
+            if view.id == self.target {
+                view.status = if *polls == 1 {
+                    InstanceStatus::Stopped
+                } else {
+                    InstanceStatus::Running
+                };
+            }
+        }
+        Ok(views)
+    }
+    fn catalog(&self) -> dblocal_core::Result<dblocal_core::service::CatalogView> {
+        self.inner.catalog()
+    }
+    fn refresh_catalog(
+        &self,
+        force: bool,
+    ) -> dblocal_core::Result<dblocal_core::service::OperationId> {
+        self.inner.refresh_catalog(force)
+    }
+    fn validate_spec(&self, spec: &InstanceSpec) -> dblocal_core::Result<()> {
+        self.inner.validate_spec(spec)
+    }
+    fn suggest_port(&self, engine: EngineKey) -> dblocal_core::Result<Port> {
+        self.inner.suggest_port(engine)
+    }
+    fn create_instance(
+        &self,
+        spec: InstanceSpec,
+    ) -> dblocal_core::Result<dblocal_core::service::OperationId> {
+        self.inner.create_instance(spec)
+    }
+    fn start_instance(
+        &self,
+        _id: &InstanceId,
+    ) -> dblocal_core::Result<dblocal_core::service::OperationId> {
+        // What the real service returns when the row already says `Starting`.
+        Err(dblocal_core::DblError::InvalidTransition {
+            from: "starting",
+            to: "starting",
+        })
+    }
+    fn stop_instance(
+        &self,
+        id: &InstanceId,
+    ) -> dblocal_core::Result<dblocal_core::service::OperationId> {
+        self.inner.stop_instance(id)
+    }
+    fn delete_instance(
+        &self,
+        id: &InstanceId,
+        mode: dblocal_core::model::DeleteMode,
+    ) -> dblocal_core::Result<dblocal_core::service::OperationId> {
+        self.inner.delete_instance(id, mode)
+    }
+    fn change_port(&self, id: &InstanceId, port: Port) -> dblocal_core::Result<()> {
+        self.inner.change_port(id, port)
+    }
+    fn data_size(&self, id: &InstanceId) -> dblocal_core::Result<u64> {
+        self.inner.data_size(id)
+    }
+    fn set_autostart(&self, id: &InstanceId, enabled: bool) -> dblocal_core::Result<()> {
+        self.inner.set_autostart(id, enabled)
+    }
+    fn cancel_operation(
+        &self,
+        id: &dblocal_core::service::OperationId,
+    ) -> dblocal_core::Result<()> {
+        self.inner.cancel_operation(id)
+    }
+    fn connection_uri(
+        &self,
+        id: &InstanceId,
+        format: dblocal_core::service::UriFormat,
+    ) -> dblocal_core::Result<dblocal_core::secret::SecretString> {
+        self.inner.connection_uri(id, format)
+    }
+    fn tail_logs(&self, id: &InstanceId, lines: usize) -> dblocal_core::Result<Vec<String>> {
+        self.inner.tail_logs(id, lines)
+    }
+    fn watch_logs(&self, id: &InstanceId, enabled: bool) -> dblocal_core::Result<()> {
+        self.inner.watch_logs(id, enabled)
+    }
+    fn list_runtimes(&self) -> dblocal_core::Result<Vec<dblocal_core::model::Runtime>> {
+        self.inner.list_runtimes()
+    }
+    fn remove_runtime(&self, runtime: &str) -> dblocal_core::Result<()> {
+        self.inner.remove_runtime(runtime)
+    }
+    fn list_archives(&self) -> dblocal_core::Result<Vec<dblocal_core::model::ArchivedData>> {
+        self.inner.list_archives()
+    }
+    fn purge_archive(&self, archive: &str) -> dblocal_core::Result<()> {
+        self.inner.purge_archive(archive)
+    }
+    fn subscribe(&self) -> tokio::sync::broadcast::Receiver<dblocal_core::service::ServiceEvent> {
+        self.inner.subscribe()
+    }
+}
+
+#[test]
+fn start_refused_with_a_concrete_process_status_is_sudah_berjalan() {
+    let inner = MockService::deterministic();
+    let target = inner.seed_instance(
+        spec("claimed", EngineKey::Postgresql, "17.4", 5432),
+        InstanceStatus::Stopped,
+    );
+    let service = AlreadyClaimed {
+        inner,
+        target,
+        polls: std::sync::Mutex::new(0),
+    };
+    let (code, _o, err) = run_cmd(
+        &service,
+        &Command::Start {
+            name: "claimed".into(),
+            timeout: 5,
+        },
+        false,
+    );
+    assert_eq!(code, EXIT_OK, "err: {err}");
+    assert!(err.contains("sudah berjalan"), "err: {err}");
+}
