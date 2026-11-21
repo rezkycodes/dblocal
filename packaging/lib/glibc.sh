@@ -2,9 +2,8 @@
 # Shared glibc floor computation for DBLocal packaging scripts.
 # Sourced by packaging/{deb,rpm}/build scripts. Do not execute directly.
 #
-# Uses readelf (not objdump) because readelf parses ELF headers regardless of
-# host binutils target support; objdump on a stock x86_64 Ubuntu cannot read
-# AArch64 release binaries, which breaks arm64 package jobs in CI.
+# Uses readelf because it parses ELF headers regardless of the host binutils
+# target support, so an x86_64 runner can read an AArch64 release binary.
 
 # dblocal_glibc_floor <binary>
 # Prints the maximum GLIBC symbol version required by <binary> (e.g. "2.43").

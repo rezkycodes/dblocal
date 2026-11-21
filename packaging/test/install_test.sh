@@ -830,20 +830,18 @@ set -e
 if [ "$rc" -ne 0 ]; then pass "F3: empty readelf output fails"; else fail "F3: empty readelf output must fail"; fi
 assert_contains "$out" "could not determine GLIBC symbol versions" "F3: clear error for empty GLIBC"
 
-# G1: neither build script may invoke objdump again (readelf handles all archs).
-# Comments may mention objdump to explain why readelf is used; command usage must not.
+# G1: neither build script may mention objdump again (readelf handles all archs).
 log "-- test: G1 no objdump in packaging scripts"
 g1_objdump_hits="$(
   grep -nH 'objdump' "$repo_root/packaging/deb/build-deb.sh" \
     "$repo_root/packaging/rpm/build-rpm.sh" \
-    "$repo_root/packaging/lib/glibc.sh" \
-    | grep -vE ':[0-9]+:[[:space:]]*#' || true
+    "$repo_root/packaging/lib/glibc.sh" || true
 )"
 if [ -n "$g1_objdump_hits" ]; then
   printf '%s\n' "$g1_objdump_hits" >&2
-  fail "G1: objdump command/reference found in packaging scripts"
+  fail "G1: objdump reference found in packaging scripts"
 else
-  pass "G1: no objdump command use in deb/rpm/glibc scripts"
+  pass "G1: no objdump reference in deb/rpm/glibc scripts"
 fi
 
 # G1: shared glibc helper exists and is sourced by both scripts.
