@@ -11,7 +11,7 @@
 
 [CmdletBinding()]
 param(
-  [Parameter(Mandatory = $true)][string]$Version,
+  [Parameter(Mandatory = $false)][string]$Version = "",
   [Parameter(Mandatory = $true)][string]$DblocalExe,
   [string]$OutDir = "dist/msi"
 )
@@ -40,13 +40,42 @@ if (-not $candle -or -not $light) {
   throw "WiX candle.exe/light.exe not found. Install WiX Toolset v3 or set WIX."
 }
 
-$msiVersion = $Version -replace '^v', ''
-# WiX ProductVersion must be major.minor.build; strip prerelease metadata.
+# F2: explicit -Version is validated; default (no tag) becomes a snapshot.
+# F1: prerelease '-' maps to '~' in package semantics, but WiX ProductVersion
+# must be major.minor.build numeric; we keep raw for filename and strip for MSI.
+$rawVersion = $Version
+$isSnapshot = $false
+if ([string]::IsNullOrWhiteSpace($rawVersion)) {
+  $gitDesc = ""
+  try { $gitDesc = (& git -C (Split-Path -Parent (Split-Path -Parent $scriptDir)) describe --tags --always 2>$null) } catch {}
+  $gitDesc = "$gitDesc".Trim()
+  $stripped = $gitDesc -replace '^v', ''
+  if ($stripped -match '^[0-9]+\.[0-9]+\.[0-9]+([-~][0-9A-Za-z.]+)?$') {
+    $rawVersion = $stripped
+  } else {
+    $short = ""
+    try { $short = (& git -C (Split-Path -Parent (Split-Path -Parent $scriptDir)) rev-parse --short=12 HEAD 2>$null) } catch {}
+    $short = "$short".Trim()
+    if ([string]::IsNullOrWhiteSpace($short)) { $short = "unknown" }
+    $rawVersion = "0.0.0~git$short"
+    $isSnapshot = $true
+    Write-Host "info: no SemVer tag describes HEAD; using snapshot package version $rawVersion"
+  }
+} else {
+  $stripped = $rawVersion -replace '^v', ''
+  if ($stripped -notmatch '^[0-9]+\.[0-9]+\.[0-9]+([-~][0-9A-Za-z.]+)?$') {
+    throw "invalid version '$rawVersion': expected MAJOR.MINOR.PATCH with optional [-~]prerelease (e.g. 0.2.0, 0.2.0-rc.1)"
+  }
+  $rawVersion = $stripped
+}
+
+$msiVersion = $rawVersion
+# WiX ProductVersion must be major.minor.build; strip prerelease/snapshot metadata.
 if ($msiVersion -match '^(\d+\.\d+\.\d+)') { $msiVersion = $Matches[1] }
 else { $msiVersion = "0.0.0" }
 
 $wixobj = Join-Path $objDir "dblocal.wixobj"
-$msi = Join-Path $OutDir "dblocal-$Version-windows-x86_64.msi"
+$msi = Join-Path $OutDir "dblocal-$rawVersion-windows-x86_64.msi"
 
 & $candle.Source `
   -nologo `

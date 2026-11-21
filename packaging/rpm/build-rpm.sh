@@ -21,6 +21,8 @@ resolve_dir() {
 
 script_dir="$(resolve_dir "$(dirname -- "$0")")"
 repo_root="$(resolve_dir "$script_dir/../..")"
+# shellcheck source=packaging/lib/version.sh
+. "$repo_root/packaging/lib/version.sh"
 
 usage() {
   cat >&2 <<'USAGE'
@@ -32,14 +34,14 @@ Usage: build-rpm.sh [options]
 USAGE
 }
 
-VERSION=""
+VERSION_INPUT=""
 ARCH=""
 OUTPUT="dist/rpm"
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
-    --version) [ "$#" -ge 2 ] || { echo "error: --version requires a value" >&2; exit 2; }; VERSION="$2"; shift 2 ;;
-    --version=*) VERSION="${1#--version=}"; shift ;;
+    --version) [ "$#" -ge 2 ] || { echo "error: --version requires a value" >&2; exit 2; }; VERSION_INPUT="$2"; shift 2 ;;
+    --version=*) VERSION_INPUT="${1#--version=}"; shift ;;
     --arch) [ "$#" -ge 2 ] || { echo "error: --arch requires a value" >&2; exit 2; }; ARCH="$2"; shift 2 ;;
     --arch=*) ARCH="${1#--arch=}"; shift ;;
     --output) [ "$#" -ge 2 ] || { echo "error: --output requires a value" >&2; exit 2; }; OUTPUT="$2"; shift 2 ;;
@@ -51,12 +53,13 @@ done
 
 DBLOCAL_BIN="${DBLOCAL_BIN:-$HOME/.cache/dblocal-target-gui/release/dblocal}"
 
-if [ -z "$VERSION" ]; then
-  VERSION="$(git -C "$repo_root" describe --tags --always 2>/dev/null || echo 0.0.0-dev)"
+# F2: explicit --version is validated; untagged default becomes 0.0.0~git<hash>.
+# F1: prerelease '-' maps to '~' in package version for correct ordering.
+# RPM Version allows '~' for prerelease ordering; keep tag/file naming raw.
+dblocal_version_default_or_validate "$VERSION_INPUT" "$repo_root" VERSION_RAW RPM_VERSION VERSION_SNAPSHOT
+if [ "$VERSION_SNAPSHOT" = "1" ]; then
+  echo "info: snapshot build; package version $RPM_VERSION (raw: $VERSION_RAW)" >&2
 fi
-# RPM Version cannot contain '-'; map prerelease separators conservatively.
-RPM_VERSION="${VERSION#v}"
-RPM_VERSION="${RPM_VERSION//-/.}"
 
 if [ -z "$ARCH" ]; then
   case "$(uname -m)" in
@@ -75,6 +78,18 @@ if [ ! -x "$DBLOCAL_BIN" ]; then
   echo "error: DBLOCAL_BIN is not executable: $DBLOCAL_BIN" >&2
   exit 1
 fi
+
+# F3: compute libc floor from the binary (same check as deb). rpmbuild
+# auto-generates GLIBC requires; we log the computed floor so the build record
+# shows the real minimum. Fail clearly if objdump is missing or finds nothing.
+command -v objdump >/dev/null 2>&1 || { echo "error: required tool not found: objdump (needed to compute libc floor)" >&2; exit 1; }
+GLIBC_FLOOR="$(objdump -T "$DBLOCAL_BIN" | grep -oE 'GLIBC_[0-9]+(\.[0-9]+)+' | sort -V | tail -n 1)"
+if [ -z "$GLIBC_FLOOR" ]; then
+  echo "error: could not determine GLIBC symbol versions from $DBLOCAL_BIN (objdump -T produced no GLIBC_*)" >&2
+  exit 1
+fi
+GLIBC_FLOOR="${GLIBC_FLOOR#GLIBC_}"
+echo "info: computed libc floor from $DBLOCAL_BIN: GLIBC_${GLIBC_FLOOR}; rpmbuild will auto-generate matching libc requires" >&2
 
 if ! command -v rpmbuild >/dev/null 2>&1; then
   cat >&2 <<'ERR'

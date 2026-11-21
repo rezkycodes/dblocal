@@ -4,7 +4,7 @@ Section: devel
 Priority: optional
 Architecture: __ARCH__
 Depends: __DEPENDS__
-Recommends: libvulkan1
+Recommends: __RECOMMENDS__
 Maintainer: DBLocal Contributors <noreply@commandcode.ai>
 Homepage: https://github.com/rezkycodes/dblocal
 Description: Local database server manager

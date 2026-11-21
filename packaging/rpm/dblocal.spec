@@ -27,8 +27,10 @@ Source4:        LICENSE-RING-AWSLC-NOTES.md
 #   libxkbcommon.so.0              -> libxkbcommon
 #   libxkbcommon-x11.so.0          -> libxkbcommon-x11
 #   libz.so.1                      -> zlib-ng-compat or zlib (virtual provides)
-# libvulkan is recommended (not required): GPUI needs a host Vulkan driver;
-# missing Vulkan is reported with an actionable message (F-SPK-01 AC2).
+# Optional runtime backends loaded by dlopen in the GPUI stack (F4):
+# Vulkan, EGL, and Wayland client. Not hard Requires: GPUI can fall back to
+# X11/xcb; missing optional backends should not block install on minimal/headless
+# systems. libvulkan missing is reported with an actionable message (F-SPK-01 AC2).
 Requires:       glibc
 Requires:       libgcc
 Requires:       libxcb
@@ -36,6 +38,8 @@ Requires:       libxkbcommon
 Requires:       libxkbcommon-x11
 Requires:       zlib
 Recommends:     vulkan-loader
+Recommends:     libwayland-client
+Recommends:     mesa-libEGL
 
 %description
 DBLocal installs and runs local PostgreSQL, MySQL, MariaDB, and Valkey
