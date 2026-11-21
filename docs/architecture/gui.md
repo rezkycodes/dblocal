@@ -205,11 +205,34 @@ Events drive everything (`app.rs::apply_event` / `apply_event_with_cx`):
   reasoned-only (`docs/spikes/gpui/README.md` §6).
 - No idle timer (OPEN-08): the tray sends actions over a `flume` channel and the workspace parks on
   `recv_async`, so the loop wakes only on real activity. The tray menu is pushed on
-  `InstanceChanged`/`InstanceRemoved` — no polling.
+  `InstanceChanged`/`InstanceRemoved` — no polling. There is no `sleep`, `poll`, or timer in the
+  bridge (`service_bridge::spawn_bridge` does `rx.blocking_recv()` / `recv_async()` only) and the tray
+  pump (`start_tray_pump`) is a `recv_async` loop.
 - Tray actions call the **same** `start_instance`/`stop_instance`/`request_quit` methods the window
   uses, so the window reflects a tray action through the normal event path (F-TRY-01 AC2).
 - Previews never start the tray: `tray::enable_for_app()` is set by `run_with_service`, so a headless
   render cannot register a StatusNotifierItem on the test host.
+
+#### Tray latency (W2-B-r2, deliverable 5)
+
+Measured by `crates/gui/src/app/tray_latency.rs` (`tray_action_reaches_the_model_through_bridge`),
+which drives the real path named by the spec: `service.start_instance` emits `InstanceChanged` on the
+broadcast channel, `service_bridge::spawn_bridge` forwards it on its dedicated thread to a flume
+receiver, and the test updates `TrayMenuModel::from_views` with the received view. No GPUI test
+scheduler is used because it rejects cross-thread wakers; the measured path is bridge thread + model
+update.
+
+Declared parallel load: 4 busy-spin threads started inside the test (`CpuLoad::spawn(4)`, no
+`stress-ng`, no external process). `n=50`, one warm-up round discarded.
+
+| Metric | Value | Target |
+|---|---:|---:|
+| p50 | 0.1 ms | <= 1000 ms |
+| max | 0.1 ms | <= 1000 ms |
+| n | 50 | 50 |
+
+Command/output: `TRAY_LATENCY n=50 p50=0.1ms max=0.1ms target=1000ms load=4_busy_spin_threads`. The
+test asserts `max <= 1000.0`.
 
 ### Close and quit (F-TRY-02)
 
@@ -249,6 +272,10 @@ confirmation.
 | `app/tests_secret.rs` | `LocalService`-shaped URI/`.env` never reaches a `Label` before Show |
 | `quit.rs` | the pure quit machine |
 | `tray.rs` | the pure menu model + Linux ksni glue |
+
+## Known issue (W2-B-r2, a11y)
+
+A debug build panic was seen once on a real desktop with accessibility enabled: `Duplicate a11y node id: ... In a release build, this node would be silently discarded from the a11y tree.` It is a `debug_assert` in gpui (release builds drop the duplicate silently); it is not diagnosed in this round. Task W2-B2 will own it.
 
 ### Unverified per OS
 
