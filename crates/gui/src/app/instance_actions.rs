@@ -256,6 +256,12 @@ impl Workspace {
         });
     }
 
+    /// Toggles the plaintext for previews without a service call.
+    ///
+    /// `UriView` already keeps the full URI for masking derived blocks, so a
+    /// reveal needs no keychain round-trip. Making this local state removes the
+    /// last `self.service` call that could run on the GPUI thread; the
+    /// production reveal is [`Self::toggle_reveal`], which uses `bg`.
     pub(crate) fn toggle_reveal_sync(&mut self, id: &InstanceId) {
         let revealed = self.state.uri(id).is_some_and(UriView::is_revealed);
         if revealed {
@@ -264,12 +270,9 @@ impl Workspace {
             }
             return;
         }
-        if let Ok(secret) = self.service.connection_uri(id, UriFormat::Uri) {
-            if let Some(uri) = self.state.uri_mut(id) {
-                uri.reveal(secret);
-            } else {
-                self.state.set_uri(id, &secret);
-            }
+        if let Some(uri) = self.state.uri_mut(id) {
+            let secret = uri.secret().clone();
+            uri.reveal(secret);
         }
     }
 

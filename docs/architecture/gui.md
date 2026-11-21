@@ -170,6 +170,55 @@ Preview/render constructors (`Workspace::new_preview`) read synchronously on pur
 not on a user path, they seed a deterministic frame, and they never start background work that
 could change the render between frames (`bg_startup = false`).
 
+### Every `DblService` call site and its thread (W2-B-r2, deliverable 4)
+
+Audited with `git grep -n 'self\.service\.' crates/gui/src/`. `DblService` is synchronous; the only
+permitted UI path is `Workspace::bg`, which runs the closure on `cx.background_spawn` (a GPUI
+background executor thread, never the render thread) and applies the result inside
+`this.update(...)`.
+
+| Site | Call | Runs on | Proof |
+|---|---|---|---|
+| `app/background.rs:56-57` | `list_instances`, `list_runtimes` | background | inside `self.bg(cx, move \|\| { … })` at `:54` |
+| `app/background.rs:77-80` | `list_instances`, `catalog`, `list_runtimes`, `refresh_catalog` | background | inside `self.bg` at `:75` |
+| `app/background.rs:143` | `catalog` | background | inside `self.bg` at `:141` |
+| `app/instance_actions.rs:26,33` | `watch_logs`, `connection_uri` | background | inside `self.bg` at `:25` / `:32` |
+| `app/instance_actions.rs:55` | `connection_uri` (`.env`) | background | inside `self.bg` at `:54` |
+| `app/instance_actions.rs:76` | `suggest_port` | background | inside `self.bg` at `:75` |
+| `app/instance_actions.rs:91` | `tail_logs` | background | inside `self.bg` at `:90` |
+| `app/instance_actions.rs:119` | `data_size` | background | inside `self.bg` at `:118` |
+| `app/instance_actions.rs:145` | `start_instance` | background | inside `self.bg` at `:144` |
+| `app/instance_actions.rs:161` | `stop_instance` | background | inside `self.bg` at `:160` |
+| `app/instance_actions.rs:208` | `connection_uri` (copy) | background | inside `self.bg` at `:207` |
+| `app/instance_actions.rs:242` | `connection_uri` (reveal) | background | inside `self.bg` at `:241` |
+| `app/instance_actions.rs:293` | `set_autostart` | background | inside `self.bg` at `:292` |
+| `app/instance_actions.rs:331,371` | `suggest_port` | background | inside `self.bg` at `:330` / `:370` |
+| `app/instance_actions.rs:455` | `create_submit::submit` → `validate_spec`, `create_instance` | background | inside `self.bg` at `:454` |
+| `app/instance_actions.rs:493` | `data_size` | background | inside `self.bg` at `:492` |
+| `app/instance_actions.rs:531` | `delete_instance` | background | inside `self.bg` at `:530` |
+| `app/quit_flow.rs:54` | `stop_instance` | background | inside `self.bg` at `:53` |
+| `app/workspace_api.rs:267` | `change_port` + `start_instance` | background | inside `self.bg` at `:264` |
+| `app.rs:340,361,375` | `watch_logs(false)` | background | inside `self.bg` at `:339`/`:360`/`:374` |
+| `service_bridge.rs:74` | `subscribe()` | bridge thread | `spawn_bridge` runs `forward(events, tx)` on `runtime.block_on` in the `dblocal-service-bridge` thread |
+
+**The one call that ran on the GPUI thread, and the fix.** `app/instance_actions.rs:267` used to be
+`toggle_reveal_sync`, which called `self.service.connection_uri(...)` directly from a `&mut self`
+method — a GPUI-thread call that can block on the OS keychain. It is only used by the preview
+constructors (`preview_revealed`); the production reveal path is `toggle_reveal`, which already goes
+through `bg`. The synchronous helper therefore stays but is confined to previews, alongside
+`load_logs_sync`, `open_tab_sync` and `new_preview`'s initial reads. These are documented as
+preview-only because they seed a deterministic frame and never run on a user path
+(`Workspace::new_preview` sets `bg_startup = false`).
+
+Two dead synchronous wrappers were removed in this round rather than left unreachable:
+`Workspace::refresh_instances` (was `#[allow(dead_code)]`, called `list_instances` and
+`list_runtimes` on the caller's thread) and `service_suggest_port` / `service_connection_uri` /
+`service_change_port`. Nothing calls them; leaving them invites a future GPUI-thread call.
+
+The proof that the background rule holds is the 2 s slow-service test:
+`app::bg_service_tests::slow_service_calls_do_not_block_gpui` fires `refresh_instances_bg`, toggles
+the palette immediately and asserts the toggle took under 500 ms while every fake call sleeps 2 s.
+
 ### Startup (deliverable 3, F-CAT-01/02)
 
 `Workspace::new` starts with an **offline** catalog read model and an empty instance list, seeds the
