@@ -364,6 +364,18 @@ impl GatedProbe {
     pub fn arm(&self) {
         self.gate_next_validate.store(true, Ordering::SeqCst);
     }
+
+    /// Clears `reached` and any pending release so the gate can be used again.
+    ///
+    /// A test that observes "did the supervisor reach `validate`?" across two
+    /// phases must reset between them, and must release any parked call before
+    /// asserting: otherwise a parked task survives into teardown and hangs the
+    /// test process instead of failing it.
+    pub fn reset(&self) {
+        *self.reached.lock().unwrap() = false;
+        *self.release.lock().unwrap() = None;
+        self.gate_next_validate.store(false, Ordering::SeqCst);
+    }
 }
 
 impl ProcessProbe for GatedProbe {

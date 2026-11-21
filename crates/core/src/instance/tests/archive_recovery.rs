@@ -202,3 +202,92 @@ fn a_recreated_name_records_its_own_second_archive() {
         "the first xx archive row is untouched"
     );
 }
+
+#[test]
+fn recovery_skips_a_recorded_directory_that_sorts_last() {
+    // The `!taken.contains(..)` filter must be load-bearing, not just covered by
+    // ordering. Here the directory an existing row already points at sorts
+    // AFTER the crashed delete's own directory, so `sort(); pop()` would pick the
+    // recorded one unless the filter removes it first. Recovery must record the
+    // crashed delete's own (earlier-stamped) directory and must not create a
+    // second row for the recorded one.
+    //
+    // Mutation check (R10): delete the `.filter(|path| !taken.contains(..))`
+    // line in `reconcile.rs::unrecorded_archive` and this test fails with
+    //   thread '...recovery_skips_a_recorded_directory_that_sorts_last'
+    //   panicked at crates/core/src/instance/tests/archive_recovery.rs:269:10:
+    //   the crashed delete's own directory is recorded
+    // because `sort(); pop()` then picks the recorded `xx-1700000000009`.
+    let h = Harness::new(EngineKey::Postgresql);
+    let archive_root = h.paths.archive_dir();
+    std::fs::create_dir_all(&archive_root).expect("archive root");
+
+    let xx = create(&h, "xx");
+
+    // A directory an existing row already points at, whose stamp sorts LAST.
+    let recorded_dir = archive_root.join("xx-1700000000009");
+    std::fs::create_dir_all(&recorded_dir).expect("recorded dir");
+    std::fs::write(recorded_dir.join("recorded.marker"), b"recorded").expect("marker");
+    h.store()
+        .add_archive(&ArchivedData::new(
+            "arch-already-there",
+            xx.name().clone(),
+            EngineKey::Postgresql,
+            "18.7",
+            recorded_dir.clone(),
+            1,
+            SystemTime::UNIX_EPOCH,
+        ))
+        .expect("record existing archive");
+
+    // The crashed delete's own archive directory, stamped BEFORE the recorded
+    // one, so plain `sort(); pop()` would wrongly choose the recorded one.
+    let own_dir = archive_root.join("xx-1600000000001");
+    std::fs::create_dir_all(&own_dir).expect("own dir");
+    std::fs::write(own_dir.join("own.marker"), b"own").expect("marker");
+
+    // Crash the delete of `xx` after the rename: data gone, row still Deleting,
+    // own archive directory unrecorded.
+    crashed_after_move(&h, xx.id(), "xx");
+
+    let restarted = super::harness::restart(&h.paths, std::sync::Arc::clone(&h.procs));
+    super::harness::wait_until_row_gone(&restarted, xx.id(), 4);
+
+    let archives = restarted.service.list_archives().expect("archives");
+    // Exactly two rows: the pre-existing one and the recovered own directory.
+    assert_eq!(
+        archives.len(),
+        2,
+        "recovery adds its own directory and no duplicate: {archives:?}"
+    );
+    let recovered = archives
+        .iter()
+        .find(|archive| archive.id().starts_with("arch-"))
+        .filter(|archive| {
+            super::super::helpers::normalize(archive.path())
+                == super::super::helpers::normalize(&own_dir)
+        })
+        .expect("the crashed delete's own directory is recorded");
+    assert_eq!(
+        super::super::helpers::normalize(recovered.path()),
+        super::super::helpers::normalize(&own_dir),
+        "recovery recorded the already-recorded directory instead of its own"
+    );
+    // No second row for the recorded directory.
+    let for_recorded = archives
+        .iter()
+        .filter(|archive| {
+            super::super::helpers::normalize(archive.path())
+                == super::super::helpers::normalize(&recorded_dir)
+        })
+        .count();
+    assert_eq!(
+        for_recorded, 1,
+        "the already-recorded directory keeps exactly one row"
+    );
+    assert!(own_dir.join("own.marker").exists(), "own data survives");
+    assert!(
+        recorded_dir.join("recorded.marker").exists(),
+        "recorded data survives"
+    );
+}

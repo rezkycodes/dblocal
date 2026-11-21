@@ -1,6 +1,6 @@
 //! In-process operation registry: one operation per instance at a time.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -9,6 +9,14 @@ use crate::download::CancellationToken;
 use crate::error::Result;
 use crate::model::InstanceId;
 use crate::service::OperationId;
+
+/// How many finished-operation ids are retained.
+///
+/// The set exists only so a consumer that subscribed after an operation finished
+/// can still notice it completed. Nothing cares about an operation that finished
+/// long ago, so a small window is plenty; the cap stops a long-lived process from
+/// growing one entry per operation forever.
+pub const FINISHED_HISTORY: usize = 1024;
 
 /// Operation ids and per-instance exclusivity.
 #[derive(Clone, Debug, Default)]
@@ -21,14 +29,15 @@ pub struct Ops {
 struct OpsInner {
     locked: Mutex<HashSet<InstanceId>>,
     cancels: Mutex<HashMap<OperationId, CancellationToken>>,
-    /// Operations that have reported `OperationFinished`.
+    /// Operations that have reported `OperationFinished`, oldest first.
     ///
     /// Kept so a consumer that subscribed after the operation finished (a test
     /// harness, or a late UI) can still learn that it completed instead of
-    /// waiting forever on an event it never saw. Bounded: only the ids of
-    /// operations finished in this process are retained, and a fresh service
-    /// starts empty.
-    finished: Mutex<HashSet<OperationId>>,
+    /// waiting forever on an event it never saw. Bounded to the most recent
+    /// [`FINISHED_HISTORY`] ids: a `VecDeque` in insertion order evicts the oldest
+    /// when a new one arrives, so a process that runs for a week does not retain
+    /// one id per operation.
+    finished: Mutex<VecDeque<OperationId>>,
 }
 
 impl Ops {
@@ -95,16 +104,29 @@ impl Ops {
     }
 
     /// Records that an operation finished and drops its cancellation token.
+    ///
+    /// Idempotent: a repeated `finish` for the same id must not append a second
+    /// copy, because that would evict a still-recent operation from the window
+    /// early.
     pub fn finish(&self, id: &OperationId) {
         if let Ok(mut cancels) = self.inner.cancels.lock() {
             cancels.remove(id);
         }
         if let Ok(mut finished) = self.inner.finished.lock() {
-            finished.insert(id.clone());
+            if finished.contains(id) {
+                return;
+            }
+            finished.push_back(id.clone());
+            // Evict the oldest beyond the window: a consumer only ever asks
+            // about an operation it just missed, so old ids are worthless and
+            // must not accumulate.
+            while finished.len() > FINISHED_HISTORY {
+                finished.pop_front();
+            }
         }
     }
 
-    /// Whether `id` has reported `OperationFinished`.
+    /// Whether `id` has reported `OperationFinished` and is still in the window.
     ///
     /// Lets a caller that may have missed the broadcast (it subscribed after the
     /// operation completed) detect completion by polling, instead of blocking on
@@ -116,6 +138,17 @@ impl Ops {
             .lock()
             .map(|finished| finished.contains(id))
             .unwrap_or(false)
+    }
+
+    /// How many finished-operation ids are currently retained, for the bound
+    /// test.
+    #[cfg(test)]
+    pub fn finished_len(&self) -> usize {
+        self.inner
+            .finished
+            .lock()
+            .map(|finished| finished.len())
+            .unwrap_or(0)
     }
 }
 
@@ -137,5 +170,57 @@ impl Drop for InstanceLock {
         if let Ok(mut locked) = self.inner.locked.lock() {
             locked.remove(&self.id);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_finished_history_is_bounded_and_keeps_the_newest() {
+        let ops = Ops::new();
+        // One more than the window, so eviction must have happened.
+        let total = FINISHED_HISTORY + 76;
+        let mut ids = Vec::with_capacity(total);
+        for _ in 0..total {
+            let id = ops.next_id();
+            ops.finish(&id);
+            ids.push(id);
+        }
+
+        assert_eq!(
+            ops.finished_len(),
+            FINISHED_HISTORY,
+            "the history never grows past its bound"
+        );
+        // The newest are present; the oldest are gone.
+        assert!(
+            ops.is_finished(ids.last().expect("at least one")),
+            "the most recent finish is retained"
+        );
+        assert!(
+            ops.is_finished(&ids[total - FINISHED_HISTORY]),
+            "the oldest id still inside the window is retained"
+        );
+        assert!(!ops.is_finished(&ids[0]), "the first id has been evicted");
+        assert!(
+            !ops.is_finished(&ids[total - FINISHED_HISTORY - 1]),
+            "one past the window is evicted"
+        );
+    }
+
+    #[test]
+    fn finishing_twice_does_not_double_count() {
+        let ops = Ops::new();
+        let id = ops.next_id();
+        ops.finish(&id);
+        ops.finish(&id);
+        assert!(ops.is_finished(&id));
+        assert_eq!(
+            ops.finished_len(),
+            1,
+            "a repeated finish must not append a second copy that could evict a live id"
+        );
     }
 }

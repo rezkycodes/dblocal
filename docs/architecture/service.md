@@ -276,6 +276,20 @@ start time and executable — not a bare PID. A marker is live only when
 row is still recovered (AGENTS.md invariant 7). A per-operation nonce additionally
 covers two services in one process.
 
+**When the owner's own identity cannot be recorded.** `own_identity` reads this
+process from the probe, but a hardened kernel (or a scripted probe in a test) can
+refuse to report it; the marker then falls back to the current instant as its
+start time. A reader in another process can never validate that stamp, so
+`delete_in_flight` answers "not in flight" and reconciliation treats the
+`Deleting` row as **interrupted**. That is safe by construction, because recovery
+never purges: with the data directory still present the delete is aborted back to
+`Stopped` and the user can retry in either mode; with the data gone the row is
+removed (registering an unrecorded `archive/<name>-<digits>` first when one
+exists). The worst case is that a delete still running in another process is
+finished slightly early; the case that matters — never discarding data on a guess
+— holds either way. Pinned by
+`tests/recovery.rs::an_unverifiable_marker_identity_is_treated_as_interrupted_and_never_purges`.
+
 ### Stale claims and the compare-and-set
 
 `helpers::claim_from(inner, id, expected, event)` applies the state machine to
@@ -308,6 +322,33 @@ happen only when that CAS wins. A stop that finishes between the probe and the
 write therefore wins, and a clean stop is never relabelled a crash. When a watched
 process really disappears the row becomes `Failed` with the log tail diagnosed —
 never a silent `Running`.
+
+The "operation in flight" skip is not redundant with the CAS. A `Running` row is
+briefly lock-held by the start operation between persisting `Running` and dropping
+its `InstanceLock`; during that window the supervisor must not even probe it. A
+second gated test holds the lock, arms the probe gate, and asserts the supervisor
+never reaches `validate` while the row is busy — and does once the lock is
+released (`tests/gates.rs::the_supervisor_skips_a_running_row_while_an_operation_holds_it`).
+Removing the guard fails that test.
+
+### Operation bookkeeping
+
+`Ops` owns three short-lived maps behind one `Arc`: which instances an operation
+has locked (the in-process exclusivity), the cancellable operations' tokens, and
+the ids of operations that reported `OperationFinished`. The finished ids exist so
+a consumer that subscribed after an operation ended can still learn that it did
+(by polling `is_finished` instead of blocking on a broadcast it missed). That
+history is bounded to the most recent `FINISHED_HISTORY` (1024) ids in insertion
+order, evicting the oldest, so a process that runs for a week does not retain one
+id per operation.
+
+The service shutdown latch is a **handle counter**, not `Arc::strong_count`: the
+supervisor task and the workers hold their own `Arc<Inner>`, so the strong count
+never reaches one while they run. Every `LocalService::clone` increments the
+counter and each `Drop` decrements it; only the decrement that reaches zero sets
+`stopping` and stops the watchers. A clone dropped while another handle lives
+therefore leaves the service fully working
+(`tests/gates.rs::dropping_a_clone_does_not_stop_the_service_but_the_last_handle_does`).
 
 ### Catalog (`catalog_ops.rs`)
 
@@ -368,9 +409,9 @@ is accepted each time with at most one spawn.
 | `download.rs` | Real loopback server + real `tar.gz`: download→verify→extract with stages; wrong checksum leaves no runtime; cancel mid-download |
 | `catalog.rs` | Platform filtering; failed refresh keeps the catalog; TTL rule; `CatalogUpdated`; `suggest_port` skips owned ports; `validate_spec` names conflicts |
 | `mutations.rs` | Immediate-exit diagnosis and failure; event sequences for create/start/stop/delete; `change_port`; `data_size`; `set_autostart`; `tail_logs`; unknown operation; a refused kill leaves the row `Running` with its identity; a stop with an unreadable credential still succeeds |
-| `gates.rs` | Deterministic gate races: a stale supervisor decision never overwrites a finished stop; a claim from a stale status is refused (start and delete); the in-flight marker trusts identity, not a bare PID; `rollback_create` refuses a symlinked instance directory |
-| `archive_recovery.rs` | Archive recovery matches only `<name>-<digits>` (never a longer name); records nothing when no own directory exists; a recreated name records its own second archive by stable id |
-| `recovery.rs` | Delete crash-point table (both modes) never loses data; interrupted create leaves nothing behind and emits `InstanceRemoved`; live `Stopping` adopted as `Running`; in-flight delete owned elsewhere is left alone |
+| `gates.rs` | Deterministic gate races: a stale supervisor decision never overwrites a finished stop; the supervisor skips a `Running` row while an operation holds its lock and probes it once free; a claim from a stale status is refused (start and delete); the in-flight marker trusts identity, not a bare PID; `rollback_create` refuses a symlinked instance directory; dropping a clone does not stop the service but the last handle does |
+| `archive_recovery.rs` | Archive recovery matches only `<name>-<digits>` (never a longer name); records nothing when no own directory exists; a recreated name records its own second archive by stable id; a recorded directory that sorts last is skipped so recovery keeps its own |
+| `recovery.rs` | Delete crash-point table (both modes) never loses data; interrupted create leaves nothing behind and emits `InstanceRemoved`; live `Stopping` adopted as `Running`; in-flight delete owned elsewhere is left alone; an unverifiable marker identity is treated as interrupted and never purges |
 | `races.rs` | Delete ends with `InstanceRemoved`; failed create ends with `InstanceRemoved` and one `OperationFinished(Err)`; a recovered `Failed` row carries a diagnosis from the log; a delete refuses a surviving engine |
 | `safety.rs` | Two-service start race and two-service delete race (50 rounds each, both released from a `Barrier`, exactly one spawn / one removal); archive traversal/absolute/symlink; runtime in use; reconciliation adopts/clears; supervisor notices a kill; log watcher idle; sentinel scan; corrupt row cannot delete outside home |
 

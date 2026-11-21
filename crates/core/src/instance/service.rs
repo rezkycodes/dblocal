@@ -552,6 +552,30 @@ impl LocalService {
         self.inner.ops.is_finished(op)
     }
 
+    /// Whether this service has been told to stop (its last handle was dropped).
+    #[cfg(test)]
+    pub(crate) fn stopping_for_test(&self) -> bool {
+        self.inner.is_stopping()
+    }
+
+    /// Whether the supervisor task is still looping.
+    #[cfg(test)]
+    pub(crate) fn supervisor_alive_for_test(&self) -> bool {
+        self.inner
+            .supervisor_alive
+            .load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// Acquires the per-instance operation lock, for a test that must prove the
+    /// supervisor skips a `Running` row while an operation holds it.
+    #[cfg(test)]
+    pub(crate) fn lock_instance_for_test(
+        &self,
+        id: &InstanceId,
+    ) -> Result<super::registry::InstanceLock> {
+        self.inner.ops.lock_instance(id)
+    }
+
     /// Runs the real create-rollback, for a test that must reach the path guard
     /// rather than assert on it indirectly.
     #[cfg(test)]
@@ -579,10 +603,11 @@ impl Drop for LocalService {
     fn drop(&mut self) {
         // The supervisor task and the background worker hold their own
         // `Arc<Inner>`, so `Arc::strong_count` never reaches one while they run
-        // and could not be used to detect "last handle". Set the flag
-        // unconditionally: a clone that is still alive keeps working (each
-        // operation tolerates the flag being set), and a genuine shutdown stops
-        // the supervisor and the watchers.
+        // and could not be used to detect "last handle". A handle counter does:
+        // every `clone()` increments it and each `drop()` decrements it, and only
+        // the decrement that reaches zero (the `== 1` returned before subtracting)
+        // stops the supervisor and the watchers. A clone that is still alive
+        // therefore keeps the service fully working.
         if self
             .inner
             .handles

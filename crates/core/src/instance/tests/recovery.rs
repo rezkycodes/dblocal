@@ -406,3 +406,77 @@ fn reconciliation_skips_a_deleting_row_owned_by_a_live_delete() {
         "aborting the delete keeps the data"
     );
 }
+
+#[test]
+fn an_unverifiable_marker_identity_is_treated_as_interrupted_and_never_purges() {
+    // `own_identity` falls back to `SystemTime::now()` when the probe cannot
+    // observe our own process. A reader in another process can never validate
+    // that start time, so `delete_in_flight` answers `false` and reconciliation
+    // treats the `Deleting` row as interrupted. With the data directory still
+    // present that means "abort the delete back to `Stopped`", never a purge.
+    //
+    // This pins the documented behaviour in docs/architecture/service.md: an
+    // unverifiable marker degrades to recovery, and recovery never purges.
+    //
+    // Mutation check: make `delete_in_flight` trust a bare PID instead of the
+    // recorded start time and this test fails with
+    //   panicked at .../recovery.rs:231:9:
+    //   reconciliation never settled the interrupted delete
+    // because the row stays `Deleting` forever instead of aborting to `Stopped`.
+    let h = Harness::new(EngineKey::Postgresql);
+    let port = test_port();
+    let spec = h.spec("unverifiable", EngineKey::Postgresql, port);
+    h.create(spec);
+    let instance = h.instances().into_iter().next().expect("instance");
+    let id = instance.id().clone();
+    let name = instance.name().clone();
+
+    // Data still there, so the safe answer is "abort, do not purge".
+    let data_dir = h.paths.data_dir(&name);
+    std::fs::write(data_dir.join("precious.txt"), b"keep").expect("precious data");
+    h.store()
+        .transition_status(&id, InstanceStatus::Stopped, InstanceStatus::Deleting)
+        .expect("deleting");
+
+    // A marker that names a live process, but with a start time the probe will
+    // never match (a foreign instant) — the same shape `own_identity`'s `now()`
+    // fallback leaves behind.
+    let owner = h.procs.spawn("/some/other/dblocal");
+    let marker = h
+        .paths
+        .instance_dir(&name)
+        .join(super::super::delete::IN_FLIGHT_MARKER);
+    std::fs::write(
+        &marker,
+        format!(
+            "pid={}\nstarted=1.0\nexe={}\nnonce=foreign\n",
+            owner.pid(),
+            owner.exe().display()
+        ),
+    )
+    .expect("marker");
+
+    let restarted = super::harness::restart(&h.paths, Arc::clone(&h.procs));
+    wait_until_settled(&restarted, &id);
+
+    let row = restarted
+        .instance(&id)
+        .expect("the row survives an interrupted delete");
+    assert_eq!(
+        row.status(),
+        InstanceStatus::Stopped,
+        "an unverifiable marker means interrupted, so the delete aborts"
+    );
+    assert!(
+        data_dir.join("precious.txt").exists(),
+        "recovery must never purge data it cannot prove was archived"
+    );
+    assert!(
+        restarted
+            .service
+            .list_archives()
+            .expect("archives")
+            .is_empty(),
+        "no archive is invented for a delete that never moved the data"
+    );
+}

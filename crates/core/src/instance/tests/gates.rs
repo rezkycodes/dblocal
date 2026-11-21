@@ -298,3 +298,99 @@ fn a_rollback_through_a_symlinked_instance_directory_removes_nothing() {
         "the row is left in place when cleanup refused"
     );
 }
+
+#[test]
+fn dropping_a_clone_does_not_stop_the_service_but_the_last_handle_does() {
+    // The supervisor task and the workers hold `Arc<Inner>`, so `strong_count`
+    // cannot tell "last handle". A handle counter can: a clone dropped while the
+    // original lives must leave the service fully working, and only the final
+    // drop sets `stopping`. This is the defect found in review round 2, gated.
+    let h = Harness::new(EngineKey::Postgresql);
+    let clone = h.service.clone();
+    assert!(!h.is_stopping(), "a fresh service is not stopping");
+
+    // Dropping the clone while the harness's own handle lives must not stop it.
+    drop(clone);
+    assert!(
+        !h.is_stopping(),
+        "dropping a clone must not tell the service to stop"
+    );
+    assert!(
+        h.supervisor_alive(),
+        "the supervisor keeps running while a handle is alive"
+    );
+    // It still works after the clone is gone.
+    let port = test_port();
+    let spec = h.spec("after-clone", EngineKey::Postgresql, port);
+    h.create(spec);
+
+    // The last drop must set `stopping`. `inner` keeps the state readable after
+    // the harness (and its runtime) is gone, so this observes the real flag the
+    // supervisor and the workers check.
+    let inner = Arc::clone(h.service.inner());
+    assert!(!inner.is_stopping(), "still running before the last drop");
+    drop(h);
+    assert!(
+        inner.is_stopping(),
+        "the last handle tells the service to stop"
+    );
+}
+
+#[test]
+fn the_supervisor_skips_a_running_row_while_an_operation_holds_it() {
+    // A `Running` row is briefly lock-held by the start operation between
+    // persisting `Running` and dropping its `InstanceLock`, so the `is_busy`
+    // guard is not dead code. With the probe gated, the supervisor would park in
+    // `validate` the moment it looked at the row; while the lock is held it must
+    // not reach `validate`, and once the lock is released it must.
+    //
+    // The gate is reset between the two phases and any parked call is released
+    // before asserting, so a failure is a clean panic rather than a hang.
+    //
+    // Mutation check (R1b): remove the `if inner.ops.is_busy(..) { continue; }`
+    // guard in `supervisor.rs::tick` and the first phase sees `reached == true`,
+    // failing with
+    //   assertion failed: the supervisor must not act on a row an operation holds
+    let procs = Arc::new(FakeProcs::new());
+    let gated = Arc::new(GatedProbe::new(Arc::clone(&procs)));
+    let h = super::harness::with_gated_probe(
+        EngineKey::Postgresql,
+        Arc::clone(&procs),
+        Arc::clone(&gated),
+        Duration::from_millis(15),
+    );
+    let port = test_port();
+    let spec = h.spec("busy-row", EngineKey::Postgresql, port);
+    h.create(spec);
+    let instance = h.instances().into_iter().next().expect("instance");
+    let id = instance.id().clone();
+
+    let ops = h.service.start_instance(&id).expect("start");
+    h.run(ops);
+    h.wait_for_status(&id, InstanceStatus::Running);
+
+    // Phase 1: hold the instance lock and arm the gate. The supervisor must not
+    // validate this `Running` row while the operation owns it.
+    let lock = h.lock_instance(&id);
+    gated.reset();
+    gated.arm();
+    let reached_while_busy = gated.wait_reached(Duration::from_millis(200));
+    // Whatever happened, release the gate so no parked task outlives this test.
+    gated.release_with(ProcessState::Match);
+    drop(lock);
+
+    assert!(
+        !reached_while_busy,
+        "the supervisor must not act on a row an operation holds"
+    );
+
+    // Phase 2: the lock is gone, so the supervisor must now reach `validate`.
+    gated.reset();
+    gated.arm();
+    let reached_when_free = gated.wait_reached(Duration::from_secs(5));
+    gated.release_with(ProcessState::Match);
+    assert!(
+        reached_when_free,
+        "the supervisor must validate the row once the operation released it"
+    );
+}

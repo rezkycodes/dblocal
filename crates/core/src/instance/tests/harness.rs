@@ -236,6 +236,24 @@ impl Harness {
         self.service.has_failure_record(id)
     }
 
+    /// Whether this harness's service has been told to stop.
+    pub fn is_stopping(&self) -> bool {
+        self.service.stopping_for_test()
+    }
+
+    /// Whether this harness's supervisor task is still looping.
+    pub fn supervisor_alive(&self) -> bool {
+        self.service.supervisor_alive_for_test()
+    }
+
+    /// Acquires the per-instance operation lock, for a test that must prove the
+    /// supervisor skips a busy row.
+    pub fn lock_instance(&self, id: &InstanceId) -> super::super::registry::InstanceLock {
+        self.service
+            .lock_instance_for_test(id)
+            .expect("instance lock")
+    }
+
     /// The stored status of the named instance, if it exists.
     pub fn instance_status(&self, name: &str) -> Option<InstanceStatus> {
         self.instances()
