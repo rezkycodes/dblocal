@@ -130,7 +130,54 @@ fn placeholder_card(
     spec: &PlaceholderCard,
     theme: &Theme,
 ) -> impl IntoElement {
-    let mut card_box = card(spec.title, theme);
+    // The prototype's Databases create card puts title + field + button on one
+    // header row. Detect that shape so we don't stack them and crush padding.
+    let header_row = spec.title.is_some()
+        && spec.controls.len() == 2
+        && spec.controls[0].kind == format::PlaceholderControlKind::Field
+        && spec.controls[1].kind == format::PlaceholderControlKind::Button;
+
+    let mut card_box = if header_row {
+        let mut hdr = h_flex().gap_2().items_center();
+        if let Some(title) = spec.title {
+            hdr = hdr.child(
+                div().flex_1().child(
+                    Label::new(title.to_owned())
+                        .text_sm()
+                        .font_weight(gpui_kit::FontWeight::SEMIBOLD),
+                ),
+            );
+        }
+        for (control_index, control) in spec.controls.iter().enumerate() {
+            hdr = hdr.child(placeholder_control(
+                tab,
+                index,
+                control_index,
+                control,
+                theme,
+            ));
+        }
+        let mut c = card(None, theme);
+        c = c.child(hdr);
+        c
+    } else {
+        let mut c = card(spec.title, theme);
+        if !spec.controls.is_empty() {
+            let mut row = h_flex().gap_2().items_center().flex_wrap();
+            for (control_index, control) in spec.controls.iter().enumerate() {
+                row = row.child(placeholder_control(
+                    tab,
+                    index,
+                    control_index,
+                    control,
+                    theme,
+                ));
+            }
+            c = c.child(row);
+        }
+        c
+    };
+
     if let Some(columns) = spec.columns {
         card_box = card_box.child(
             Label::new(columns.to_owned())
@@ -159,19 +206,6 @@ fn placeholder_card(
                         .text_color(theme.muted_foreground),
                 ),
         );
-    }
-    if !spec.controls.is_empty() {
-        let mut row = h_flex().gap_2().flex_wrap();
-        for (control_index, control) in spec.controls.iter().enumerate() {
-            row = row.child(placeholder_control(
-                tab,
-                index,
-                control_index,
-                control,
-                theme,
-            ));
-        }
-        card_box = card_box.child(row);
     }
     card_box
 }

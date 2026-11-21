@@ -235,6 +235,10 @@ impl Workspace {
     }
 
     /// A virtualised list over the buffer, so a frame clones pointers only.
+    ///
+    /// `size_full` gives the list a definite height inside the flex viewer; without
+    /// it the default `Auto` sizing collapses to zero in a `min_h_0` chain and no
+    /// lines paint (the "8 baris" footer proved the buffer had lines).
     fn render_log_lines(&self, buffer: &LogBuffer, theme: &Theme) -> gpui_kit::AnyElement {
         let lines = buffer.clone();
         let mono = theme.mono_font_family.clone();
@@ -256,6 +260,7 @@ impl Workspace {
                 .collect::<Vec<_>>()
         })
         .track_scroll(&scroll)
+        .size_full()
         .into_any_element()
     }
 }

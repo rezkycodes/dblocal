@@ -303,29 +303,6 @@ fn draw_and_capture(app: &mut HeadlessAppContext, name: &str, build: Build) -> F
     }
 }
 
-fn text_rows(frame: &Frame, rect: (u32, u32, u32, u32), bg: [u8; 3], tol: u8) -> usize {
-    let (x0, y0, x1, y1) = frame.rect(rect);
-    let mut rows = 0;
-    let mut y = y0;
-    while y + 6 * frame.scale <= y1 {
-        let mut row_hits = 0;
-        for x in x0..x1 {
-            let p = frame.px(x, y);
-            if p[0].abs_diff(bg[0]) > tol
-                || p[1].abs_diff(bg[1]) > tol
-                || p[2].abs_diff(bg[2]) > tol
-            {
-                row_hits += 1;
-            }
-        }
-        if row_hits > 8 {
-            rows += 1;
-        }
-        y += 6 * frame.scale;
-    }
-    rows
-}
-
 /// Whether a device-pixel row inside `rect` contains glyph pixels (anything
 /// that differs from `bg` by more than `tol`), with a minimum run length so a
 /// single antialiased pixel does not count.
@@ -414,22 +391,73 @@ fn text_bands_multi(
     bands
 }
 
-/// Text pixels in a device-pixel rect, used where a band may be empty.
-fn text_pixels(frame: &Frame, rect: (u32, u32, u32, u32), bg: [u8; 3], tol: u8) -> usize {
-    let (x0, y0, x1, y1) = frame.rect(rect);
-    let mut hits = 0;
-    for y in y0..y1 {
-        for x in x0..x1 {
+/// Finds the log viewer body rectangle: between the header bottom border and the
+/// footer top border, inside the log viewer card in the content pane.
+///
+/// The viewer draws `table_row_border` (1px) under its header and above its
+/// footer. We scan the content pane for two horizontal border runs and return the
+/// rectangle between them. This is layout-derived, not a magic y constant.
+fn log_viewer_body(frame: &Frame, border: [u8; 3]) -> (u32, u32, u32, u32) {
+    let (w, h) = frame.dims();
+    let s = frame.scale;
+    let x0 = (DOCK + 40) * s;
+    let x1 = (LOGICAL_W - 40) * s;
+    let mut border_ys: Vec<u32> = Vec::new();
+    let mut y = 120 * s;
+    while y < h.saturating_sub(40 * s) {
+        let mut hits = 0usize;
+        let mut total = 0usize;
+        let mut x = x0;
+        while x < x1.min(w) {
             let p = frame.px(x, y);
-            if p[0].abs_diff(bg[0]) > tol
-                || p[1].abs_diff(bg[1]) > tol
-                || p[2].abs_diff(bg[2]) > tol
+            if p[0].abs_diff(border[0]) <= 6
+                && p[1].abs_diff(border[1]) <= 6
+                && p[2].abs_diff(border[2]) <= 6
             {
                 hits += 1;
             }
+            total += 1;
+            x += 3;
+        }
+        if total > 0 && hits * 100 / total > 80 {
+            border_ys.push(y);
+        }
+        y += 1;
+    }
+    // Coalesce adjacent border rows into single border positions.
+    let mut borders: Vec<u32> = Vec::new();
+    for y in border_ys {
+        if borders.last().is_some_and(|last: &u32| y - *last <= 2 * s) {
+            if let Some(last) = borders.last_mut() {
+                *last = y;
+            }
+        } else {
+            borders.push(y);
         }
     }
-    hits
+    // The viewer is the last bordered card-like pair that has substantial gap.
+    // Header bottom border and footer top border are consecutive borders with a
+    // gap larger than a single line but smaller than the whole pane.
+    let mut best: Option<(u32, u32)> = None;
+    for pair in borders.windows(2) {
+        let top = pair[0];
+        let bot = pair[1];
+        let gap = bot.saturating_sub(top);
+        if gap > 20 * s && gap < 700 * s {
+            best = Some((top, bot));
+        }
+    }
+    let (top, bot) = best.unwrap_or_else(|| {
+        panic!(
+            "could not locate log viewer borders; found borders at {:?}",
+            borders
+        )
+    });
+    // Body is between header bottom border and footer top border. Convert back
+    // to the harness's logical coordinates (helpers scale them again).
+    let body_top = (top + s) / s;
+    let body_bottom = bot.saturating_sub(s) / s;
+    (x0 / s, body_top, x1 / s, body_bottom)
 }
 
 #[test]
@@ -545,58 +573,99 @@ fn renders_overview_failed_with_diagnosis_banner() {
 }
 
 #[test]
-fn renders_failed_logs_with_the_diagnosis_banner() {
-    let frame = render(true, "logs-diagnosis-dark.png", Workspace::preview_failure);
-    // The diagnosis banner is a danger-tinted strip in the content area.
-    let danger_tinted = frame.count_tint(
+fn renders_logs_body_bands_from_layout() {
+    // Round 2, defect 1: the old tests counted bands in a wide magic region that
+    // included header/footer, so they passed with zero log lines. We derive the
+    // viewer body rectangle from the painted header/footer borders.
+    //
+    // Mutation proof (reverting the layout fix, `screen-fill` back to a block
+    // `div` so `page_fill`'s `flex_1` has no flex parent):
+    //   RENDER .../logs-diagnosis-dark.png (2560x1640, 3016 colours, target-only)
+    //   thread 'renders_logs_body_bands_from_layout' panicked at
+    //   crates/gui/tests/render.rs:492:9:
+    //   could not locate log viewer borders; found borders at [727, 761]
+    // The 727/761 pair is the collapsed 16-logical-px body the coordinator saw.
+    // Restoring `v_flex()` makes the same test pass with 8 bands.
+    let border_dark = [38, 40, 51];
+    let border_light = [223, 224, 231];
+
+    // Diagnosis case: 8 lines in the buffer, all visible.
+    let diagnosis = render(true, "logs-diagnosis-dark.png", Workspace::preview_failure);
+    let body = log_viewer_body(&diagnosis, border_dark);
+    let bands = text_bands(&diagnosis, body, DARK_BG, 14);
+    eprintln!("DIAG_BODY rect={body:?} bands={}", bands.len());
+    assert_eq!(
+        bands.len(),
+        8,
+        "diagnosis viewer body must show 8 log bands, got {} in {body:?}",
+        bands.len()
+    );
+    let danger_tinted = diagnosis.count_tint(
         (DOCK, 100, LOGICAL_W - 20, LOGICAL_H / 2),
         DARK_BG,
         DARK_DANGER,
     );
-    let danger_text = frame.count_near((DOCK, 100, LOGICAL_W - 20, LOGICAL_H / 2), DARK_DANGER, 28);
-    eprintln!("DIAGNOSIS tint={danger_tinted} danger_text={danger_text}");
+    let danger_text =
+        diagnosis.count_near((DOCK, 100, LOGICAL_W - 20, LOGICAL_H / 2), DARK_DANGER, 28);
     assert!(
         danger_tinted > 3000 || danger_text > 200,
         "diagnosis banner not visible (tint={danger_tinted}, text={danger_text})"
     );
 
-    // Defect 4: the log band below the banner must contain text, not just a
-    // header/footer. Sample the region where the first log lines must land.
-    let log_body = (DOCK + 40, 300, LOGICAL_W - 40, LOGICAL_H - 90);
-    let log_text = text_pixels(&frame, log_body, DARK_BG, 14);
-    eprintln!("DIAGNOSIS log_text={log_text}");
-    assert!(
-        log_text > 400,
-        "log lines missing below the diagnosis banner ({log_text})"
-    );
-}
-
-#[test]
-fn renders_logs_with_monospace_text() {
-    let frame = render(false, "logs-light.png", Workspace::preview_logs);
-    // Log body is below header/subtabs in the right pane.
-    let rows = text_rows(
-        &frame,
-        (DOCK + 20, 170, LOGICAL_W - 30, LOGICAL_H - 90),
-        LIGHT_BG,
-        14,
-    );
-    eprintln!("LOGS rows={rows}");
-    assert!(rows > 2, "expected log text rows, got {rows}");
-
-    // Defect 4: the body must hold visible text bands, proving the uniform_list
-    // was given a definite height and actually painted lines.
-    let bands = text_bands(
-        &frame,
-        (DOCK + 60, 170, LOGICAL_W - 60, LOGICAL_H - 90),
-        LIGHT_BG,
-        14,
-    );
-    eprintln!("LOGS bands={}", bands.len());
-    assert!(
-        bands.len() >= 3,
-        "expected >=3 log text bands, got {}",
+    // Light case: 2 demo lines.
+    let light = render(false, "logs-light.png", Workspace::preview_logs);
+    let body = log_viewer_body(&light, border_light);
+    let bands = text_bands(&light, body, LIGHT_BG, 14);
+    eprintln!("LOGS_BODY rect={body:?} bands={}", bands.len());
+    assert_eq!(
+        bands.len(),
+        2,
+        "light viewer body must show 2 log bands, got {} in {body:?}",
         bands.len()
+    );
+
+    // Short buffer: 1 line.
+    let short = render(false, "logs-short-light.png", Workspace::preview_logs_short);
+    let body = log_viewer_body(&short, border_light);
+    let bands = text_bands(&short, body, LIGHT_BG, 14);
+    eprintln!("SHORT_BODY rect={body:?} bands={}", bands.len());
+    assert_eq!(
+        bands.len(),
+        1,
+        "short buffer should show 1 band, got {} in {body:?}",
+        bands.len()
+    );
+
+    // Long buffer: 200 lines, follow on → last lines visible. Band count must
+    // equal the number of visible rows that fit the body.
+    let long = render(false, "logs-long-light.png", Workspace::preview_logs_long);
+    let body = log_viewer_body(&long, border_light);
+    let bands = text_bands(&long, body, LIGHT_BG, 14);
+    let (_x0, y0, _x1, y1) = body;
+    // `log_viewer_body` already returns logical coordinates; band positions from
+    // `text_bands` are device pixels, so scale only when mixing the two.
+    let body_h_logical = (y1 - y0) as f32;
+    let visible_rows = (body_h_logical / 18.0).floor() as usize;
+    eprintln!(
+        "LONG_BODY rect={body:?} body_h={body_h_logical} visible_rows={visible_rows} bands={}",
+        bands.len()
+    );
+    assert!(
+        visible_rows >= 10,
+        "long log viewer should show many rows, got {visible_rows}"
+    );
+    assert_eq!(
+        bands.len(),
+        visible_rows.min(200),
+        "long buffer should fill visible rows, got {} expected ~{visible_rows}",
+        bands.len()
+    );
+    // Follow is on, so the last line must be near the bottom of the body.
+    let last = bands.last().expect("bands present");
+    let bottom_gap = (y1 * long.scale).saturating_sub(last.1);
+    assert!(
+        bottom_gap < 24 * long.scale,
+        "follow mode should keep last line near bottom; gap={bottom_gap}"
     );
 }
 
@@ -620,9 +689,6 @@ fn renders_databases_placeholder_in_the_product_build() {
         product_text > 100,
         "product placeholder renders nothing ({product_text})"
     );
-    // Defect 1: the product placeholder is now the full prototype structure
-    // (several disabled cards). It should be substantial but must not contain
-    // the demo's sample rows; the demo table draws distinct row bands.
     assert!(
         product_text > 10_000,
         "product placeholder should render the prototype structure ({product_text})"
@@ -630,6 +696,22 @@ fn renders_databases_placeholder_in_the_product_build() {
     assert!(
         demo_text > 10_000,
         "demo databases should render sample content ({demo_text})"
+    );
+}
+
+#[test]
+fn renders_config_placeholder_in_the_product_build() {
+    let frame = render(
+        false,
+        "config-product-light.png",
+        Workspace::preview_product_config,
+    );
+    let body = (DOCK + 40, 180, LOGICAL_W - 40, LOGICAL_H - 80);
+    let text = frame.count_not_near(body, LIGHT_BG, 12);
+    eprintln!("CONFIG product={text}");
+    assert!(
+        text > 8_000,
+        "config placeholder should render the prototype structure ({text})"
     );
 }
 

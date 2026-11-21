@@ -279,8 +279,9 @@ impl Workspace {
     /// The `.env` block for the card preview, masked unless revealed.
     pub(crate) fn dotenv_rows(&self, id: &InstanceId) -> Vec<crate::format::EnvLine> {
         let revealed = self.uri_revealed(id);
+        let uri_secret = self.state.uri(id).map(|u| u.secret());
         match self.service_connection_uri(id, UriFormat::DotEnv) {
-            Ok(secret) => super::masked_env_rows(secret.expose(), revealed),
+            Ok(secret) => super::masked_env_rows(secret.expose(), revealed, uri_secret),
             Err(_) => Vec::new(),
         }
     }

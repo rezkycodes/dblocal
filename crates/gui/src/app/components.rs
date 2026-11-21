@@ -129,6 +129,7 @@ pub fn card(title: Option<&str>, theme: &Theme) -> Div {
     let mut base = v_flex()
         .gap_3()
         .p(px(18.))
+        .pb(px(18.))
         .rounded(px(8.))
         .border_1()
         .border_color(theme.border)

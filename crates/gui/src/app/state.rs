@@ -171,16 +171,28 @@ impl Tabs {
 
 /// The connection URI of one instance, in the form the Overview card shows.
 ///
-/// Only the masked preview is retained: the plaintext is fetched from the
-/// service at the moment the user asks for it and dropped again on hide, so a
-/// revealed password never sits in view state longer than the user needs it
-/// (`F-CRD-02`, task requirement 5).
-#[derive(Debug, Clone)]
+/// The secret URI is kept for masking derived blocks (`.env`) without ever
+/// rendering it. The plaintext is exposed to the UI only while the user has it
+/// revealed (`F-CRD-02`, task requirement 5); `Debug` redacts it via
+/// [`SecretString`].
+#[derive(Clone)]
 pub struct UriView {
-    /// The masked preview, built from the URI once and safe to render.
-    pub masked: String,
+    /// The masked preview, safe to render at any time.
+    masked: String,
+    /// The full URI, kept only for masking/copy; never rendered directly.
+    secret: SecretString,
     /// The plaintext, present only while the user has it revealed.
     revealed: Option<SecretString>,
+}
+
+impl std::fmt::Debug for UriView {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("UriView")
+            .field("masked", &self.masked)
+            .field("secret", &self.secret)
+            .field("revealed", &self.revealed)
+            .finish()
+    }
 }
 
 impl UriView {
@@ -188,11 +200,12 @@ impl UriView {
     pub fn masked_from(uri: &SecretString) -> Self {
         Self {
             masked: format::mask_uri(uri.expose()),
+            secret: uri.clone(),
             revealed: None,
         }
     }
 
-    /// Whether the plaintext is currently held.
+    /// Whether the plaintext is currently held in revealed form.
     pub fn is_revealed(&self) -> bool {
         self.revealed.is_some()
     }
@@ -208,12 +221,19 @@ impl UriView {
     /// Stores the plaintext the service returned for a reveal request.
     pub fn reveal(&mut self, uri: SecretString) {
         self.masked = format::mask_uri(uri.expose());
+        self.secret = uri.clone();
         self.revealed = Some(uri);
     }
 
-    /// Drops the plaintext, keeping the masked preview.
+    /// Drops the revealed plaintext, keeping the masked preview and the secret
+    /// used only for masking derived blocks.
     pub fn hide(&mut self) {
         self.revealed = None;
+    }
+
+    /// The secret URI, for masking derived blocks. Never render this directly.
+    pub fn secret(&self) -> &SecretString {
+        &self.secret
     }
 }
 
@@ -639,10 +659,99 @@ mod tests {
     fn a_revealed_uri_view_never_renders_its_password_in_debug() {
         let mut view = UriView::masked_from(&secret());
         view.reveal(secret());
-        // `SecretString` redacts itself, so the derived `Debug` is safe.
+        // `SecretString` redacts itself, so the `Debug` impl is safe.
         let rendered = format!("{view:?}");
         assert!(!rendered.contains("hunter2"));
         assert!(rendered.contains("SecretString(***)"));
+    }
+
+    #[test]
+    fn the_env_block_never_shows_the_password_in_any_engine() {
+        use dblocal_core::engine::{Credential, uri as core_uri};
+        use dblocal_core::secret::SecretString;
+
+        // A secret that must be percent-encoded in the URI userinfo.
+        let raw = "p@ss:w/rd%";
+        let encoded = core_uri::encode_userinfo(raw);
+
+        for (engine, port) in [
+            (EngineKey::Postgresql, 5432u16),
+            (EngineKey::Mysql, 3306),
+            (EngineKey::Mariadb, 3307),
+            (EngineKey::Valkey, 6379),
+        ] {
+            let credential = Credential::new(
+                if engine == EngineKey::Valkey {
+                    "default"
+                } else {
+                    "root"
+                },
+                SecretString::new(raw),
+            );
+            let uri = core_uri::build_uri(engine, port, &credential);
+            let dotenv = core_uri::build_dotenv(engine, port, &credential);
+
+            // Hidden path, exactly as the Overview card builds it.
+            let hidden = crate::app::masked_env_rows(dotenv.expose(), false, Some(&uri));
+            let hidden_text: String = hidden
+                .iter()
+                .map(|row| match &row.key {
+                    Some(key) => format!("{key}={}", row.value),
+                    None => row.value.clone(),
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            assert!(
+                !hidden_text.contains(raw),
+                "{engine:?} hidden .env leaked the raw secret: {hidden_text}"
+            );
+            assert!(
+                !hidden_text.contains(&encoded),
+                "{engine:?} hidden .env leaked the percent-encoded secret: {hidden_text}"
+            );
+
+            // Show reveals it.
+            let shown = crate::app::masked_env_rows(dotenv.expose(), true, Some(&uri));
+            let shown_text: String = shown
+                .iter()
+                .map(|row| match &row.key {
+                    Some(key) => format!("{key}={}", row.value),
+                    None => row.value.clone(),
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            assert!(
+                shown_text.contains(&encoded) || shown_text.contains(raw),
+                "{engine:?} reveal did not show the secret"
+            );
+
+            // Hide clears it again.
+            let hidden_again = crate::app::masked_env_rows(dotenv.expose(), false, Some(&uri));
+            let hidden_again_text: String = hidden_again
+                .iter()
+                .map(|row| match &row.key {
+                    Some(key) => format!("{key}={}", row.value),
+                    None => row.value.clone(),
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            assert!(
+                !hidden_again_text.contains(raw) && !hidden_again_text.contains(&encoded),
+                "{engine:?} hide did not clear the secret: {hidden_again_text}"
+            );
+
+            // Closing the tab forgets the URI entirely, so the block cannot be
+            // built from a stale secret afterwards.
+            let mut state = ShellState::default();
+            let id = instance_id();
+            state.set_uri(&id, &uri);
+            state.uri_mut(&id).expect("uri").reveal(uri.clone());
+            state.forget_uri(&id);
+            assert!(
+                state.uri(&id).is_none(),
+                "{engine:?} tab close kept the uri"
+            );
+        }
     }
 
     #[test]

@@ -290,39 +290,6 @@ fn download_row_reports_percent_detail_and_eta() {
 }
 
 #[test]
-fn uri_masking_hides_the_password_only() {
-    let masked = mask_uri("postgresql://postgres:hunter2@127.0.0.1:5432/postgres?sslmode=disable");
-    assert!(masked.starts_with("postgresql://postgres:••••••@127.0.0.1:5432/postgres"));
-    assert!(!masked.contains("hunter2"));
-    // MongoDB-style passwords with an encoded `@` still resolve on the last `@`.
-    let tricky = mask_uri("redis://default:p%40ss@127.0.0.1:6379");
-    assert!(!tricky.contains("p%40ss"));
-    // No credentials: unchanged.
-    assert_eq!(
-        mask_uri("postgresql://127.0.0.1:5432/db"),
-        "postgresql://127.0.0.1:5432/db"
-    );
-}
-
-#[test]
-fn dotenv_masking_replaces_only_the_password_line() {
-    let block = "DB_CONNECTION=postgresql\nDB_PASSWORD=hunter2\nDB_PORT=5432";
-    let masked = mask_dotenv(block);
-    assert!(masked.contains("DB_PASSWORD=••••••"));
-    assert!(!masked.contains("hunter2"));
-    assert!(masked.contains("DB_PORT=5432"));
-    // An instance created without a password has no value to hide.
-    assert_eq!(
-        mask_dotenv("DB_USERNAME=postgres\nDB_PASSWORD="),
-        "DB_USERNAME=postgres\nDB_PASSWORD="
-    );
-    // The Valkey block uses a different key and must be masked too.
-    let redis = mask_dotenv("REDIS_HOST=127.0.0.1\nREDIS_PASSWORD=hunter2");
-    assert!(redis.contains("REDIS_PASSWORD=••••••"));
-    assert!(!redis.contains("hunter2"));
-}
-
-#[test]
 fn env_lines_split_key_from_value() {
     let rows = env_lines("DB_HOST=127.0.0.1\n# comment\nDB_PASSWORD=secret");
     assert_eq!(rows.len(), 3);

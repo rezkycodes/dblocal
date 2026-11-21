@@ -110,6 +110,58 @@ impl Workspace {
         workspace
     }
 
+    /// Preview of the Logs tab with a 200-line buffer and follow on, so the
+    /// virtualised list must paint the newest lines at the bottom.
+    pub fn preview_logs_long(
+        service: Arc<dyn DblService>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let mut workspace = Self::preview(service, window, cx);
+        // Switch to Logs first: `set_inner_tab` reloads the demo tail, which
+        // would overwrite our custom buffer.
+        workspace.set_inner_tab(InnerTab::Logs);
+        if let Some(id) = workspace.tabs.selected_instance().cloned() {
+            let lines = (0..200)
+                .map(|index| format!("baris log panjang {index:03} — payload stabil"))
+                .collect::<Vec<_>>();
+            workspace.logs.load(&id, lines);
+            if let Some(buffer) = workspace.logs.get_mut(&id) {
+                buffer.set_following(true);
+            }
+            workspace.log_scroll.scroll_to_bottom();
+        }
+        workspace
+    }
+
+    /// Preview of the Logs tab with only a short buffer.
+    pub fn preview_logs_short(
+        service: Arc<dyn DblService>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let mut workspace = Self::preview(service, window, cx);
+        workspace.set_inner_tab(InnerTab::Logs);
+        if let Some(id) = workspace.tabs.selected_instance().cloned() {
+            workspace
+                .logs
+                .load(&id, vec!["satu baris pendek".to_owned()]);
+        }
+        workspace
+    }
+
+    /// Preview of the Config tab placeholder in the product build (`Fase 3`).
+    pub fn preview_product_config(
+        service: Arc<dyn DblService>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let mut workspace = Self::preview(service, window, cx);
+        workspace.demo_content = false;
+        workspace.set_inner_tab(InnerTab::Config);
+        workspace
+    }
+
     /// Preview with the Databases tab open (placeholder or demo content).
     pub fn preview_databases(
         service: Arc<dyn DblService>,
@@ -388,6 +440,51 @@ mod tests {
             crate::format::create_footer_note(selected.installed),
             dblocal_core::strings::UI_CREATE_DOWNLOAD_NOTE
         );
+    }
+
+    #[test]
+    fn the_demo_env_block_never_shows_a_demo_password() {
+        // Reproduces the coordinator's round-2 finding on `overview-dark.png`:
+        // the MariaDB `.env` printed `DATABASE_URL=mysql://root:pwd-…@host/`.
+        let service = seeded();
+        for view in service.list_instances().expect("list") {
+            if view.auth != AuthMode::Password {
+                continue;
+            }
+            let uri = service
+                .connection_uri(&view.id, dblocal_core::service::UriFormat::Uri)
+                .expect("uri");
+            let dotenv = service
+                .connection_uri(&view.id, dblocal_core::service::UriFormat::DotEnv)
+                .expect("dotenv");
+            let password = uri
+                .expose()
+                .split_once("://")
+                .and_then(|(_, rest)| rest.split_once('@').map(|(creds, _)| creds.to_owned()))
+                .and_then(|creds| creds.split_once(':').map(|(_, p)| p.to_owned()))
+                .expect("demo uri carries a password");
+            assert!(!password.is_empty());
+
+            let rows = crate::app::masked_env_rows(dotenv.expose(), false, Some(&uri));
+            let text: String = rows
+                .iter()
+                .map(|row| match &row.key {
+                    Some(key) => format!("{key}={}", row.value),
+                    None => row.value.clone(),
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            assert!(
+                !text.contains(&password),
+                "{} leaked its demo password: {text}",
+                view.name
+            );
+            assert!(
+                text.contains("••••••"),
+                "{} hidden env block has no mask: {text}",
+                view.name
+            );
+        }
     }
 
     #[test]

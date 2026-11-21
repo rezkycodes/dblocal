@@ -157,7 +157,7 @@ impl Workspace {
         // Logs keeps its own bounded scroll area so the virtualised list gets a
         // definite height; the other screens scroll the whole page as before.
         let body = if inner == InnerTab::Logs {
-            div()
+            v_flex()
                 .id("screen-fill")
                 .flex_1()
                 .min_h_0()
@@ -174,7 +174,9 @@ impl Workspace {
         };
         v_flex()
             .id("selected-instance")
-            .size_full()
+            .flex_1()
+            .min_h_0()
+            .w_full()
             .child(self.render_header(&view, cx))
             .child(self.render_subtabs(inner, cx))
             .child(body)

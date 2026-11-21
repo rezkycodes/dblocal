@@ -374,54 +374,6 @@ pub fn download_row(
     }
 }
 
-/// Masks the password inside a connection URI, keeping the shape readable.
-///
-/// `postgres://postgres:hunter2@127.0.0.1:5432/db` becomes
-/// `postgres://postgres:••••••@127.0.0.1:5432/db`.
-pub fn mask_uri(uri: &str) -> String {
-    let Some((scheme_sep, _)) = uri.split_once("://") else {
-        return uri.to_owned();
-    };
-    let after_scheme = scheme_sep.len() + 3;
-    let rest = &uri[after_scheme..];
-    let Some(at) = rest.rfind('@') else {
-        return uri.to_owned();
-    };
-    let credentials = &rest[..at];
-    let Some((user, _password)) = credentials.split_once(':') else {
-        // Redis without a user has no colon before the `@`; leave as-is.
-        return uri.to_owned();
-    };
-    format!(
-        "{}://{user}:••••••{}",
-        &uri[..scheme_sep.len()],
-        &rest[at..]
-    )
-}
-
-/// Masks only the password value in a `.env` block.
-///
-/// Both the framework block (`DB_PASSWORD`) and the Valkey block
-/// (`REDIS_PASSWORD`) are covered, so neither shapes leaks a secret.
-pub fn mask_dotenv(block: &str) -> String {
-    block
-        .lines()
-        .map(|line| {
-            for prefix in ["DB_PASSWORD=", "REDIS_PASSWORD="] {
-                if let Some(rest) = line.strip_prefix(prefix) {
-                    return if rest.is_empty() {
-                        line.to_owned()
-                    } else {
-                        format!("{prefix}••••••")
-                    };
-                }
-            }
-            line.to_owned()
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
 /// One line of a rendered `.env` block, split so the key can be accented.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EnvLine {
@@ -778,9 +730,14 @@ pub fn platform_label(os: &str, arch: &str) -> String {
     format!("{os} {arch}")
 }
 
+mod masking;
 mod placeholders;
+pub use masking::*;
 pub use placeholders::*;
 
+#[cfg(test)]
+#[path = "masking_tests.rs"]
+mod masking_tests;
 #[cfg(test)]
 #[path = "tests.rs"]
 mod tests;

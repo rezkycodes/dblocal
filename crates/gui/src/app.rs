@@ -763,11 +763,22 @@ impl Workspace {
 }
 
 /// Splits a `.env` block into rows the preview renders, masking the secret.
-pub(crate) fn masked_env_rows(block: &str, revealed: bool) -> Vec<crate::format::EnvLine> {
+///
+/// When the card is hidden the block is masked against the URI the view holds,
+/// so both `DATABASE_URL`/`REDIS_URL` userinfo and the raw/percent-encoded
+/// password in `*PASSWORD` are covered, not only the two known key prefixes.
+pub(crate) fn masked_env_rows(
+    block: &str,
+    revealed: bool,
+    uri: Option<&dblocal_core::secret::SecretString>,
+) -> Vec<crate::format::EnvLine> {
     let text = if revealed {
         block.to_owned()
     } else {
-        crate::format::mask_dotenv(block)
+        match uri {
+            Some(uri) => crate::format::mask_dotenv_with_secret(block, uri.expose()),
+            None => crate::format::mask_dotenv(block),
+        }
     };
     crate::format::env_lines(&text)
 }
