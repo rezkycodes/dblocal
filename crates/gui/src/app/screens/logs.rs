@@ -21,7 +21,7 @@ use crate::format;
 use crate::logs::LogBuffer;
 
 use super::Workspace;
-use super::page;
+use super::page_fill;
 use crate::app::components::{banner, icon, mono_themed};
 
 impl Workspace {
@@ -31,7 +31,7 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let theme = cx.theme().clone();
-        let mut body = page();
+        let mut body = page_fill();
         if format::offers_port_fix(view) {
             body = body.child(self.render_diagnosis_banner(view, &theme, cx));
         }
@@ -132,6 +132,10 @@ impl Workspace {
         let path = format!("~/.dblocal/instances/{}/logs/engine.log", view.name);
 
         let mut viewer = v_flex()
+            .id("log-viewer")
+            .flex_1()
+            .min_h_0()
+            .overflow_hidden()
             .rounded(px(8.))
             .border_1()
             .border_color(theme.border)
@@ -202,7 +206,15 @@ impl Workspace {
         } else {
             self.render_log_lines(&buffer, theme)
         };
-        viewer = viewer.child(div().p(px(8.)).child(body));
+        viewer = viewer.child(
+            div()
+                .id("log-lines-wrap")
+                .flex_1()
+                .min_h_0()
+                .overflow_hidden()
+                .p(px(8.))
+                .child(body),
+        );
         viewer.child(
             h_flex()
                 .gap_4()

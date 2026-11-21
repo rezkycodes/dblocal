@@ -55,8 +55,8 @@ No hue was changed; saturation/value were adjusted minimally until every checked
 
 | Surface | Phase | Product build | Demo build |
 |---|---|---|---|
-| Databases tab (`F-DBU`) | 2 | "belum tersedia di versi ini", controls disabled, no sample rows | Prototype layout with sample rows, review only |
-| Config tab (`F-CFG`) | 3 | "belum tersedia di versi ini", controls disabled, no sample rows | Prototype layout with sample config rows, review only |
+| Databases tab (`F-DBU`) | 2 | Prototype card structure (Database, "User & hak akses", "Password superuser", boundary footer with disabled "Open in…"); every control disabled; empty-state copy "belum tersedia di versi ini (Fase 2)"; no sample rows | Prototype layout with sample rows, review only |
+| Config tab (`F-CFG`) | 3 | Prototype card structure (restart-required banner, "Setting penting" with column header, footer actions); every control disabled; empty-state copy "belum tersedia di versi ini (Fase 3)"; no sample rows | Prototype layout with sample config rows, review only |
 | "Open in…" (`F-OPN`) | 2 | Menu item disabled with placeholder reason | Menu entries visible but disabled |
 
 ## Rules

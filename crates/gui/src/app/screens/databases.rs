@@ -2,15 +2,17 @@
 //!
 //! Neither has a backend in the frozen `DblService`: there is no
 //! `list_databases`/`create_database`/`config.read` call. In the product build
-//! both tabs state "belum tersedia di versi ini" with every control disabled and
-//! never show sample rows. The demo build may render the prototype layout with
-//! sample data so the design stays reviewable (`D-25`).
+//! both tabs render the prototype structure with every control disabled and the
+//! "belum tersedia di versi ini (Fase N)" state, and never show sample rows.
+//! The demo build may render the prototype layout with sample data so the design
+//! stays reviewable (`D-25`).
 //!
 //! Every placeholder here is listed in `docs/architecture/gui.md` with the phase
 //! that fills it.
 
 use dblocal_core::model::EngineKey;
 use dblocal_core::strings;
+use gpui_kit::assets::IconName;
 use gpui_kit::component::Disableable;
 use gpui_kit::component::Sizable;
 use gpui_kit::component::button::{Button, ButtonVariants};
@@ -22,7 +24,7 @@ use gpui_kit::{AnyElement, Context, IntoElement, ParentElement, Styled, div, px}
 use super::Workspace;
 use super::page;
 use crate::app::components::{card, icon, section_label};
-use gpui_kit::assets::IconName;
+use crate::format::{self, PlaceholderCard, PlaceholderTab};
 
 impl Workspace {
     pub(crate) fn render_databases(
@@ -33,10 +35,9 @@ impl Workspace {
         let theme = cx.theme().clone();
         if !self.demo_content() {
             return placeholder_page(
+                PlaceholderTab::Databases,
                 IconName::Database,
                 strings::UI_SUBTAB_DATABASES,
-                strings::UI_PLACEHOLDER_DATABASES,
-                strings::placeholder_phase("2"),
                 &theme,
             );
         }
@@ -65,10 +66,9 @@ impl Workspace {
         let theme = cx.theme().clone();
         if !self.demo_content() {
             return placeholder_page(
+                PlaceholderTab::Config,
                 IconName::SlidersHorizontal,
                 strings::UI_SUBTAB_CONFIG,
-                strings::UI_PLACEHOLDER_CONFIG,
-                strings::placeholder_phase("3"),
                 &theme,
             );
         }
@@ -78,57 +78,138 @@ impl Workspace {
     }
 }
 
-/// The honest "no backend yet" state: heading, the phase, a muted explanation
-/// and every control visibly disabled.
+/// The honest "no backend yet" state: the prototype's card structure, every
+/// control disabled, and the "(Fase N)" note in the header. No sample rows.
 pub(crate) fn placeholder_page(
+    tab: PlaceholderTab,
     glyph: IconName,
     title: &str,
-    message: &str,
-    phase: String,
     theme: &Theme,
 ) -> AnyElement {
-    page()
+    let mut content = page();
+    content = content.child(placeholder_header(
+        glyph,
+        title,
+        format::placeholder_phase_label(tab),
+        theme,
+    ));
+    for (index, card_spec) in format::placeholder_layout(tab).into_iter().enumerate() {
+        content = content.child(placeholder_card(tab, index, &card_spec, theme));
+    }
+    content.into_any_element()
+}
+
+/// The banner the placeholder page starts with: icon, tab name, phase.
+fn placeholder_header(
+    glyph: IconName,
+    title: &str,
+    phase: &str,
+    theme: &Theme,
+) -> impl IntoElement {
+    h_flex()
+        .gap_2()
+        .items_center()
+        .child(icon(glyph, 20.0, theme.muted_foreground))
         .child(
-            card(None, theme)
-                .gap_3()
-                .child(
-                    h_flex()
-                        .gap_2()
-                        .items_center()
-                        .child(icon(glyph, 20.0, theme.muted_foreground))
-                        .child(
-                            Label::new(title.to_owned())
-                                .text_sm()
-                                .font_weight(gpui_kit::FontWeight::SEMIBOLD),
-                        )
-                        .child(
-                            Label::new(phase)
-                                .text_xs()
-                                .text_color(theme.muted_foreground),
-                        ),
-                )
-                .child(
-                    Label::new(message.to_owned())
-                        .text_sm()
-                        .text_color(theme.muted_foreground),
-                )
-                .child(
-                    h_flex()
-                        .gap_2()
-                        .child(
-                            Button::new("placeholder-primary")
-                                .label(strings::UI_CREATE_SUBMIT)
-                                .primary()
-                                .disabled(true),
-                        )
-                        .child(
-                            Button::new("placeholder-secondary")
-                                .label(strings::UI_CANCEL)
-                                .disabled(true),
-                        ),
-                ),
+            Label::new(title.to_owned())
+                .text_sm()
+                .font_weight(gpui_kit::FontWeight::SEMIBOLD),
         )
-        .into_any_element()
+        .child(
+            Label::new(strings::placeholder_phase(phase))
+                .text_xs()
+                .text_color(theme.muted_foreground),
+        )
+}
+
+/// One placeholder card, rendered from the pure descriptor so the view and the
+/// view-model test cannot drift.
+fn placeholder_card(
+    tab: PlaceholderTab,
+    index: usize,
+    spec: &PlaceholderCard,
+    theme: &Theme,
+) -> impl IntoElement {
+    let mut card_box = card(spec.title, theme);
+    if let Some(columns) = spec.columns {
+        card_box = card_box.child(
+            Label::new(columns.to_owned())
+                .text_xs()
+                .text_color(theme.muted_foreground),
+        );
+    }
+    if let Some(body) = spec.body {
+        card_box = card_box.child(
+            Label::new(body.to_owned())
+                .text_sm()
+                .text_color(theme.muted_foreground),
+        );
+    }
+    if let Some(empty) = spec.empty {
+        card_box = card_box.child(
+            div()
+                .p(px(16.))
+                .rounded(px(6.))
+                .bg(theme.background)
+                .border_1()
+                .border_color(theme.table_row_border)
+                .child(
+                    Label::new(empty.to_owned())
+                        .text_xs()
+                        .text_color(theme.muted_foreground),
+                ),
+        );
+    }
+    if !spec.controls.is_empty() {
+        let mut row = h_flex().gap_2().flex_wrap();
+        for (control_index, control) in spec.controls.iter().enumerate() {
+            row = row.child(placeholder_control(
+                tab,
+                index,
+                control_index,
+                control,
+                theme,
+            ));
+        }
+        card_box = card_box.child(row);
+    }
+    card_box
+}
+
+/// One disabled control: a button, or a text field drawn with its placeholder.
+fn placeholder_control(
+    tab: PlaceholderTab,
+    card_index: usize,
+    control_index: usize,
+    control: &format::PlaceholderControl,
+    theme: &Theme,
+) -> AnyElement {
+    let id = format!(
+        "placeholder-{tab:?}-{card_index}-{control_index}",
+        tab = tab
+    );
+    match control.kind {
+        format::PlaceholderControlKind::Button => Button::new(id)
+            .label(control.label)
+            .disabled(control.disabled)
+            .into_any_element(),
+        format::PlaceholderControlKind::Field => div()
+            .h(px(32.))
+            .w(px(200.))
+            .px(px(10.))
+            .flex()
+            .items_center()
+            .rounded(px(6.))
+            .border_1()
+            .border_color(theme.table_row_border)
+            .bg(theme.background)
+            .child(
+                Label::new(control.label)
+                    .text_sm()
+                    .text_color(theme.muted_foreground),
+            )
+            .into_any_element(),
+    }
 }
 
 /// The prototype's Databases layout, drawn only in the demo build.

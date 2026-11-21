@@ -10,6 +10,7 @@
 #![allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
 use std::collections::HashSet;
 use std::sync::Arc;
+use std::time::Duration;
 
 use dblocal_core::service::{DblService, mock::MockService};
 use dblocal_gui::app::Workspace;
@@ -152,8 +153,37 @@ fn output_path(name: &str) -> (std::path::PathBuf, bool) {
 
 static GPU: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-fn render(mode_dark: bool, name: &str, build: Build) -> Frame {
-    let _guard = GPU.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+/// Fails the test process loudly if a render hangs. A deadlocked render held
+/// the GPU mutex for 54 minutes in CI; an abort with the case name is the only
+/// diagnostic we can get from inside a wedged process.
+struct RenderWatchdog {
+    done: Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl RenderWatchdog {
+    fn arm(name: &str) -> Self {
+        let done = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let flag = Arc::clone(&done);
+        let label = name.to_owned();
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_secs(120));
+            if !flag.load(std::sync::atomic::Ordering::SeqCst) {
+                eprintln!("RENDER HANG: {label} did not finish within 120s; aborting");
+                std::process::abort();
+            }
+        });
+        Self { done }
+    }
+}
+
+impl Drop for RenderWatchdog {
+    fn drop(&mut self) {
+        self.done.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+/// Builds a headless app with the DBLocal themes registered.
+fn headless_app(mode_dark: bool) -> HeadlessAppContext {
     let text_system = gpui_kit::platform::current_platform(true).text_system();
     let mut app = HeadlessAppContext::with_platform(
         text_system,
@@ -170,7 +200,39 @@ fn render(mode_dark: bool, name: &str, build: Build) -> Frame {
         };
         dblocal_gui::theme::apply_named(cx, theme);
     });
+    app
+}
 
+/// Quits the app cleanly and lets the scheduler drain before the context drops.
+///
+/// `HeadlessAppContext::drop` calls `App::shutdown`, which blocks on the test
+/// scheduler. Under parallel test threads that shutdown parked forever while
+/// the render mutex was still held, wedging every other case. Quitting and
+/// parking first, then dropping, keeps shutdown off the critical path.
+fn shutdown_headless(mut app: HeadlessAppContext) {
+    app.update(|cx| cx.quit());
+    app.run_until_parked();
+    drop(app);
+}
+
+fn render(mode_dark: bool, name: &str, build: Build) -> Frame {
+    // Arm before the mutex so a case stuck waiting on an earlier deadlock is
+    // named too, not just the case that holds it.
+    let watchdog = RenderWatchdog::arm(name);
+    let guard = GPU.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut app = headless_app(mode_dark);
+    let frame = draw_and_capture(&mut app, name, build);
+    // Release the render mutex before shutting the context down: the next case
+    // may start while this one drains, so a stuck shutdown cannot block it.
+    drop(guard);
+    shutdown_headless(app);
+    drop(watchdog);
+    frame
+}
+
+/// The actual render: window, frames, screenshot, PNG. The caller owns the
+/// mutex and the context lifetime.
+fn draw_and_capture(app: &mut HeadlessAppContext, name: &str, build: Build) -> Frame {
     let service = seeded_service();
     let handle: AnyWindowHandle = {
         let bounds = Bounds {
@@ -264,6 +326,112 @@ fn text_rows(frame: &Frame, rect: (u32, u32, u32, u32), bg: [u8; 3], tol: u8) ->
     rows
 }
 
+/// Whether a device-pixel row inside `rect` contains glyph pixels (anything
+/// that differs from `bg` by more than `tol`), with a minimum run length so a
+/// single antialiased pixel does not count.
+fn row_has_text(frame: &Frame, y: u32, x0: u32, x1: u32, bg: [u8; 3], tol: u8) -> bool {
+    let mut hits = 0;
+    for x in x0..x1 {
+        let p = frame.px(x, y);
+        if p[0].abs_diff(bg[0]) > tol || p[1].abs_diff(bg[1]) > tol || p[2].abs_diff(bg[2]) > tol {
+            hits += 1;
+        }
+    }
+    hits > 8
+}
+
+/// Counts horizontal text bands (runs of glyph rows separated by a blank gap).
+/// A list of one-line rows yields one band per row; a stacked two-line row
+/// yields two bands, and touching rows merge into one long band.
+fn text_bands(frame: &Frame, rect: (u32, u32, u32, u32), bg: [u8; 3], tol: u8) -> Vec<(u32, u32)> {
+    let (x0, y0, x1, y1) = frame.rect(rect);
+    let mut bands = Vec::new();
+    let mut current: Option<(u32, u32)> = None;
+    let mut blank_run = 0u32;
+    for y in y0..y1 {
+        if row_has_text(frame, y, x0, x1, bg, tol) {
+            blank_run = 0;
+            current = Some(match current {
+                Some((start, _)) => (start, y + 1),
+                None => (y, y + 1),
+            });
+        } else if let Some(band) = current {
+            blank_run += 1;
+            if blank_run >= 2 * frame.scale {
+                bands.push(band);
+                current = None;
+                blank_run = 0;
+            }
+        }
+    }
+    if let Some(band) = current {
+        bands.push(band);
+    }
+    bands
+}
+
+/// Counts horizontal text bands (runs of glyph rows separated by a blank gap),
+/// treating any of `bgs` as background. A list of one-line rows yields one band
+/// per row; a stacked two-line row yields two bands, and touching rows merge
+/// into one long band.
+fn text_bands_multi(
+    frame: &Frame,
+    rect: (u32, u32, u32, u32),
+    bgs: &[[u8; 3]],
+    tol: u8,
+) -> Vec<(u32, u32)> {
+    let (x0, y0, x1, y1) = frame.rect(rect);
+    let is_bg = |p: [u8; 4]| {
+        bgs.iter().any(|bg| {
+            p[0].abs_diff(bg[0]) <= tol
+                && p[1].abs_diff(bg[1]) <= tol
+                && p[2].abs_diff(bg[2]) <= tol
+        })
+    };
+    let mut bands = Vec::new();
+    let mut current: Option<(u32, u32)> = None;
+    let mut blank_run = 0u32;
+    for y in y0..y1 {
+        let hits = (x0..x1).filter(|x| !is_bg(frame.px(*x, y))).count();
+        if hits > 8 {
+            blank_run = 0;
+            current = Some(match current {
+                Some((start, _)) => (start, y + 1),
+                None => (y, y + 1),
+            });
+        } else if let Some(band) = current {
+            blank_run += 1;
+            if blank_run >= 2 * frame.scale {
+                bands.push(band);
+                current = None;
+                blank_run = 0;
+            }
+        }
+    }
+    if let Some(band) = current {
+        bands.push(band);
+    }
+    bands
+}
+
+/// Text pixels in a device-pixel rect, used where a band may be empty.
+fn text_pixels(frame: &Frame, rect: (u32, u32, u32, u32), bg: [u8; 3], tol: u8) -> usize {
+    let (x0, y0, x1, y1) = frame.rect(rect);
+    let mut hits = 0;
+    for y in y0..y1 {
+        for x in x0..x1 {
+            let p = frame.px(x, y);
+            if p[0].abs_diff(bg[0]) > tol
+                || p[1].abs_diff(bg[1]) > tol
+                || p[2].abs_diff(bg[2]) > tol
+            {
+                hits += 1;
+            }
+        }
+    }
+    hits
+}
+
 #[test]
 fn renders_dark_and_light_overview_with_the_prototype_regions() {
     let dark = render(true, "overview-dark.png", Workspace::preview);
@@ -321,6 +489,27 @@ fn renders_dark_and_light_overview_with_the_prototype_regions() {
     eprintln!("DOCK selected={selected}");
     assert!(selected > 300, "no selected dock row ({selected})");
 
+    // Defect 5: dock rows are one line. Sample the name column across the
+    // visible rows and require one text band per 30px row pitch, not two
+    // stacked bands (the old status-under-name layout). Both the plain sidebar
+    // surface and the selected-row fill count as background.
+    let name_col = (78, 86, 210, 246);
+    let bands = text_bands_multi(&dark, name_col, &[DARK_SIDEBAR, DARK_ACTIVE_ROW], 12);
+    eprintln!("DOCK bands={} {bands:?}", bands.len());
+    // Five visible rows at a 30px pitch: one band each, none taller than a line.
+    assert!(
+        (4..=6).contains(&bands.len()),
+        "dock rows should be one-line bands (~5), got {}: {bands:?}",
+        bands.len()
+    );
+    for (start, end) in &bands {
+        let h = (*end - *start) as f32 / dark.scale as f32;
+        assert!(
+            h < 18.0,
+            "dock row band too tall ({h}px): one line expected"
+        );
+    }
+
     // Primary button colour present in each theme.
     let primary_dark = dark.count_near((DOCK, 70, LOGICAL_W, LOGICAL_H - 40), DARK_PRIMARY, 16);
     let primary_light = light.count_near((DOCK, 70, LOGICAL_W, LOGICAL_H - 40), LIGHT_PRIMARY, 16);
@@ -370,6 +559,16 @@ fn renders_failed_logs_with_the_diagnosis_banner() {
         danger_tinted > 3000 || danger_text > 200,
         "diagnosis banner not visible (tint={danger_tinted}, text={danger_text})"
     );
+
+    // Defect 4: the log band below the banner must contain text, not just a
+    // header/footer. Sample the region where the first log lines must land.
+    let log_body = (DOCK + 40, 300, LOGICAL_W - 40, LOGICAL_H - 90);
+    let log_text = text_pixels(&frame, log_body, DARK_BG, 14);
+    eprintln!("DIAGNOSIS log_text={log_text}");
+    assert!(
+        log_text > 400,
+        "log lines missing below the diagnosis banner ({log_text})"
+    );
 }
 
 #[test]
@@ -384,6 +583,21 @@ fn renders_logs_with_monospace_text() {
     );
     eprintln!("LOGS rows={rows}");
     assert!(rows > 2, "expected log text rows, got {rows}");
+
+    // Defect 4: the body must hold visible text bands, proving the uniform_list
+    // was given a definite height and actually painted lines.
+    let bands = text_bands(
+        &frame,
+        (DOCK + 60, 170, LOGICAL_W - 60, LOGICAL_H - 90),
+        LIGHT_BG,
+        14,
+    );
+    eprintln!("LOGS bands={}", bands.len());
+    assert!(
+        bands.len() >= 3,
+        "expected >=3 log text bands, got {}",
+        bands.len()
+    );
 }
 
 #[test]
@@ -406,9 +620,16 @@ fn renders_databases_placeholder_in_the_product_build() {
         product_text > 100,
         "product placeholder renders nothing ({product_text})"
     );
+    // Defect 1: the product placeholder is now the full prototype structure
+    // (several disabled cards). It should be substantial but must not contain
+    // the demo's sample rows; the demo table draws distinct row bands.
     assert!(
-        demo_text > product_text.saturating_mul(2),
-        "demo should render more content than placeholder ({demo_text} vs {product_text})"
+        product_text > 10_000,
+        "product placeholder should render the prototype structure ({product_text})"
+    );
+    assert!(
+        demo_text > 10_000,
+        "demo databases should render sample content ({demo_text})"
     );
 }
 

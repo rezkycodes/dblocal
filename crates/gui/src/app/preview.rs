@@ -134,6 +134,10 @@ impl Workspace {
     }
 
     /// Preview with the create modal open on a version that needs a download.
+    ///
+    /// PostgreSQL 17.4 is installed in the demo, so the preview selects 16.6
+    /// (not installed) and the footer must promise the SHA-256-verified
+    /// download (`F-INS-01` AC2).
     pub fn preview_create(
         service: Arc<dyn DblService>,
         window: &mut Window,
@@ -141,6 +145,7 @@ impl Workspace {
     ) -> Self {
         let mut workspace = Self::preview(service, window, cx);
         workspace.open_create_dialog(window, cx);
+        workspace.choose_version("16.6".to_owned(), window, cx);
         workspace
     }
 
@@ -359,6 +364,30 @@ mod tests {
         assert_eq!(groups.len(), 4, "all four engines have an instance");
         let total: usize = groups.iter().map(|group| group.instances.len()).sum();
         assert_eq!(total, 6, "the prototype cast has six instances");
+    }
+
+    #[test]
+    fn the_download_preview_picks_a_version_that_is_not_installed() {
+        // Defect 7: the default PostgreSQL version in the demo (17.4) is
+        // installed, so the create render never showed a download. The preview
+        // selects 16.6 instead and the footer must promise a download.
+        let service = seeded();
+        let catalog = service.catalog().expect("catalog");
+        let entry = catalog
+            .engines
+            .iter()
+            .find(|entry| entry.engine == EngineKey::Postgresql)
+            .expect("postgresql entry");
+        let selected = entry
+            .versions
+            .iter()
+            .find(|version| version.version == "16.6")
+            .expect("16.6 in the demo catalog");
+        assert!(!selected.installed, "16.6 must need a download");
+        assert_eq!(
+            crate::format::create_footer_note(selected.installed),
+            dblocal_core::strings::UI_CREATE_DOWNLOAD_NOTE
+        );
     }
 
     #[test]

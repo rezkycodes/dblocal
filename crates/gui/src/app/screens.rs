@@ -154,19 +154,30 @@ impl Workspace {
             return div().into_any_element();
         };
         let inner = tab.inner;
+        // Logs keeps its own bounded scroll area so the virtualised list gets a
+        // definite height; the other screens scroll the whole page as before.
+        let body = if inner == InnerTab::Logs {
+            div()
+                .id("screen-fill")
+                .flex_1()
+                .min_h_0()
+                .child(self.render_screen(&view, inner, cx))
+                .into_any_element()
+        } else {
+            div()
+                .id("screen-scroll")
+                .flex_1()
+                .min_h_0()
+                .overflow_y_scroll()
+                .child(self.render_screen(&view, inner, cx))
+                .into_any_element()
+        };
         v_flex()
             .id("selected-instance")
             .size_full()
             .child(self.render_header(&view, cx))
             .child(self.render_subtabs(inner, cx))
-            .child(
-                div()
-                    .id("screen-scroll")
-                    .flex_1()
-                    .min_h_0()
-                    .overflow_y_scroll()
-                    .child(self.render_screen(&view, inner, cx)),
-            )
+            .child(body)
             .into_any_element()
     }
 
@@ -336,6 +347,19 @@ pub(crate) fn page() -> gpui_kit::Div {
         .pt(px(10.))
         .pb(px(32.))
         .max_w(px(1080.))
+}
+
+/// A page that fills its parent instead of scrolling, for the Logs tab: its
+/// virtualised list needs a definite height to lay out at all.
+pub(crate) fn page_fill() -> gpui_kit::Div {
+    v_flex()
+        .gap_3()
+        .px(px(32.))
+        .pt(px(10.))
+        .pb(px(12.))
+        .max_w(px(1080.))
+        .flex_1()
+        .min_h_0()
 }
 
 /// An icon plus a muted label, the pattern most hints use.

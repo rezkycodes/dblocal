@@ -232,11 +232,10 @@ fn dock_meta_combines_short_version_and_port() {
 #[test]
 fn header_subtitle_names_engine_endpoint_state_and_process_mode() {
     let v = view("app", EngineKey::Postgresql, InstanceStatus::Running, 5432);
-    let subtitle = header_subtitle(&v);
-    assert!(subtitle.contains("PostgreSQL.17.4"));
-    assert!(subtitle.contains("127.0.0.1:5432"));
-    assert!(subtitle.contains(strings::STATUS_RUNNING));
-    assert!(subtitle.contains("detached"));
+    assert_eq!(
+        header_subtitle(&v),
+        "PostgreSQL 17.4 · 127.0.0.1:5432 · berjalan · detached"
+    );
 }
 
 #[test]
@@ -651,4 +650,150 @@ fn default_version_prefers_the_newest_supported_entry() {
 #[test]
 fn platform_label_joins_os_and_arch() {
     assert_eq!(platform_label("linux", "x86_64"), "linux x86_64");
+}
+
+// --- review round 1 regression guards ----------------------------------------
+
+#[test]
+fn connection_title_appears_once() {
+    // Defect 2: the card chrome and the header row both drew "Koneksi".
+    let header = connection_header(strings::UI_CREDENTIAL_KEYCHAIN);
+    assert_eq!(header.card_title, None);
+    assert_eq!(connection_title_occurrences(&header), 1);
+}
+
+#[test]
+fn dock_row_labels_are_one_line_and_accessible() {
+    // Defect 5: the row must read as glyph, name, version, :port on one line,
+    // while the accessible label keeps the status word (F-PLH-02).
+    let v = view(
+        "pg-app",
+        EngineKey::Postgresql,
+        InstanceStatus::Running,
+        5432,
+    );
+    let labels = dock_row_labels(&v);
+    assert_eq!(labels, ["pg-app", "17.4", ":5432"]);
+    let accessible = dock_row_accessible(&v);
+    assert!(accessible.contains("pg-app"));
+    assert!(accessible.contains(strings::STATUS_RUNNING));
+    assert_eq!(DOCK_ROW_HEIGHT, 30.0);
+}
+
+#[test]
+fn create_dialog_engine_order_matches_the_prototype() {
+    // Defect 7: prototype order is PostgreSQL, Valkey, MySQL, MariaDB.
+    use dblocal_core::service::{EngineEntry, VersionEntry};
+    let entries = vec![
+        EngineEntry {
+            engine: EngineKey::Mysql,
+            available: true,
+            unavailable_reason: None,
+            versions: vec![VersionEntry {
+                version: "8.4.4".to_owned(),
+                eol: false,
+                installed: true,
+                size_bytes: 1,
+            }],
+        },
+        EngineEntry {
+            engine: EngineKey::Postgresql,
+            available: true,
+            unavailable_reason: None,
+            versions: vec![VersionEntry {
+                version: "17.4".to_owned(),
+                eol: false,
+                installed: true,
+                size_bytes: 1,
+            }],
+        },
+        EngineEntry {
+            engine: EngineKey::Mariadb,
+            available: true,
+            unavailable_reason: None,
+            versions: vec![VersionEntry {
+                version: "11.4.2".to_owned(),
+                eol: false,
+                installed: true,
+                size_bytes: 1,
+            }],
+        },
+        EngineEntry {
+            engine: EngineKey::Valkey,
+            available: true,
+            unavailable_reason: None,
+            versions: vec![VersionEntry {
+                version: "8.1.0".to_owned(),
+                eol: false,
+                installed: true,
+                size_bytes: 1,
+            }],
+        },
+    ];
+    let ordered: Vec<EngineKey> = create_engine_cards(&entries)
+        .into_iter()
+        .map(|entry| entry.engine)
+        .collect();
+    assert_eq!(
+        ordered,
+        vec![
+            EngineKey::Postgresql,
+            EngineKey::Valkey,
+            EngineKey::Mysql,
+            EngineKey::Mariadb,
+        ]
+    );
+}
+
+#[test]
+fn create_footer_note_depends_on_whether_a_download_is_needed() {
+    // Defect 7: the "download" render must pick a version that is not installed
+    // so the footer says it will download and verify SHA-256.
+    assert_eq!(create_footer_note(false), strings::UI_CREATE_DOWNLOAD_NOTE);
+    assert_eq!(create_footer_note(true), strings::UI_CREATE_READY_NOTE);
+}
+
+#[test]
+fn placeholder_layouts_match_the_prototype_structure() {
+    // Defect 1: Databases/Config placeholders must not reuse the create-dialog
+    // labels, and they must carry the prototype's card/control structure with
+    // every control disabled and no sample rows.
+    let db = placeholder_layout(PlaceholderTab::Databases);
+    let db_labels = placeholder_labels(PlaceholderTab::Databases);
+    assert_eq!(
+        db_labels,
+        vec![
+            strings::UI_DATABASES_NAME_PLACEHOLDER,
+            strings::UI_DATABASES_CREATE,
+            strings::UI_DATABASES_NEW_USER,
+            strings::UI_DATABASES_RESET,
+            strings::UI_ACTION_OPEN_IN,
+        ]
+    );
+    assert!(
+        db.iter()
+            .all(|card| { card.controls.iter().all(|c| c.disabled) })
+    );
+    assert!(!db_labels.contains(&strings::UI_CREATE_SUBMIT));
+    assert!(!db_labels.contains(&strings::UI_CANCEL));
+
+    let cfg = placeholder_layout(PlaceholderTab::Config);
+    let cfg_labels = placeholder_labels(PlaceholderTab::Config);
+    assert_eq!(
+        cfg_labels,
+        vec![
+            strings::UI_CONFIG_LATER,
+            strings::UI_CONFIG_RESTART_NOW,
+            strings::UI_CONFIG_OPEN_FILE,
+            strings::UI_CONFIG_REVERT,
+            strings::UI_CONFIG_DISCARD,
+            strings::UI_CONFIG_SAVE,
+        ]
+    );
+    assert!(
+        cfg.iter()
+            .all(|card| card.controls.iter().all(|c| c.disabled))
+    );
+    assert_eq!(placeholder_phase_label(PlaceholderTab::Databases), "2");
+    assert_eq!(placeholder_phase_label(PlaceholderTab::Config), "3");
 }

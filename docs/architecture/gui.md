@@ -187,9 +187,9 @@ the product build; views render `InstanceView`, `CatalogView`, `Runtime`, `LogSt
 | Overview (running) | `crates/gui/src/app/screens/overview.rs` | `renders_dark_and_light_overview_with_the_prototype_regions` |
 | Overview (failed, diagnosis in Logs) | `crates/gui/src/app/screens/logs.rs` banner + `screens.rs` header | `renders_failed_logs_with_the_diagnosis_banner` |
 | Logs | `crates/gui/src/app/screens/logs.rs`, `crates/gui/src/logs.rs` | `renders_logs_with_monospace_text` |
-| Databases placeholder (product) | `crates/gui/src/app/screens/databases.rs` (`demo_content == false`) | `renders_databases_placeholder_in_the_product_build` |
+| Databases placeholder (product) | `crates/gui/src/app/screens/databases.rs` (`demo_content == false`) | `renders_databases_placeholder_in_the_product_build`, `format::placeholder_layout` / `placeholder_labels` |
 | Databases demo | `crates/gui/src/app/screens/databases.rs` (`demo_content == true`) | `renders_databases_placeholder_in_the_product_build` (demo frame) |
-| Config placeholder | `crates/gui/src/app/screens/databases.rs` | covered by placeholder path; no separate backend yet |
+| Config placeholder | `crates/gui/src/app/screens/databases.rs` (`demo_content == false`) | `format::placeholder_layout` / `placeholder_labels` (exact disabled control list) |
 | New instance dialog (download needed) | `crates/gui/src/app/create_dialog.rs` | `renders_create_dialog_with_a_download_and_an_unavailable_version` |
 | New instance dialog (unavailable version) | `crates/gui/src/app/create_dialog.rs` + preview forcing unavailable engine | `renders_create_dialog_with_a_download_and_an_unavailable_version` |
 | Dock with filter | `crates/gui/src/app/dock.rs`, `format::filter_instances` | `renders_dock_with_the_filter_applied` |
@@ -203,8 +203,8 @@ the product build; views render `InstanceView`, `CatalogView`, `Runtime`, `LogSt
 
 | Surface | Phase | Product build | Demo build | Fills when |
 |---|---:|---|---|---|
-| Databases tab (`F-DBU`) | 2 | "belum tersedia di versi ini", controls disabled, no sample rows | Prototype layout with sample rows for review | `DblService` gains database/user operations |
-| Config tab (`F-CFG`) | 3 | "belum tersedia di versi ini", controls disabled, no sample rows | Prototype layout with sample config rows for review | `DblService` gains config read/write |
+| Databases tab (`F-DBU`) | 2 | Prototype card structure: Database card (disabled name field + "Buat database", empty state "belum tersedia di versi ini (Fase 2)"), "User & hak akses" card (disabled "User baru"), "Password superuser" card (disabled "Reset password"), footer boundary card with disabled "Open in…". No sample rows. | Prototype layout with sample rows for review | `DblService` gains database/user operations |
+| Config tab (`F-CFG`) | 3 | Prototype card structure: restart-required banner (disabled "Nanti"/"Restart sekarang"), "Setting penting" card (column header + empty state "belum tersedia di versi ini (Fase 3)"), footer actions (disabled "Buka file konfigurasi"/"Kembalikan konfigurasi sebelumnya"/"Buang perubahan"/"Simpan"). No sample rows. | Prototype layout with sample config rows for review | `DblService` gains config read/write |
 | "Open in…" (`F-OPN`) | 2 | Menu disabled with placeholder reason | Menu entries visible but disabled | Client detection/open integration lands |
 
 The placeholder rule is enforced by `Workspace::demo_content`: render tests use preview constructors that

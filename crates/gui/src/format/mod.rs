@@ -293,7 +293,7 @@ pub fn short_version(version: &str) -> String {
 pub fn header_subtitle(view: &InstanceView) -> String {
     let state = status_label(view.status);
     format!(
-        "{}.{} · 127.0.0.1:{} · {} · detached",
+        "{} {} · 127.0.0.1:{} · {} · detached",
         view.engine.display_name(),
         view.version,
         view.port,
@@ -777,6 +777,9 @@ pub fn default_version_index(entry: &EngineEntry) -> usize {
 pub fn platform_label(os: &str, arch: &str) -> String {
     format!("{os} {arch}")
 }
+
+mod placeholders;
+pub use placeholders::*;
 
 #[cfg(test)]
 #[path = "tests.rs"]

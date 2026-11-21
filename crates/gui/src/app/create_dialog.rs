@@ -16,7 +16,7 @@ use dblocal_core::strings;
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::label::Label;
-use gpui_kit::component::{ActiveTheme, Sizable, Theme, h_flex, input::Input, v_flex};
+use gpui_kit::component::{ActiveTheme, Theme, h_flex, input::Input, v_flex};
 use gpui_kit::{
     AnyElement, Context, InteractiveElement, IntoElement, MouseButton, ParentElement, SharedString,
     Styled, div, prelude::*, px,
@@ -117,59 +117,63 @@ fn render_engine_cards(
     theme: &Theme,
     cx: &mut Context<Workspace>,
 ) -> impl IntoElement {
-    let cards = entries.iter().map(|entry| {
-        let engine = entry.engine;
-        let selected = engine == form.engine;
-        let disabled = !entry.available;
-        let reason = format::engine_unavailable_reason(entry).map(str::to_owned);
-        v_flex()
-            .id(SharedString::from(format!("engine-{}", engine.as_str())))
-            .flex_1()
-            .min_w(px(140.))
-            .gap_2()
-            .p(px(12.))
-            .rounded(px(8.))
-            .border_1()
-            .cursor_pointer()
-            .border_color(if selected {
-                theme.primary
-            } else {
-                theme.border
-            })
-            .bg(if selected {
-                crate::theme::tokens::tint(theme.primary, 0.08)
-            } else {
-                theme.background
-            })
-            .hover(|s| s.border_color(theme.primary))
-            .on_click(cx.listener(move |this, _, window, cx| {
-                if !disabled {
-                    this.choose_engine_action(engine, window, cx);
-                }
-            }))
-            .child(
-                h_flex()
-                    .items_center()
-                    .child(engine_badge(engine, 28.0, theme))
-                    .child(div().flex_1())
-                    .when(selected, |this| {
-                        this.child(icon(IconName::Check, 16.0, theme.primary))
-                    }),
-            )
-            .child(Label::new(engine.display_name()).font_weight(gpui_kit::FontWeight::SEMIBOLD))
-            .child(
-                Label::new(format!("Port kanonik {}", engine.canonical_port()))
-                    .text_xs()
-                    .text_color(theme.muted_foreground),
-            )
-            .when_some(reason, |this, reason| {
-                this.child(
-                    Label::new(reason)
+    let cards = crate::format::create_engine_cards(entries)
+        .into_iter()
+        .map(|entry| {
+            let engine = entry.engine;
+            let selected = engine == form.engine;
+            let disabled = !entry.available;
+            let reason = format::engine_unavailable_reason(entry).map(str::to_owned);
+            v_flex()
+                .id(SharedString::from(format!("engine-{}", engine.as_str())))
+                .flex_1()
+                .min_w(px(140.))
+                .gap_2()
+                .p(px(12.))
+                .rounded(px(8.))
+                .border_1()
+                .cursor_pointer()
+                .border_color(if selected {
+                    theme.primary
+                } else {
+                    theme.border
+                })
+                .bg(if selected {
+                    crate::theme::tokens::tint(theme.primary, 0.08)
+                } else {
+                    theme.background
+                })
+                .hover(|s| s.border_color(theme.primary))
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    if !disabled {
+                        this.choose_engine_action(engine, window, cx);
+                    }
+                }))
+                .child(
+                    h_flex()
+                        .items_center()
+                        .child(engine_badge(engine, 28.0, theme))
+                        .child(div().flex_1())
+                        .when(selected, |this| {
+                            this.child(icon(IconName::Check, 16.0, theme.primary))
+                        }),
+                )
+                .child(
+                    Label::new(engine.display_name()).font_weight(gpui_kit::FontWeight::SEMIBOLD),
+                )
+                .child(
+                    Label::new(format!("Port kanonik {}", engine.canonical_port()))
                         .text_xs()
                         .text_color(theme.muted_foreground),
                 )
-            })
-    });
+                .when_some(reason, |this, reason| {
+                    this.child(
+                        Label::new(reason)
+                            .text_xs()
+                            .text_color(theme.muted_foreground),
+                    )
+                })
+        });
     h_flex().gap_2p5().flex_wrap().children(cards)
 }
 
@@ -334,7 +338,8 @@ fn render_fields(
                         .items_center()
                         .rounded(px(6.))
                         .border_1()
-                        .border_color(theme.table_row_border)
+                        .border_color(theme.border)
+                        .bg(theme.background)
                         .text_color(theme.muted_foreground)
                         .child(Label::new(superuser.to_owned())),
                 )
@@ -397,11 +402,7 @@ fn render_footer(
     theme: &Theme,
     cx: &mut Context<Workspace>,
 ) -> impl IntoElement {
-    let note = if format::create_needs_download(installed) {
-        strings::UI_CREATE_DOWNLOAD_NOTE
-    } else {
-        strings::UI_CREATE_READY_NOTE
-    };
+    let note = format::create_footer_note(installed);
     let note_colour = if installed {
         theme.success
     } else {
@@ -434,11 +435,14 @@ fn render_footer(
 }
 
 /// The input, or an empty spacer when a headless preview has no entity.
+///
+/// The inputs use the default height (32 logical px), the same as the
+/// superuser box beside them, as the prototype draws the row.
 fn input_or_empty(
     input: Option<&gpui_kit::Entity<gpui_kit::component::input::InputState>>,
 ) -> AnyElement {
     match input {
-        Some(input) => Input::new(input).small().into_any_element(),
+        Some(input) => Input::new(input).into_any_element(),
         None => div().h(px(32.)).into_any_element(),
     }
 }

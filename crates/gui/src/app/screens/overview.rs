@@ -157,13 +157,14 @@ impl Workspace {
             });
         }
 
-        card(Some(strings::UI_OVERVIEW_CONNECTION), theme)
+        let header = format::connection_header(&credential_note);
+        card(header.card_title, theme)
             .child(
                 h_flex()
                     .justify_between()
                     .items_center()
                     .child(
-                        Label::new(strings::UI_OVERVIEW_CONNECTION)
+                        Label::new(header.title)
                             .text_sm()
                             .font_weight(gpui_kit::FontWeight::SEMIBOLD),
                     )
@@ -172,7 +173,7 @@ impl Workspace {
                             .gap_1p5()
                             .child(icon(IconName::KeyRound, 14.0, credential_colour))
                             .child(
-                                Label::new(credential_note)
+                                Label::new(header.credential)
                                     .text_xs()
                                     .text_color(credential_colour),
                             ),

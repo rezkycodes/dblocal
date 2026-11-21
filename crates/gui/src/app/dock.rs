@@ -134,11 +134,12 @@ impl Workspace {
             }))
             .child(icon(header_icon, 14.0, theme.muted_foreground))
             .child(engine_badge(engine, 20.0, theme))
-            .child(Label::new(group.label.to_owned()).flex_1())
+            .child(div().flex_1().child(group.label))
             .child(
-                Label::new(format!("{count}"))
+                div()
                     .text_xs()
-                    .text_color(theme.muted_foreground),
+                    .text_color(theme.muted_foreground)
+                    .child(format!("{count}")),
             );
 
         let mut group_box = v_flex().gap_0p5().child(header);
@@ -167,6 +168,8 @@ impl Workspace {
             theme.muted_foreground
         };
         let mono = theme.mono_font_family.clone();
+        let accessible = format!("{} — {}", view.name, format::status_label(view.status));
+        let tooltip_label = accessible.clone();
         h_flex()
             .id(SharedString::from(format!("row-{}", view.id)))
             .h(px(30.))
@@ -175,6 +178,11 @@ impl Workspace {
             .gap_2()
             .rounded(px(5.))
             .cursor_pointer()
+            .aria_label(accessible)
+            .tooltip(move |_window, cx| {
+                cx.new(|_| gpui_kit::component::tooltip::Tooltip::new(tooltip_label.clone()))
+                    .into()
+            })
             .when(selected, |s| {
                 s.bg(theme.sidebar_accent)
                     .text_color(theme.sidebar_accent_foreground)
@@ -184,29 +192,21 @@ impl Workspace {
                 this.open_tab(id.clone(), cx);
             }))
             .child(status_glyph(view.status, 9.0, theme))
+            .child(div().flex_1().min_w_0().truncate().child(view.name.clone()))
             .child(
-                v_flex()
-                    .flex_1()
-                    .min_w_0()
-                    .child(Label::new(view.name.clone()).text_sm().truncate())
-                    .child(
-                        Label::new(format::status_label(view.status))
-                            .text_size(px(10.))
-                            .text_color(theme.muted_foreground),
-                    ),
-            )
-            .child(
-                Label::new(format::short_version(&view.version))
+                div()
                     .text_xs()
-                    .text_color(theme.muted_foreground),
+                    .text_color(theme.muted_foreground)
+                    .child(format::short_version(&view.version)),
             )
             .child(
-                Label::new(format!(":{}", view.port))
+                div()
                     .w(px(46.))
-                    .text_xs()
                     .text_right()
+                    .text_xs()
                     .font_family(mono)
-                    .text_color(port_colour),
+                    .text_color(port_colour)
+                    .child(format!(":{}", view.port)),
             )
     }
 
