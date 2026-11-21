@@ -30,9 +30,10 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 #![allow(unsafe_code)]
 
+use std::io::Write as _;
 use std::net::{Ipv4Addr, TcpListener};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::process::{Child, Command, Output, Stdio};
 use std::time::{Duration, Instant};
 
 use redis::Commands;
@@ -43,6 +44,9 @@ const PORT_LAST: u16 = 29_999;
 
 /// Prefix every e2e temp home uses (`cargo xtask e2e` scans for it).
 const HOME_PREFIX: &str = "dblocal-e2e-cli-";
+
+/// Line the follow test appends to the engine log.
+const APPENDED_LINE: &str = "cli-e2e: appended while following";
 
 struct Home {
     dir: TempDir,
@@ -362,6 +366,67 @@ fn cli_drives_a_real_valkey_from_create_to_archive() {
     );
     drop(client);
 
+    // K1: `logs -f --lines 2` prints exactly the 2 requested lines and, with
+    // nothing appended during the window, nothing else. Before the fix the
+    // first tick reprinted the whole 200-line follow window.
+    let history = follow_logs(name, 2, || {});
+    eprintln!(
+        "cli_e2e: logs -f --lines 2 printed {} lines after one follow tick: {history:?}",
+        history.len()
+    );
+    assert_eq!(
+        history.len(),
+        2,
+        "logs -f --lines 2 printed {} lines: {history:?}",
+        history.len()
+    );
+
+    // K1: a line appended while following is printed exactly once.
+    let log = home
+        .path()
+        .join("instances")
+        .join(name)
+        .join("logs")
+        .join("valkey.log");
+    let before = std::fs::read_to_string(&log)
+        .expect("read valkey.log")
+        .lines()
+        .count();
+    let followed = follow_logs(name, 5, || {
+        let mut file = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&log)
+            .expect("open valkey.log for append");
+        // The engine always ends its lines, but a missing newline would fuse
+        // the append onto the last line and make this test prove nothing.
+        if !std::fs::read_to_string(&log)
+            .map(|text| text.ends_with('\n'))
+            .unwrap_or(false)
+        {
+            writeln!(file).expect("newline before append");
+        }
+        writeln!(file, "{}", APPENDED_LINE).expect("append");
+        file.flush().expect("flush");
+    });
+    // History (at most 5) plus the append. An engine that logs on its own could
+    // add more, so the count is a lower bound and the append is the assertion.
+    eprintln!(
+        "cli_e2e: follow with one append printed {} lines (history {before} + 1): {followed:?}",
+        followed.len()
+    );
+    assert!(
+        followed.len() >= before.min(5) + 1,
+        "the append was not printed: {followed:?}"
+    );
+    assert_eq!(
+        followed
+            .iter()
+            .filter(|line| line.as_str() == APPENDED_LINE)
+            .count(),
+        1,
+        "the appended line must be printed exactly once: {followed:?}"
+    );
+
     // status is non-zero while stopped.
     ok(&run(&["stop", name]), "stop");
     let status = run(&["status", name]);
@@ -392,4 +457,65 @@ fn cli_drives_a_real_valkey_from_create_to_archive() {
     assert!(wait_tcp_gone(port, Duration::from_secs(20)));
 
     eprintln!("cli_e2e: whole run {:.1}s", started.elapsed().as_secs_f64());
+}
+
+/// Runs `dblocal logs <name> -f --lines <lines>`, lets `during` happen, then
+/// SIGINTs after the follow has had a chance to tick, and returns stdout lines.
+///
+/// The child is owned by [`Follower`], which SIGKILLs it on drop, so a panicking
+/// assertion cannot leave a `logs -f` process behind.
+fn follow_logs(name: &str, lines: usize, during: impl FnOnce()) -> Vec<String> {
+    let child = bin()
+        .args(["logs", name, "-f", "--lines", &lines.to_string()])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn logs -f");
+    let mut follower = Follower { child: Some(child) };
+    // Let the history print and at least one follow tick happen.
+    std::thread::sleep(Duration::from_millis(600));
+    during();
+    // Two follow intervals (250 ms each) plus slack for the append to be read.
+    std::thread::sleep(Duration::from_millis(1200));
+    follower.interrupt();
+    let out = follower.wait();
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    assert!(
+        out.status.success(),
+        "logs -f must exit 0 on SIGINT, got {:?}; stderr: {}",
+        out.status.code(),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    stdout.lines().map(str::to_owned).collect()
+}
+
+/// Owns a `logs -f` child and guarantees it is gone when the test unwinds.
+struct Follower {
+    child: Option<Child>,
+}
+
+impl Follower {
+    fn interrupt(&mut self) {
+        if let Some(child) = &self.child {
+            let _ = Command::new("kill")
+                .args(["-INT", &child.id().to_string()])
+                .status();
+        }
+    }
+
+    fn wait(&mut self) -> Output {
+        let Some(child) = self.child.take() else {
+            panic!("follower already reaped");
+        };
+        child.wait_with_output().expect("wait for logs -f")
+    }
+}
+
+impl Drop for Follower {
+    fn drop(&mut self) {
+        if let Some(mut child) = self.child.take() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
 }
