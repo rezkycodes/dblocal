@@ -703,6 +703,17 @@ fn smoke_failure_restores_old_bytes_and_removes_staged_sibling() {
     let err = apply(&plan).expect_err("smoke failure");
     assert_eq!(err.code(), crate::update::error::CODE_UPDATE_APPLY_FAILED);
     assert_eq!(fs::read(&current).unwrap(), old_bytes, "old bytes restored");
+    // Documented outcome: the rollback is a rename of a copy, so `.old` survives
+    // for the "next successful start" cleanup instead of being deleted mid-recovery.
+    assert!(
+        dir.path().join("dblocal.old").exists(),
+        "the backup is kept after a smoke rollback"
+    );
+    assert_eq!(
+        fs::read(dir.path().join("dblocal.old")).unwrap(),
+        old_bytes,
+        "the kept backup holds the old bytes"
+    );
     assert!(
         !fs::read_dir(dir.path()).unwrap().any(|e| e
             .unwrap()
