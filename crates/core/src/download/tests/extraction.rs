@@ -464,8 +464,7 @@ async fn hard_link_layer_extracted_set_rejects_target_through_symlinked_dir() {
     let err = run
         .result
         .as_ref()
-        .err()
-        .expect("set layer should reject")
+        .expect_err("set layer should reject")
         .to_string();
     assert!(
         err.contains("not extracted earlier as a regular file"),
@@ -504,8 +503,7 @@ async fn hard_link_layer_on_disk_check_rejects_symlink_target_recorded_as_file()
     let err = run
         .result
         .as_ref()
-        .err()
-        .expect("on-disk layer should reject")
+        .expect_err("on-disk layer should reject")
         .to_string();
     assert!(
         err.contains("not a regular file") || err.contains("not extracted earlier"),

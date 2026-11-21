@@ -6,8 +6,6 @@
 
 use std::fmt::Write as _;
 use std::fs;
-#[cfg(unix)]
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::Duration;
@@ -521,6 +519,7 @@ mod tests {
         assert!(conf.contains("requirepass pw-123"));
         #[cfg(unix)]
         {
+            use std::os::unix::fs::PermissionsExt;
             let mode = fs::metadata(config_path(&run))
                 .expect("meta")
                 .permissions()

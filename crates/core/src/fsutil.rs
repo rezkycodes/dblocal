@@ -45,10 +45,7 @@ pub fn write_private_file_atomic(path: &Path, contents: &[u8]) -> io::Result<()>
         use std::os::unix::fs::OpenOptionsExt;
         opts.mode(0o600);
     }
-    let mut file = match opts.open(&tmp) {
-        Ok(f) => f,
-        Err(e) => return Err(e),
-    };
+    let mut file = opts.open(&tmp)?;
     if let Err(e) = file.write_all(contents).and_then(|_| file.sync_all()) {
         let _ = fs::remove_file(&tmp);
         return Err(e);

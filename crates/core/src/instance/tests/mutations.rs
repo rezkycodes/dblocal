@@ -569,8 +569,7 @@ fn start_repairs_config_rewritten_but_store_not_updated_postgres() {
     let conf = data_dir.join("postgresql.conf");
     std::fs::write(
         &conf,
-        "# base\n# DBLocal managed settings\nlisten_addresses = '127.0.0.1'\nport = 1\nunix_socket_directories = ''\n# DBLocal managed settings end\n"
-            .to_string(),
+        "# base\n# DBLocal managed settings\nlisten_addresses = '127.0.0.1'\nport = 1\nunix_socket_directories = ''\n# DBLocal managed settings end\n",
     )
     .expect("write stale wrong-port conf");
 
