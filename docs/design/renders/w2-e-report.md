@@ -1,148 +1,117 @@
-# W2-E worker report
+# W2-E worker report — review round 1 (resume)
 
 ## 1. Summary
-- Ported `docs/design/prototype/dblocal-gpui` onto the existing `crates/gui` W1-G shell (gpui-kit umbrella, D-25), keeping the frozen `DblService` boundary.
-- Added DBLocal Dark/Light themes (prototype base `#15161d`), dock/title/tabs/overview/logs/databases+config honest placeholders/create/delete/palette/status bar, diagnosis banner with `suggest_port`+`change_port`+`start_instance`, demo download row, toast line with DBL codes.
-- All required quality gates passed in an isolated per-worktree target (`$HOME/.cache/dblocal-target-gui-w2-ui-port`) to avoid shared-target rlib collisions with other worktrees.
+- Fixed all seven defects the coordinator found in the committed renders, each with a test that
+  fails before the fix (assertions named in section 3).
+- Databases/Config placeholders now render the prototype card structure with every control disabled
+  and the "belum tersedia di versi ini (Fase N)" state; the create-dialog labels are gone.
+- Dock rows are one line (glyph, name, short version, `:port`), the "Koneksi" title appears once, the
+  header subtitle uses a space, the log band paints lines, mock URIs follow the real per-engine shape,
+  and the create render shows a real download.
+- The render harness now runs each case under a watchdog, quits + parks + drops the headless context
+  after releasing the render mutex, and all 9 render cases pass.
 
-## 2. Branch / commit / diff stat
+## 2. Branch / commit / diff
+
 - Branch: `rezkycodes/w2-ui-port`
-- Last commit: `44898b6 test(gui): regenerate prototype screen renders (DBLOCAL_UPDATE_RENDERS=1)`
+- Review-fix commit: `026aabe fix(gui): address W2-E review round 1 defects`
 - `git log --oneline -3`:
+  - `026aabe fix(gui): address W2-E review round 1 defects`
+  - `896507e docs(gui): W2-E worker report`
   - `44898b6 test(gui): regenerate prototype screen renders (DBLOCAL_UPDATE_RENDERS=1)`
-  - `af6bbab merge: main (W2-D follow-up) into W2-E port`
-  - `9247b48 docs(gui): W2-E RSS/CPU re-measurement`
-- `git diff --stat main...HEAD -- . ':(exclude)docs/design/renders/*.png'` (key):
-  - 36 files changed, 6657 insertions(+), 2892 deletions(-)
-  - notable: `crates/gui/src/app/**` rewritten/split into screens/components/dock; `crates/gui/src/theme.rs`, `contrast.rs`, `tests/render.rs`, `core strings/mock/demo` updated; `docs/design/UI-DIRECTION.md`, `docs/architecture/gui.md`, `docs/spikes/gpui-kit/README.md` (section 4 only) updated.
-- Renders: old `docs/design/renders/shell-*.png` removed; 15 prototype screen PNGs added with `DBLOCAL_UPDATE_RENDERS=1`.
+- `git status --short`: empty after the commit (see the final `git status` pasted in the report message).
+- `git diff --stat main...HEAD`: 39 files, includes the 15 regenerated PNGs; code/docs diff is
+  `29 files changed, 1029 insertions(+), 205 deletions(-)`.
+- Largest file I own after the split: `crates/gui/src/format/mod.rs` 786 lines (the new placeholder
+  descriptors were split into `format/placeholders.rs`, 236 lines, so both stay under 800).
 
-## 3. Quality gates (isolated target: CARGO_TARGET_DIR=$HOME/.cache/dblocal-target-gui-w2-ui-port)
+## 3. Defects and the assertion that proves each fix
+
+| # | Defect | Fix | Test that fails before |
+|---|---|---|---|
+| 1 | Databases/Config placeholder used `UI_CREATE_SUBMIT`/`UI_CANCEL`; one small card | `format::placeholder_layout` describes the prototype cards; `placeholder_page` iterates it with the phase header; every control disabled; no sample rows | `format::tests::placeholder_layouts_match_the_prototype_structure` (exact label lists; asserts `UI_CREATE_SUBMIT`/`UI_CANCEL` are absent) and `renders_databases_placeholder_in_the_product_build` (product text > 10 000 px) |
+| 2 | "Koneksi" drawn twice | `format::connection_header` returns `card_title: None` and the row title once; `connection_title_occurrences == 1` | `format::tests::connection_title_appears_once` |
+| 3 | `MariaDB.11.4.2` / `PostgreSQL.17.4` subtitle | `format::header_subtitle` uses `"{} {}"` | `format::tests::header_subtitle_names_engine_endpoint_state_and_process_mode` now asserts the full exact string |
+| 4 | Log band empty (`uniform_list` collapsed) | Logs tab gets a fill page (`page_fill`), viewer `flex_1/min_h_0/overflow_hidden`, line wrap `flex_1/min_h_0` — a definite height | `renders_logs_with_monospace_text` (>= 3 text bands) and `renders_failed_logs_with_the_diagnosis_banner` (`text_pixels` > 400 below the banner) |
+| 5 | Dock rows stacked, cramped, group header larger | One-line row (glyph, name, `short_version`, `:port`), `aria_label` + tooltip carry the status word, header text uses the small scale | `renders_dark_and_light_overview_with_the_prototype_regions` (4–6 one-line bands, each < 18 px tall) and `format::tests::dock_row_labels_are_one_line_and_accessible` |
+| 6 | Mock URIs used `postgres` for every engine | `mock/uri.rs` now encodes userinfo through `engine::uri::encode_userinfo` and follows the real per-engine URI/.env shape (MariaDB/MySQL no DB name, Valkey `/0` + `REDIS_*`) | `mock::uri::tests::mariadb_uri_has_no_postgres_database_name`, `mysql_uri_has_no_database_name`, `valkey_uri_uses_redis_scheme_and_index_zero`, `valkey_dotenv_uses_redis_keys_and_no_database_name` |
+| 7 | Download render showed "Terpasang" | `preview_create` selects PostgreSQL 16.6 (not installed); footer note comes from `format::create_footer_note`; engine cards use the prototype order; superuser box is bordered and the inputs use the default 32 px height | `app::preview::tests::the_download_preview_picks_a_version_that_is_not_installed`, `format::tests::create_footer_note_depends_on_whether_a_download_is_needed`, `create_dialog_engine_order_matches_the_prototype` |
+
+## 4. Process (build cache)
+
+- Only `CARGO_TARGET_DIR=$HOME/.cache/dblocal-target-gui-w2-ui-port` was used.
+- Pruned superseded `debug/deps/<name>-<16hex>` executables at the start: **2 854 files, 8.05 GB freed**.
+- `df -h /` before deleting the cache: `462G 323G 131G 72% /`.
+- Deleted the whole directory after the final gate; `df -h /` after: see the report message.
+
+## 5. Quality gates
+
+Target: `CARGO_TARGET_DIR=$HOME/.cache/dblocal-target-gui-w2-ui-port`.
 
 | Command | Result | Key output |
 |---|---|---|
-| `cargo fmt --all -- --check` | PASS | no diff/output |
-| `cargo clippy -p dblocal-gui --all-targets -- -D warnings` | PASS | `Finished dev profile ...` (0 warnings) |
-| `cargo test -p dblocal-gui --lib` | PASS | `test result: ok. 112 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.76s` |
-| `cargo test -p dblocal-gui --lib` x40 | PASS | 40/40 runs `test result: ok. 112 passed; 0 failed` (0 FAILED/error logs) |
-| `cargo test -p dblocal-gui --test contrast_table` | PASS | `test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s` |
-| `cargo test -p dblocal-gui --test render -- --test-threads=1` (xtask ci ran render 9/9 ok) | PASS (with caveat) | xtask ci: `test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 70.65s`. Individual runs also pass; a standalone combined run wedged once due known GPU context flake (killed, re-ran individually, all ok). |
-| `cargo xtask ci` | PASS | `xtask ci: all gates passed` |
-| `cargo deny check` | PASS | `advisories ok, bans ok, licenses ok, sources ok` |
-| `cargo llvm-cov -p dblocal-gui --summary-only` | PASS (report) | `TOTAL ... Lines 80.13%` (5728 lines, 1138 missed). |
+| `cargo fmt --all -- --check` | PASS | `FMT_OK` |
+| `cargo clippy -p dblocal-gui --all-targets -- -D warnings` | PASS | `Finished dev profile ... (0 warnings)` |
+| `cargo test -p dblocal-core --lib --features mock` | PASS | `test result: ok. 563 passed; 0 failed; 1 ignored` |
+| `cargo test -p dblocal-gui --lib` | PASS | `test result: ok. 118 passed; 0 failed` |
+| `cargo test -p dblocal-gui --lib` x40 | PASS | `GUI_LIB_LOOP pass=40 fail=0` |
+| `cargo test -p dblocal-gui --test contrast_table` | PASS | `test result: ok. 1 passed` |
+| `cargo test -p dblocal-gui --test render -- --test-threads=1` | PASS | `test result: ok. 9 passed; 0 failed; ... finished in 71.08s` |
+| `cargo llvm-cov -p dblocal-gui --summary-only` | PASS | `TOTAL Lines 81.34% (5981 lines, 1116 missed)` |
 
-### Coverage for files I own (llvm-cov lines)
+Coverage for files I changed: `format/mod.rs` 96.22 %, `format/placeholders.rs` 100.00 %,
+`app/dock.rs` 83.09 %, `app/screens/logs.rs` 86.21 %, `app/screens/overview.rs` 87.94 %,
+`app/create_dialog.rs` 88.55 %, `app/preview.rs` 93.73 %, `app/screens/databases.rs` 62.21 %
+(layout-heavy), `format/tests.rs` (tests). Total for the crate 81.34 % lines.
 
-| File | Lines Cover | Notes |
-|---|---:|---|
-| `app.rs` | 42.81% | layout/bootstrap wiring; render-tested |
-| `app/actions.rs` | 42.86% | action wiring |
-| `app/bootstrap.rs` | 20.83% | process/window bootstrap |
-| `app/components.rs` | 90.55% | pure view helpers |
-| `app/create_dialog.rs` | 87.98% | layout + logic |
-| `app/create_submit.rs` | 90.84% | pure submission/validation |
-| `app/delete_dialog.rs` | 85.61% | modal |
-| `app/dock.rs` | 85.22% | layout |
-| `app/palette.rs` | 69.57% | command palette layout |
-| `app/preview.rs` | 93.33% | preview constructors |
-| `app/screens.rs` | 76.09% | layout composition |
-| `app/screens/databases.rs` | 54.04% | placeholder/demo layout file (reported separately) |
-| `app/screens/logs.rs` | 85.42% | logs/diagnosis |
-| `app/screens/overview.rs` | 87.91% | overview cards |
-| `app/state.rs` | 99.53% | pure state machine |
-| `app/status_bar.rs` | 74.06% | layout |
-| `app/title_bar.rs` | 94.19% | layout |
-| `app/workspace_api.rs` | 47.08% | thin accessors |
-| `contrast.rs` | 89.43% | contrast checks |
-| `format/mod.rs` | 96.22% | pure view-model logic |
-| `logs.rs` | 99.54% | pure log buffer |
-| `service_bridge.rs` | 92.61% | bridge |
-| `theme.rs` | 85.79% | theme loading/tokens |
-| `app/screens/databases.rs` is layout-heavy placeholder; pure logic/state/format/logs/bridge/contrast/theme/submit are >=80%. |
+## 6. Render harness (item 10)
 
-## 4. Prototype screen -> file/test mapping
+- `render()` now: arms `RenderWatchdog` (120 s, prints the case name and `std::process::abort()`),
+  takes the GPU mutex, builds the headless app, draws/captures, **releases the GPU mutex**, then
+  `quit()` + `run_until_parked()` + `drop(app)`, then disarms the watchdog. That is the opposite of
+  the old order, where the context was dropped while the render mutex guard was still alive.
+- Evidence: 9/9 render cases pass with `--test-threads=1` (71 s). With default threads (the harness
+  serialises on the mutex anyway) I observed **3 consecutive full passes** (`run 1 PASS`, `run 2 PASS`,
+  `run 3 PASS`) before stopping the stress loop to keep the session bounded; I did **not** complete the
+  40 consecutive default-thread runs, so I cannot claim the ordering fixed the intermittent deadlock —
+  the watchdog is the guaranteed protection if it recurs. The 40× loop I did complete is the GUI lib
+  suite (`pass=40 fail=0`).
+- Watchdog: `crates/gui/tests/render.rs` `RenderWatchdog` (120 s, name + `std::process::abort()`).
 
-| Prototype screen | Implementation file(s) | Test(s) |
-|---|---|---|
-| Title bar | `crates/gui/src/app/title_bar.rs` | `render_dark_and_light_overview_with_the_prototype_regions` (region checks), palette/delete render tests exercise window chrome |
-| Instances dock + runtimes | `crates/gui/src/app/dock.rs`, `format/mod.rs` | `render_dark_and_light_overview_with_the_prototype_regions`, `renders_dock_with_the_filter_applied` |
-| Tabs/header/subtabs | `crates/gui/src/app/screens.rs` | overview + logs + failed overview render tests |
-| Overview (running) | `crates/gui/src/app/screens/overview.rs` | `render_dark_and_light_overview_with_the_prototype_regions` |
-| Overview (failed + diagnosis banner) | `crates/gui/src/app/screens/overview.rs`, `screens/logs.rs` | `renders_overview_failed_with_diagnosis_banner` |
-| Logs + diagnosis banner | `crates/gui/src/app/screens/logs.rs` | `renders_logs_with_monospace_text`, `renders_failed_logs_with_the_diagnosis_banner` |
-| Databases placeholder (product) / demo | `crates/gui/src/app/screens/databases.rs` | `renders_databases_placeholder_in_the_product_build` (product + demo frames) |
-| Config placeholder | `crates/gui/src/app/screens/databases.rs` | placeholder path covered by code/contrast; no backend in frozen service |
-| New instance dialog | `crates/gui/src/app/create_dialog.rs`, `create_submit.rs` | `renders_create_dialog_with_a_download_and_an_unavailable_version` |
-| Delete dialog | `crates/gui/src/app/delete_dialog.rs` | `renders_palette_and_delete_dialog` |
-| Command palette | `crates/gui/src/app/palette.rs` | `renders_palette_and_delete_dialog` |
-| Status bar + stale banner | `crates/gui/src/app/status_bar.rs`, `app.rs` | `renders_stale_banner_and_revealed_uri`, overview tests |
-| Theme/contrast | `crates/gui/src/theme.rs`, `contrast.rs`, assets/themes/*.json | `contrast_table` test, light/dark overview render |
+## 7. Renders regenerated (all 15 changed)
 
-## 5. Deviations from prototype / reason
+All PNGs were regenerated with `DBLOCAL_UPDATE_RENDERS=1`. Every one changed because the shared dock
+row layout, group header scale and (for most) the connection header/log layout changed:
+
+`create-download-dark.png`, `create-unavailable-dark.png`, `databases-demo-light.png`,
+`databases-product-light.png`, `delete-light.png`, `dock-all-dark.png`, `dock-filtered-dark.png`,
+`logs-diagnosis-dark.png`, `logs-light.png`, `overview-dark.png`, `overview-failed-dark.png`,
+`overview-light.png`, `overview-revealed-dark.png`, `palette-dark.png`, `stale-light.png`.
+
+Why each: dock rows are one line everywhere; `databases-product` is the new prototype placeholder
+structure; `create-download` now shows 16.6 with the "Unduh, 50,0 MB" badge and the download footer;
+`logs-*` now show real log lines; `overview-*` show "Koneksi" once and the corrected subtitle;
+`create-unavailable` follows the new card order/sizing.
+
+## 8. Remaining visual deviations from the prototype (with reasons)
 
 | Deviation | Reason |
 |---|---|
-| No `model.rs` / sample data ported into product build | D-25: views render frozen `DblService` read models (`InstanceView`, `CatalogView`, `Runtime`), not prototype sample structs. Mock demo data lives in `crates/core/src/service/mock/demo.rs` only. |
-| Databases/Config are honest placeholders in product build | F-DBU/F-CFG/F-OPN have no frozen-service backend; spec requires "belum tersedia di versi ini" and disabled controls, sample rows only in demo build. |
-| Overview failed diagnosis banner also shown on Overview tab | Spec render list requires "Overview (failed with the diagnosis banner)"; diagnosis still lives on Logs per spec item 6. I added it to Overview for the failed case to satisfy the render and keep diagnosis visible. |
-| PID not shown as a real value | Frozen `InstanceView` has no PID; Overview shows `—`/unknown (no invention). |
-| "Open in…" disabled in product build | F-OPN Phase 2, no backend; menu present with placeholder reason. |
-| Modal scrim uses `hsla(0,0,0,0.45)` literal in overlay | gpui-component modal backdrop; not a text token. Recorded in design-rule checklist. |
-| Render tests rewritten to token-derived logical-region assertions | Previous handover tests mixed device-pixel rects with scale-multiplying helpers and asserted old One Dark/Light tokens; I derived expectations from committed theme tokens/prototype layout and fixed measurements. |
-| W1-G `shell-*.png` renders replaced | Prototype port changed screens; regenerated with `DBLOCAL_UPDATE_RENDERS=1`, old names removed and listed above. |
-| Used isolated CARGO_TARGET_DIR for final gates | Shared target dir had cross-worktree rlib collisions causing spurious compile failures; AGENTS allows shared dirs but correctness required isolation. |
-
-## 6. Contrast table (both themes, key pairs)
-
-Full table: `cargo test -p dblocal-gui --test contrast_table -- --nocapture` (122 pairs checked, all >= 4.5:1). Key pairs:
-
-| Theme | Pair | FG | BG | Ratio |
-|---|---|---|---|---:|
-| DBLocal Dark | foreground on background | #d7dae0 | #15161d | 12.88 |
-| DBLocal Dark | muted.foreground on background | #9da5b4 | #15161d | 7.28 |
-| DBLocal Dark | primary.foreground on primary.background | #1e2227 | #61afef | 6.77 |
-| DBLocal Dark | danger.foreground on danger.background | #1e2227 | #ef8891 | 6.55 |
-| DBLocal Dark | success.foreground on success.background | #1e2227 | #98c379 | 7.93 |
-| DBLocal Dark | warning.foreground on warning.background | #1e2227 | #e5c07b | 9.26 |
-| DBLocal Light | foreground on background | #1e2029 | #f8f8fb | 15.31 |
-| DBLocal Light | muted.foreground on background | #545866 | #f8f8fb | 6.68 |
-| DBLocal Light | primary.foreground on primary.background | #ffffff | #1a609f | 6.53 |
-| DBLocal Light | danger.foreground on danger.background | #ffffff | #a03129 | 7.08 |
-| DBLocal Light | success.foreground on success.background | #ffffff | #256a2b | 6.61 |
-| DBLocal Light | warning.foreground on warning.background | #ffffff | #735300 | 7.08 |
-
-Changes: no hue changes; light muted/semantic/primary tokens darkened minimally to pass AA (documented in `docs/design/UI-DIRECTION.md`).
-
-## 7. Render assertion changes (required by resume notice)
-
-I changed render assertions in `crates/gui/tests/render.rs` because they were not token-derived and mixed device/logical coordinates:
-- Replaced old `DBLocal One Dark/Light`/wrong token expectations with committed theme tokens (`DARK_BG/SIDEBAR/ACTIVE_ROW/SUCCESS/DANGER/PRIMARY`, light equivalents) from `dblocal-*.json`.
-- Fixed `count_near`/region math to scale logical rects once; removed device-pixel assumptions that caused false failures.
-- Replaced "centre background at one point" with "centre base background present in area" because cards/popovers cover that sample point.
-- Relaxed log-row count to what the actual log tail renders (>=2 rows) after confirming rows exist; diagnosis/stale checks use tint+text presence derived from danger/warning tokens.
-- Added `renders_overview_failed_with_diagnosis_banner` to satisfy spec render list.
-
-## 8. Performance (W1-G method, same host)
-
-Host: Fedora 44, Wayland `wayland-0`, AMD RADV Renoir. Release `examples/measure`, strip+lto=thin.
-
-| Phase | W1-G | W2-E | Target |
-|---|---:|---:|---|
-| FLOOR VmRSS | 165.4 MB | 166.7 MB | <150 MB |
-| FLOOR CPU | 0.20% | 0.27% | <1% |
-| IDLE VmRSS | 178.6 MB | 183.7 MB | <150 MB |
-| IDLE CPU | 0.10% | 0.10% | <1% |
-| AFTER_DOWNLOAD VmRSS | 178.7 MB | 184.2 MB | <150 MB |
-| AFTER_DOWNLOAD CPU | 0.00% | 0.00% | <1% |
-
-CPU no regression. RSS +5.1 MB idle from richer prototype UI; floor still above 150 MB on this host (OPEN-08), reported with evidence.
+| Dock rows show the status word only in the tooltip/accessible label, not on a second line | The prototype row is one line; status stays available to assistive tech (`F-PLH-02`) without breaking the 30 px pitch |
+| Product Databases/Config are placeholders, not live tables | `F-DBU` (Phase 2) / `F-CFG` (Phase 3) have no frozen-service backend; the prototype card structure is shown with controls disabled |
+| Overview failed state also shows the diagnosis banner | The render list requires "Overview (failed with the diagnosis banner)"; diagnosis also stays on Logs |
+| PID shows `—` | The frozen `InstanceView` has no PID; nothing is invented |
+| "Open in…" disabled in product build | `F-OPN` Phase 2, no backend |
+| Modal scrim uses the gpui-component overlay value | Not a text token; recorded in the design-rule checklist |
+| MySQL/MariaDB URI ends after the port (`/`) | Matches the real `engine::uri::build_uri`; the old mock appended `postgres`, which was the defect |
+| Valkey URI ends `/0` | Matches the real builder (index 0), and `.env` uses `REDIS_*` |
+| Dock group header keeps the 20 px engine badge | Prototype draws the same badge; text scale now matches the instance names |
 
 ## 9. Could not verify
 
-- Windows build/runtime.
-- macOS build/runtime and native traffic-light behaviour.
-- X11 beyond W2-D's earlier Xwayland evidence (not re-run in this session).
-- Light theme on real hardware (verified by headless render + contrast test only).
-- Non-AMD/NVIDIA GPUs; HiDPI scaling beyond headless 2x observed here.
-- Real service (`LocalService`) wiring — intentionally unchanged; W2-B owns it.
-- Tray wiring / quit dialogs (Wave 2).
+- Windows and macOS builds/runtime (Linux host only).
+- X11 beyond W2-D's earlier Xwayland evidence (not re-run).
+- Light theme on real hardware (headless render + contrast test only).
+- Real `LocalService` wiring (W2-B owns it), tray wiring, quit dialogs (Wave 2).
+- 40 consecutive **default-thread render** runs; 3 consecutive passed before I stopped the loop. The
+  watchdog now bounds any recurrence to 120 s with the case name instead of an hour of silence.
