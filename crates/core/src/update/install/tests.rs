@@ -478,6 +478,94 @@ fn ensure_target_writable_rejects_relative_target_without_parent() {
     assert_eq!(err.code(), crate::update::error::CODE_UPDATE_APPLY_FAILED);
 }
 
+#[test]
+fn plan_windows_msi_is_refused_with_generic_reason() {
+    // WindowsMsi cannot self-update and has no package-manager hint, so the plan
+    // falls back to the generic Indonesian refusal instead of an empty reason.
+    let plan = plan_install(
+        &InstallKind::WindowsMsi {
+            exe_path: PathBuf::from("C:\\Program Files\\DBLocal\\dblocal.exe"),
+        },
+        Path::new("C:\\staged.zip"),
+        Path::new("C:\\Program Files\\DBLocal\\dblocal.exe"),
+        &ver("1.2.0"),
+    )
+    .unwrap();
+    match &plan.steps()[0] {
+        InstallStep::Refuse { reason } => {
+            assert_eq!(
+                reason,
+                "Pembaruan otomatis tidak tersedia untuk cara pemasangan ini."
+            );
+        }
+        other => panic!("unexpected {other:?}"),
+    }
+}
+
+#[test]
+fn ensure_target_writable_reports_unreadable_directory() {
+    let target = Path::new("/definitely-not-a-real-parent-dir-xyz/dblocal");
+    let err = ensure_target_writable(target).expect_err("missing parent");
+    assert_eq!(err.code(), crate::update::error::CODE_UPDATE_APPLY_FAILED);
+    assert!(err.detail().contains("izin direktori"));
+}
+
+#[cfg(unix)]
+#[test]
+fn cleanup_backup_reports_directory_in_place_of_backup() {
+    let dir = tempdir().unwrap();
+    let current = dir.path().join("dblocal");
+    write_fake_binary(&current, "1.0.0", true);
+    std::fs::create_dir(dir.path().join("dblocal.old")).unwrap();
+    let err = cleanup_backup(&current).expect_err("backup is a directory");
+    assert_eq!(err.code(), crate::update::error::CODE_UPDATE_APPLY_FAILED);
+}
+
+#[cfg(unix)]
+#[test]
+fn restore_backup_failure_removes_its_temp_copy() {
+    let dir = tempdir().unwrap();
+    let backup = dir.path().join("dblocal.old");
+    let target = dir.path().join("dblocal");
+    write_fake_binary(&backup, "1.0.0", true);
+    // A non-empty directory at the target makes rename(2) fail.
+    std::fs::create_dir(&target).unwrap();
+    std::fs::write(target.join("file"), b"x").unwrap();
+    let err = restore_backup(&backup, &target).expect_err("rename over dir");
+    assert_eq!(err.code(), crate::update::error::CODE_UPDATE_APPLY_FAILED);
+    let leftovers: Vec<String> = fs::read_dir(dir.path())
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().to_string())
+        .filter(|name| name.starts_with(".dblocal.update-"))
+        .collect();
+    assert!(leftovers.is_empty(), "temp copy left behind: {leftovers:?}");
+}
+
+#[cfg(unix)]
+#[test]
+fn apply_reports_missing_staged_file_and_leaves_no_sibling() {
+    let dir = tempdir().unwrap();
+    let current = dir.path().join("dblocal");
+    write_fake_binary(&current, "1.0.0", true);
+    let plan = plan_install(
+        &InstallKind::PortableTarball {
+            exe_path: current.clone(),
+        },
+        &dir.path().join("does-not-exist"),
+        &current,
+        &ver("1.1.0"),
+    )
+    .unwrap();
+    let err = apply(&plan).expect_err("staged file missing");
+    assert_eq!(err.code(), crate::update::error::CODE_UPDATE_APPLY_FAILED);
+    assert!(err.detail().contains("menyalin file update"));
+    let names: Vec<String> = fs::read_dir(dir.path())
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().to_string())
+        .collect();
+    assert_eq!(names, vec!["dblocal".to_owned()], "dir changed: {names:?}");
+}
+
 #[cfg(unix)]
 #[test]
 fn ensure_target_writable_asks_the_os_without_writing_a_probe() {
