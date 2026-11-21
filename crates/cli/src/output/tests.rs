@@ -236,6 +236,28 @@ impl DblService for StaticService {
     }
 }
 
+/// Runs `f` on its own thread and fails the test, rather than hanging the test
+/// binary, if it has not finished within `limit`.
+///
+/// A mutation that ignores a timeout turns the wait into "wait until the channel
+/// closes", which never happens in these tests; without this wrapper the whole
+/// test binary would hang for minutes and the mutation would look like a hang
+/// instead of a red test.
+fn with_deadline<T, F>(limit: Duration, f: F) -> T
+where
+    T: Send + 'static,
+    F: FnOnce() -> T + Send + 'static,
+{
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(f());
+    });
+    match rx.recv_timeout(limit) {
+        Ok(value) => value,
+        Err(_) => panic!("the wait did not return within {limit:?}; a timeout was ignored"),
+    }
+}
+
 #[test]
 fn wait_operation_rx_reports_progress_and_returns_the_outcome() {
     let (tx, mut rx) = tokio::sync::broadcast::channel(16);
@@ -256,8 +278,19 @@ fn wait_operation_rx_reports_progress_and_returns_the_outcome() {
     })
     .expect("send");
     drop(tx);
+    let service = StaticService {
+        status: InstanceStatus::Stopped,
+    };
     let mut err = Vec::new();
-    let result = wait_operation_rx(&mut rx, &op, &mut err, true);
+    let result = wait_operation_rx(
+        &mut rx,
+        &op,
+        &service,
+        Target::Name("never"),
+        Completion::StatusIn(&[InstanceStatus::Stopped]),
+        &mut err,
+        true,
+    );
     assert!(result.is_ok());
     let text = String::from_utf8_lossy(&err);
     assert!(text.contains("downloading"), "err: {text}");
@@ -274,8 +307,20 @@ fn wait_operation_rx_propagates_a_failure() {
     })
     .expect("send");
     drop(tx);
+    let service = StaticService {
+        status: InstanceStatus::Stopped,
+    };
     let mut err = Vec::new();
-    let failure = wait_operation_rx(&mut rx, &op, &mut err, false).expect_err("must fail");
+    let failure = wait_operation_rx(
+        &mut rx,
+        &op,
+        &service,
+        Target::Name("never"),
+        Completion::StatusIn(&[InstanceStatus::Stopped]),
+        &mut err,
+        false,
+    )
+    .expect_err("must fail");
     assert_eq!(failure.code, "DBL-2001");
 }
 
@@ -283,26 +328,111 @@ fn wait_operation_rx_propagates_a_failure() {
 fn wait_operation_rx_reports_a_closed_stream() {
     let (tx, mut rx) = tokio::sync::broadcast::channel(2);
     drop(tx);
+    let service = StaticService {
+        status: InstanceStatus::Stopped,
+    };
     let mut err = Vec::new();
-    let failure = wait_operation_rx(&mut rx, &op(), &mut err, false).expect_err("closed");
+    let failure = wait_operation_rx(
+        &mut rx,
+        &op(),
+        &service,
+        Target::Name("never"),
+        Completion::StatusIn(&[InstanceStatus::Stopped]),
+        &mut err,
+        false,
+    )
+    .expect_err("closed");
     assert_eq!(failure.code, "DBL-3003");
+}
+
+/// A dropped `OperationFinished` must not become a hang or a wrong verdict: on
+/// `Lagged` the store is re-read and decides. The channel has capacity 1 and the
+/// only message after the burst is irrelevant, so the fix is the only way out.
+#[test]
+fn wait_operation_rx_resolves_a_lagged_finish_from_the_store() {
+    let service = FakeService::new(InstanceStatus::Stopped, false);
+    let (tx, mut rx) = tokio::sync::broadcast::channel(1);
+    tx.send(ServiceEvent::CatalogUpdated {
+        status: dblocal_core::model::CatalogStatus::Fresh,
+    })
+    .expect("send");
+    tx.send(ServiceEvent::LogLines {
+        id: instance_id(),
+        lines: Vec::new(),
+    })
+    .expect("send");
+    drop(tx);
+    let mut err = Vec::new();
+    let result = with_deadline(Duration::from_secs(5), move || {
+        wait_operation_rx(
+            &mut rx,
+            &op(),
+            &service,
+            Target::Name("output-app"),
+            Completion::StatusIn(&[InstanceStatus::Stopped]),
+            &mut err,
+            false,
+        )
+    });
+    assert!(
+        result.is_ok(),
+        "the completed create must resolve: {result:?}"
+    );
+}
+
+/// The same for a delete: on `Lagged`, a vanished instance means success.
+#[test]
+fn wait_operation_rx_resolves_a_lagged_delete_from_the_store() {
+    let service = StaticService {
+        status: InstanceStatus::Deleting,
+    };
+    let (tx, mut rx) = tokio::sync::broadcast::channel(1);
+    tx.send(ServiceEvent::CatalogUpdated {
+        status: dblocal_core::model::CatalogStatus::Fresh,
+    })
+    .expect("send");
+    tx.send(ServiceEvent::LogLines {
+        id: instance_id(),
+        lines: Vec::new(),
+    })
+    .expect("send");
+    drop(tx);
+    let mut err = Vec::new();
+    let result = with_deadline(Duration::from_secs(5), move || {
+        wait_operation_rx(
+            &mut rx,
+            &op(),
+            &service,
+            Target::Id(&instance_id()),
+            Completion::Gone,
+            &mut err,
+            false,
+        )
+    });
+    // StaticService always lists the instance, so `Gone` cannot be proven and
+    // the closed stream is the honest answer.
+    assert_eq!(result.expect_err("still listed").code, "DBL-3003");
 }
 
 #[test]
 fn wait_for_status_rx_times_out_at_the_deadline() {
-    let (_tx, mut rx) = tokio::sync::broadcast::channel(2);
-    let service = StaticService {
-        status: InstanceStatus::Starting,
-    };
-    let wait = StatusWait {
-        op: &op(),
-        instance_id: &instance_id(),
-        ok_statuses: &[InstanceStatus::Running],
-        timeout: Duration::from_millis(50),
-        show_progress: false,
-    };
-    let mut err = Vec::new();
-    let failure = wait_for_status_rx(&mut rx, &service, wait, &mut err).expect_err("timeout");
+    let failure = with_deadline(Duration::from_secs(5), || {
+        let (_tx, mut rx) = tokio::sync::broadcast::channel(2);
+        let service = StaticService {
+            status: InstanceStatus::Starting,
+        };
+        let op = op();
+        let id = instance_id();
+        let wait = StatusWait {
+            op: &op,
+            instance_id: &id,
+            ok_statuses: &[InstanceStatus::Running],
+            timeout: Duration::from_millis(50),
+            show_progress: false,
+        };
+        let mut err = Vec::new();
+        wait_for_status_rx(&mut rx, &service, wait, &mut err).expect_err("timeout")
+    });
     assert_eq!(failure.code, "DBL-4001");
 }
 
@@ -465,6 +595,43 @@ fn wait_for_status_rx_reports_a_closed_stream() {
     assert_eq!(failure.code, "DBL-3003");
 }
 
+/// A burst that drops the final `InstanceChanged` must not end as a spurious
+/// timeout: on `Lagged` the status is re-read from the store. The channel holds
+/// one event, the service says `Running`, and the only remaining message is
+/// irrelevant, so ignoring `Lagged` would block until `Closed`.
+#[test]
+fn wait_for_status_rx_recovers_a_dropped_final_event_after_a_burst() {
+    let service = FakeService::new(InstanceStatus::Running, false);
+    let id = service.id();
+    let status = with_deadline(Duration::from_secs(5), move || {
+        let (tx, mut rx) = tokio::sync::broadcast::channel(1);
+        tx.send(ServiceEvent::CatalogUpdated {
+            status: dblocal_core::model::CatalogStatus::Fresh,
+        })
+        .expect("send");
+        tx.send(ServiceEvent::LogLines {
+            id: instance_id(),
+            lines: Vec::new(),
+        })
+        .expect("send");
+        drop(tx);
+        let op = op();
+        let wait = StatusWait {
+            op: &op,
+            instance_id: &id,
+            ok_statuses: &[InstanceStatus::Running],
+            timeout: Duration::from_secs(3),
+            show_progress: false,
+        };
+        let mut err = Vec::new();
+        wait_for_status_rx(&mut rx, &service, wait, &mut err)
+    });
+    assert_eq!(
+        status.expect("running from the store"),
+        InstanceStatus::Running
+    );
+}
+
 #[test]
 fn status_label_covers_every_variant() {
     for status in [
@@ -485,7 +652,7 @@ fn status_label_covers_every_variant() {
 #[test]
 fn table_widths_follow_the_longest_cell() {
     let views = FakeService::new(InstanceStatus::Running, false).views();
-    let table = format_list_table(&views, false);
+    let table = format_list_table(&views);
     assert!(table.contains("output-app"));
     assert!(table.contains("running"));
     assert!(!table.ends_with('\n'), "caller adds the newline");
@@ -506,4 +673,24 @@ fn report_error_writes_the_diagnostic_and_returns_the_code() {
 fn service_open_error_is_never_empty() {
     let text = crate::messages::service_open_error("detail");
     assert!(text.contains("detail"));
+}
+
+#[test]
+fn message_helpers_carry_their_codes() {
+    assert!(crate::messages::timeout_line().contains(crate::messages::CODE_TIMEOUT));
+    assert!(crate::messages::runtime_line("x").contains(crate::messages::CODE_RUNTIME));
+    assert!(
+        crate::messages::stopping_elsewhere_line()
+            .contains(dblocal_core::error::CODE_INVALID_TRANSITION)
+    );
+    assert_eq!(
+        crate::messages::diagnosis_line("status"),
+        "diagnosis: status"
+    );
+    assert_eq!(crate::messages::code_line("DBL-1002", "x"), "[DBL-1002] x");
+    assert_eq!(
+        crate::messages::download_progress(50, 5, 10),
+        "... unduhan 50% (5/10)"
+    );
+    assert_eq!(crate::messages::stage_line("starting"), "... starting");
 }

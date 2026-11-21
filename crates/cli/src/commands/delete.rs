@@ -15,19 +15,22 @@ pub fn run(ctx: &mut Ctx<'_>, name: &str, yes: bool, purge: bool) -> u8 {
         if !ctx.is_interactive {
             output::stderr_line(
                 ctx.err,
-                &format!("[DBL-1001] {}", messages::ERR_DELETE_NEEDS_YES),
+                &messages::code_line("DBL-1001", messages::ERR_DELETE_NEEDS_YES),
             );
             return EXIT_BAD_ARGS;
         }
         output::stderr_line(ctx.err, messages::PROMPT_DELETE);
         let Some(input) = (ctx.confirm)() else {
-            output::stderr_line(ctx.err, "[DBL-1001] gagal membaca konfirmasi");
+            output::stderr_line(
+                ctx.err,
+                &messages::code_line("DBL-1001", messages::ERR_CONFIRM_READ),
+            );
             return EXIT_BAD_ARGS;
         };
         if input.trim() != name {
             output::stderr_line(
                 ctx.err,
-                &format!("[DBL-1001] {}", messages::ERR_NAME_CONFIRMATION),
+                &messages::code_line("DBL-1001", messages::ERR_NAME_CONFIRMATION),
             );
             return EXIT_BAD_ARGS;
         }
@@ -44,7 +47,15 @@ pub fn run(ctx: &mut Ctx<'_>, name: &str, yes: bool, purge: bool) -> u8 {
         Err(e) => return output::report_error(ctx.err, &e),
     };
 
-    match output::wait_operation_rx(&mut rx, &op, ctx.err, ctx.stderr_is_tty) {
+    match output::wait_operation_rx(
+        &mut rx,
+        &op,
+        ctx.service,
+        output::Target::Id(&view.id),
+        output::Completion::Gone,
+        ctx.err,
+        ctx.stderr_is_tty,
+    ) {
         Ok(()) => {
             if purge {
                 output::stderr_line(ctx.err, messages::MSG_DELETED);
@@ -71,7 +82,7 @@ pub fn run(ctx: &mut Ctx<'_>, name: &str, yes: bool, purge: bool) -> u8 {
             EXIT_OK
         }
         Err(e) => {
-            output::stderr_line(ctx.err, &format!("[{}] {}", e.code, e.message));
+            output::stderr_line(ctx.err, &messages::code_line(&e.code, &e.message));
             EXIT_GENERAL
         }
     }

@@ -20,25 +20,32 @@ fn list_empty_json() {
     assert_eq!(out.trim(), "[]");
 }
 
+/// `list --json` stdout is exactly one JSON line carrying the expected array.
 #[test]
-fn list_json_has_stable_keys() {
+fn list_json_is_one_line_equal_to_the_expected_array() {
     let svc = MockService::deterministic();
     svc.seed_instance(
         spec("app", EngineKey::Postgresql, "17.4", 5432),
         InstanceStatus::Running,
     );
-    let (code, out, _) = run_cmd(&svc, &Command::List { json: true }, false);
+    let (code, out, err) = run_cmd(&svc, &Command::List { json: true }, false);
     assert_eq!(code, EXIT_OK);
-    let v: serde_json::Value = serde_json::from_str(out.trim()).expect("json");
-    let arr = v.as_array().expect("array");
-    assert_eq!(arr.len(), 1);
-    let obj = arr[0].as_object().expect("obj");
-    for k in ["name", "engine", "version", "port", "status"] {
-        assert!(obj.contains_key(k), "missing {k}");
-    }
-    assert_eq!(obj["name"], "app");
-    assert_eq!(obj["engine"], "postgresql");
-    assert_eq!(obj["status"], "running");
+    assert_eq!(err, "", "stderr must be empty");
+    assert_eq!(
+        out,
+        "[{\"name\":\"app\",\"engine\":\"postgresql\",\"version\":\"17.4\",\"port\":5432,\"status\":\"running\"}]\n"
+    );
+    let parsed: serde_json::Value = serde_json::from_str(out.trim()).expect("json");
+    assert_eq!(
+        parsed,
+        serde_json::json!([{
+            "name": "app",
+            "engine": "postgresql",
+            "version": "17.4",
+            "port": 5432,
+            "status": "running"
+        }])
+    );
 }
 
 #[test]
@@ -79,18 +86,20 @@ fn status_stopped_exit_1() {
     assert_eq!(out.trim(), "stopped");
 }
 
+/// F-CLI-03 AC1: `uri` stdout is the URI and one newline, with no decoration
+/// of any kind, and stderr is empty.
 #[test]
-fn uri_prints_secret_only_on_stdout() {
+fn uri_stdout_is_exactly_the_uri_and_stderr_is_empty() {
     let svc = MockService::deterministic();
     let id = svc.seed_instance(
         spec("app", EngineKey::Postgresql, "17.4", 5432),
         InstanceStatus::Running,
     );
     let uri = svc.connection_uri(&id, UriFormat::Uri).expect("uri");
-    let secret = uri.expose().to_owned();
+    let expected = format!("{}\n", uri.expose());
     assert!(
-        secret.contains("pwd-") || secret.contains(":"),
-        "uri should contain credential"
+        uri.expose().contains("pwd-"),
+        "the fixture must carry a credential or this proves nothing"
     );
     let (code, out, err) = run_cmd(
         &svc,
@@ -101,8 +110,8 @@ fn uri_prints_secret_only_on_stdout() {
         false,
     );
     assert_eq!(code, EXIT_OK);
-    assert!(out.trim().contains(secret.as_str()));
-    assert!(!err.contains(&secret), "stderr must not contain uri secret");
+    assert_eq!(out, expected, "stdout must be the bare URI plus newline");
+    assert_eq!(err, "", "stderr must be empty on success");
 }
 
 #[test]
@@ -162,13 +171,17 @@ fn delete_refuses_without_yes_when_not_interactive() {
     assert_eq!(svc.list_instances().unwrap().len(), 1);
 }
 
+/// `uri --env` prints the core builder's `.env` block verbatim plus one newline;
+/// the expectation is the service's own value, not a substring of it.
 #[test]
-fn uri_env_uses_dotenv_format() {
+fn uri_env_stdout_equals_the_core_dotenv_block() {
     let svc = MockService::deterministic();
-    svc.seed_instance(
+    let id = svc.seed_instance(
         spec("app", EngineKey::Postgresql, "17.4", 5432),
         InstanceStatus::Running,
     );
+    let block = svc.connection_uri(&id, UriFormat::DotEnv).expect("dotenv");
+    let expected = format!("{}\n", block.expose());
     let (code, out, err) = run_cmd(
         &svc,
         &Command::Uri {
@@ -178,8 +191,8 @@ fn uri_env_uses_dotenv_format() {
         false,
     );
     assert_eq!(code, EXIT_OK);
-    assert!(out.contains("DATABASE_URL=") || out.contains("DB_HOST="));
-    assert!(!err.contains("DATABASE_URL=")); // stderr should be clean
+    assert_eq!(out, expected, "stdout must be the core .env block verbatim");
+    assert_eq!(err, "", "stderr must be empty on success");
 }
 
 #[test]
@@ -283,7 +296,7 @@ fn formatters_table_and_json_golden() {
         InstanceStatus::Running,
     );
     let views = svc.list_instances().unwrap();
-    let table = output::format_list_table(&views, false);
+    let table = output::format_list_table(&views);
     assert!(table.contains("NAME"));
     assert!(table.contains("ENGINE"));
     assert!(table.contains("app"));

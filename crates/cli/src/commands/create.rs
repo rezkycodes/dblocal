@@ -1,4 +1,4 @@
-use dblocal_core::model::{AuthMode, EngineKey, InstanceName, InstanceSpec, Port};
+use dblocal_core::model::{AuthMode, EngineKey, InstanceName, InstanceSpec, InstanceStatus, Port};
 use dblocal_core::service::UriFormat;
 
 use crate::cli::{EXIT_BAD_ARGS, EXIT_GENERAL, EXIT_OK};
@@ -19,7 +19,10 @@ pub fn run(
         Err(_) => {
             output::stderr_line(
                 ctx.err,
-                &format!("[DBL-1001] {}: {engine}", messages::ERR_UNKNOWN_ENGINE),
+                &messages::code_line(
+                    "DBL-1001",
+                    &format!("{}: {engine}", messages::ERR_UNKNOWN_ENGINE),
+                ),
             );
             return EXIT_BAD_ARGS;
         }
@@ -65,7 +68,15 @@ pub fn run(
         Err(e) => return output::report_error(ctx.err, &e),
     };
 
-    let res = output::wait_operation_rx(&mut rx, &op, ctx.err, ctx.stderr_is_tty);
+    let res = output::wait_operation_rx(
+        &mut rx,
+        &op,
+        ctx.service,
+        output::Target::Name(name),
+        output::Completion::StatusIn(&[InstanceStatus::Stopped]),
+        ctx.err,
+        ctx.stderr_is_tty,
+    );
     match res {
         Ok(()) => {
             let view = match ctx.service.list_instances() {
@@ -73,7 +84,10 @@ pub fn run(
                 Err(e) => return output::report_error(ctx.err, &e),
             };
             let Some(view) = view else {
-                output::stderr_line(ctx.err, "[DBL-1002] instance missing after create");
+                output::stderr_line(
+                    ctx.err,
+                    &messages::code_line("DBL-1002", messages::ERR_CREATE_MISSING),
+                );
                 return crate::cli::EXIT_NOT_FOUND;
             };
             match ctx.service.connection_uri(&view.id, UriFormat::Uri) {
@@ -85,7 +99,7 @@ pub fn run(
             }
         }
         Err(e) => {
-            output::stderr_line(ctx.err, &format!("[{}] {}", e.code, e.message));
+            output::stderr_line(ctx.err, &messages::code_line(&e.code, &e.message));
             if matches!(
                 e.code.as_str(),
                 "DBL-1001" | "DBL-1003" | "DBL-1005" | "DBL-6001"

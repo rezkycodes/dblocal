@@ -14,12 +14,18 @@ pub fn run(ctx: &mut Ctx<'_>, json: bool) -> u8 {
                 EXIT_OK
             }
             Err(e) => {
-                output::stderr_line(ctx.err, &format!("[DBL-3001] json: {e}"));
+                output::stderr_line(
+                    ctx.err,
+                    &crate::messages::code_line(
+                        dblocal_core::error::CODE_IO,
+                        &format!("json: {e}"),
+                    ),
+                );
                 crate::cli::EXIT_GENERAL
             }
         }
     } else {
-        let table = output::format_list_table(&instances, ctx.stdout_is_tty);
+        let table = output::format_list_table(&instances);
         output::stdout_line(ctx.out, &table);
         EXIT_OK
     }

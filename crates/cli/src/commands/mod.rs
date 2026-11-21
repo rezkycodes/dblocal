@@ -73,9 +73,9 @@ pub fn find_instance(
         None => {
             output::stderr_line(
                 ctx.err,
-                &format!(
-                    "[DBL-1002] {}: {name}",
-                    crate::messages::ERR_INSTANCE_NOT_FOUND
+                &crate::messages::code_line(
+                    dblocal_core::error::CODE_NOT_FOUND,
+                    &format!("{}: {name}", crate::messages::ERR_INSTANCE_NOT_FOUND),
                 ),
             );
             Err(crate::cli::EXIT_NOT_FOUND)

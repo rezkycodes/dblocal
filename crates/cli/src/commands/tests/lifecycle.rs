@@ -2,8 +2,9 @@
 
 use super::*;
 
+/// `create` stdout is the URI plus one newline and nothing else (F-CLI-03 AC2).
 #[test]
-fn create_installed_runtime_prints_uri_and_exits_0() {
+fn create_stdout_is_exactly_the_uri_and_exits_0() {
     let svc = MockService::deterministic();
     let (code, out, err) = run_cmd(
         &svc,
@@ -17,7 +18,14 @@ fn create_installed_runtime_prints_uri_and_exits_0() {
         false,
     );
     assert_eq!(code, EXIT_OK, "stderr: {err}");
-    assert!(out.trim().starts_with("postgresql://"), "out: {out}");
+    let view = svc
+        .list_instances()
+        .unwrap()
+        .into_iter()
+        .next()
+        .expect("row");
+    let uri = svc.connection_uri(&view.id, UriFormat::Uri).expect("uri");
+    assert_eq!(out, format!("{}\n", uri.expose()));
     assert_eq!(svc.list_instances().unwrap().len(), 1);
 }
 
@@ -225,9 +233,9 @@ fn logs_missing_instance_is_exit_3() {
 }
 
 #[test]
-fn uri_missing_instance_is_exit_3_and_uri_is_exit_0() {
+fn uri_missing_instance_is_exit_3() {
     let svc = MockService::deterministic();
-    let (code, _o, _e) = run_cmd(
+    let (code, out, err) = run_cmd(
         &svc,
         &Command::Uri {
             name: "ghost".into(),
@@ -236,6 +244,8 @@ fn uri_missing_instance_is_exit_3_and_uri_is_exit_0() {
         false,
     );
     assert_eq!(code, EXIT_NOT_FOUND);
+    assert!(out.is_empty(), "a missing instance prints no URI: {out}");
+    assert!(err.contains("DBL-1002"), "err: {err}");
 }
 
 #[test]

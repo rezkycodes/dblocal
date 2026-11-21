@@ -18,14 +18,18 @@ pub fn run(ctx: &mut Ctx<'_>, name: &str, timeout: u64) -> u8 {
     };
     let timeout = Duration::from_secs(timeout.max(1));
 
-    if view.status == InstanceStatus::Running {
-        output::stderr_line(ctx.err, messages::ERR_ALREADY_RUNNING);
-        return EXIT_OK;
-    }
-    if view.status == InstanceStatus::Starting {
-        // Another process is already starting it: the loser of the race.
-        output::stderr_line(ctx.err, messages::ERR_ALREADY_RUNNING);
-        return wait_cross_process(ctx, &view.id, timeout);
+    match view.status {
+        InstanceStatus::Running => {
+            output::stderr_line(ctx.err, messages::ERR_ALREADY_RUNNING);
+            return EXIT_OK;
+        }
+        InstanceStatus::Starting => {
+            // Another process is already starting it: the loser of the race.
+            output::stderr_line(ctx.err, messages::ERR_ALREADY_RUNNING);
+            return wait_cross_process(ctx, &view.id, timeout);
+        }
+        InstanceStatus::Stopping => return report_stopping_elsewhere(ctx),
+        _ => {}
     }
 
     output::stderr_line(ctx.err, &format!("{} {name}...", messages::MSG_STARTING));
@@ -33,7 +37,7 @@ pub fn run(ctx: &mut Ctx<'_>, name: &str, timeout: u64) -> u8 {
     let op = match ctx.service.start_instance(&view.id) {
         Ok(op) => op,
         Err(DblError::InvalidTransition {
-            from: "busy" | "starting" | "running" | "stopping",
+            from: "busy" | "starting" | "running",
             ..
         }) => {
             // The compare-and-set refused: another writer (another process, or
@@ -46,6 +50,12 @@ pub fn run(ctx: &mut Ctx<'_>, name: &str, timeout: u64) -> u8 {
             output::stderr_line(ctx.err, messages::ERR_ALREADY_RUNNING);
             return wait_cross_process(ctx, &view.id, timeout);
         }
+        // `stopping` is NOT the same race: nobody is going to reach `running`.
+        // Waiting for one would burn the whole timeout and then claim an engine
+        // failure, so it is reported immediately instead.
+        Err(DblError::InvalidTransition {
+            from: "stopping", ..
+        }) => return report_stopping_elsewhere(ctx),
         Err(e) => return output::report_error(ctx.err, &e),
     };
 
@@ -65,6 +75,12 @@ pub fn run(ctx: &mut Ctx<'_>, name: &str, timeout: u64) -> u8 {
     }
 }
 
+/// Prints the "another process is stopping it" line and returns its exit code.
+fn report_stopping_elsewhere(ctx: &mut Ctx<'_>) -> u8 {
+    output::stderr_line(ctx.err, &messages::stopping_elsewhere_line());
+    EXIT_GENERAL
+}
+
 /// Waits for an instance another process is starting.
 ///
 /// The service's `broadcast` channel is per-process, so a cross-process state
@@ -82,15 +98,18 @@ fn wait_cross_process(ctx: &mut Ctx<'_>, id: &InstanceId, timeout: Duration) -> 
                             output::stderr_line(ctx.err, messages::MSG_READY);
                             return EXIT_OK;
                         }
+                        // The winner was stopped before it became healthy (or a
+                        // sibling stop won): `running` is not coming either.
+                        InstanceStatus::Stopping => return report_stopping_elsewhere(ctx),
                         InstanceStatus::Failed => {
                             if let Some(failure) = view.failure {
                                 output::stderr_line(
                                     ctx.err,
-                                    &format!("[{}] {}", failure.code, failure.message),
+                                    &messages::code_line(&failure.code, &failure.message),
                                 );
                                 output::stderr_line(
                                     ctx.err,
-                                    &format!("diagnosis: {}", failure.diagnosis.as_str()),
+                                    &messages::diagnosis_line(failure.diagnosis.as_str()),
                                 );
                             }
                             return EXIT_ENGINE_FAILED;
@@ -104,7 +123,7 @@ fn wait_cross_process(ctx: &mut Ctx<'_>, id: &InstanceId, timeout: Duration) -> 
             Err(e) => return output::report_error(ctx.err, &e),
         }
         if Instant::now() >= deadline {
-            output::stderr_line(ctx.err, "[DBL-4001] waktu tunggu habis");
+            output::stderr_line(ctx.err, &messages::timeout_line());
             return EXIT_ENGINE_FAILED;
         }
         std::thread::sleep(CROSS_PROCESS_POLL);
@@ -114,9 +133,9 @@ fn wait_cross_process(ctx: &mut Ctx<'_>, id: &InstanceId, timeout: Duration) -> 
 /// Every failed start exits 4 (F-CLI-02: "a failed start prints the DBL code,
 /// the Indonesian message and the diagnosis, exit 4").
 fn report_start_failure(ctx: &mut Ctx<'_>, e: &dblocal_core::service::UserFacingError) -> u8 {
-    output::stderr_line(ctx.err, &format!("[{}] {}", e.code, e.message));
+    output::stderr_line(ctx.err, &messages::code_line(&e.code, &e.message));
     if let Some(diag) = e.diagnosis {
-        output::stderr_line(ctx.err, &format!("diagnosis: {}", diag.as_str()));
+        output::stderr_line(ctx.err, &messages::diagnosis_line(diag.as_str()));
     }
     if e.code == "DBL-1002" {
         EXIT_NOT_FOUND
