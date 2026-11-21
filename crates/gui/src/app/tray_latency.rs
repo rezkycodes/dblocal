@@ -239,7 +239,8 @@ fn wait_for_running(
         match rx.recv_timeout(remaining.min(Duration::from_millis(50))) {
             Ok(crate::service_bridge::UiEvent::InstanceChanged(view)) => {
                 if view.id == *id {
-                    let _model = crate::tray::TrayMenuModel::from_views(std::slice::from_ref(&view));
+                    let _model =
+                        crate::tray::TrayMenuModel::from_views(std::slice::from_ref(&view));
                     if view.status == InstanceStatus::Running {
                         return true;
                     }
