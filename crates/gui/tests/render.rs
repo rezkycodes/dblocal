@@ -336,6 +336,26 @@ fn renders_dark_and_light_overview_with_the_prototype_regions() {
 }
 
 #[test]
+fn renders_overview_failed_with_diagnosis_banner() {
+    let frame = render(
+        true,
+        "overview-failed-dark.png",
+        Workspace::preview_failed_overview,
+    );
+    let danger_tinted = frame.count_tint(
+        (DOCK, 80, LOGICAL_W - 20, LOGICAL_H / 2),
+        DARK_BG,
+        DARK_DANGER,
+    );
+    let danger_text = frame.count_near((DOCK, 80, LOGICAL_W - 20, LOGICAL_H / 2), DARK_DANGER, 28);
+    eprintln!("OVERVIEW-DIAG tint={danger_tinted} danger_text={danger_text}");
+    assert!(
+        danger_tinted > 2000 || danger_text > 150,
+        "failed overview diagnosis banner not visible (tint={danger_tinted}, text={danger_text})"
+    );
+}
+
+#[test]
 fn renders_failed_logs_with_the_diagnosis_banner() {
     let frame = render(true, "logs-diagnosis-dark.png", Workspace::preview_failure);
     // The diagnosis banner is a danger-tinted strip in the content area.

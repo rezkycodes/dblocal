@@ -145,8 +145,45 @@ gpui-kit-assets 0.10.0). The direct `gpui`, `gpui-component`, `gpui-kit-assets` 
 - **`gpui-fast`:** measured, **not adopted** (RSS 183.6 MB vs 180.5 MB, no floor improvement);
   `docs/spikes/gpui-kit/gpui-fast-notes.md`.
 
+## W2-E prototype port (D-25)
+
+The W2-E port replaced the W1-G placeholder views with the user's prototype layout, keeping the frozen
+`DblService` boundary and the event pump. The prototype's `model.rs` and sample data are not used in
+the product build; views render `InstanceView`, `CatalogView`, `Runtime`, `LogStore` and service events.
+
+### Screen map
+
+| Prototype screen | Implementation | Headless render test |
+|---|---|---|
+| Overview (running) | `crates/gui/src/app/screens/overview.rs` | `renders_dark_and_light_overview_with_the_prototype_regions` |
+| Overview (failed, diagnosis in Logs) | `crates/gui/src/app/screens/logs.rs` banner + `screens.rs` header | `renders_failed_logs_with_the_diagnosis_banner` |
+| Logs | `crates/gui/src/app/screens/logs.rs`, `crates/gui/src/logs.rs` | `renders_logs_with_monospace_text` |
+| Databases placeholder (product) | `crates/gui/src/app/screens/databases.rs` (`demo_content == false`) | `renders_databases_placeholder_in_the_product_build` |
+| Databases demo | `crates/gui/src/app/screens/databases.rs` (`demo_content == true`) | `renders_databases_placeholder_in_the_product_build` (demo frame) |
+| Config placeholder | `crates/gui/src/app/screens/databases.rs` | covered by placeholder path; no separate backend yet |
+| New instance dialog (download needed) | `crates/gui/src/app/create_dialog.rs` | `renders_create_dialog_with_a_download_and_an_unavailable_version` |
+| New instance dialog (unavailable version) | `crates/gui/src/app/create_dialog.rs` + preview forcing unavailable engine | `renders_create_dialog_with_a_download_and_an_unavailable_version` |
+| Dock with filter | `crates/gui/src/app/dock.rs`, `format::filter_instances` | `renders_dock_with_the_filter_applied` |
+| Light theme Overview | same Overview path, `DBLocal Light` | `renders_dark_and_light_overview_with_the_prototype_regions` |
+| Delete dialog | `crates/gui/src/app/delete_dialog.rs` | `renders_palette_and_delete_dialog` |
+| Command palette | `crates/gui/src/app/palette.rs` | `renders_palette_and_delete_dialog` |
+| Stale catalog banner | `crates/gui/src/app/status_bar.rs` | `renders_stale_banner_and_revealed_uri` |
+| Revealed URI | `crates/gui/src/app/screens/overview.rs`, `UriView` | `renders_stale_banner_and_revealed_uri` |
+
+### Honest placeholders (Phase 2/3, no frozen-service backend)
+
+| Surface | Phase | Product build | Demo build | Fills when |
+|---|---:|---|---|---|
+| Databases tab (`F-DBU`) | 2 | "belum tersedia di versi ini", controls disabled, no sample rows | Prototype layout with sample rows for review | `DblService` gains database/user operations |
+| Config tab (`F-CFG`) | 3 | "belum tersedia di versi ini", controls disabled, no sample rows | Prototype layout with sample config rows for review | `DblService` gains config read/write |
+| "Open in…" (`F-OPN`) | 2 | Menu disabled with placeholder reason | Menu entries visible but disabled | Client detection/open integration lands |
+
+The placeholder rule is enforced by `Workspace::demo_content`: render tests use preview constructors that
+set it explicitly; the product build never sets it.
+
 ## Unverified here
 
 X11 now builds and runs here (Xwayland `:0`, verified in W2-D). Windows and macOS cannot be built or
 run on this Linux host; `gpui-fast` is measured but has no render-parity or 40× evidence; non-AMD
-GPUs unverified. Tray wiring, quit dialogs and the real service are Wave 2.
+GPUs unverified. Tray wiring, quit dialogs and the real service are Wave 2. Light theme is verified
+by headless renders and the contrast test, not on real hardware.

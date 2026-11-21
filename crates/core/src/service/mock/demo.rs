@@ -258,6 +258,21 @@ impl MockService {
         self.create_instance(spec)
     }
 
+    /// The download sample the demo status bar shows, as a live operation would
+    /// have reported mid-transfer. The preview seeds it into the shell state so
+    /// the row is renderable without racing a background step.
+    pub fn demo_download_progress() -> (OperationId, crate::model::DownloadProgress) {
+        (
+            OperationId::new("demo-download-pg-15"),
+            crate::model::DownloadProgress::new(
+                220 * 1024 * 1024,
+                980 * 1024 * 1024,
+                24 * 1024 * 1024,
+                Some(Duration::from_secs(32)),
+            ),
+        )
+    }
+
     /// Marks one instance's credential as living in the `0600` file fallback.
     pub fn seed_file_credential(&self, id: &InstanceId) {
         let mut g = lock(&self.inner);
@@ -444,6 +459,14 @@ mod tests {
             .find(|view| view.id == app.id)
             .expect("pg-app");
         assert_eq!(updated.credential_backend, Some(CredentialBackend::File));
+    }
+
+    #[test]
+    fn the_demo_has_a_download_in_progress_sample() {
+        let (operation, progress) = MockService::demo_download_progress();
+        assert_eq!(operation.as_str(), "demo-download-pg-15");
+        assert!(progress.bytes_done < progress.bytes_total);
+        assert!(progress.bytes_per_sec > 0);
     }
 
     #[test]

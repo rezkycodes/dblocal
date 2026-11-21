@@ -85,6 +85,15 @@ pub(super) fn render(workspace: &Workspace, cx: &mut Context<Workspace>) -> impl
             strings::UI_TRAY_UNAVAILABLE
         }))
         .child(downloads_popover(workspace, &theme, cx))
+        .when_some(workspace.toast_text(), |this, toast| {
+            this.child(
+                Label::new(toast)
+                    .text_xs()
+                    .text_color(theme.muted_foreground)
+                    .truncate()
+                    .max_w(px(320.)),
+            )
+        })
         .child(Label::new(format!(
             "{}{}",
             strings::UI_VERSION_PREFIX,

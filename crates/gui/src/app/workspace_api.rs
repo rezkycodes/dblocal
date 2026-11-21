@@ -332,6 +332,11 @@ impl Workspace {
         super::status_bar::stale_banner(self, cx.theme())
     }
 
+    /// The latest toast line (copy confirmations, DBL-coded failures).
+    pub(crate) fn toast_text(&self) -> Option<SharedString> {
+        self.toast.clone()
+    }
+
     pub(crate) fn version(&self) -> &'static str {
         self.version
     }

@@ -29,7 +29,11 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let theme = cx.theme().clone();
-        page()
+        let mut content = page();
+        if crate::format::offers_port_fix(view) {
+            content = content.child(self.render_overview_diagnosis(view, &theme, cx));
+        }
+        content
             .child(self.render_connection(view, &theme, cx))
             .child(
                 h_flex()
@@ -50,6 +54,64 @@ impl Workspace {
                     ),
             )
             .child(self.render_recent_logs(view, &theme, cx))
+    }
+
+    fn render_overview_diagnosis(
+        &self,
+        view: &dblocal_core::service::InstanceView,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let suggested = self.instance_port_proposal(&view.id);
+        let id_fix = view.id.clone();
+        let code = view
+            .failure
+            .as_ref()
+            .map(|f| f.code.clone())
+            .unwrap_or_default();
+        super::super::components::banner(theme.danger)
+            .child(super::super::components::icon(
+                gpui_kit::assets::IconName::TriangleAlert,
+                20.0,
+                theme.danger,
+            ))
+            .child(
+                v_flex()
+                    .flex_1()
+                    .min_w(px(280.))
+                    .gap_1()
+                    .child(
+                        h_flex()
+                            .gap_2()
+                            .items_center()
+                            .child(
+                                Label::new(strings::diagnosis_port_heading(view.port.get()))
+                                    .text_sm()
+                                    .font_weight(gpui_kit::FontWeight::SEMIBOLD),
+                            )
+                            .child(
+                                Label::new(code)
+                                    .text_xs()
+                                    .font_family(theme.mono_font_family.clone())
+                                    .text_color(theme.muted_foreground),
+                            ),
+                    )
+                    .child(
+                        Label::new(strings::diagnosis_port_body(view.port.get(), suggested))
+                            .text_xs()
+                            .text_color(theme.muted_foreground),
+                    ),
+            )
+            .child(
+                h_flex().flex_none().gap_2().child(
+                    Button::new("overview-move-port")
+                        .primary()
+                        .label(strings::diagnosis_move_and_start(suggested))
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.move_to_port_and_start(&id_fix, suggested, cx);
+                        })),
+                ),
+            )
     }
 
     /// The Connection card: masked URI, reveal, copy actions, the `.env` block.

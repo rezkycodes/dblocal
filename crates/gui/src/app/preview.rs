@@ -22,6 +22,14 @@ impl Workspace {
     ) -> Self {
         let mut workspace = Self::new(service, window, cx);
         workspace.demo_content = true;
+        // The prototype's status bar carries a live download row.
+        let (operation, progress) =
+            dblocal_core::service::mock::MockService::demo_download_progress();
+        workspace.state.on_download(
+            operation,
+            progress,
+            dblocal_core::strings::UI_DOWNLOADS.to_owned(),
+        );
         // Open the running instance so the Overview screen is the resting state.
         if let Some(first) = workspace
             .state
@@ -63,6 +71,27 @@ impl Workspace {
             let index = workspace.tabs.open_or_select(id.clone());
             workspace.load_logs_for(&id);
             workspace.tabs.set_inner(index, InnerTab::Logs);
+        }
+        workspace
+    }
+
+    /// Preview of a failed instance's Overview, which shows the diagnosis banner.
+    pub fn preview_failed_overview(
+        service: Arc<dyn DblService>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let mut workspace = Self::preview(service, window, cx);
+        if let Some(id) = workspace
+            .state
+            .instances
+            .iter()
+            .find(|view| view.status == InstanceStatus::Failed)
+            .map(|view| view.id.clone())
+        {
+            let index = workspace.tabs.open_or_select(id.clone());
+            workspace.load_logs_for(&id);
+            workspace.tabs.set_inner(index, InnerTab::Overview);
         }
         workspace
     }

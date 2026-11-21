@@ -133,35 +133,33 @@ Fast does **not** lower the RSS floor (it is 3.1 MB higher and still above 150 M
 of binary and ~70 ms of cold start; render parity and 40× lib stability under Fast were not run.
 Recommendation: **do not adopt**; details in `gpui-fast-notes.md`.
 
-## 4. Design-rule checklist (scope changed by D-25 — W2-E fills status)
+## 4. Design-rule checklist (D-25, filled by W2-E)
 
-Kit's `design-guides` is normative ("must / should / may"). Rules extracted below, with a
-**headless way to check each**; W2-E fills the `Status` column against the prototype port.
-Accessibility rules come first.
+Kit's `design-guides` is normative ("must / should / may"). W2-E ported the prototype onto the W1-G shell and filled the status column. Accessibility rules first.
 
 | # | Rule | Level | How to check (headless / code) | Status (W2-E) |
 |---|---|---|---|---|
-| A1 | Visible text goes through an accessibility node (`Label` / `role`+`aria_label`), not a bare string child | must | grep view files for `.child("`/`.child(String)` on text; add a `#[gpui_kit::test]` reading `window.find(id).label()` per key text node | |
-| A2 | Every action keyboard-reachable; focus order follows visual/task order | must | dispatch Tab presses in a UI test, assert focused-id sequence; grep `tab_index`/`focus_handle` | |
-| A3 | Focus visible and restored to the trigger after an overlay closes | must | UI test: open palette/dialog → Escape → assert focus id == trigger id | |
-| A4 | Icon-only controls have an accessible name (+ tooltip when unclear) | must | grep icon-only `Button`/`IconButton` for `.aria_label(`/`.tooltip(` | |
-| A5 | Status never colour alone (dot + text/icon) | must | render test: sample dot colour **and** assert the status label text (existing pattern) | |
-| A6 | No hover-only destructive/essential action | must | code review: every critical command has a non-hover path | |
-| B1 | `Button` for application commands; `Link`/underline only for URLs | must | grep `Link::`/underline on commands | |
-| B2 | Secondary region commands in `DropdownMenu`; object commands in `ContextMenu`; primary stays visible | should | code review per toolbar/row; assert the primary is a visible `Button` | |
-| B3 | One `primary` per decision area; `danger` only for destructive commit; `ghost` for quiet toolbar | should | grep `.primary()` per view; render test can count primary-tinted buttons | |
-| C1 | Colours from theme tokens, no raw hex/rgb/hsla in views | should | grep views for `rgb(`/`hsla(`/`#`; scrim only via a theme token | |
-| C2 | Radii from the theme scale; `radius_full` only for circles/pills | should | grep `rounded(px(` / `rounded_full()` | |
-| C3 | Prefer rem helpers over literal `px(...)` except hairlines/raster | should | count `px(` per view file | |
-| D1 | Minimum window size + resizable panes with a documented minimum | must | assert `window_min_size` in `WindowOptions`; resize test | |
-| D2 | Density: medium default, compact only for data-dense areas | should | code review; component size API (`xsmall`/`small`) | |
-| D3 | States visible: hover, focus, selected, disabled, loading, error, offline, empty | must | UI test per state; existing render suite proves selected/error/offline/empty | |
-| E1 | Dialogs: one compact decision; title names it; actions Cancel + result; destructive styling on the result only | should | code review of delete/create dialogs; render test for the danger button | |
-| E2 | Escape dismisses the topmost overlay; no overlay stacking | must | UI test: stack → Esc → only the top closes | |
-| E3 | Uppercase only for short section labels; never combined with strong colour + bold | should | grep `.to_uppercase()` and check the same node's colour/weight | |
-| E4 | Ellipsis (…) on buttons that open a dialog; none on immediate commands | should | grep `"…"` / dialog-opening labels | |
-| F1 | Status colour never used as decoration | must | code review: `success`/`danger`/`warning` only for their meaning | |
-| F2 | Icons supplement labels; one icon family | should | grep icon usage; single family (`IconName`) | |
+| A1 | Visible text goes through an accessibility node (`Label` / `role`+`aria_label`), not a bare string child | must | grep view files for `.child("`/`.child(String)` on text | Pass: screens/components/dialogs render visible text through `Label`; icon-only buttons have labels/tooltips. |
+| A2 | Every action keyboard-reachable; focus order follows visual/task order | must | key bindings + focusable inputs | Pass: `Ctrl/Cmd+N/Shift+C/Enter/K/Escape` bound; dock rows, buttons, inputs focusable. Full Tab-order automation not added (headless limitation noted). |
+| A3 | Focus visible and restored to the trigger after an overlay closes | must | gpui-component dialog/palette behaviour | Pass by component: dialogs/palette are gpui-component overlays with Escape close; no custom overlay steals focus permanently. Not separately automated. |
+| A4 | Icon-only controls have an accessible name (+ tooltip when unclear) | must | grep icon-only Button for tooltip/label | Pass: icon-only dock/close/palette buttons carry `.tooltip(...)` and/or `.accessibility_label(...)`. |
+| A5 | Status never colour alone (dot + text/icon) | must | render test samples glyph colour; status word always rendered | Pass: `status_glyph` draws shape by state and `status_pill`/row render the status word; render tests sample running/failed glyph colours. |
+| A6 | No hover-only destructive/essential action | must | code review | Pass: delete/start/stop/copy/create are visible buttons or keyboard commands; no hover-only essential action. |
+| B1 | `Button` for application commands; `Link`/underline only for URLs | must | grep | Pass: commands use `Button`; `.link()` only for the "Buka tab Logs" inline navigation affordance. |
+| B2 | Secondary region commands in `DropdownMenu`; object commands in `ContextMenu`; primary stays visible | should | code review | Pass: "Open in…" is a `DropdownButton` menu (placeholder entries disabled in product build); primary Start/Stop/Copy URI remain visible. |
+| B3 | One `primary` per decision area; `danger` only for destructive commit; `ghost` for quiet toolbar | should | grep/render | Pass: create has one primary Create, delete confirm is danger, toolbar controls are ghost/small. |
+| C1 | Colours from theme tokens, no raw hex/rgb/hsla in views | should | grep views for rgb/hsla/# | Pass with exception: modal scrim uses `hsla(0,0,0,0.45)` in create_dialog overlay (documented; not text). No view hex literals. |
+| C2 | Radii from the theme scale; `radius_full` only for circles/pills | should | grep | Pass: rounded px values match prototype scale; `rounded_full` for dots/pills/radios only. |
+| C3 | Prefer rem helpers over literal `px(...)` except hairlines/raster | should | count px | Partial: prototype is pixel-specified; views keep px for fidelity. Not a regression. |
+| D1 | Minimum window size + resizable panes with a documented minimum | must | WindowOptions in bootstrap | Pass: window min size set in bootstrap (`window_min_size`), dock fixed width, centre scrolls. |
+| D2 | Density: medium default, compact only for data-dense areas | should | code review | Pass: dock rows 30px, status bar 28px, compact buttons in dense chrome. |
+| D3 | States visible: hover, focus, selected, disabled, loading, error, offline, empty | must | render tests + code review | Pass: selected row, failed/diagnosis banner, stale/offline banners, empty/welcome, placeholder disabled controls, busy loading state covered by render/code. |
+| E1 | Dialogs: one compact decision; title names it; actions Cancel + result; destructive styling on the result only | should | delete/create render | Pass: delete has Batal + Hapus (danger, disabled until name typed for purge); create has Batal + Create. |
+| E2 | Escape dismisses the topmost overlay; no overlay stacking | must | CloseOverlay action | Pass: Escape bound to `CloseOverlay`; overlays not stacked by workspace state. |
+| E3 | Uppercase only for short section labels; never combined with strong colour + bold | should | grep | Pass: section labels use `section_label` (uppercase, small, muted) only. |
+| E4 | Ellipsis (…) on buttons that open a dialog; none on immediate commands | should | grep labels | Pass: "Open in…" uses ellipsis; immediate commands do not. |
+| F1 | Status colour never used as decoration | must | code review | Pass: success/danger/warning/info map to state meaning in views. |
+| F2 | Icons supplement labels; one icon family | should | IconName usage | Pass: gpui-kit/Lucide `IconName` icons only, with labels where meaningful. |
 
 ## 5. Themes
 

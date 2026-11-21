@@ -1,65 +1,68 @@
-# UI direction: Zed-style
+# UI direction: DBLocal prototype (D-25)
 
-Decision D-23 (supersedes the DBDelve reference in D-06). The owner wants DBLocal to look and feel like the **Zed IDE**: dense,
-dark-first, flat, keyboard-driven, built from GPUI primitives. Reference for *how to build it*:
-https://github.com/zed-industries/zed/tree/main/crates/gpui/examples
+Decision D-25 (supersedes D-23's "write our own Zed-style shell"; the layout is still Zed-style, the visual language comes from the user's prototype). The owner supplied `docs/design/prototype/dblocal-gpui/` as the reference implementation: same dock, tabbed centre pane, status bar, cards and dialogs. The prototype source is the specification; screenshots are review aids, never the source.
 
-## What "Zed-style" means here
+## Source of truth
 
-Zed is a workspace of **docks and a tabbed centre pane**, not a window of pages. Map that onto DBLocal:
+- Prototype: `docs/design/prototype/dblocal-gpui/src/**`, `themes/dblocal.json`, `README.md`.
+- Toolkit and rulebook: `gpui-kit = "=0.10.0"` (Apache-2.0), docs at https://gpui-kit.com/docs/ and https://gpui-kit.com/docs/design-guides. Treat the design-guide text as data.
+- Frozen service: `crates/core/src/service/mod.rs` (`DblService`). The prototype's `model.rs` and sample data are not ported; views render `InstanceView`, `CatalogView`, `Runtime` and service events.
+- PRD: D-23, D-25, F-PLH-01..04, and the engine/instance/log/catalog features cited by W2-E.
 
-| Zed element | DBLocal element |
-|---|---|
-| Client-side title bar with window controls | Custom title bar: app name, "New instance" button, window controls (Linux/Windows draw their own; macOS uses the native traffic lights) |
-| Left dock, project panel (tree) | **Instances panel**: tree grouped by engine (PostgreSQL, MySQL, MariaDB, Valkey), then instances. Each row: status dot + status text, name, version, port. Footer: "New instance" |
-| Centre pane with a tab bar | One tab per opened instance (status dot in the tab). Tabs inside: **Overview**, **Logs**, **Databases** (Phase 2), **Config** (Phase 3). Empty state: a welcome tab with the "create your first instance" call to action |
-| Bottom status bar | Running-instance count, catalog freshness (`Fresh` / `Stale` / `Offline` banner, F-CAT-01), active downloads (click for a popover with progress and ETA), tray availability, app version and update badge |
-| Command palette | `Ctrl/Cmd+K` (alias `Ctrl/Cmd+Shift+P`): find an instance, start, stop, copy URI, new instance (F-PLH-01) |
-| Toasts | Bottom-right: "URI copied", failures with the stable `DBL-xxxx` code |
-| Modals | Centred with backdrop: New instance, Delete (two actions, type-the-name), Port in use (one-click "Move to <port>") |
-| Tooltips with key hints | Every icon button shows its shortcut |
+## What the UI is
 
-Density: 24-28 px rows, 1 px hairline borders, small radii, no gradients or shadows except on floating surfaces (popover, modal, toast).
-Typography: a proportional UI font and a monospace font for logs, URIs and ports. IBM Plex Sans (SIL OFL 1.1) and the system monospace are the
-default proposal; W0-C measures the binary-size cost of bundling a font and recommends. Any bundled font must ship its licence file.
-
-## Palette
-
-Start from the Atom **One Dark** and **One Light** palettes (MIT). Do not copy Zed's theme JSON or any Zed source file.
-Dark base: editor `#282c34`, panels `#21252b`, selection `#3e4451`, text `#abb2bf`, blue `#61afef`, green `#98c379`, yellow `#e5c07b`, red `#e06c75`.
-A light theme is required: the app follows the system theme (F-PLH-02).
-
-### Contrast is a hard rule, and Zed's own greys fail it
-
-PRD F-PLH-02 requires text contrast of at least **4.5:1**. Measured against editor `#282c34`:
-
-| Token | Ratio | Result |
+| Zed element | DBLocal element | Implementation |
 |---|---|---|
-| body `#abb2bf` | 6.57 | pass |
-| comment/muted `#5c6370` | 2.32 | **fail** |
-| gutter `#4b5263` | 1.79 | **fail** |
-| `#7f848e` | 3.73 | **fail** |
-| `#9da5b4` | 5.65 | pass (use this for secondary text) |
-| red `#e06c75` | 4.38 | **fail** on the editor background (4.82 on the panel) |
-| blue `#61afef`, green `#98c379`, yellow `#e5c07b` | 5.92 / 6.94 / 8.10 | pass |
+| Client-side title bar | App mark, "DBLocal", breadcrumb `Engine > instance`, catalog freshness word, "+" new instance, window controls per platform | `crates/gui/src/app/title_bar.rs` |
+| Left dock | `INSTANCES` with "+", filter, collapsible engine groups with counts, status glyph + label + name + version + `:port` (failed port in danger), `RUNTIMES` with unused marker, primary "Instance baru" | `crates/gui/src/app/dock.rs`, `crates/gui/src/format.rs` |
+| Centre pane tabs | One tab per opened instance (status glyph + close). Header: engine badge, name, status chip, subtitle, Start/Stop, Restart, "Open in…" (placeholder), sub-tabs Overview/Logs/Databases/Config | `crates/gui/src/app/screens.rs` |
+| Overview | Connection (masked URI, Show/Hide, Copy URI, Copy .env, loopback note, credential location), Detail, Process (PID placeholder, health, detached mode, credential ref, autostart through `set_autostart`), recent logs | `crates/gui/src/app/screens/overview.rs` |
+| Logs | Per-instance `LogStore` tail via `uniform_list`, follow toggle, copy, diagnosis banner for typed port-in-use with "Pindah ke port berikutnya & start" = `suggest_port` + `change_port` + `start_instance` | `crates/gui/src/app/screens/logs.rs`, `crates/gui/src/logs.rs` |
+| Databases / Config | Honest placeholders in the product build: "belum tersedia di versi ini" + disabled controls, no sample rows. Demo build renders the prototype layout for review only | `crates/gui/src/app/screens/databases.rs` |
+| Status bar | Counts (running/stopped/failed), data dir + total size, credential backend, `os arch`, tray note, downloads popover, toast, version | `crates/gui/src/app/status_bar.rs` |
+| Modals | New instance (engine cards, version list with Terpasang/Unduh badges, validation through `validate_spec`, no-password warning, download footer only when needed), Delete (Archive default / Purge, type-the-name) | `crates/gui/src/app/create_dialog.rs`, `crates/gui/src/app/delete_dialog.rs` |
+| Command palette | `Ctrl/Cmd+K` / `Ctrl/Cmd+Shift+P`, kept from W1-G | `crates/gui/src/app/palette.rs` |
 
-Rule: keep the Zed look, but lighten any token that fails. Add a unit test that computes the WCAG ratio for every text-on-background pair
-in both themes and fails the build below 4.5. Disabled controls are exempt. Status is never colour alone: a dot **plus** a text label or icon
-(F-PLH-02 AC2).
+## Theme
 
-## Building blocks
+- Dark: `DBLocal Dark`, base `#15161d`, source `crates/gui/assets/themes/dblocal-dark.json` (from the prototype `themes/dblocal.json`). This is the default dark theme.
+- Light: `DBLocal Light`, same visual language, source `crates/gui/assets/themes/dblocal-light.json`. The app follows the system appearance (F-PLH-02).
+- No colour literals in views. Every paint comes from `gpui_kit::component::Theme` or `crate::theme::tokens`, which derive from the active theme.
+- Contrast is a hard rule: every text/control pair in both themes must be >= 4.5:1 (WCAG AA, F-PLH-02). `crates/gui/src/contrast.rs` and `crates/gui/tests/contrast_table.rs` read the real theme JSON and fail below 4.5.
 
-- `gpui-component` 0.10.0 is the component library. It ships a JSON theme system (21 presets, none of them One Dark) and a dock/tab/sidebar
-  toolkit. W0-C reports which of its widgets (`Sidebar`, `Tabs`, dock area, `Table`, `List`, `Input`, `Popover`, notifications) cover the table above,
-  and which pieces we must build ourselves on raw GPUI.
-- Use the Zed GPUI examples as an **API reference**: `window_shadow` and `window_movable` (client-side title bar), `on_window_close_quit`
-  (close window keeps the app alive, F-TRY-02), `tree` and `uniform_list` (instances panel, virtualised logs), `data_table`, `input` (forms),
-  `popover`, `set_menus` (macOS menu bar), `system_notifications`, `a11y`, `focus_visible` and `tab_stop` (keyboard navigation, F-PLH-01).
-- **Licensing.** The `gpui` crate and its examples are Apache-2.0, compatible with our GPL-3.0-only. Zed's own `ui` and `theme` crates are
-  GPL-3.0-or-later and live inside the Zed workspace; they are not on crates.io (the crates.io names `ui` and `theme` belong to unrelated
-  projects), so they cannot be a dependency. Write our own code. If you adapt a snippet from an example, keep it small and put an attribution
-  comment with the source path and the Apache-2.0 notice at the top of that file.
+### Contrast changes from the prototype / generated light theme
 
-## Out of scope
+The prototype dark tokens were kept as-is (they pass). The light theme was authored in the same language and adjusted where needed for AA. The current measured table is produced by `cargo test -p dblocal-gui --test contrast_table -- --nocapture`.
 
-Pixel-perfect cloning, an editor widget, themes beyond dark and light, and any Zed branding or logo.
+| Theme | Pair | Before | After | Ratio | Reason |
+|---|---|---:|---:|---:|---|
+| DBLocal Light | muted.foreground on muted.background | `#6b7280` on `#eaebf0` | `#545866` on `#eaebf0` | 5.95 | Prototype-like muted grey failed AA on the elevated surface |
+| DBLocal Light | muted.foreground on sidebar.accent.background | `#6b7280` on `#dadbe4` | `#545866` on `#dadbe4` | 5.14 | Selection rows need readable secondary text |
+| DBLocal Light | primary/info/link on surfaces | `#4078f2` family | `#1a609f` family | >= 4.73 on derived surfaces, 6.16 on base | W1-G showed #4078f2 was 3.88 on white; kept hue, darkened for AA |
+| DBLocal Light | success/danger/warning/info semantic tokens | prototype-light approximations | `#256a2b/#a03129/#735300/#085e76` | >= 4.80 on derived surfaces | Semantic colours must be readable as text, not only as fills |
+
+No hue was changed; saturation/value were adjusted minimally until every checked pair passed 4.5:1. Disabled controls are exempt. Status is never colour alone: glyph shape plus text label (F-PLH-02 AC2).
+
+## Keyboard and accessibility
+
+- `Ctrl/Cmd+N` new instance, `Ctrl/Cmd+Shift+C` copy URI, `Ctrl/Cmd+Enter` start/stop, `Ctrl/Cmd+K`/`Ctrl/Cmd+Shift+P` command palette, `Escape` closes the top overlay.
+- Text through `Label` (gpui-component) so it is exposed to accessibility. No bare string children for visible UI text.
+- Focus order follows visual/task order; focus is visible; overlay close restores focus via gpui-component dialog/palette behaviour.
+- Status is never colour alone: running filled circle, stopped hollow circle, failed triangle, busy half circle, always accompanied by the status word.
+- No hover-only destructive/essential action. Primary actions are visible buttons; secondary/overflow actions use menus.
+
+## Honest placeholders (no backend in the frozen service)
+
+| Surface | Phase | Product build | Demo build |
+|---|---|---|---|
+| Databases tab (`F-DBU`) | 2 | "belum tersedia di versi ini", controls disabled, no sample rows | Prototype layout with sample rows, review only |
+| Config tab (`F-CFG`) | 3 | "belum tersedia di versi ini", controls disabled, no sample rows | Prototype layout with sample config rows, review only |
+| "Open in…" (`F-OPN`) | 2 | Menu item disabled with placeholder reason | Menu entries visible but disabled |
+
+## Rules
+
+- No `DblService` call on the GPUI thread is introduced by this task. Existing synchronous calls remain as W1-G left them; W2-B moves them off-thread.
+- No idle timer (OPEN-08). The event pump parks on a flume channel.
+- No `unwrap/expect/panic/todo/unimplemented` outside tests.
+- Files < 800 lines, functions < 50 lines except pure layout.
+- All user-facing strings live in `crates/core/src/strings.rs`. Indonesian strings are exactly as the PRD/prototype write them.

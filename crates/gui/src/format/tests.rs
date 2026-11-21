@@ -1,4 +1,3 @@
-
 use dblocal_core::model::{
     AuthMode, CatalogStatus, CredentialBackend, EngineKey, InstanceId, InstanceName, InstanceSpec,
     InstanceStatus, Port, Runtime, RuntimeState, StartFailure,
