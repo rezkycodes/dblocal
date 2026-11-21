@@ -216,6 +216,10 @@ fn detect_linux_deny_list_paths() {
         "/home/u/src/dblocal/target/debug/dblocal",
         "/snap/dblocal/current/bin/dblocal",
     ] {
+        assert!(
+            linux_deny_reason(Path::new(path)).is_some(),
+            "deny rule missing for {path}"
+        );
         let kind = detect_from_path(Path::new(path));
         assert!(matches!(kind, InstallKind::Unknown { .. }), "path {path}");
     }
