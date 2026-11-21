@@ -7,7 +7,7 @@ use crate::{DblError, Result};
 
 #[cfg(unix)]
 use super::fsops::apply_unix_mode;
-use super::fsops::{create_hard_link, create_symlink, write_regular_file};
+use super::fsops::{create_hard_link_with, create_symlink, write_regular_file};
 use super::path::{ensure_parent_safe, safe_join, stripped_relative_path, validate_symlink_target};
 use super::{ExtractCaps, ExtractState};
 
@@ -172,7 +172,9 @@ fn extract_tar<R: Read>(
                 std::fs::create_dir_all(parent).map_err(|source| DblError::Io { source })?;
                 state.seen_dirs.insert(parent.to_path_buf());
             }
-            create_hard_link(&target_dest, &dest, caps, &mut state, &raw_name)?;
+            create_hard_link_with(&target_dest, &dest, caps, &mut state, &raw_name, |t, l| {
+                std::fs::hard_link(t, l)
+            })?;
             state.regular_files.insert(rel);
             continue;
         }

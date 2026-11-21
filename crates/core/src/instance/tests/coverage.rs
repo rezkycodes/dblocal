@@ -396,3 +396,41 @@ fn a_postgres_start_records_the_pid_from_postmaster_pid() {
         );
     }
 }
+
+/// M11: LocalService::new must tighten pre-existing permissive layout dirs to 0700.
+#[cfg(unix)]
+#[test]
+fn local_service_new_tightens_preexisting_layout_dirs() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let paths = crate::paths::DblPaths::with_root(dir.path());
+    for d in [
+        paths.instances_dir(),
+        paths.archive_dir(),
+        paths.runtimes_dir(),
+        paths.downloads_dir(),
+    ] {
+        std::fs::create_dir_all(&d).expect("mkdir");
+        std::fs::set_permissions(&d, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+    }
+
+    let _service =
+        crate::service::LocalService::new(paths.clone(), crate::service::ServiceOptions::default())
+            .expect("service");
+
+    for d in [
+        paths.instances_dir(),
+        paths.archive_dir(),
+        paths.runtimes_dir(),
+        paths.downloads_dir(),
+    ] {
+        let mode = std::fs::metadata(&d).expect("meta").permissions().mode() & 0o777;
+        assert_eq!(
+            mode,
+            0o700,
+            "{} must be 0700 after service init",
+            d.display()
+        );
+    }
+}
