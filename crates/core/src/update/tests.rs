@@ -317,3 +317,60 @@ async fn download_rejects_truncated_body_on_clean_eof() {
             | crate::update::error::CODE_UPDATE_APPLY_FAILED
     ));
 }
+
+#[test]
+fn error_codes_and_messages_are_stable() {
+    let cases = vec![
+        UpdateError::Malformed { reason: "x".into() },
+        UpdateError::RateLimited { reason: "x".into() },
+        UpdateError::Network { reason: "x".into() },
+        UpdateError::ChecksumMetadata { reason: "x".into() },
+        UpdateError::VerifyFailed { reason: "x".into() },
+        UpdateError::DowngradeRefused { reason: "x".into() },
+        UpdateError::UnsupportedInstallKind { reason: "x".into() },
+        UpdateError::AssetMissing { reason: "x".into() },
+        UpdateError::ApplyFailed { reason: "x".into() },
+    ];
+    for e in cases {
+        assert!(e.code().starts_with("DBL-8"));
+        assert!(!e.user_message().is_empty());
+        assert!(e.diagnostic().contains(e.code()));
+        let _ = e.to_string();
+        let _ = e.detail();
+        let _d: crate::DblError = e.clone().into();
+    }
+}
+
+#[test]
+fn model_accessors_and_tokens() {
+    let asset = ReleaseAsset::new("a.tar.gz", "https://github.com/a/b/a.tar.gz", 1, UpdateAssetKind::TarGz);
+    assert_eq!(asset.name(), "a.tar.gz");
+    assert_eq!(asset.url(), "https://github.com/a/b/a.tar.gz");
+    assert_eq!(asset.size_bytes(), 1);
+    assert!(asset.kind().is_installable());
+    assert!(!UpdateAssetKind::Checksums.is_installable());
+    let _ = format!("{}", UpdateAssetKind::AppImage);
+    let u = AvailableUpdate::new(Version::parse("1.0.0").unwrap(), "v1.0.0", "notes", asset.clone(), asset.with_kind(UpdateAssetKind::Checksums));
+    assert_eq!(u.tag(), "v1.0.0");
+    assert_eq!(u.release_notes(), "notes");
+    assert_eq!(u.checksums_asset().kind(), UpdateAssetKind::Checksums);
+    let c = UpdateCheck::UpToDate { current: Version::parse("1.0.0").unwrap() };
+    assert!(c.available().is_none());
+    assert!(platform_asset_tokens(Os::Linux, Arch::X86_64).is_some());
+    assert!(platform_asset_tokens(Os::Windows, Arch::Aarch64).is_some());
+}
+
+#[test]
+fn install_kind_paths_and_hints() {
+    let k = InstallKind::MacApp { bundle_path: std::path::PathBuf::from("/Applications/DBLocal.app") };
+    assert!(k.can_self_update());
+    assert_eq!(k.path(), Path::new("/Applications/DBLocal.app"));
+    let k = InstallKind::WindowsZip { exe_path: std::path::PathBuf::from("C:\\d\\dblocal.exe") };
+    assert!(k.can_self_update());
+    let k = InstallKind::WindowsMsi { exe_path: std::path::PathBuf::from("C:\\d\\dblocal.exe") };
+    assert!(!k.can_self_update());
+    let h = PackageManagerHint::Rpm;
+    assert!(h.message().contains("rpm"));
+    let h = PackageManagerHint::Other { manager: "pacman".into() };
+    assert!(h.message().contains("pacman"));
+}
