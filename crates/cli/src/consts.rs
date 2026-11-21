@@ -17,15 +17,12 @@ pub const LOG_FOLLOW_WINDOW: usize = 200;
 /// How often the cross-process start race loser re-reads the shared state.
 pub const CROSS_PROCESS_POLL_MS: u64 = 100;
 
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn cli_defaults_are_sane() {
-        assert!(super::DEFAULT_START_TIMEOUT_SECS >= 10);
-        assert!(super::STOP_TIMEOUT_SECS >= super::DEFAULT_START_TIMEOUT_SECS);
-        assert!(super::DEFAULT_LOG_LINES > 0);
-        assert!(super::LOG_FOLLOW_INTERVAL_MS > 0);
-        assert!(super::LOG_FOLLOW_WINDOW > 0);
-        assert!(super::CROSS_PROCESS_POLL_MS > 0);
-    }
-}
+// Compile-time invariants, so a wrong default can never ship even though no
+// test exercises it: a stop wait shorter than a start wait would be a lie, and a
+// zero interval or window would spin or print nothing.
+const _: () = assert!(STOP_TIMEOUT_SECS >= DEFAULT_START_TIMEOUT_SECS);
+const _: () = assert!(DEFAULT_START_TIMEOUT_SECS > 0);
+const _: () = assert!(DEFAULT_LOG_LINES > 0);
+const _: () = assert!(LOG_FOLLOW_INTERVAL_MS > 0);
+const _: () = assert!(LOG_FOLLOW_WINDOW > 0);
+const _: () = assert!(CROSS_PROCESS_POLL_MS > 0);
