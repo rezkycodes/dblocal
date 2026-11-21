@@ -134,8 +134,6 @@ pub struct Workspace {
     first_paint_logged: bool,
     /// Whether the demo build may show sample rows in the placeholder tabs.
     demo_content: bool,
-    /// When false, skip background startup loads (previews seed state directly).
-    bg_startup: bool,
     /// Background service tasks currently in flight, kept so they are not
     /// dropped while pending. Completed tasks are drained opportunistically.
     bg_tasks: Vec<Task<()>>,
@@ -153,7 +151,31 @@ pub struct Workspace {
 impl Workspace {
     /// Builds the workspace and starts the event pump.
     pub fn new(service: Arc<dyn DblService>, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let events = service_bridge::spawn_bridge(service.clone());
+        Self::build(service, window, cx, true)
+    }
+
+    /// The shared constructor.
+    ///
+    /// `live` starts the service bridge, the background startup load and the
+    /// two pumps. Previews and tests pass `false`: starting a bridge over a
+    /// service that emits on its own threads made `App::shutdown`'s effect
+    /// flush loop forever, so a preview render hung in `drop(HeadlessAppContext)`
+    /// under load. A preview seeds its state synchronously and needs none of it.
+    fn build(
+        service: Arc<dyn DblService>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+        live: bool,
+    ) -> Self {
+        let events = if live {
+            service_bridge::spawn_bridge(service.clone())
+        } else {
+            // A channel this view can never receive on, closed immediately, so
+            // the type is the same and no thread is ever started.
+            let (tx, rx) = flume::unbounded::<UiEvent>();
+            drop(tx);
+            rx
+        };
         let tray_start = if crate::tray::app_enabled() {
             start_tray()
         } else {
@@ -205,7 +227,6 @@ impl Workspace {
             started_at: Instant::now(),
             first_paint_logged: false,
             demo_content: false,
-            bg_startup: true,
             bg_tasks: Vec::new(),
             pending: Arc::new(AtomicUsize::new(0)),
             pending_preview: false,
@@ -213,11 +234,11 @@ impl Workspace {
             _event_task: None,
             _tray_task: None,
         };
-        if workspace.bg_startup {
+        if live {
             workspace.startup_load(cx);
+            workspace.start_event_pump(cx);
+            workspace.start_tray_pump(cx);
         }
-        workspace.start_event_pump(cx);
-        workspace.start_tray_pump(cx);
         workspace
     }
 
@@ -227,9 +248,7 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let mut this = Self::new(service, window, cx);
-        // new() already kicked bg startup; override with sync state.
-        this.bg_startup = false;
+        let mut this = Self::build(service, window, cx, false);
         if let Ok(instances) = this.service.list_instances() {
             this.state.replace_instances(instances);
         }
