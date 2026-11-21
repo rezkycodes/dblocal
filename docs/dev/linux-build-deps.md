@@ -7,8 +7,8 @@ runtime. This host is Fedora 44 (Wayland, GNOME 50.6); package names differ by d
 **Both backends are compiled in.** `gpui-kit` 0.10.0 enables `wayland` **and** `x11` (plus
 `font-kit`, `runtime_shaders`) on `gpui-pre-platform`/`gpui-pre-linux` on desktop, and downstream
 cannot opt out (Cargo features are additive). So `libxkbcommon-x11-devel` / `libxkbcommon-x11-dev`
-is a **required build dependency**, not an optional one for a feature flag. The app selects the
-backend at runtime from `WAYLAND_DISPLAY` / `DISPLAY`.
+is a **required build dependency**. The app selects the backend at runtime from
+`WAYLAND_DISPLAY` / `DISPLAY`.
 
 ## Fedora
 
