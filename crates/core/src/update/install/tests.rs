@@ -359,3 +359,136 @@ fn cleanup_backup_removes_old_file() {
     cleanup_backup(&current).unwrap();
     assert!(!backup.exists());
 }
+
+#[test]
+fn plan_accessors_and_apply_refusals() {
+    let plan = plan_install(
+        &InstallKind::PortableTarball {
+            exe_path: PathBuf::from("/tmp/db-local-example/dblocal"),
+        },
+        Path::new("/tmp/staged"),
+        Path::new("/tmp/db-local-example/dblocal"),
+        &ver("1.2.0"),
+    )
+    .unwrap();
+    assert_eq!(plan.staged_file(), Path::new("/tmp/staged"));
+    assert_eq!(
+        plan.current_exe(),
+        Path::new("/tmp/db-local-example/dblocal")
+    );
+    assert_eq!(plan.target_version(), &ver("1.2.0"));
+
+    let win = plan_install(
+        &InstallKind::WindowsZip {
+            exe_path: PathBuf::from("C:\\dblocal.exe"),
+        },
+        Path::new("C:\\staged.zip"),
+        Path::new("C:\\dblocal.exe"),
+        &ver("1.2.0"),
+    )
+    .unwrap();
+    let err = apply(&win).expect_err("windows apply refused");
+    assert_eq!(err.code(), crate::update::error::CODE_UPDATE_APPLY_FAILED);
+
+    let mac = plan_install(
+        &InstallKind::MacApp {
+            bundle_path: PathBuf::from("/Applications/DBLocal.app"),
+        },
+        Path::new("/tmp/staged.dmg"),
+        Path::new("/Applications/DBLocal.app/Contents/MacOS/dblocal"),
+        &ver("1.2.0"),
+    )
+    .unwrap();
+    let err = apply(&mac).expect_err("mac apply refused");
+    assert_eq!(err.code(), crate::update::error::CODE_UPDATE_APPLY_FAILED);
+}
+
+#[test]
+fn apply_refuses_non_installable_kind() {
+    let mut plan = plan_install(
+        &InstallKind::PortableTarball {
+            exe_path: PathBuf::from("/tmp/db-local-example/dblocal"),
+        },
+        Path::new("/tmp/staged"),
+        Path::new("/tmp/db-local-example/dblocal"),
+        &ver("1.2.0"),
+    )
+    .unwrap();
+    plan = InstallPlan {
+        kind: InstallKind::Homebrew {
+            exe_path: PathBuf::from("/opt/homebrew/bin/dblocal"),
+        },
+        ..plan
+    };
+    let err = apply(&plan).expect_err("homebrew refused");
+    assert_eq!(
+        err.code(),
+        crate::update::error::CODE_UPDATE_UNSUPPORTED_KIND
+    );
+}
+
+#[test]
+fn restore_backup_requires_existing_backup() {
+    let dir = tempdir().unwrap();
+    let target = dir.path().join("dblocal");
+    let missing = dir.path().join("dblocal.old");
+    let err = restore_backup(&missing, &target).expect_err("missing backup");
+    assert_eq!(err.code(), crate::update::error::CODE_UPDATE_APPLY_FAILED);
+}
+
+#[cfg(unix)]
+#[test]
+fn restore_backup_renames_over_target() {
+    let dir = tempdir().unwrap();
+    let target = dir.path().join("dblocal");
+    let backup = dir.path().join("dblocal.old");
+    write_fake_binary(&target, "2.0.0", true);
+    write_fake_binary(&backup, "1.0.0", true);
+    restore_backup(&backup, &target).expect("restore");
+    let out = version_output(&target);
+    assert!(String::from_utf8_lossy(&out.stdout).contains("1.0.0"));
+}
+
+#[cfg(unix)]
+#[test]
+fn create_backup_copies_when_target_missing_and_refreshes_existing() {
+    let dir = tempdir().unwrap();
+    let target = dir.path().join("dblocal");
+    let backup = dir.path().join("dblocal.old");
+    create_backup(&target, &backup).expect("no target yet");
+    assert!(!backup.exists());
+
+    write_fake_binary(&target, "1.0.0", true);
+    write_fake_binary(&backup, "0.9.0", true);
+    create_backup(&target, &backup).expect("refresh");
+    let out = version_output(&backup);
+    assert!(String::from_utf8_lossy(&out.stdout).contains("1.0.0"));
+}
+
+#[test]
+fn fsync_path_reports_missing_file() {
+    let dir = tempdir().unwrap();
+    let err = fsync_path(&dir.path().join("nope")).expect_err("missing");
+    assert_eq!(err.code(), crate::update::error::CODE_UPDATE_APPLY_FAILED);
+}
+
+#[test]
+fn ensure_target_writable_rejects_relative_target_without_parent() {
+    let err = ensure_target_writable(Path::new("dblocal")).expect_err("no parent");
+    assert_eq!(err.code(), crate::update::error::CODE_UPDATE_APPLY_FAILED);
+}
+
+#[test]
+fn install_target_path_prefers_kind_target() {
+    let dir = tempdir().unwrap();
+    let appimage = dir.path().join("DBLocal.AppImage");
+    std::fs::write(&appimage, b"x").unwrap();
+    let resolved = install_target_path(
+        &InstallKind::AppImage {
+            appimage_path: appimage.clone(),
+        },
+        Path::new("/nonexistent/current"),
+    )
+    .unwrap();
+    assert!(resolved.ends_with("DBLocal.AppImage"));
+}
