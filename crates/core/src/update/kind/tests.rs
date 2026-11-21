@@ -111,7 +111,13 @@ fn package_manager_hint_messages() {
     assert!(PackageManagerHint::Dpkg.message().contains("dpkg"));
     assert!(PackageManagerHint::Rpm.message().contains("rpm"));
     assert!(PackageManagerHint::Homebrew.message().contains("Homebrew"));
-    assert!(PackageManagerHint::Other { manager: "nix".into() }.message().contains("nix"));
+    assert!(
+        PackageManagerHint::Other {
+            manager: "nix".into()
+        }
+        .message()
+        .contains("nix")
+    );
 }
 
 #[test]
@@ -124,19 +130,63 @@ fn detect_from_path_linux_is_portable() {
 
 #[test]
 fn detect_install_kind_with_ownership_fallback() {
-    let kind = detect_install_kind_with(PathBuf::from("/opt/custom/dblocal"), &FixedOwnership(None)).unwrap();
+    let kind =
+        detect_install_kind_with(PathBuf::from("/opt/custom/dblocal"), &FixedOwnership(None))
+            .unwrap();
     if cfg!(target_os = "linux") {
-        assert!(matches!(kind, InstallKind::PortableTarball { .. } | InstallKind::Unknown { .. } | InstallKind::Homebrew { .. }));
+        assert!(matches!(
+            kind,
+            InstallKind::PortableTarball { .. }
+                | InstallKind::Unknown { .. }
+                | InstallKind::Homebrew { .. }
+        ));
     }
 }
 
 #[test]
 fn install_kind_path_accessors() {
     let p = PathBuf::from("/tmp/x");
-    assert_eq!(InstallKind::PortableTarball { exe_path: p.clone() }.path(), p.as_path());
-    assert_eq!(InstallKind::WindowsZip { exe_path: p.clone() }.path(), p.as_path());
-    assert_eq!(InstallKind::WindowsMsi { exe_path: p.clone() }.path(), p.as_path());
-    assert_eq!(InstallKind::DistPackage { exe_path: p.clone(), hint: PackageManagerHint::Dpkg }.path(), p.as_path());
-    assert_eq!(InstallKind::Homebrew { exe_path: p.clone() }.path(), p.as_path());
-    assert_eq!(InstallKind::Unknown { exe_path: p.clone() }.path(), p.as_path());
+    assert_eq!(
+        InstallKind::PortableTarball {
+            exe_path: p.clone()
+        }
+        .path(),
+        p.as_path()
+    );
+    assert_eq!(
+        InstallKind::WindowsZip {
+            exe_path: p.clone()
+        }
+        .path(),
+        p.as_path()
+    );
+    assert_eq!(
+        InstallKind::WindowsMsi {
+            exe_path: p.clone()
+        }
+        .path(),
+        p.as_path()
+    );
+    assert_eq!(
+        InstallKind::DistPackage {
+            exe_path: p.clone(),
+            hint: PackageManagerHint::Dpkg
+        }
+        .path(),
+        p.as_path()
+    );
+    assert_eq!(
+        InstallKind::Homebrew {
+            exe_path: p.clone()
+        }
+        .path(),
+        p.as_path()
+    );
+    assert_eq!(
+        InstallKind::Unknown {
+            exe_path: p.clone()
+        }
+        .path(),
+        p.as_path()
+    );
 }
