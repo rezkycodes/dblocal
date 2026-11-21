@@ -119,3 +119,27 @@ found the second shape, so `start.rs` now treats `busy`, `starting`, `running`
 and `stopping` as "another process owns it": print `sudah berjalan`, wait on the
 shared store, exit 0. Ten sweeps of the 20-round test (200 races) were green
 after the fix.
+
+## Recorded e2e runs (2026-11-21, Fedora, Linux x86_64)
+
+`DBLOCAL_E2E=1 cargo xtask e2e` (both targets: the W2-C `service_e2e` suite and
+this task's `cli_e2e`), three consecutive runs on a seeded runtime cache:
+
+| Run | service_e2e | cli_e2e | Result |
+|---|---|---|---|
+| 1 | 15 passed | 1 passed, 0.45 s | every target passed |
+| 2 | 15 passed | 1 passed, 0.48 s | every target passed |
+| 3 | 15 passed | 1 passed, 0.45 s | every target passed |
+
+The CLI case creates a real Valkey 9.2.0 through the **installed binary**, starts
+it, asserts `status` exits 0 and the URI connects with the production `redis`
+client (`PING`, `SET`, `GET`), stops it and asserts `status` is non-zero, then
+deletes with archive mode and asserts the archive directory exists. The first
+cold-cache run of the *core* suite (before its download populated
+`~/.cache/dblocal-dev`) failed two of W2-C's own cases, which demand a cached
+artifact; a warm re-run was green. That cache requirement is pre-existing and
+unchanged by this task.
+
+On this machine the shared `CARGO_TARGET_DIR` can hold an `xtask` binary built by
+a sibling worktree; `cargo build -p xtask` before `cargo xtask e2e` if the CLI
+target does not appear in the output.
