@@ -110,6 +110,16 @@ async fn check_ignores_draft_and_prerelease_by_default() {
             ]
         },
         {
+            "tag_name":"v1.4.0-rc.1",
+            "draft": false,
+            "prerelease": false,
+            "body":"rc-marked-stable",
+            "assets":[
+                {"name":"dblocal-linux-x86_64.tar.gz","browser_download_url":"https://github.com/a/b/releases/download/v1.4/dblocal-linux-x86_64.tar.gz","size":1},
+                {"name":"checksums.txt","browser_download_url":"https://github.com/a/b/releases/download/v1.4/checksums.txt","size":1}
+            ]
+        },
+        {
             "tag_name":"v1.1.0",
             "draft": false,
             "prerelease": false,
@@ -232,9 +242,13 @@ fn select_platform_asset_picks_appimage_over_tarball() {
 #[tokio::test]
 async fn check_reports_non_200_status() {
     let fetcher = MockFetcher::new(vec![Ok(FetchResponse::new(500, b"oops".to_vec()))]);
-    let err = check(&Version::parse("1.0.0").unwrap(), &fetcher, &linux_options())
-        .await
-        .expect_err("500");
+    let err = check(
+        &Version::parse("1.0.0").unwrap(),
+        &fetcher,
+        &linux_options(),
+    )
+    .await
+    .expect_err("500");
     assert_eq!(err.code(), crate::update::error::CODE_UPDATE_NETWORK);
 }
 
@@ -242,18 +256,26 @@ async fn check_reports_non_200_status() {
 async fn check_reports_oversized_body() {
     let body = vec![b'a'; MAX_RELEASES_BODY_BYTES + 1];
     let fetcher = MockFetcher::new(vec![Ok(FetchResponse::new(200, body))]);
-    let err = check(&Version::parse("1.0.0").unwrap(), &fetcher, &linux_options())
-        .await
-        .expect_err("oversized");
+    let err = check(
+        &Version::parse("1.0.0").unwrap(),
+        &fetcher,
+        &linux_options(),
+    )
+    .await
+    .expect_err("oversized");
     assert_eq!(err.code(), crate::update::error::CODE_UPDATE_MALFORMED);
 }
 
 #[tokio::test]
 async fn check_reports_429_rate_limit() {
     let fetcher = MockFetcher::new(vec![Ok(FetchResponse::new(429, b"rate".to_vec()))]);
-    let err = check(&Version::parse("1.0.0").unwrap(), &fetcher, &linux_options())
-        .await
-        .expect_err("429");
+    let err = check(
+        &Version::parse("1.0.0").unwrap(),
+        &fetcher,
+        &linux_options(),
+    )
+    .await
+    .expect_err("429");
     assert_eq!(err.code(), crate::update::error::CODE_UPDATE_RATE_LIMITED);
 }
 
@@ -299,7 +321,13 @@ async fn check_returns_up_to_date_when_no_matching_platform_asset() {
         ]
     }]).to_string();
     let fetcher = MockFetcher::new(vec![Ok(FetchResponse::new(200, json.into_bytes()))]);
-    let result = check(&Version::parse("1.0.0").unwrap(), &fetcher, &linux_options()).await.unwrap();
+    let result = check(
+        &Version::parse("1.0.0").unwrap(),
+        &fetcher,
+        &linux_options(),
+    )
+    .await
+    .unwrap();
     assert!(matches!(result, UpdateCheck::UpToDate { .. }));
 }
 
@@ -315,7 +343,13 @@ async fn check_skips_release_when_no_checksums() {
         ]
     }]).to_string();
     let fetcher = MockFetcher::new(vec![Ok(FetchResponse::new(200, json.into_bytes()))]);
-    let result = check(&Version::parse("1.0.0").unwrap(), &fetcher, &linux_options()).await.unwrap();
+    let result = check(
+        &Version::parse("1.0.0").unwrap(),
+        &fetcher,
+        &linux_options(),
+    )
+    .await
+    .unwrap();
     assert!(matches!(result, UpdateCheck::UpToDate { .. }));
 }
 

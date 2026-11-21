@@ -1,6 +1,6 @@
 //! Download update assets with HTTPS-only, host allowlist, size cap, and SHA-256 verification.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use reqwest::StatusCode;
@@ -8,7 +8,8 @@ use reqwest::header::{ACCEPT_ENCODING, RANGE};
 use tokio::io::AsyncWriteExt;
 
 use super::error::{UpdateError, UpdateResult};
-use super::verify::verify_sha256_file;
+use super::model::AvailableUpdate;
+use super::verify::{Checksums, verify_sha256_file};
 
 /// Hosts allowed for update downloads/redirects.
 pub const ALLOWED_HOSTS: &[&str] = &[
@@ -23,14 +24,18 @@ pub const MAX_UPDATE_BYTES: u64 = 65 * 1024 * 1024;
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 /// Read timeout.
 const READ_TIMEOUT: Duration = Duration::from_secs(60);
+/// Fixed staged file name; never derived from release JSON.
+const STAGED_ASSET_NAME: &str = "dblocal-update.bin";
+/// Fixed staged checksums file name.
+const STAGED_CHECKSUMS_NAME: &str = "checksums.txt";
 
 /// Options for update download.
 #[derive(Debug, Clone)]
 pub struct UpdateDownloadOptions {
     /// Allow only loopback http in tests.
-    pub allow_loopback_http: bool,
+    allow_loopback_http: bool,
     /// Max bytes allowed.
-    pub max_bytes: u64,
+    max_bytes: u64,
 }
 
 impl Default for UpdateDownloadOptions {
@@ -43,6 +48,7 @@ impl Default for UpdateDownloadOptions {
 }
 
 impl UpdateDownloadOptions {
+    /// Test-only constructor that allows loopback plain HTTP.
     #[cfg(test)]
     pub fn loopback_for_tests() -> Self {
         Self {
@@ -50,6 +56,131 @@ impl UpdateDownloadOptions {
             max_bytes: MAX_UPDATE_BYTES,
         }
     }
+
+    /// Test-only constructor with a custom max-bytes cap.
+    #[cfg(test)]
+    pub fn loopback_for_tests_with_max(max_bytes: u64) -> Self {
+        Self {
+            allow_loopback_http: true,
+            max_bytes,
+        }
+    }
+
+    /// Returns true when loopback plain HTTP is allowed.
+    pub(crate) fn allows_loopback_http(&self) -> bool {
+        self.allow_loopback_http
+    }
+}
+
+/// A verified update asset staged inside a caller-provided directory.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StagedUpdate {
+    version: semver::Version,
+    staged_path: PathBuf,
+    asset_name: String,
+}
+
+impl StagedUpdate {
+    /// Version of the staged update.
+    pub fn version(&self) -> &semver::Version {
+        &self.version
+    }
+
+    /// Path to the verified staged file.
+    pub fn staged_path(&self) -> &Path {
+        &self.staged_path
+    }
+
+    /// Original asset name from release metadata, for diagnostics only.
+    pub fn asset_name(&self) -> &str {
+        &self.asset_name
+    }
+}
+
+/// Downloads checksums and asset for `update`, verifies SHA-256, and stages the
+/// asset under a fixed file name inside `staging_dir`.
+pub async fn download_update(
+    update: &AvailableUpdate,
+    staging_dir: &Path,
+    options: &UpdateDownloadOptions,
+) -> UpdateResult<StagedUpdate> {
+    tokio::fs::create_dir_all(staging_dir)
+        .await
+        .map_err(|source| UpdateError::ApplyFailed {
+            reason: format!("gagal membuat direktori staging update: {source}"),
+        })?;
+
+    let checksums = fetch_checksums(update, staging_dir, options).await?;
+    let expected = checksums
+        .digest_for(update.asset().name())
+        .ok_or_else(|| UpdateError::ChecksumMetadata {
+            reason: format!(
+                "checksums.txt tidak berisi entri untuk aset {}",
+                update.asset().name()
+            ),
+        })?;
+
+    let staged_path = staging_dir.join(STAGED_ASSET_NAME);
+    download_and_verify(
+        update.asset().url(),
+        &staged_path,
+        expected,
+        update.asset().size_bytes(),
+        options,
+    )
+    .await?;
+
+    Ok(StagedUpdate {
+        version: update.version().clone(),
+        staged_path,
+        asset_name: update.asset().name().to_owned(),
+    })
+}
+
+async fn fetch_checksums(
+    update: &AvailableUpdate,
+    staging_dir: &Path,
+    options: &UpdateDownloadOptions,
+) -> UpdateResult<Checksums> {
+    let checksums_path = staging_dir.join(STAGED_CHECKSUMS_NAME);
+    let url = parse_and_validate_url(update.checksums_asset().url(), options)?;
+    let declared = update.checksums_asset().size_bytes();
+    let hard_cap = super::check::MAX_CHECKSUMS_BODY_BYTES as u64;
+    if declared == 0 || declared > hard_cap {
+        return Err(UpdateError::ChecksumMetadata {
+            reason: format!("ukuran checksums.txt tidak valid: {declared}"),
+        });
+    }
+    let max_bytes = declared.saturating_add(1024).min(hard_cap);
+    download_to_file(&url, &checksums_path, max_bytes, options).await?;
+    let body = read_bounded_text(&checksums_path, hard_cap).await?;
+    let _ = tokio::fs::remove_file(&checksums_path).await;
+    Checksums::parse(&body)
+}
+
+async fn read_bounded_text(path: &Path, max_bytes: u64) -> UpdateResult<String> {
+    let meta = tokio::fs::metadata(path)
+        .await
+        .map_err(|source| UpdateError::ChecksumMetadata {
+            reason: format!("gagal membaca checksums.txt: {source}"),
+        })?;
+    if meta.len() > max_bytes {
+        let _ = tokio::fs::remove_file(path).await;
+        return Err(UpdateError::ChecksumMetadata {
+            reason: format!(
+                "checksums.txt melebihi batas {} byte",
+                max_bytes
+            ),
+        });
+    }
+    let bytes = tokio::fs::read(path)
+        .await
+        .map_err(|source| UpdateError::ChecksumMetadata {
+            reason: format!("gagal membaca checksums.txt: {source}"),
+        })?;
+    String::from_utf8(bytes).map_err(|_| UpdateError::ChecksumMetadata {
+        reason: "checksums.txt bukan UTF-8 yang valid".to_owned(),
+    })
 }
 
 /// Downloads `url` to `dest`, verifies sha256 from `expected_hex`, deletes on mismatch.
@@ -99,12 +230,7 @@ fn parse_and_validate_url(
 
 /// Validates URL scheme and host allowlist.
 pub fn validate_url(url: &reqwest::Url, options: &UpdateDownloadOptions) -> UpdateResult<()> {
-    let scheme = url.scheme();
-    if scheme == "https" {
-        validate_allowed_host(url)?;
-        return Ok(());
-    }
-    if scheme == "http" && options.allow_loopback_http && is_loopback(url) {
+    if redirect_allowed(url, options.allows_loopback_http()) {
         return Ok(());
     }
     Err(UpdateError::Network {
@@ -112,14 +238,20 @@ pub fn validate_url(url: &reqwest::Url, options: &UpdateDownloadOptions) -> Upda
     })
 }
 
-fn validate_allowed_host(url: &reqwest::Url) -> UpdateResult<()> {
-    let host = url.host_str().unwrap_or_default().to_ascii_lowercase();
-    if ALLOWED_HOSTS.iter().any(|h| *h == host) {
-        return Ok(());
+/// Pure policy check for download URLs and redirect targets.
+///
+/// HTTPS is allowed only for hosts in [`ALLOWED_HOSTS`]. Plain HTTP is allowed
+/// only for loopback hosts when `allow_loopback_http` is true (tests).
+pub fn redirect_allowed(url: &reqwest::Url, allow_loopback_http: bool) -> bool {
+    let scheme = url.scheme();
+    if scheme == "https" {
+        let host = url.host_str().unwrap_or_default().to_ascii_lowercase();
+        return ALLOWED_HOSTS.iter().any(|h| *h == host);
     }
-    Err(UpdateError::Network {
-        reason: format!("host update tidak diizinkan: {host}"),
-    })
+    if scheme == "http" && allow_loopback_http {
+        return is_loopback(url);
+    }
+    false
 }
 
 fn is_loopback(url: &reqwest::Url) -> bool {
@@ -142,7 +274,7 @@ fn redact_url(url: &reqwest::Url) -> String {
 }
 
 fn build_client(options: &UpdateDownloadOptions) -> UpdateResult<reqwest::Client> {
-    let allow_loopback = options.allow_loopback_http;
+    let allow_loopback = options.allows_loopback_http();
     reqwest::Client::builder()
         .https_only(!allow_loopback)
         .connect_timeout(CONNECT_TIMEOUT)
@@ -153,15 +285,7 @@ fn build_client(options: &UpdateDownloadOptions) -> UpdateResult<reqwest::Client
                 return attempt.error("too many redirects");
             }
             let url = attempt.url().clone();
-            let ok = if url.scheme() == "https" {
-                let host = url.host_str().unwrap_or_default().to_ascii_lowercase();
-                ALLOWED_HOSTS.iter().any(|h| *h == host)
-            } else if url.scheme() == "http" && allow_loopback {
-                is_loopback(&url)
-            } else {
-                false
-            };
-            if ok {
+            if redirect_allowed(&url, allow_loopback) {
                 attempt.follow()
             } else {
                 attempt.error(format!("redirect host not allowed: {}", redact_url(&url)))
@@ -232,6 +356,8 @@ async fn download_to_file(
             reason: format!("status HTTP tidak terduga: {status}"),
         });
     }
+    enforce_declared_size(&resp, offset, max_bytes, dest).await?;
+
     let mut file = tokio::fs::OpenOptions::new()
         .create(true)
         .write(true)
@@ -273,6 +399,44 @@ async fn download_to_file(
             reason: format!("gagal fsync file unduhan: {source}"),
         })?;
     Ok(())
+}
+
+async fn enforce_declared_size(
+    resp: &reqwest::Response,
+    offset: u64,
+    max_bytes: u64,
+    dest: &Path,
+) -> UpdateResult<()> {
+    let declared_total = declared_total_bytes(resp, offset);
+    if let Some(total) = declared_total
+        && total > max_bytes
+    {
+        let _ = tokio::fs::remove_file(dest).await;
+        return Err(UpdateError::Network {
+            reason: format!("respons update melebihi batas {max_bytes} byte"),
+        });
+    }
+    Ok(())
+}
+
+fn declared_total_bytes(resp: &reqwest::Response, offset: u64) -> Option<u64> {
+    if let Some(total) = content_range_total(resp.headers().get(reqwest::header::CONTENT_RANGE)) {
+        return Some(total);
+    }
+    resp.headers()
+        .get(reqwest::header::CONTENT_LENGTH)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.parse::<u64>().ok())
+        .map(|len| offset.saturating_add(len))
+}
+
+fn content_range_total(value: Option<&reqwest::header::HeaderValue>) -> Option<u64> {
+    let text = value?.to_str().ok()?;
+    let (_, total) = text.rsplit_once('/')?;
+    if total == "*" {
+        return None;
+    }
+    total.parse::<u64>().ok()
 }
 
 #[cfg(test)]

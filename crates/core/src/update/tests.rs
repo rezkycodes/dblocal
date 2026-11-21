@@ -150,8 +150,7 @@ async fn download_rejects_oversized_body() {
     });
     let dir = tempdir().unwrap();
     let dest = dir.path().join("asset");
-    let mut opts = UpdateDownloadOptions::loopback_for_tests();
-    opts.max_bytes = 1024;
+    let opts = UpdateDownloadOptions::loopback_for_tests_with_max(1024);
     let err = download_and_verify(
         &format!("http://{addr}/asset"),
         &dest,
@@ -173,6 +172,19 @@ fn host_allowlist_rejects_evil_host() {
 }
 
 #[test]
+fn redirect_policy_rejects_public_http_and_bad_hosts() {
+    for case in [
+        "http://github.com/a/b",
+        "https://github.com.evil.example/a",
+        "https://github.com@evil.example/a",
+        "https://example.com/a",
+    ] {
+        let url = reqwest::Url::parse(case).unwrap();
+        assert!(!redirect_allowed(&url, false), "{case}");
+    }
+}
+
+#[test]
 fn downgrade_refused_error_code() {
     let err = UpdateError::DowngradeRefused {
         reason: "old".to_owned(),
@@ -187,6 +199,7 @@ fn install_kind_unknown_refused() {
     let plan = plan_install(
         &InstallKind::Unknown {
             exe_path: std::path::PathBuf::from("/tmp/dblocal"),
+            reason: "tidak dikenal".to_owned(),
         },
         Path::new("/tmp/staged"),
         Path::new("/tmp/dblocal"),

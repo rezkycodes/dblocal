@@ -29,7 +29,7 @@ pub enum InstallKind {
     /// Installed by Homebrew.
     Homebrew { exe_path: PathBuf },
     /// Could not determine; self-update refused.
-    Unknown { exe_path: PathBuf },
+    Unknown { exe_path: PathBuf, reason: String },
 }
 
 impl InstallKind {
@@ -62,8 +62,20 @@ impl InstallKind {
             | Self::WindowsMsi { exe_path }
             | Self::DistPackage { exe_path, .. }
             | Self::Homebrew { exe_path }
-            | Self::Unknown { exe_path } => exe_path,
+            | Self::Unknown { exe_path, .. } => exe_path,
             Self::MacApp { bundle_path } => bundle_path,
+        }
+    }
+
+    /// Human-readable refusal reason for unsupported kinds.
+    pub fn refusal_reason(&self) -> Option<String> {
+        match self {
+            Self::DistPackage { hint, .. } => Some(hint.message()),
+            Self::Homebrew { .. } => Some(PackageManagerHint::Homebrew.message()),
+            Self::Unknown { reason, .. } => Some(format!(
+                "Jenis pemasangan tidak dikenali; pembaruan otomatis ditolak demi keamanan. {reason}"
+            )),
+            _ => None,
         }
     }
 }
@@ -154,7 +166,11 @@ fn detect_from_env_with(
 ) -> Option<InstallKind> {
     if let Some(appimage) = lookup("APPIMAGE") {
         let path = PathBuf::from(appimage);
-        if !path.as_os_str().is_empty() {
+        if !path.as_os_str().is_empty()
+            && lookup("APPDIR").is_some()
+            && exe_path_inside_appdir(exe_path, lookup("APPDIR").as_deref())
+            && path.is_file()
+        {
             return Some(InstallKind::AppImage { appimage_path: path });
         }
     }
@@ -166,19 +182,112 @@ fn detect_from_env_with(
     None
 }
 
+fn exe_path_inside_appdir(exe_path: &Path, appdir: Option<&str>) -> bool {
+    let Some(appdir) = appdir else {
+        return false;
+    };
+    let appdir = PathBuf::from(appdir);
+    if appdir.as_os_str().is_empty() {
+        return false;
+    }
+    let exe = canonical_or_original(exe_path);
+    let dir = canonical_or_original(&appdir);
+    exe.starts_with(&dir)
+}
+
 fn detect_from_path(exe_path: &Path) -> InstallKind {
     match Os::current() {
         Os::Windows => detect_windows(exe_path),
         Os::Macos => detect_macos(exe_path),
-        Os::Linux => InstallKind::PortableTarball {
-            exe_path: exe_path.to_path_buf(),
-        },
+        Os::Linux => detect_linux(exe_path),
     }
+}
+
+fn detect_linux(exe_path: &Path) -> InstallKind {
+    if let Some(reason) = linux_deny_reason(exe_path) {
+        return InstallKind::Unknown {
+            exe_path: exe_path.to_path_buf(),
+            reason,
+        };
+    }
+    InstallKind::PortableTarball {
+        exe_path: exe_path.to_path_buf(),
+    }
+}
+
+/// Linux self-update deny-list: paths where in-place binary replacement is not
+/// safe or not the right delivery mechanism. Anything not recognised becomes
+/// Unknown.
+fn linux_deny_reason(exe_path: &Path) -> Option<String> {
+    let lower = path_to_lower(exe_path);
+    let denied_prefixes = [
+        "/nix/store",
+        "/snap/",
+        "/app/",
+        "/usr/",
+        "/opt/",
+    ];
+    for prefix in denied_prefixes {
+        if lower.starts_with(prefix) || lower.contains(prefix) {
+            return Some(format!("path berada di lokasi terkelola: {prefix}"));
+        }
+    }
+    let denied_suffixes = ["/.cargo/bin/", "/target/debug/", "/target/release/"];
+    for suffix in denied_suffixes {
+        if lower.contains(suffix) {
+            return Some(format!("path berada di lokasi build/tooling: {suffix}"));
+        }
+    }
+    if !path_is_writable_by_current_user(exe_path) {
+        return Some("direktori executable tidak dapat ditulis oleh pengguna saat ini".to_owned());
+    }
+    None
+}
+
+fn path_is_writable_by_current_user(exe_path: &Path) -> bool {
+    let Some(dir) = exe_path.parent() else {
+        return false;
+    };
+    let meta = match std::fs::metadata(dir) {
+        Ok(m) => m,
+        Err(_) => return false,
+    };
+    if !meta.is_dir() {
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = meta.permissions().mode();
+        let probe = dir.join(format!(".dblocal-update-probe-{}", std::process::id()));
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&probe)
+        {
+            Ok(_) => {
+                let _ = std::fs::remove_file(&probe);
+                true
+            }
+            Err(_) => false,
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        !meta.permissions().readonly()
+    }
+}
+
+fn canonical_or_original(path: &Path) -> PathBuf {
+    std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
 }
 
 fn detect_windows(exe_path: &Path) -> InstallKind {
     let lower = path_to_lower(exe_path);
-    if lower.contains("\\program files") || lower.contains("\\program files (x86)") {
+    if lower.contains("\\program files")
+        || lower.contains("\\program files (x86)")
+        || lower.contains("\\appdata\\local\\dblocal")
+    {
         return InstallKind::WindowsMsi {
             exe_path: exe_path.to_path_buf(),
         };
@@ -196,6 +305,7 @@ fn detect_macos(exe_path: &Path) -> InstallKind {
     }
     InstallKind::Unknown {
         exe_path: exe_path.to_path_buf(),
+        reason: "path executable macOS tidak berada di dalam bundle .app yang dikenali".to_owned(),
     }
 }
 

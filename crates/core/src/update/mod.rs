@@ -20,7 +20,8 @@ pub use check::{
     ReqwestUpdateFetcher, UpdateCheckOptions, UpdateFetcher, check, sanitize_release_notes,
 };
 pub use download::{
-    ALLOWED_HOSTS, MAX_UPDATE_BYTES, UpdateDownloadOptions, download_and_verify, validate_url,
+    ALLOWED_HOSTS, MAX_UPDATE_BYTES, StagedUpdate, UpdateDownloadOptions, download_and_verify,
+    download_update, redirect_allowed, validate_url,
 };
 pub use error::{
     CODE_UPDATE_APPLY_FAILED, CODE_UPDATE_ASSET_MISSING, CODE_UPDATE_CHECKSUM,
@@ -29,7 +30,8 @@ pub use error::{
     UpdateResult,
 };
 pub use install::{
-    InstallPlan, InstallStep, apply, plan_install, smoke_check, windows_helper_command,
+    InstallPlan, InstallStep, apply, cleanup_backup, plan_install, restore_backup, smoke_check,
+    windows_helper_command,
 };
 pub use kind::{
     InstallKind, PackageManagerHint, PackageOwnership, detect_install_kind,

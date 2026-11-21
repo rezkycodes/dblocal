@@ -44,6 +44,18 @@ fn parse_checksums_rejects_path_in_name() {
 }
 
 #[test]
+fn parse_checksums_lowercases_hash_and_rejects_duplicates() {
+    let hash = "A".repeat(64);
+    let body = format!("{hash}  file.tar.gz\n{hash}  file.tar.gz\n");
+    let err = Checksums::parse(&body).expect_err("dup");
+    assert_eq!(err.code(), crate::update::error::CODE_UPDATE_CHECKSUM);
+
+    let body = format!("{hash}  file.tar.gz\n");
+    let c = Checksums::parse(&body).expect("parse");
+    assert_eq!(c.digest_for("file.tar.gz"), Some("a".repeat(64).as_str()));
+}
+
+#[test]
 fn parse_checksums_missing_asset() {
     let hash = "d".repeat(64);
     let c = Checksums::parse(&format!("{hash}  other.tar.gz")).expect("parse");

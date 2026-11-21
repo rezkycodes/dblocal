@@ -16,6 +16,7 @@ impl PackageOwnership for FixedOwnership {
 fn unknown_is_not_self_updatable() {
     let kind = InstallKind::Unknown {
         exe_path: PathBuf::from("/tmp/dblocal"),
+        reason: "test".to_owned(),
     };
     assert!(!kind.can_self_update());
     assert!(kind.package_manager_hint().is_none());
@@ -122,10 +123,14 @@ fn package_manager_hint_messages() {
 
 #[test]
 fn detect_from_path_linux_is_portable() {
-    let kind = detect_from_path(Path::new("/home/u/bin/dblocal"));
-    if cfg!(target_os = "linux") {
-        assert!(matches!(kind, InstallKind::PortableTarball { .. }));
+    if !cfg!(target_os = "linux") {
+        return;
     }
+    let dir = tempfile::tempdir().unwrap();
+    let exe = dir.path().join("dblocal");
+    std::fs::write(&exe, b"x").unwrap();
+    let kind = detect_from_path(&exe);
+    assert!(matches!(kind, InstallKind::PortableTarball { .. }));
 }
 
 #[test]
@@ -184,7 +189,8 @@ fn install_kind_path_accessors() {
     );
     assert_eq!(
         InstallKind::Unknown {
-            exe_path: p.clone()
+            exe_path: p.clone(),
+            reason: "x".to_owned(),
         }
         .path(),
         p.as_path()
@@ -198,6 +204,24 @@ fn detect_from_path_windows_branch_via_direct_call() {
     assert!(matches!(kind, InstallKind::WindowsZip { .. }));
     let kind = detect_windows(Path::new("C:\\Program Files\\DBLocal\\dblocal.exe"));
     assert!(matches!(kind, InstallKind::WindowsMsi { .. }));
+    let kind = detect_windows(Path::new("C:\\Users\\me\\AppData\\Local\\DBLocal\\dblocal.exe"));
+    assert!(matches!(kind, InstallKind::WindowsMsi { .. }));
+}
+
+#[test]
+fn detect_linux_deny_list_paths() {
+    if !cfg!(target_os = "linux") {
+        return;
+    }
+    for path in [
+        "/home/u/.cargo/bin/dblocal",
+        "/nix/store/abc-dblocal/bin/dblocal",
+        "/home/u/src/dblocal/target/debug/dblocal",
+        "/snap/dblocal/current/bin/dblocal",
+    ] {
+        let kind = detect_from_path(Path::new(path));
+        assert!(matches!(kind, InstallKind::Unknown { .. }), "path {path}");
+    }
 }
 
 #[test]
@@ -213,13 +237,39 @@ fn detect_package_manager_on_linux_path_does_not_panic() {
 
 #[test]
 fn command_reports_ownership_false_for_missing_cmd() {
-    assert!(!command_reports_ownership("definitely-not-a-command", &["-S", "/bin/sh"]));
+    assert!(!command_reports_ownership(
+        "definitely-not-a-command",
+        &["-S", "/bin/sh"]
+    ));
 }
 
 #[test]
 fn detect_from_env_with_appimage() {
-    let kind = detect_from_env_with(Path::new("/tmp/dblocal"), |k| (k == "APPIMAGE").then(|| "/tmp/DBLocal.AppImage".to_owned()));
+    let dir = tempfile::tempdir().unwrap();
+    let appdir = dir.path().join("appdir");
+    std::fs::create_dir_all(appdir.join("usr/bin")).unwrap();
+    let exe = appdir.join("usr/bin/dblocal");
+    std::fs::write(&exe, b"x").unwrap();
+    let appimage = dir.path().join("DBLocal.AppImage");
+    std::fs::write(&appimage, b"app").unwrap();
+    let kind = detect_from_env_with(&exe, |k| match k {
+        "APPIMAGE" => Some(appimage.to_string_lossy().to_string()),
+        "APPDIR" => Some(appdir.to_string_lossy().to_string()),
+        _ => None,
+    });
     assert!(matches!(kind, Some(InstallKind::AppImage { .. })));
+}
+
+#[test]
+fn detect_from_env_rejects_foreign_appimage() {
+    let dir = tempfile::tempdir().unwrap();
+    let foreign = dir.path().join("Other.AppImage");
+    std::fs::write(&foreign, b"other").unwrap();
+    let kind = detect_from_env_with(Path::new("/usr/local/bin/dblocal"), |k| match k {
+        "APPIMAGE" => Some(foreign.to_string_lossy().to_string()),
+        _ => None,
+    });
+    assert!(kind.is_none());
 }
 
 #[test]

@@ -127,16 +127,6 @@ impl ReqwestUpdateFetcher {
     }
 }
 
-impl Default for ReqwestUpdateFetcher {
-    fn default() -> Self {
-        // Default is best-effort for callers that want a simple constructor;
-        // real callers should prefer `new()` and handle errors.
-        Self::new().unwrap_or_else(|_| Self {
-            client: reqwest::Client::new(),
-        })
-    }
-}
-
 impl UpdateFetcher for ReqwestUpdateFetcher {
     fn get(
         &self,
@@ -151,8 +141,26 @@ impl UpdateFetcher for ReqwestUpdateFetcher {
                 .await
                 .map_err(|e| e.to_string())?;
             let status = response.status().as_u16();
-            let bytes = response.bytes().await.map_err(|e| e.to_string())?;
-            Ok(FetchResponse::new(status, bytes.to_vec()))
+            if let Some(len) = response.content_length()
+                && len > MAX_RELEASES_BODY_BYTES as u64
+            {
+                return Err(format!(
+                    "respons rilis terlalu besar: {len} byte"
+                ));
+            }
+            let mut body: Vec<u8> = Vec::new();
+            let mut stream = response;
+            while let Some(chunk) = stream.chunk().await.map_err(|e| e.to_string())? {
+                let next = body.len().saturating_add(chunk.len());
+                if next > MAX_RELEASES_BODY_BYTES {
+                    return Err(format!(
+                        "respons rilis terlalu besar: melebihi {} byte",
+                        MAX_RELEASES_BODY_BYTES
+                    ));
+                }
+                body.extend_from_slice(&chunk);
+            }
+            Ok(FetchResponse::new(status, body))
         })
     }
 }
@@ -267,13 +275,16 @@ fn select_release(
         if release.draft {
             continue;
         }
-        if release.prerelease && options.channel == ReleaseChannel::Stable {
-            continue;
-        }
         let version = match parse_release_version(&release.tag_name) {
             Ok(v) => v,
             Err(_) => continue,
         };
+        if options.channel == ReleaseChannel::Stable && !version.pre.is_empty() {
+            continue;
+        }
+        if release.prerelease && options.channel == ReleaseChannel::Stable {
+            continue;
+        }
         if version == *current {
             continue;
         }

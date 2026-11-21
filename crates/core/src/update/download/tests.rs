@@ -12,6 +12,9 @@ use tokio::net::TcpListener;
 
 use super::*;
 use crate::update::verify::sha256_file_hex;
+use crate::update::{
+    AvailableUpdate, MAX_CHECKSUMS_BODY_BYTES, ReleaseAsset, UpdateAssetKind, download_update,
+};
 
 struct TestServer {
     addr: SocketAddr,
@@ -131,6 +134,38 @@ fn validate_url_allows_github_hosts() {
 }
 
 #[test]
+fn redirect_policy_rejects_evil_hosts_and_http() {
+    let cases = [
+        "https://github.com.evil.example/a.tar.gz",
+        "https://github.com@evil.example/a.tar.gz",
+        "http://github.com/a.tar.gz",
+        "http://objects.githubusercontent.com/a.tar.gz",
+    ];
+    for case in cases {
+        let url = reqwest::Url::parse(case).unwrap();
+        assert!(!redirect_allowed(&url, false), "case {case}");
+        assert!(!redirect_allowed(&url, true), "loopback case {case}");
+    }
+}
+
+#[test]
+fn redirect_policy_allows_expected_hosts_and_loopback() {
+    let https = [
+        "https://github.com/a/b/releases/download/v1/x.tar.gz",
+        "https://objects.githubusercontent.com/a/b",
+        "https://github-releases.githubusercontent.com/a/b",
+        "https://release-assets.githubusercontent.com/a/b",
+    ];
+    for case in https {
+        let url = reqwest::Url::parse(case).unwrap();
+        assert!(redirect_allowed(&url, false), "case {case}");
+    }
+    let loopback = reqwest::Url::parse("http://127.0.0.1:1234/a").unwrap();
+    assert!(redirect_allowed(&loopback, true));
+    assert!(!redirect_allowed(&loopback, false));
+}
+
+#[test]
 fn effective_max_rejects_declared_over_hard_cap() {
     let err = effective_max(MAX_UPDATE_BYTES + 1, MAX_UPDATE_BYTES).expect_err("over");
     assert_eq!(err.code(), crate::update::error::CODE_UPDATE_MALFORMED);
@@ -244,6 +279,184 @@ async fn download_rejects_disallowed_https_host() {
     .await
     .expect_err("host");
     assert_eq!(err.code(), crate::update::error::CODE_UPDATE_NETWORK);
+}
+
+#[tokio::test]
+async fn redirect_to_disallowed_second_server_is_not_contacted() {
+    let second_hits = Arc::new(AtomicUsize::new(0));
+    let second_hits_clone = second_hits.clone();
+    let second = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+    let second_addr = second.local_addr().unwrap();
+    tokio::spawn(async move {
+        if let Ok((mut socket, _)) = second.accept().await {
+            let mut buf = [0u8; 1024];
+            let _ = socket.read(&mut buf).await;
+            second_hits_clone.fetch_add(1, Ordering::SeqCst);
+            let body = b"evil";
+            let resp = format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            );
+            let _ = socket.write_all(resp.as_bytes()).await;
+            let _ = socket.write_all(body).await;
+        }
+    });
+
+    let first = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+    let first_addr = first.local_addr().unwrap();
+    tokio::spawn(async move {
+        if let Ok((mut socket, _)) = first.accept().await {
+            let mut buf = [0u8; 1024];
+            let _ = socket.read(&mut buf).await;
+            let location = format!("https://127.0.0.1:{}/evil", second_addr.port());
+            let resp = format!(
+                "HTTP/1.1 302 Found\r\nLocation: {location}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+            );
+            let _ = socket.write_all(resp.as_bytes()).await;
+        }
+    });
+
+    let dir = tempdir().expect("tmp");
+    let dest = dir.path().join("asset.bin");
+    let err = download_and_verify(
+        &format!("http://{first_addr}/asset"),
+        &dest,
+        &"5".repeat(64),
+        4,
+        &UpdateDownloadOptions::loopback_for_tests(),
+    )
+    .await
+    .expect_err("redirect blocked");
+    assert_eq!(err.code(), crate::update::error::CODE_UPDATE_NETWORK);
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    assert_eq!(second_hits.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn download_update_uses_checksums_and_fixed_staging_name() {
+    let body = b"hello-update".to_vec();
+    let checksum = sha2_hex(&body);
+    let checksums_body = format!("{checksum}  dblocal-linux-x86_64.tar.gz\n").into_bytes();
+    let checksums_server = start_server(checksums_body).await;
+    let asset_server = start_server(body.clone()).await;
+    let dir = tempdir().expect("tmp");
+    let update = AvailableUpdate::new(
+        semver::Version::parse("1.2.3").unwrap(),
+        "v1.2.3",
+        "notes",
+        ReleaseAsset::new(
+            "dblocal-linux-x86_64.tar.gz",
+            asset_server.url("/asset"),
+            body.len() as u64,
+            UpdateAssetKind::TarGz,
+        ),
+        ReleaseAsset::new(
+            "checksums.txt",
+            checksums_server.url("/checksums.txt"),
+            64,
+            UpdateAssetKind::Checksums,
+        ),
+    );
+    let staged = download_update(&update, dir.path(), &UpdateDownloadOptions::loopback_for_tests())
+        .await
+        .expect("download");
+    assert_eq!(staged.staged_path().file_name().unwrap(), "dblocal-update.bin");
+    assert_eq!(tokio::fs::read(staged.staged_path()).await.unwrap(), body);
+}
+
+#[tokio::test]
+async fn download_update_rejects_missing_checksum_entry() {
+    let checksums_server =
+        start_server(format!("{}  other.tar.gz\n", "a".repeat(64)).into_bytes()).await;
+    let dir = tempdir().expect("tmp");
+    let update = AvailableUpdate::new(
+        semver::Version::parse("1.2.3").unwrap(),
+        "v1.2.3",
+        "notes",
+        ReleaseAsset::new(
+            "dblocal-linux-x86_64.tar.gz",
+            "http://127.0.0.1:9/asset",
+            10,
+            UpdateAssetKind::TarGz,
+        ),
+        ReleaseAsset::new(
+            "checksums.txt",
+            checksums_server.url("/checksums.txt"),
+            64,
+            UpdateAssetKind::Checksums,
+        ),
+    );
+    let err = download_update(&update, dir.path(), &UpdateDownloadOptions::loopback_for_tests())
+        .await
+        .expect_err("missing checksum");
+    assert_eq!(err.code(), crate::update::error::CODE_UPDATE_CHECKSUM);
+}
+
+#[tokio::test]
+async fn download_update_rejects_oversized_checksums() {
+    let big = vec![b'a'; (MAX_CHECKSUMS_BODY_BYTES as usize) + 1];
+    let checksums_server = start_server(big).await;
+    let dir = tempdir().expect("tmp");
+    let update = AvailableUpdate::new(
+        semver::Version::parse("1.2.3").unwrap(),
+        "v1.2.3",
+        "notes",
+        ReleaseAsset::new(
+            "dblocal-linux-x86_64.tar.gz",
+            "http://127.0.0.1:9/asset",
+            10,
+            UpdateAssetKind::TarGz,
+        ),
+        ReleaseAsset::new(
+            "checksums.txt",
+            checksums_server.url("/checksums.txt"),
+            (MAX_CHECKSUMS_BODY_BYTES + 1) as u64,
+            UpdateAssetKind::Checksums,
+        ),
+    );
+    let err = download_update(&update, dir.path(), &UpdateDownloadOptions::loopback_for_tests())
+        .await
+        .expect_err("big checksums");
+    assert_eq!(err.code(), crate::update::error::CODE_UPDATE_CHECKSUM);
+}
+
+#[tokio::test]
+async fn download_update_rejects_wrong_digest() {
+    let body = b"hello-update".to_vec();
+    let checksums_body = format!("{}  dblocal-linux-x86_64.tar.gz\n", "0".repeat(64)).into_bytes();
+    let checksums_server = start_server(checksums_body).await;
+    let asset_server = start_server(body.clone()).await;
+    let dir = tempdir().expect("tmp");
+    let update = AvailableUpdate::new(
+        semver::Version::parse("1.2.3").unwrap(),
+        "v1.2.3",
+        "notes",
+        ReleaseAsset::new(
+            "dblocal-linux-x86_64.tar.gz",
+            asset_server.url("/asset"),
+            body.len() as u64,
+            UpdateAssetKind::TarGz,
+        ),
+        ReleaseAsset::new(
+            "checksums.txt",
+            checksums_server.url("/checksums.txt"),
+            64,
+            UpdateAssetKind::Checksums,
+        ),
+    );
+    let err = download_update(&update, dir.path(), &UpdateDownloadOptions::loopback_for_tests())
+        .await
+        .expect_err("bad digest");
+    assert_eq!(err.code(), crate::update::error::CODE_UPDATE_VERIFY_FAILED);
+    assert!(!dir.path().join("dblocal-update.bin").exists());
+}
+
+fn sha2_hex(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    let out = hasher.finalize();
+    out.iter().map(|b| format!("{b:02x}")).collect()
 }
 
 #[test]

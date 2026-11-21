@@ -33,7 +33,12 @@ impl Checksums {
                 parse_checksum_line(line).ok_or_else(|| UpdateError::ChecksumMetadata {
                     reason: format!("baris checksums.txt tidak valid pada baris {}", idx + 1),
                 })?;
-            entries.push((name.to_owned(), hash.to_owned()));
+            if entries.iter().any(|(existing, _)| existing == name) {
+                return Err(UpdateError::ChecksumMetadata {
+                    reason: format!("entri checksums.txt duplikat untuk {name}"),
+                });
+            }
+            entries.push((name.to_owned(), hash));
         }
         if entries.is_empty() {
             return Err(UpdateError::ChecksumMetadata {
@@ -62,7 +67,7 @@ impl Checksums {
     }
 }
 
-fn parse_checksum_line(line: &str) -> Option<(&str, &str)> {
+fn parse_checksum_line(line: &str) -> Option<(String, &str)> {
     let mut parts = line.split_whitespace();
     let hash = parts.next()?;
     let name = parts.next()?;
@@ -73,10 +78,10 @@ fn parse_checksum_line(line: &str) -> Option<(&str, &str)> {
     if !is_sha256_hex(hash) {
         return None;
     }
-    if name.is_empty() || name.contains('/') || name.contains('\\') {
+    if name.is_empty() || name.contains('/') || name.contains('\\') || name.contains("..") {
         return None;
     }
-    Some((hash, name))
+    Some((hash.to_ascii_lowercase(), name))
 }
 
 fn is_sha256_hex(value: &str) -> bool {
