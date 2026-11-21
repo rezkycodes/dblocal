@@ -8,135 +8,94 @@ wires the menu later.
 
 - `detect_clients(&dyn HostProbe) -> Vec<DetectedClient>`: pure over an injected
   host probe.
-- `plan_open(client, &OpenTarget, Option<&SecretString>) -> Result<LaunchPlan>`:
-  pure value describing how to open a client.
-- `run(&LaunchPlan, &dyn Spawner) -> Result<()>`: executes the plan through an
-  injected spawner.
+- `plan_open(client, &OpenTarget, Option<&SecretString>, OsKind, &TerminalChoice) -> ClientResult<LaunchPlan>`:
+  pure value describing how to open a client. `OpenTarget::new` validates untrusted input.
+- `run(&LaunchPlan, &dyn Spawner) -> ClientResult<()>`: executes the plan through an
+  injected spawner. The spawner materializes secure launcher scripts and substitutes `{script}`.
 
 The password never appears in argv, in a URL printed in a command line, in a log
-line, or in an error message. It is passed only through the spawned process
-environment (`PGPASSWORD`, `MYSQL_PWD`, `REDISCLI_AUTH`), or through a private
-launcher script when a terminal cannot inherit the environment safely.
+line, or in an error message. CLI passwords are passed only through private launcher
+scripts that export env vars and self-delete.
 
 ## Host probe
 
-`HostProbe` abstracts OS lookups so tests inject a fake host:
-
-- `which(name) -> Option<PathBuf>`: PATH lookup.
-- `path_exists(path) -> bool`.
-- `desktop_entries() -> Vec<String>`: Linux `.desktop` ids / names.
-- `macos_applications() -> Vec<String>`: app bundle names under `/Applications`.
-- `windows_app_paths() -> Vec<String>`: App Paths registry display names/paths.
-
-The real probe is not implemented here (core-only, no GUI/OS integration in this
-task); tests use `FakeHost`.
+`HostProbe` abstracts OS lookups so tests inject a fake host: `which`, `path_exists`,
+`desktop_entries`, `macos_applications`, `windows_app_paths`. Real probes are outside
+this core-only task.
 
 ## Known clients and engine matrix
 
-Only clients that are really found are returned. A client declares which engines
-it can open; unsupported combinations are rejected by `plan_open`.
-
 | Client | Kind | PostgreSQL | MySQL | MariaDB | Valkey | Evidence / note |
 |---|---|:---:|:---:|:---:|:---:|---|
-| DBDelve | GUI | yes | yes | yes | no | DBDelve is a PostgreSQL/MySQL-family desktop client; Valkey/Redis not claimed without source. |
-| TablePlus | GUI | yes | yes | yes | yes | TablePlus documents native connections for PostgreSQL, MySQL, MariaDB and Redis-compatible servers; `tableplus://` URL scheme is documented. |
-| DBeaver | GUI | yes | yes | yes | yes | DBeaver supports PostgreSQL, MySQL/MariaDB and Redis via drivers; opened via `-con` command-line argument with a URL-like connection spec. Valkey is RESP-compatible; support depends on driver, so we only enable when detected and treat as Redis-compatible. |
-| `psql` | CLI | yes | no | no | no | PostgreSQL interactive terminal. |
-| `mysql` | CLI | no | yes | yes | no | MySQL/MariaDB CLI. |
-| `mariadb` | CLI | no | yes | yes | no | MariaDB CLI, compatible with MySQL protocol. |
-| `valkey-cli` | CLI | no | no | no | yes | Valkey CLI; reads `REDISCLI_AUTH` for password. |
-| `redis-cli` | CLI | no | no | no | yes | Redis CLI; reads `REDISCLI_AUTH`. |
+| DBDelve | GUI | yes | yes | yes | no | DBDelve connection-argument mechanism is **unverified** on this machine. Plan launches the detected DBDelve app only and sets `copy_uri_hint` with a password-less URI so GUI can copy it. `dbdelve --help` produced no output in this headless environment. |
+| TablePlus | GUI | yes | yes | yes | yes | Official TablePlus docs document opening a connection by URL form like `postgresql://user@host:port/db` with values URL-encoded and no password in URL: https://docs.tableplus.com/gui-tools/manage-connections . macOS uses `open -a TablePlus <url>` (documented). Linux/Windows pass URL to detected TablePlus executable path. `mysql://` and `redis://` URL forms for TablePlus are **unverified** here (third-party reports only). |
+| DBeaver | GUI | yes | yes | yes | yes | DBeaver CLI `-con` is documented: https://dbeaver.com/docs/dbeaver/Command-Line/ . `driver`, `host`, `port`, `name`, `openConsole` are documented parameters; MariaDB driver id `maria` is **unverified**. Password is never passed in argv. |
+| `psql` | CLI | yes | no | no | no | PostgreSQL CLI. Uses `postgresql://user@host:port/db` conninfo arg to avoid libpq keyword conninfo injection; password via `PGPASSWORD` in launcher script. |
+| `mysql` | CLI | no | yes | yes | no | MySQL/MariaDB CLI. Uses `--database=<value>` to avoid positional option injection; password via `MYSQL_PWD` in launcher script. |
+| `mariadb` | CLI | no | yes | yes | no | MariaDB CLI. Same safe argv form as mysql. |
+| `valkey-cli` | CLI | no | no | no | yes | Valkey CLI. Password via `REDISCLI_AUTH` in launcher script. |
+| `redis-cli` | CLI | no | no | no | yes | Redis CLI. Password via `REDISCLI_AUTH` in launcher script. |
 
-Uncertain support is intentionally excluded. DBDelve+Valkey is not advertised,
-so it is left out.
+## OpenTarget validation (F2)
+
+`OpenTarget::new` returns `ClientResult` and rejects unsafe input:
+
+- host: only `127.0.0.1`, `::1`, `localhost`.
+- username/database: `[A-Za-z0-9_.-]`, max 63 chars, not starting with `-`; database may be empty.
+- instance name: no control characters, max 128 chars.
+- port: 1..=65535.
+
+CLI args never pass database/user as positional/conninfo-injectable values: mysql/mariadb use `--database=<value>`, psql uses URI conninfo `postgresql://user@host:port/db` with password omitted.
 
 ## Launch planning
 
-`LaunchPlan` is a pure value: `program`, `argv`, `env`, optional `url`, optional
-`temp_file`. `plan_open` validates that the client supports the target engine and
-that a detected client has not disappeared.
+`LaunchPlan` is pure data: `program`, `argv`, `env`, optional `url`, optional `temp_file`,
+optional `command_string`, `required_path`, `copy_uri_hint`. Secrets never go in argv/url/command_string.
+CLI plans with passwords use a launcher script and `{script}` placeholder substituted by the spawner.
 
-### GUI clients
+## CLI secrets and launcher scripts (F1)
 
-- **TablePlus**: uses the documented `tableplus://` URL scheme. The password is
-  **not** embedded in the URL. TablePlus prompts for the password or uses its own
-  saved connection; we pass host/port/user/database/driver in the URL and omit
-  password. Residual exposure: none in process args; the user is prompted by
-  TablePlus if it has no saved credential.
-- **DBeaver**: uses `-con` with a connection spec. The password is not placed in
-  argv. DBeaver can prompt or use its secure storage. We pass a connection name
-  and driver/url properties without password. Residual exposure: none in argv.
-- **DBDelve**: opened with a connection URI argument when supported, but password
-  is omitted from argv/URL; DBDelve prompts. If DBDelve requires password in URL,
-  that would be a leak - we avoid it by omitting password and documenting the
-  prompt behaviour. Residual exposure: user prompt.
+All OSes use the same launcher-script mechanism for CLI clients that need a password. This avoids
+single-instance terminal env inheritance failure (verified on this machine with ptyxis: a second
+window did not inherit caller env var).
 
-### CLI clients
+Launcher directory (one function): Linux `$XDG_RUNTIME_DIR/dblocal` or fallback `$HOME/.dblocal/run`;
+macOS `$TMPDIR/dblocal` (or `/tmp/dblocal`); Windows `%LOCALAPPDATA%\dblocal\run` or `%USERPROFILE%\dblocal\run`.
+Directory is created 0700; existing dir is verified via `symlink_metadata`: real dir, current uid, mode 0700.
+If verification fails, return typed `ScriptError` and never chmod.
 
-CLI clients run inside an OS terminal emulator. Passwords are passed by
-environment variables on the spawned client process:
+Script file: random 128-bit name, `O_CREAT|O_EXCL`, mode 0600, content written, `sync_all`.
+Script deletes itself first (`rm -f -- "$0"` on POSIX; cmd block with `del "%~f0"` on Windows),
+exports env vars, then execs client. Spawner deletes script on spawn failure and sweeps files older than 10 minutes.
 
-| Engine | Env var | Notes |
-|---|---|---|
-| PostgreSQL | `PGPASSWORD` | Read by `psql`. |
-| MySQL/MariaDB | `MYSQL_PWD` | Read by `mysql`/`mariadb` client. Deprecated upstream but still supported; no argv alternative is safe. |
-| Valkey | `REDISCLI_AUTH` | Read by `valkey-cli` and `redis-cli`. |
+Residual exposure: password exists briefly in an owner-only 0600 file inside an owner-only 0700 dir
+from creation until script start/self-delete; swept after 10 minutes if terminal never starts.
 
-`PGPASSWORD`/`MYSQL_PWD`/`REDISCLI_AUTH` are set in the environment of the
-spawned terminal/client process, not printed in command strings.
+## Terminal handling (Linux)
 
-## Terminal handling
+Order: `$TERMINAL` if set and existing, then `xdg-terminal-exec`, `ptyxis`, `x-terminal-emulator`,
+`gnome-terminal`, `konsole`, `foot`, `wezterm`, `kitty`, `alacritty`, `xterm`. If none found,
+return `NoTerminal`.
 
-Terminal choice is per OS, exposed as `OsKind` for deterministic tests:
-
-- **Linux**: `$TERMINAL` if set and executable, else `x-terminal-emulator`,
-  `gnome-terminal`, `konsole`, `kitty`, `alacritty`, `xterm`.
-- **macOS**: `Terminal.app` via `open -a Terminal` / `osascript`.
-- **Windows**: `wt.exe`, falling back to `cmd.exe /k`.
-
-When a terminal cannot inherit environment variables safely through its command
-string (macOS `Terminal.app` via `osascript`, Windows `wt.exe`/`cmd.exe` command
-line), the password must not be placed in the command string. The plan uses a
-private launcher script in a `0700` directory: the script exports the env var,
-removes itself as its first action, then execs the client. The script contains
-the password; it lives in a private temp directory with mode `0700` and the file
-mode `0600`, and is removed by the script itself before the client runs.
-Residual exposure: the password exists briefly in a private file; on multi-user
-systems with a compromised same-user process it could be read during that window.
-This is safer than argv or command-line exposure in the process list.
-
-Linux terminals that accept `-e`/`--` argv can receive env vars through the
-spawned process environment, so no launcher script is needed.
+Verified on this machine: `ptyxis --help` shows `--` command form and `--new-window`; no `-e`.
+`xdg-terminal-exec`, `foot`, `wezterm`, `kitty` not installed here; their flags are from documentation
+and marked unverified. Kitty uses positional command after `--` (unverified locally). macOS Terminal.app
+and Windows `wt.exe`/`cmd.exe` paths are value-tested only.
 
 ## Injection and quoting
 
-Instance names, hosts, URIs and paths are untrusted input. The module never
-builds a shell string by concatenation. Where a shell is unavoidable (a
-terminal's `-e` argument that takes a single command string, or a launcher
-script body), `shell_quote` is used. It wraps values in single quotes and escapes
-embedded single quotes as `'\''`. A leading `-` is safe when passed as argv; when
-placed after `--` or as a quoted argument it is not interpreted as an option.
-
-Hostile corpus tested: spaces, quotes, `;`, `&&`, `$()`, backticks, newlines,
-`%`, leading `-`, very long names, non-ASCII.
+No shell command is built by concatenation. Launcher scripts use `shell_quote` for POSIX and quoted args
+for Windows cmd. Hostile corpus tested at validation and plan layers.
 
 ## Secrets scanning
 
-Tests include an assertion helper that scans every `LaunchPlan` for the secret in
-argv, URL, and command string fields. It is used on every golden plan. A mutation
-that puts the password into argv or URL is caught by this helper.
+Tests scan every `LaunchPlan` for secret in argv/url/command_string. Env values may contain secrets by design;
+they are not used for CLI terminal launch plans after F1 (secrets live in scripts).
 
 ## Unverified / limitations
 
-- Windows and macOS terminal launching is tested by golden plan value only; no
-  real Windows/macOS terminal was executed on this Linux host.
-- Real third-party client behaviour with the chosen mechanism was not tried
-  unless the client is installed on this host. DBDelve, TablePlus, DBeaver were
-  not exercised as real GUI launches here; detection on this host is printed by
-  tests but not asserted as present.
-- `MYSQL_PWD` is deprecated by MySQL upstream but remains the safest non-interactive
-  option without writing a config file; we document the residual deprecation.
-- macOS `osascript`/Terminal.app launcher script is the safest option found that
-  avoids command-line password exposure; it has a brief private-file window.
-- DBeaver `-con` argument format varies by version; we use a conservative generic
-  connection argument and document that real-client verification is needed.
+- Windows script behaviour, macOS Terminal.app, and terminals not installed locally (xdg-terminal-exec, foot, wezterm, kitty, alacritty, konsole, gnome-terminal, xterm) are unverified by real execution here.
+- Real DBDelve/TablePlus/DBeaver behavior is unverified; DBDelve on host was detected but not launched.
+- TablePlus mysql/redis URL forms are unverified by official docs (third-party reports only).
+- DBeaver MariaDB driver id `maria` is unverified.
+- `MYSQL_PWD` is deprecated upstream but used for non-interactive CLI compatibility.
