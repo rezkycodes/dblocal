@@ -363,6 +363,13 @@ unless `force`, runs in the background, reports `Fresh`/`Stale`/`Offline` throug
 `watch_logs`, `connection_uri`, `validate_spec`, `suggest_port`, `list_runtimes`,
 `remove_runtime`, `list_archives`, `purge_archive`.
 
+- `change_port` is only allowed while the instance does not hold a process. It
+  probes the target port, rewrites the engine config before persisting the new
+  port (atomic write in the same directory), and only then updates the store and
+  emits `InstanceChanged`. If the config rewrite fails, neither the file nor the
+  store changes. `start` re-syncs the engine config from the stored port before
+  spawning, so a crash between config rewrite and store update is repaired on the
+  next start.
 - `watch_logs` starts a follower only while watching; an idle app does no log
   I/O, and the follower stops when disabled or when the instance is gone.
 - `connection_uri` reads the secret through `SecretStore::get` using the
@@ -396,6 +403,10 @@ is accepted each time with at most one spawn.
   through `process::terminate`, which refuses anything that does not validate.
 - Paths read from the store are re-validated with `safe_within` before being
   deleted or moved.
+- Instance-layout directories (`instances/`, `archive/`, `runtimes/`,
+  `downloads/`) and per-instance `data/`, `logs/`, `run/` are created/tightened
+  to `0700` on Unix. Valkey `prepare_run`/`initialize` also tighten data/run/logs
+  to `0700` so a permissive pre-existing directory cannot leak local access.
 
 ## Tests
 

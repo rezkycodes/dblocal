@@ -129,6 +129,18 @@ async fn run_start_inner(
     let rotate = log_path.clone();
     let _ = blocking(move || crate::process::logs::rotate_if_needed(&rotate)).await;
 
+    // Sync the engine config from the store before every start. This repairs a
+    // crash between a config rewrite and the store update, and keeps the config
+    // authoritative with the persisted port (D-2).
+    let instance_for_sync = instance.clone();
+    let paths_for_sync = inner.paths.clone();
+    if let Err(err) =
+        blocking(move || super::helpers::sync_instance_port(&paths_for_sync, &instance_for_sync))
+            .await
+    {
+        return fail(inner, id, instance, &log_path, err, StartFailure::Unknown).await;
+    }
+
     let credential = read_credential(inner, instance)?;
     let ctx = run_context(&inner.paths, instance, credential);
 

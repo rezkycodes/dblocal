@@ -7,7 +7,7 @@ use crate::{DblError, Result};
 
 #[cfg(unix)]
 use super::fsops::apply_unix_mode;
-use super::fsops::{create_symlink, write_regular_file};
+use super::fsops::{create_hard_link, create_symlink, write_regular_file};
 use super::path::{ensure_parent_safe, safe_join, stripped_relative_path, validate_symlink_target};
 use super::{ExtractCaps, ExtractState};
 
@@ -31,6 +31,57 @@ pub(super) fn extract_tar_xz(
     let file = std::fs::File::open(archive_path).map_err(|source| DblError::Io { source })?;
     let dec = liblzma::read::XzDecoder::new(file);
     extract_tar(dec, staging, strip_prefix, caps)
+}
+
+fn validate_hard_link_target(
+    staging: &Path,
+    target: &Path,
+    strip_prefix: Option<&str>,
+    raw_name: &str,
+    regular_files: &std::collections::HashSet<std::path::PathBuf>,
+) -> Result<std::path::PathBuf> {
+    let target_name = target.to_string_lossy().into_owned();
+    let rel = match stripped_relative_path(target, strip_prefix, &target_name)? {
+        Some(p) => p,
+        None => {
+            return Err(DblError::UnsafeArchive {
+                entry: format!("{raw_name}: hard link target is the stripped prefix"),
+            });
+        }
+    };
+    // Ensure the resolved target stays inside the staging root. safe_join also
+    // performs lexical containment checks.
+    let _ = safe_join(staging, &rel, &target_name)?;
+    if !regular_files.contains(&rel) {
+        return Err(DblError::UnsafeArchive {
+            entry: format!(
+                "{raw_name}: hard link target '{}' was not extracted earlier as a regular file",
+                target.display()
+            ),
+        });
+    }
+    let target_dest = staging.join(&rel);
+    let meta = std::fs::symlink_metadata(&target_dest).map_err(|source| {
+        if source.kind() == std::io::ErrorKind::NotFound {
+            DblError::UnsafeArchive {
+                entry: format!(
+                    "{raw_name}: hard link target '{}' does not exist on disk",
+                    target.display()
+                ),
+            }
+        } else {
+            DblError::Io { source }
+        }
+    })?;
+    if meta.file_type().is_symlink() || !meta.file_type().is_file() {
+        return Err(DblError::UnsafeArchive {
+            entry: format!(
+                "{raw_name}: hard link target '{}' is not a regular file",
+                target.display()
+            ),
+        });
+    }
+    Ok(rel)
 }
 
 fn extract_tar<R: Read>(
@@ -72,12 +123,9 @@ fn extract_tar<R: Read>(
             .into_owned();
         let raw_name = raw_path.to_string_lossy().into_owned();
 
-        // Reject hard links outright.
-        if matches!(entry_type, tar::EntryType::Link) {
-            return Err(DblError::UnsafeArchive {
-                entry: format!("{raw_name}: hard links are not allowed"),
-            });
-        }
+        // Hard links are validated below; they may only target a regular file
+        // already extracted inside the staging root.
+        let is_hard_link = matches!(entry_type, tar::EntryType::Link);
         // Reject special device/fifo entries.
         if matches!(
             entry_type,
@@ -105,6 +153,30 @@ fn extract_tar<R: Read>(
         let dest = safe_join(staging, &rel, &raw_name)?;
         ensure_parent_safe(staging, &dest, &mut state.seen_dirs, &raw_name)?;
 
+        if is_hard_link {
+            let target = entry
+                .link_name()
+                .map_err(|source| DblError::Io { source })?;
+            let target = target.ok_or_else(|| DblError::UnsafeArchive {
+                entry: format!("{raw_name}: hard link has no target"),
+            })?;
+            let target_rel = validate_hard_link_target(
+                staging,
+                &target,
+                strip_prefix,
+                &raw_name,
+                &state.regular_files,
+            )?;
+            let target_dest = staging.join(&target_rel);
+            if let Some(parent) = dest.parent() {
+                std::fs::create_dir_all(parent).map_err(|source| DblError::Io { source })?;
+                state.seen_dirs.insert(parent.to_path_buf());
+            }
+            create_hard_link(&target_dest, &dest, caps, &mut state, &raw_name)?;
+            state.regular_files.insert(rel);
+            continue;
+        }
+
         match entry_type {
             tar::EntryType::Directory => {
                 std::fs::create_dir_all(&dest).map_err(|source| DblError::Io { source })?;
@@ -123,6 +195,7 @@ fn extract_tar<R: Read>(
                 }
                 #[cfg(not(unix))]
                 let _ = mode;
+                state.regular_files.insert(rel);
             }
             tar::EntryType::Symlink => {
                 let target = entry

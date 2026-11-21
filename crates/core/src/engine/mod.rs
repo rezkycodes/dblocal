@@ -13,11 +13,11 @@ mod valkey;
 
 pub use postgres::{
     PostgresAdapter, PostmasterIdentity, parse_postmaster_pid, prepare_run as prepare_postgres_run,
-    read_postmaster_pid,
+    read_postmaster_pid, sync_port as sync_postgres_port,
 };
 pub use valkey::{
     ConfigParams, ServerIdentity, ValkeyAdapter, parse_pidfile, prepare_run as prepare_valkey_run,
-    read_pidfile,
+    read_pidfile, sync_port as sync_valkey_port,
 };
 
 use std::path::PathBuf;

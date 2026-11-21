@@ -440,8 +440,9 @@ async fn archive_data(inner: &Arc<Inner>, instance: &Instance) -> OpResult<Archi
     let engine = instance.engine();
     let version = instance.version().to_owned();
     let target_for_move = target.clone();
+    let archive_root = inner.paths.archive_dir();
     blocking(move || {
-        std::fs::create_dir_all(target_for_move.parent().unwrap_or(&target_for_move))?;
+        super::helpers::ensure_private_dir(&archive_root)?;
         if data_dir.exists() {
             if target_for_move.exists() {
                 // Another process already moved this data (it crashed after the
@@ -454,7 +455,7 @@ async fn archive_data(inner: &Arc<Inner>, instance: &Instance) -> OpResult<Archi
                 std::fs::rename(&data_dir, &target_for_move)?;
             }
         } else if !target_for_move.exists() {
-            std::fs::create_dir_all(&target_for_move)?;
+            super::helpers::ensure_private_dir(&target_for_move)?;
         }
         // The instance shell (logs, run) is gone once its data is archived.
         remove_tree(&instance_dir)
