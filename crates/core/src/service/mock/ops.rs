@@ -614,11 +614,17 @@ impl DblService for MockService {
             .instances
             .get(id)
             .ok_or_else(|| not_found("instance", id))?;
+        // Same rule as the real service (item 10): a no-password instance has a
+        // URI without a password; a password instance without a stored secret is
+        // a typed `credential` error, never a silent empty password. The mock
+        // renders through its own copy of the format (`super::uri`) so it stays
+        // an independent oracle for the core builder.
         let password = if inst.auth() == AuthMode::Password {
             g.passwords
                 .get(id)
-                .map(|s| s.expose().to_owned())
-                .unwrap_or_default()
+                .ok_or_else(|| not_found("credential", id))?
+                .expose()
+                .to_owned()
         } else {
             String::new()
         };

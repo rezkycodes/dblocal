@@ -12,8 +12,10 @@ pub mod uri;
 mod valkey;
 
 pub use postgres::{
-    PostgresAdapter, PostmasterIdentity, parse_postmaster_pid, prepare_run as prepare_postgres_run,
-    read_postmaster_pid, sync_port as sync_postgres_port,
+    PostgresAdapter, PostmasterIdentity, SocketDir as PostgresSocketDir,
+    choose_socket_dir as choose_postgres_socket_dir,
+    configure_after_init as configure_postgres_after_init, parse_postmaster_pid,
+    prepare_run as prepare_postgres_run, read_postmaster_pid, sync_port as sync_postgres_port,
 };
 pub use valkey::{
     ConfigParams, ServerIdentity, ValkeyAdapter, parse_pidfile, prepare_run as prepare_valkey_run,
@@ -190,6 +192,18 @@ pub trait EngineAdapter: Send + Sync {
         credential: &Credential,
         format: UriFormat,
     ) -> SecretString;
+
+    /// Builds a connection URI or `.env` block for an instance with no password
+    /// (auth mode [`AuthMode::None`], PRD `F-CRD-03`).
+    ///
+    /// There is no credential to pass, so the default renders through
+    /// [`uri::render_no_password`]: the userinfo carries only the username and
+    /// no password key appears in the `.env` block. The service only calls this
+    /// when the instance's auth mode is `None`; a password instance with a
+    /// missing credential stays a typed error.
+    fn connection_uri_no_password(&self, ctx: &RunContext, format: UriFormat) -> SecretString {
+        uri::render_no_password(self.key(), ctx.port.get(), &ctx.superuser, format)
+    }
 
     /// Classifies raw start output so the UI can offer a fix (PRD `F-LOG-02`).
     ///

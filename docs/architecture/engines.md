@@ -16,6 +16,14 @@ diagnose failures.
   - `UriFormat::DotEnv` returns a framework-style block whose values are the raw
     credential components (and a percent-encoded `*_URL` line). The block is a
     secret because it contains the password.
+- **No-password instances still have a URI (`F-CRD-03`).** An instance created
+  with `AuthMode::None` has no credential row, so `EngineAdapter::connection_uri`
+  is not used for it. `connection_uri_no_password` (default impl backed by
+  `uri::render_no_password`) renders the same formats without a password:
+  PostgreSQL `postgresql://USER@127.0.0.1:PORT/postgres`, Valkey
+  `redis://127.0.0.1:PORT/0`, and a `.env` block that omits `DB_PASSWORD` /
+  `REDIS_PASSWORD`. A password-mode instance with a missing credential stays a
+  typed `NotFound { kind: "credential" }`, never an empty password.
 - **No password in argv.** Start/stop/init commands never carry a password as an
   argument. PostgreSQL bootstraps via a `0600` `--pwfile` deleted immediately
   after `initdb`; Valkey writes `requirepass` in a `0600` `valkey.conf`;

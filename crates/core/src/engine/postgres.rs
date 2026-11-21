@@ -374,22 +374,9 @@ fn socket_dir_plan_for_init(ctx: &InitContext) -> SocketDir {
 
 /// Ensures the unix socket directory exists with restrictive permissions.
 pub fn ensure_socket_dir(dir: &Path) -> Result<()> {
-    fs::create_dir_all(dir).map_err(|e| DblError::Engine {
+    crate::fsutil::ensure_private_dir(dir).map_err(|e| DblError::Engine {
         reason: format!("cannot create unix socket directory {}: {e}", dir.display()),
-    })?;
-    #[cfg(unix)]
-    {
-        let mut perms = fs::metadata(dir)
-            .map_err(|e| DblError::Engine {
-                reason: format!("cannot stat unix socket directory: {e}"),
-            })?
-            .permissions();
-        perms.set_mode(0o700);
-        fs::set_permissions(dir, perms).map_err(|e| DblError::Engine {
-            reason: format!("cannot set unix socket directory permissions: {e}"),
-        })?;
-    }
-    Ok(())
+    })
 }
 
 /// Validates that `<dir>/.s.PGSQL.<port>` fits within the AF_UNIX limit.
@@ -494,7 +481,10 @@ fn managed_block(port: u16, socket_plan: &SocketDir) -> String {
     block
 }
 
-fn configure_after_init(ctx: &InitContext, socket_plan: &SocketDir) -> Result<()> {
+/// Appends the DBLocal-managed settings block after initdb has written its base config.
+///
+/// Public for integration-style tests that need a real initdb-shaped config file.
+pub fn configure_after_init(ctx: &InitContext, socket_plan: &SocketDir) -> Result<()> {
     let conf = ctx.data_dir.join("postgresql.conf");
     let mut contents = fs::read_to_string(&conf).map_err(|e| DblError::Engine {
         reason: format!("cannot read postgresql.conf: {e}"),
@@ -505,7 +495,7 @@ fn configure_after_init(ctx: &InitContext, socket_plan: &SocketDir) -> Result<()
     contents.push('\n');
     contents.push_str(&managed_block(ctx.port.get(), socket_plan));
     contents.push('\n');
-    write_atomic(&conf, &contents)
+    write_private_config_atomic(&conf, &contents)
 }
 
 /// Rewrites the DBLocal-managed port/socket settings in `postgresql.conf`.
@@ -523,12 +513,12 @@ pub fn sync_port(data_dir: &Path, run_dir: &Path, port: u16) -> Result<SocketDir
         reason: format!("cannot read postgresql.conf: {e}"),
     })?;
     let block = managed_block(port, &plan);
-    let updated = replace_managed_block(&contents, &block);
-    write_atomic(&conf, &updated)?;
+    let updated = replace_managed_block(&contents, &block, port);
+    write_private_config_atomic(&conf, &updated)?;
     Ok(plan)
 }
 
-fn replace_managed_block(contents: &str, block: &str) -> String {
+fn replace_managed_block(contents: &str, block: &str, port: u16) -> String {
     if let Some(start) = contents.find(MANAGED_BEGIN)
         && let Some(end_rel) = contents[start..].find(MANAGED_END)
     {
@@ -547,7 +537,7 @@ fn replace_managed_block(contents: &str, block: &str) -> String {
     for line in &mut lines {
         let trimmed = line.trim_start();
         if trimmed.starts_with("port =") {
-            *line = format!("port = {port}", port = extract_port_from_block(block));
+            *line = format!("port = {port}");
             replaced_port = true;
         } else if trimmed.starts_with("unix_socket_directories =") {
             *line = extract_line(block, "unix_socket_directories =").to_owned();
@@ -574,17 +564,6 @@ fn replace_managed_block(contents: &str, block: &str) -> String {
     out
 }
 
-fn extract_port_from_block(block: &str) -> u16 {
-    for line in block.lines() {
-        if let Some(v) = line.trim().strip_prefix("port = ")
-            && let Ok(p) = v.trim().parse()
-        {
-            return p;
-        }
-    }
-    0
-}
-
 fn extract_line<'a>(block: &'a str, prefix: &str) -> &'a str {
     block
         .lines()
@@ -592,55 +571,12 @@ fn extract_line<'a>(block: &'a str, prefix: &str) -> &'a str {
         .unwrap_or("")
 }
 
-fn write_atomic(path: &Path, contents: &str) -> Result<()> {
-    let parent = path.parent().ok_or_else(|| DblError::Engine {
-        reason: format!("config path has no parent: {}", path.display()),
-    })?;
-    let nonce: u64 = rand::random();
-    let tmp = parent.join(format!(
-        ".{}.tmp-{:016x}",
-        path.file_name().and_then(|s| s.to_str()).unwrap_or("conf"),
-        nonce
-    ));
-    let mut opts = OpenOptions::new();
-    opts.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        opts.mode(0o600);
-    }
-    let mut file = match opts.open(&tmp) {
-        Ok(f) => f,
-        Err(e) => {
-            return Err(DblError::Engine {
-                reason: format!("cannot write {}: {e}", tmp.display()),
-            });
+fn write_private_config_atomic(path: &Path, contents: &str) -> Result<()> {
+    crate::fsutil::write_private_file_atomic(path, contents.as_bytes()).map_err(|e| {
+        DblError::Engine {
+            reason: format!("cannot write {}: {e}", path.display()),
         }
-    };
-    if let Err(e) = file
-        .write_all(contents.as_bytes())
-        .and_then(|_| file.sync_all())
-    {
-        let _ = fs::remove_file(&tmp);
-        return Err(DblError::Engine {
-            reason: format!("cannot write {}: {e}", tmp.display()),
-        });
-    }
-    drop(file);
-    if let Err(e) = fs::rename(&tmp, path) {
-        let _ = fs::remove_file(&tmp);
-        return Err(DblError::Engine {
-            reason: format!("cannot rename {} into place: {e}", path.display()),
-        });
-    }
-    #[cfg(unix)]
-    {
-        // Best-effort directory fsync.
-        if let Ok(dir) = std::fs::File::open(parent) {
-            let _ = dir.sync_all();
-        }
-    }
-    Ok(())
+    })
 }
 
 fn escape_single_quotes(value: &str) -> String {

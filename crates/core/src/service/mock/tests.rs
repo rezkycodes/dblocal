@@ -379,6 +379,54 @@ async fn no_auth_instance_has_no_password() {
 }
 
 #[tokio::test]
+async fn no_auth_uri_and_dotenv_match_the_core_rendering() {
+    // Item 10: the mock must not hide a core defect. Render through both and
+    // require the identical bytes for each engine and format (PRD F-CRD-03).
+    for (engine, user, port) in [
+        (EngineKey::Postgresql, "postgres", 5432u16),
+        (EngineKey::Valkey, "default", 6379),
+    ] {
+        let service = super::MockService::deterministic();
+        let spec = InstanceSpec::new(
+            InstanceName::new("nopass").expect("name"),
+            engine,
+            "17.4",
+            Some(Port::new(port).expect("port")),
+            AuthMode::None,
+        )
+        .expect("spec");
+        let id = service.seed_instance(spec, InstanceStatus::Stopped);
+        for format in [UriFormat::Uri, UriFormat::DotEnv] {
+            let mock = service
+                .connection_uri(&id, format)
+                .expect("uri")
+                .expose()
+                .to_owned();
+            let core = crate::engine::uri::render_no_password(engine, port, user, format)
+                .expose()
+                .to_owned();
+            assert_eq!(mock, core, "{engine:?} {format:?} diverged");
+        }
+    }
+}
+
+#[tokio::test]
+async fn password_instance_without_a_stored_secret_is_a_typed_not_found() {
+    // The mock always has a password today; a password instance with no stored
+    // secret must fail typed (like the real service), never render an empty one.
+    let service = super::MockService::deterministic();
+    let id = service.seed_instance(
+        spec("pwless", EngineKey::Postgresql, "17.4", 5432),
+        InstanceStatus::Stopped,
+    );
+    super::lock(&service.inner).passwords.remove(&id);
+    let err = service
+        .connection_uri(&id, UriFormat::Uri)
+        .expect_err("must be typed");
+    assert_eq!(err.code(), crate::error::CODE_NOT_FOUND);
+}
+
+#[tokio::test]
 async fn logs_stream_only_while_watched() {
     let service = super::MockService::deterministic();
     let id = service.seed_instance(

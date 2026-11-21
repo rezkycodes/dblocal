@@ -493,3 +493,181 @@ fn sync_port_is_idempotent() {
     assert_eq!(once, twice);
     assert_eq!(once.matches("port = 5544").count(), 1);
 }
+
+#[test]
+fn sync_port_reports_a_missing_config_as_an_engine_error() {
+    let dir = tempdir().expect("tempdir");
+    let data = dir.path().join("data");
+    let run = dir.path().join("run");
+    fs::create_dir_all(&data).expect("data");
+    let err = sync_port(&data, &run, 5544).expect_err("a missing config is an error");
+    assert!(matches!(err, DblError::Engine { .. }), "{err:?}");
+    assert!(format!("{err}").contains("cannot read postgresql.conf"));
+}
+
+#[test]
+fn configure_after_init_reports_a_missing_config() {
+    let dir = tempdir().expect("tempdir");
+    let ctx = init_ctx(AuthMode::None, None);
+    let ctx = InitContext {
+        data_dir: dir.path().to_path_buf(),
+        ..ctx
+    };
+    let plan = SocketDir::Enabled(dir.path().join("sock"));
+    let err = configure_after_init(&ctx, &plan).expect_err("missing base config");
+    assert!(
+        format!("{err}").contains("cannot read postgresql.conf"),
+        "{err:?}"
+    );
+}
+
+#[test]
+fn initdb_failed_carries_the_combined_tail() {
+    let err = initdb_failed(b"out line".to_vec(), b"err line".to_vec(), Some(1));
+    let text = format!("{err}");
+    assert!(text.contains("initdb failed (code Some(1))"), "{text}");
+    assert!(text.contains("out line"), "{text}");
+    assert!(text.contains("err line"), "{text}");
+}
+
+#[test]
+fn combined_output_joins_stdout_and_stderr_cleanly() {
+    // stdout without a trailing newline gains one before stderr; empty stderr
+    // leaves stdout untouched.
+    assert_eq!(combined_output(b"a".to_vec(), b"b".to_vec()), "a\nb");
+    assert_eq!(combined_output(b"a\n".to_vec(), b"b".to_vec()), "a\nb");
+    assert_eq!(combined_output(b"only".to_vec(), Vec::new()), "only");
+    assert_eq!(combined_output(b"".to_vec(), b"err".to_vec()), "err");
+}
+
+#[cfg(unix)]
+fn stub_runtime(dir: &std::path::Path, name: &str, script: &str) -> PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+    let bin = dir.join("bin");
+    fs::create_dir_all(&bin).expect("bin");
+    let path = bin.join(exe_name(name));
+    fs::write(&path, script).expect("script");
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).expect("chmod");
+    path
+}
+
+#[cfg(unix)]
+#[test]
+fn initialize_succeeds_through_a_stub_initdb_and_writes_the_managed_block() {
+    // A stub initdb that creates the data dir and a base postgresql.conf, so the
+    // success path calls `configure_after_init` and leaves the instance stopped
+    // with the managed block. No real engine runs.
+    let dir = tempdir().expect("tempdir");
+    let data = dir.path().join("data");
+    stub_runtime(
+        dir.path(),
+        "initdb",
+        &format!(
+            "#!/bin/sh\nmkdir -p '{data}'\nprintf '# initdb base\\n' > '{data}/postgresql.conf'\nexit 0\n",
+            data = data.display()
+        ),
+    );
+    let ctx = InitContext {
+        instance_name: "pg-stub".into(),
+        runtime_dir: dir.path().to_path_buf(),
+        data_dir: data.clone(),
+        port: Port::new(41010).expect("port"),
+        superuser: "postgres".into(),
+        auth: AuthMode::None,
+        password: None,
+    };
+    PostgresAdapter.initialize(&ctx).expect("initialize");
+    let text = fs::read_to_string(data.join("postgresql.conf")).expect("conf");
+    assert!(text.contains("# initdb base"));
+    assert!(text.contains("# DBLocal managed settings"));
+    assert!(text.contains("port = 41010"));
+}
+
+#[cfg(unix)]
+#[test]
+fn initialize_with_password_writes_and_removes_a_pwfile() {
+    // The password path writes a 0600 pwfile, passes it via --pwfile, and removes
+    // it afterwards; a stub initdb that records its argv proves both.
+    let dir = tempdir().expect("tempdir");
+    let data = dir.path().join("data");
+    let log = dir.path().join("argv.log");
+    stub_runtime(
+        dir.path(),
+        "initdb",
+        &format!(
+            "#!/bin/sh\necho \"$@\" > '{log}'\nmkdir -p '{data}'\nprintf '# base\\n' > '{data}/postgresql.conf'\nexit 0\n",
+            log = log.display(),
+            data = data.display()
+        ),
+    );
+    let ctx = InitContext {
+        instance_name: "pg-stub".into(),
+        runtime_dir: dir.path().to_path_buf(),
+        data_dir: data.clone(),
+        port: Port::new(41010).expect("port"),
+        superuser: "postgres".into(),
+        auth: AuthMode::Password,
+        password: Some(SecretString::from("s3cret")),
+    };
+    PostgresAdapter.initialize(&ctx).expect("initialize");
+    let argv = fs::read_to_string(&log).expect("argv");
+    assert!(argv.contains("--pwfile"), "argv: {argv}");
+    assert!(argv.contains("--auth-local scram-sha-256"), "argv: {argv}");
+    // The transient pwfile must be gone after initdb.
+    assert!(
+        !data
+            .parent()
+            .expect("parent")
+            .join(".dblocal-pwfile")
+            .exists(),
+        "the pwfile must be removed"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn initialize_failure_cleans_the_data_dir_and_reports_initdb_output() {
+    // A stub initdb that fails must roll the data directory back and carry its
+    // stderr into the typed error (F-INS-02 AC3).
+    let dir = tempdir().expect("tempdir");
+    let data = dir.path().join("data");
+    stub_runtime(
+        dir.path(),
+        "initdb",
+        "#!/bin/sh\nprintf 'initdb boom\\n' >&2\nexit 1\n",
+    );
+    let ctx = InitContext {
+        instance_name: "pg-stub".into(),
+        runtime_dir: dir.path().to_path_buf(),
+        data_dir: data.clone(),
+        port: Port::new(41010).expect("port"),
+        superuser: "postgres".into(),
+        auth: AuthMode::None,
+        password: None,
+    };
+    let err = PostgresAdapter.initialize(&ctx).expect_err("initdb failed");
+    let text = format!("{err}");
+    assert!(text.contains("initdb failed"), "{text}");
+    assert!(text.contains("initdb boom"), "{text}");
+    assert!(!data.exists(), "a failed init must clean the data dir");
+}
+
+#[cfg(unix)]
+#[test]
+fn initialize_reports_a_missing_initdb_binary() {
+    let dir = tempdir().expect("tempdir");
+    let ctx = InitContext {
+        instance_name: "pg-stub".into(),
+        runtime_dir: dir.path().to_path_buf(),
+        data_dir: dir.path().join("data"),
+        port: Port::new(41010).expect("port"),
+        superuser: "postgres".into(),
+        auth: AuthMode::None,
+        password: None,
+    };
+    let err = PostgresAdapter.initialize(&ctx).expect_err("no initdb");
+    assert!(
+        format!("{err}").contains("failed to execute initdb"),
+        "{err:?}"
+    );
+}

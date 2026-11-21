@@ -103,6 +103,9 @@ pub trait EngineAdapter: Send + Sync {
     fn health_check(&self, ctx: &RunContext) -> Result<Health>;
     fn shutdown(&self, ctx: &RunContext) -> Result<()>;
     fn connection_uri(&self, ctx: &RunContext, credential: &Credential) -> SecretString;
+    fn connection_uri_no_password(&self, ctx: &RunContext, format: UriFormat) -> SecretString {
+        uri::render_no_password(self.key(), ctx.port.get(), &ctx.superuser, format)
+    }
     fn diagnose_start_failure(&self, output: &str, exit_code: Option<i32>) -> StartFailure {
         StartFailure::Unknown
     }
@@ -118,6 +121,10 @@ and `RunContext { instance_name, runtime_dir, data_dir, logs_dir, run_dir, port,
   after that and logs it (F-INS-03 AC3).
 - `health_check` is a protocol-level probe. An authentication challenge (Valkey `NOAUTH`, a PostgreSQL
   auth request) proves the server is up and must answer `Health::Ready`.
+- `connection_uri_no_password` renders the URI/`.env` for an `AuthMode::None` instance, which has no
+  credential row (`F-CRD-03`, `F-CLI-03`). The default implementation covers every engine; it carries
+  only the username (PostgreSQL/MySQL) or no userinfo (Valkey), and the `.env` block omits the password
+  key. `connection_uri` (with a credential) is only called for password-mode instances.
 - `AdminOps` reads the credential from `RunContext::credential`; no method takes one, so a caller cannot
   act as one user while reporting another. Methods (Phase 2): `list_databases`, `create_database`,
   `drop_database`, `create_user`, `reset_password`. Engines without admin support return `None`.

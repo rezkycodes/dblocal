@@ -10,7 +10,7 @@ mod catalog;
 mod clock;
 pub mod demo;
 mod ops;
-mod uri;
+pub(crate) mod uri;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::sync::{Arc, Mutex};
