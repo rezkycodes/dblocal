@@ -85,6 +85,9 @@ EOF
 }
 
 start_server() {
+  # Sets the globals BASE_URL and server_pid. It must NOT print the URL through a
+  # command substitution: that runs in a subshell, so server_pid would be lost and
+  # cleanup would never kill the server (one leaked python process per run).
   local port
   port="$(pick_free_port)"
   # Fully detach the HTTP server: redirect all stdio so it never holds the
@@ -101,7 +104,7 @@ start_server() {
     fi
     sleep 0.1
   done
-  printf 'http://127.0.0.1:%s\n' "$port"
+  BASE_URL="http://127.0.0.1:${port}"
 }
 
 run_installer() {
@@ -136,7 +139,8 @@ VERSION="v0.1.0-test"
 # Build a release containing assets for the targets we exercise.
 setup_release "$VERSION" "linux-x86_64" "r1"
 setup_release "$VERSION" "macos-universal" "r1"
-BASE_URL="$(start_server)"
+BASE_URL=""
+start_server
 log "fake release server: $BASE_URL"
 
 # --- 1) Platform detection: Linux x86_64 -> correct asset, dry-run ----------
