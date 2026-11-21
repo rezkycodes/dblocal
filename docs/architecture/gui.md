@@ -61,7 +61,9 @@ Coverage totals are from `cargo llvm-cov -p dblocal-gui`. Layout-heavy files (`a
 
 ## Performance (OPEN-08)
 
-Measured with `crates/gui/examples/measure` (release, strip + `lto=thin`) on Fedora 44 / Wayland / AMD RADV. Raw numbers in `docs/design/renders/measurements.md`.
+Measured with `crates/gui/examples/measure` (release, strip + `lto=thin`) on Fedora 44 / Wayland / AMD RADV.
+
+W1-G's original run on this host:
 
 | Phase | VmRSS | CPU |
 |---|---:|---:|
@@ -69,8 +71,25 @@ Measured with `crates/gui/examples/measure` (release, strip + `lto=thin`) on Fed
 | Shell idle (mock) | 178.6 MB | 0.10 % |
 | Shell after a mock download | 178.7 MB | 0.00 % |
 
-- **CPU target met and improved:** the 50 ms pump is gone; idle CPU dropped from the spike's ~3.2 % to 0.10 %, an order of magnitude under the 1 % target.
-- **RSS target not met, and the floor is the cause:** an *empty* GPUI window is 165 MB on this host, ≥15 MB over the 150 MB target before any DBLocal widget exists. App code cannot go below that without changing the renderer or toolkit; per OPEN-08 this is reported with evidence rather than worked around.
+Those are kept as the historical W1-G data point. Absolute RSS for the *same* binary drifts by up
+to ~8 MB between sessions on this host (page cache, GPU driver state, compositor load), so they are
+not reproducible at the 1 MB level: on 2026-11-21 the same `main` binary reports FLOOR 167.6 MB /
+IDLE 180.0 MB. For any before/after comparison, use a same-session A/B.
+
+**W2-D A/B (direct `gpui-pre` deps vs the `gpui-kit` umbrella, same `measure.rs`, alternating
+3 reps each, one session):** FLOOR 176.8 → 177.3 MB (**+0.5 MB**), shell IDLE 188.0 → 188.7 MB
+(**+0.7 MB**), AFTER_DOWNLOAD 188.2 → 188.9 MB (+0.7 MB), idle CPU 0.08 → 0.12 %. Cold start is
+indistinguishable (p50 494 vs 489 ms over 20 interleaved runs each). The umbrella edge therefore
+costs ~0.5–0.7 MB of RSS, not the +12.8 MB an earlier draft claimed from comparing different
+methods. Release binaries: `dblocal` +1.52 MB, `measure` +1.51 MB. Full tables and method:
+`docs/spikes/gpui-kit/README.md` §2.
+
+- **CPU target met:** idle CPU 0.08–0.12 %, an order of magnitude under the 1 % target (the 50 ms
+  pump is gone; see the bridge above).
+- **RSS target not met, and the floor is the cause:** an *empty* GPUI window is ~166–180 MB on this
+  host depending on session, ≥15 MB over the 150 MB target before any DBLocal widget exists. App
+  code cannot go below that without changing the renderer or toolkit; per OPEN-08 this is reported
+  with evidence rather than worked around.
 
 ## Headless render evidence
 
@@ -131,19 +150,21 @@ gpui-kit-assets 0.10.0). The direct `gpui`, `gpui-component`, `gpui-kit-assets` 
 
 - **Linux backends:** the kit enables `wayland` **and** `x11` (plus `font-kit`,
   `runtime_shaders`) on `gpui-pre-platform`/`gpui-pre-linux`, and downstream cannot opt X11 out.
-  Both are compiled in and selected at runtime from `WAYLAND_DISPLAY` / `DISPLAY`. This makes
+  Both are compiled in and selected at runtime from `WAYLAND_DISPLAY` / `DISPLAY`; there is no
+  local backend feature. This makes
   `libxkbcommon-x11-devel` / `libxkbcommon-x11-dev` a **required** build dependency
   (`docs/dev/linux-build-deps.md`). Verified running on Wayland and on X11 (Xwayland `:0`).
-- **Cost vs direct deps:** +1.5 MB release binary and +12.8 MB idle RSS (both backends linked);
-  idle CPU 0.25 %, cold start p50 465 ms Wayland / 384 ms X11. See `docs/spikes/gpui-kit/README.md`.
+- **Cost vs direct deps (same-session A/B):** +1.5 MB release binary and +0.5 MB floor /
+  +0.7 MB shell idle RSS; cold start is indistinguishable (p50 494 vs 489 ms). See
+  `docs/spikes/gpui-kit/README.md` §2 and the Performance section above.
 - **Themes:** `gpui_kit::init` registers the registry; `theme::init` loads our Atom One JSON via
   `ThemeRegistry::load_themes_from_str` and applies it with `Theme::update(...apply_config...)` —
   the same path the D-25 prototype uses. Ours is the default; the 122-pair contrast test stays the
   contract; Kit presets are not loaded.
 - **Design rules:** the normative must/should/may checklist from Kit's `design-guides`, with a
   headless check per rule for W2-E to fill in, is in `docs/spikes/gpui-kit/README.md`.
-- **`gpui-fast`:** measured, **not adopted** (RSS 183.6 MB vs 180.5 MB, no floor improvement);
-  `docs/spikes/gpui-kit/gpui-fast-notes.md`.
+- **`gpui-fast`:** measured with the same probe, **not adopted** (+2.2 MB floor / +2.7 MB shell idle
+  vs the default backend, so no floor improvement); see `docs/spikes/gpui-kit/gpui-fast-notes.md`.
 
 ## Unverified here
 

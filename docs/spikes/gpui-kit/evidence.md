@@ -41,30 +41,46 @@ $ cargo xtask ci                                      # "xtask ci: all gates pas
 
 Render PNG parity (committed vs regenerated in `target/`, `cmp` per file): **14/14 identical**.
 
-## Release artifacts
+## Release artifacts (same profile, both trees)
 
 ```
-60207104  release/dblocal             (was 58685208 direct-deps baseline)
-60823448  release/examples/measure    (was 59311840)
+60207104  release/dblocal             (direct deps: 58685208)  -> +1.52 MB
+60823448  release/examples/measure    (direct deps: 59311840)  -> +1.51 MB
 ```
 
-## OPEN-08 numbers
+## RSS — same-method A/B (the authoritative comparison)
 
-Default (umbrella) stack, `examples/measure`:
-```
-FLOOR:          VmRSS=167.6 MB VmHWM=167.6 MB CPU=0.20%
-IDLE:           VmRSS=180.5 MB VmHWM=180.5 MB CPU=0.25%
-AFTER_DOWNLOAD: VmRSS=181.2 MB VmHWM=181.2 MB CPU=0.00%
-```
-Direct-deps baseline (before migration): FLOOR 167.5, IDLE 167.7/178.2, AFTER 168.0.
-
-## Cold start (wall clock, process spawn → FIRST_FRAME_MS, 20 runs, single-window real-shell probe)
+`examples/measure` built from `main @ b7b18a7` (direct) and this branch (umbrella). The two
+`measure.rs` sources differ only in import paths. Alternating A B A B A B, 3 reps each, one
+session, no other build/test running.
 
 ```
-Wayland, default:  P50=464.8 ms P95=525.0 N=20 MIN=444.0 MAX=2059.1
-X11, default:      P50=383.7 ms P95=384.2 N=20 MIN=363.2 MAX=404.2
-Wayland, gpui-fast:P50=535.3 ms P95=749.9 N=20 MIN=464.2 MAX=2058.6
+          direct mean [min-max]        umbrella mean [min-max]      delta
+FLOOR     176.8 MB [176.6-176.9]       177.3 MB [177.2-177.5]       +0.5 MB
+IDLE      188.0 MB [187.9-188.1]       188.7 MB [188.6-188.8]       +0.7 MB
+AFTER     188.2 MB [188.1-188.3]       188.9 MB [188.8-189.0]       +0.7 MB
+CPU idle  0.08 %                       0.12 %                       +0.04 pp
+CPU floor 0.13 %                       0.09 %                       -0.04 pp
 ```
+
+Reconciliation: today `main`'s own binary reports FLOOR 167.6 / IDLE 180.0; the paired run above
+reports 176.8 / 188.0 for the same direct edge. Absolute RSS moves up to ~8 MB between sessions,
+so `gui.md`'s 165.4 / 178.6 (W1-G) is a historical point, stale by ~1-2 MB today, and cross-session
+deltas at the 1 MB level are not meaningful. The +12.8 MB in the earlier draft of this report
+compared different methods and is withdrawn, as is the untested "X11 code and its atlas" cause.
+
+## Cold start — same probe, interleaved 20 runs per edge (Wayland)
+
+Spawn -> `FIRST_FRAME_MS`, real shell window, 5 s exit. Single shared probe body; only the
+dependency-edge module differs.
+
+```
+direct (pre-migration)  p50=494.2  p95=561.3  mean=501.5  min=448.6  max=571.7  n=20
+umbrella (gpui-kit)     p50=489.1  p95=530.4  mean=493.7  min=449.4  max=538.8  n=20
+```
+
+X11 (umbrella, earlier run): p50 383.7 ms, p95 384.2, n=20. W0-C's 361 ms is a different method/machine
+load and is not used as a baseline here.
 
 ## X11 runtime proof
 
@@ -76,10 +92,19 @@ FLOOR: VmRSS=167.6 MB VmHWM=167.6 MB CPU=1.13%
 INFO FIRST_FRAME_MS=0.06
 ```
 
-## gpui-fast shell idle (real shell, 60 s idle sample)
+## gpui-fast — same-probe A/B (floor and shell idle)
+
+Both edges built from the identical shared probe body; 60 s idle sample; alternating.
 
 ```
-SHELL_IDLE: VmRSS=183.6 MB VmHWM=183.6 MB CPU=0.08%   # gpui-fast
+floor  umbrella  mean=181.9 MB [181.4-182.3]      fast mean=184.1 MB [183.5-184.6]   +2.2 MB
+shell  umbrella  median=184.8 MB [183.0-185.8]    fast median=187.5 MB [184.5-188.7] +2.7 MB
+        idle CPU umbrella 0.06 %                   fast 0.05-0.08 %
 ```
 
-Probe binaries (real shell, stripped, lto=thin): default 45,842,472 B; gpui-fast 48,765,032 B.
+Caveat: zram swap was fully exhausted (8191/8191 MB) by other workers during these runs, so some
+samples show 60-155 MB after page reclaim. Medians above use only un-reclaimed readings (>=180 MB).
+The earlier single-harness figures (default 180.5 / fast 183.6 MB) came from different harnesses and
+are superseded by this same-probe comparison.
+
+Probe binaries (real shell, stripped, lto=thin): default 45,842,472 B; gpui-fast 48,779,064 B.
