@@ -61,8 +61,12 @@ impl InstallPlan {
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum InstallStep {
-    /// Write staged file next to target binary with same mode.
-    WriteNextToCurrent { src: PathBuf, dst: PathBuf },
+    /// Write staged file next to target binary, copying mode from the live target.
+    WriteNextToCurrent {
+        src: PathBuf,
+        dst: PathBuf,
+        mode_from: PathBuf,
+    },
     /// fsync the written file.
     Fsync { path: PathBuf },
     /// Create/refresh backup link/copy before swap.
@@ -202,6 +206,7 @@ fn plan_linux_replace(staged_file: &Path, target: &Path) -> Vec<InstallStep> {
         InstallStep::WriteNextToCurrent {
             src: staged_file.to_path_buf(),
             dst: tmp.clone(),
+            mode_from: dst.clone(),
         },
         InstallStep::Fsync { path: tmp.clone() },
         InstallStep::Backup {
@@ -296,9 +301,11 @@ fn apply_linux(plan: &InstallPlan) -> UpdateResult<()> {
 
 fn apply_step(step: &InstallStep, created_backup: &mut bool) -> UpdateResult<()> {
     match step {
-        InstallStep::WriteNextToCurrent { src, dst } => {
-            copy_with_mode(src, dst, dst_target(src, dst)?)
-        }
+        InstallStep::WriteNextToCurrent {
+            src,
+            dst,
+            mode_from,
+        } => copy_with_mode(src, dst, mode_from),
         InstallStep::Fsync { path } => fsync_path(path),
         InstallStep::Backup { target, backup } => {
             create_backup(target, backup)?;
@@ -318,13 +325,6 @@ fn apply_step(step: &InstallStep, created_backup: &mut bool) -> UpdateResult<()>
         | InstallStep::ReplaceMacBundle { .. }
         | InstallStep::Refuse { .. } => Ok(()),
     }
-}
-
-fn dst_target<'a>(src: &'a Path, dst: &'a Path) -> UpdateResult<&'a Path> {
-    if dst.exists() {
-        return Ok(dst);
-    }
-    Ok(src)
 }
 
 #[cfg(test)]
