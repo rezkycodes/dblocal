@@ -179,6 +179,7 @@ fn downgrade_refused_error_code() {
     };
     assert_eq!(err.code(), crate::update::error::CODE_UPDATE_DOWNGRADE);
     assert!(!err.user_message().is_empty());
+    assert_eq!(crate::update::error::CODE_UPDATE_UP_TO_DATE, "DBL-8001");
 }
 
 #[test]
@@ -293,8 +294,7 @@ async fn download_rejects_truncated_body_on_clean_eof() {
             let mut buf = [0u8; 2048];
             let _ = socket.read(&mut buf).await;
             let body = b"short";
-            let head =
-                format!("HTTP/1.1 200 OK\r\nContent-Length: 100\r\nConnection: close\r\n\r\n");
+            let head = "HTTP/1.1 200 OK\r\nContent-Length: 100\r\nConnection: close\r\n\r\n";
             let _ = socket.write_all(head.as_bytes()).await;
             let _ = socket.write_all(body).await;
         }
