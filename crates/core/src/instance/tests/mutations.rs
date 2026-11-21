@@ -198,9 +198,16 @@ fn change_port_rewrites_postgres_config_and_start_repairs_stale_config() {
     std::fs::create_dir_all(&run_dir).expect("run dir");
     let conf = data_dir.join("postgresql.conf");
 
-    // Seed a realistic initdb-shaped base config and run the real
-    // configure_after_init, which appends the managed block.
-    std::fs::write(&conf, "# initdb base\nmax_connections = 42\n").expect("base conf");
+    // Seed a realistic initdb-shaped base config, including a user override
+    // OUTSIDE the managed block (`port = 5433` and a commented listen line).
+    // The managed-block branch must replace only the block and leave every
+    // surrounding user line byte-identical; the legacy in-place scanner would
+    // rewrite the user's `port = 5433` too and leave two `port` lines, which is
+    // exactly what this test now distinguishes (M10 survived before: with no
+    // user `port` line the two paths produced the same bytes).
+    let base =
+        "# initdb base\nmax_connections = 42\nport = 5433\n#listen_addresses = 'localhost'\n";
+    std::fs::write(&conf, base).expect("base conf");
     let ctx = crate::engine::InitContext {
         instance_name: "pgcfg".into(),
         runtime_dir: h.paths.runtimes_dir(),
@@ -213,7 +220,10 @@ fn change_port_rewrites_postgres_config_and_start_repairs_stale_config() {
     let socket = crate::engine::choose_postgres_socket_dir(&run_dir.join("sock"), port);
     crate::engine::configure_postgres_after_init(&ctx, &socket).expect("configure_after_init");
     let configured = std::fs::read_to_string(&conf).expect("configured");
-    assert!(configured.contains("# initdb base\nmax_connections = 42\n"));
+    assert!(
+        configured.starts_with(base),
+        "the seeded base must survive as-is"
+    );
     assert!(configured.contains("# DBLocal managed settings"));
     assert!(configured.contains(&format!("port = {port}")));
 
@@ -228,8 +238,9 @@ fn change_port_rewrites_postgres_config_and_start_repairs_stale_config() {
         .next()
         .expect("prefix");
     assert_eq!(
-        before_block, "# initdb base\nmax_connections = 42\n\n",
-        "content before managed block must be byte-identical"
+        before_block,
+        format!("{base}\n"),
+        "content before the managed block must be byte-identical afterwards"
     );
     assert_eq!(
         text.matches(
@@ -245,7 +256,17 @@ fn change_port_rewrites_postgres_config_and_start_repairs_stale_config() {
         1,
         "exactly one managed block end"
     );
-    assert!(text.contains(&format!("port = {}", free.get())));
+    // Exactly one `port = <new>` line: the block's. The user override above
+    // stays at 5433, so a legacy rewrite that touched it would make this two.
+    assert_eq!(
+        text.matches(&format!("port = {}", free.get())).count(),
+        1,
+        "the new port appears in exactly one place: {text}"
+    );
+    assert!(
+        text.contains("port = 5433"),
+        "the user override outside the block must not be rewritten: {text}"
+    );
     assert!(text.contains("listen_addresses = '127.0.0.1'"));
     assert!(!text.contains(&format!("port = {port}\n")));
 
