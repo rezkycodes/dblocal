@@ -10,14 +10,14 @@ shipped, and the Phase 2 packaging plan. It matches `.github/workflows/release.y
 
 ---
 
-## 1. What a release produces (Phase 1)
+## 1. What a release produces
 
 | Target | Artifacts |
 |---|---|
-| `linux-x86_64` | `.AppImage`, `.tar.gz` |
-| `linux-aarch64` | `.AppImage`, `.tar.gz` |
+| `linux-x86_64` | `.AppImage`, `.tar.gz`, `.deb`, `.rpm` |
+| `linux-aarch64` | `.AppImage`, `.tar.gz`, `.deb`, `.rpm` |
 | `macos-universal` | `.dmg` (signed + notarized when Apple secrets are present, otherwise unsigned with a loud warning), `.tar.gz` |
-| `windows-x86_64` | `.zip` (unsigned in v1) |
+| `windows-x86_64` | `.zip`, `.msi` (unsigned in v1) |
 
 Plus:
 
@@ -25,7 +25,9 @@ Plus:
 - **GitHub build provenance attestations** via `actions/attest-build-provenance`.
 - GitHub-generated release notes (`generate_release_notes: true`).
 
-`.deb`, `.rpm` and `.msi` are **not** built in Phase 1 — see §7.
+Linux `.deb`/`.rpm` are built from the prebuilt release binary by `package-linux`; Windows `.msi`
+is built from the prebuilt `dblocal.exe` by `package-msi` on `windows-latest`. See
+[`PACKAGING.md`](./PACKAGING.md) and §8.
 
 ---
 
@@ -170,21 +172,24 @@ If you are testing the AppImage on a headless/CI box, install `mesa-vulkan-drive
 
 ---
 
-## 8. Phase 2 packaging plan (not built yet)
+## 8. Phase 2 native packages (F-PKG-04)
 
-Phase 2 adds native packages. Each is driven from the same tagged commit as the Phase 1 artifacts.
+Phase 2 native packages are built by CI from the same tagged commit and prebuilt release binary as
+the Phase 1 artifacts. Build scripts live in `packaging/deb/`, `packaging/rpm/`, and
+`packaging/msi/`; see [`PACKAGING.md`](./PACKAGING.md) for dependency derivation, layout, and
+local verification.
 
-| Package | Tool | Notes |
+| Package | Build path | Notes |
 |---|---|---|
-| `.deb` (Debian/Ubuntu) | [`cargo-deb`](https://github.com/kornelski/cargo-deb) | Metadata in `Cargo.toml` `[package.metadata.deb]`; depends on `libvulkan1`, keyring backend libs; recommends, does not require, engine binaries. |
-| `.rpm` (Fedora/RHEL) | [`cargo-generate-rpm`](https://github.com/cat-in-void/cargo-generate-rpm) | Generated from the same binary and a spec-like config; `Requires: vulkan-loader`. |
-| `.msi` (Windows) | [WiX Toolset](https://wixtoolset.org/) | Per-user install (no elevation), Start-menu shortcut, optional tray autostart entry. |
+| `.deb` (Debian/Ubuntu) | `packaging/deb/build-deb.sh` + `dpkg-deb` | Built from prebuilt `DBLOCAL_BIN`; no `cargo-deb` and no Rust crate metadata changes. Depends derived from `readelf -d` DT_NEEDED (`libc6`, `libgcc-s1`, `libxcb1`, `libxkbcommon0`, `libxkbcommon-x11-0`, `zlib1g`); Recommends `libvulkan1`. |
+| `.rpm` (Fedora/RHEL) | `packaging/rpm/build-rpm.sh` + `rpmbuild` | Built from prebuilt `DBLOCAL_BIN`; spec in `packaging/rpm/dblocal.spec`. Requires `glibc`, `libgcc`, `libxcb`, `libxkbcommon`, `libxkbcommon-x11`, `zlib`; Recommends `vulkan-loader`. |
+| `.msi` (Windows) | `packaging/msi/dblocal.wxs` + `build-msi.ps1` | Built on `windows-latest` in CI with WiX v3. Per-user install by default (no elevation); optional per-machine: `msiexec /i ... ALLUSERS=1 MSIINSTALLPERUSER=""`. MSI is unsigned in v1 and unverified on Linux — treat as unbuilt/unrun until owner tests on Windows. |
 
 Uninstall rule (F-PKG-04 AC2): removing a package deletes **only** the app files. `~/.dblocal/`
 (engine runtimes, instance data, archives, `state.db`) is deliberately **kept**, and the uninstall
-message must say so.
+message must say so. The MSI keeps `%USERPROFILE%\.dblocal` with the same rule.
 
-Self-update (F-PKG-05, also Phase 2) is **disabled** for package-manager installs — the app must
+Self-update (F-PKG-05, Phase 2) is **disabled** for package-manager installs — the app must
 direct the user to `apt`/`dnf`/`winget` instead of replacing files behind the package manager's
 back.
 
@@ -196,13 +201,17 @@ Before the first real tag:
 
 1. Push a throwaway tag such as `v0.0.0-rc1` to a fork and let `release.yml` run end to end.
 2. Confirm each job's artifact names match what `packaging/install.sh` expects
-   (`dblocal-<tag>-<target>.tar.gz`, `dblocal-<tag>-macos-universal.tar.gz`, etc.).
-3. Confirm the size gate actually runs and passes.
+   (`dblocal-<tag>-<target>.tar.gz`, `dblocal-<tag>-macos-universal.tar.gz`, etc.) and that
+   package artifacts are named as expected (`dblocal_<version>_<arch>.deb`,
+   `dblocal-<version>-1.<dist>.<arch>.rpm`, `dblocal-<version>-windows-x86_64.msi`).
+3. Confirm the size gate actually runs and passes for every artifact, including `.deb`/`.rpm`/`.msi`.
 4. Confirm `checksums.txt` lists every artifact and that `install.sh --dry-run` resolves the right
    asset for each target.
 5. If Apple secrets are configured, confirm the `.dmg` passes `spctl -a -vv`; if not, confirm the
    unsigned path still produces a usable `.dmg` and a visible warning.
-6. Delete the rehearsal tag and its release.
+6. On Windows, confirm the `.msi` installs per-user without elevation, creates a Start Menu shortcut,
+   and uninstall keeps `%USERPROFILE%\.dblocal`.
+7. Delete the rehearsal tag and its release.
 
 ## 10. Source correspondence (GPLv3 §6)
 
