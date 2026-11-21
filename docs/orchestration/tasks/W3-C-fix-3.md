@@ -12,6 +12,10 @@ Mutation: `terminal.rs::escape_cmd_set_value` returning `value.to_owned()` (no `
 
 Mutation: `validate_windows_env_value` made a no-op (`if false && ...`): all green. Add tests: a password containing `"`, `\r`, `\n` makes `launcher_temp_file(.., OsKind::Windows)` (and `plan_open` for Windows) return the typed `InvalidTarget { field: "password" }` and writes nothing; the same corpus is accepted on Linux/macOS (the POSIX launcher quotes it, already covered). Rerun the mutation: red.
 
+## W3 — `escape_applescript` has no test at all
+
+`grep -rn escape_applescript crates/core/src/clients/tests` finds nothing, yet it builds the macOS `osascript` command for the launcher. Add value tests over the same corpus as the POSIX one (`it's`, `a"b`, backslash, `\\`, newline, `$HOME`, a 4096-byte string): the escaped text inside the AppleScript double-quoted literal contains no unescaped `"` and no unescaped backslash, and unescaping it (write the inverse in the test) gives the original. Mutation: drop the backslash replacement or the quote replacement: red each. macOS behaviour itself stays unverified (Linux machine); say so in `clients.md`.
+
 ## While there
 
 Pin the Windows launcher STRUCTURE with one golden test (value only, since cmd.exe cannot run here): the file starts with `@echo off\r\n(\r\n`, the `del "%~f0"` line comes before every `set` and before the client line, the client line is the last line inside the parentheses, the file ends with `)\r\n`, every line ends in `\r\n`, and no `set`/client line appears outside the block. Mutation: move `del` after the client line (or drop the opening parenthesis): red. State in `clients.md` that the Windows script and `cmd.exe` behaviour are unverified until the owner's Windows run (the checklist row is `docs/dev/windows-verification.md`: verify it names the "Open in..." launcher; if it does not, say so in your report and I will add the row).
