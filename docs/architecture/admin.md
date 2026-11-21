@@ -214,14 +214,18 @@ Databases tab shows nothing for a Valkey instance. This matches the PRD's
   tests including the hostile corpus and the tokenizer proof.
 - `admin/postgres.rs` is **≥ 80 %** covered by unit tests (state machine with
   injected failures, error mapping, target validation) plus the ignored e2e.
-- `crates/core/tests/admin_e2e.rs` (7 `#[ignore]`d tests) starts a real
+- `crates/core/tests/admin_e2e.rs` (8 `#[ignore]`d tests) starts a real
   PostgreSQL from the cached catalog archive in a temp home on a port in
   20000-29999, with a `/proc` guard that kills any `postgres` whose executable
-  lives in that home — even on panic. Cases: create is UTF8 with a size;
-  read-only cannot write; read-write can; drop refuses an open connection and
-  succeeds after; hostile names change nothing; reset succeeds and the old
-  password stops working; a failing sink rolls back and the old password still
-  works.
+  lives in that home — even on panic. Because it starts a real engine, every run
+  holds the machine-wide lock (Common Rules 12):
+  `DBLOCAL_E2E=1 flock -w 3600 "$HOME/.cache/dblocal-e2e.lock" cargo test -p
+  dblocal-core --test admin_e2e -- --ignored --test-threads=1`. Cases: create is
+  UTF8 with a size; read-only cannot write; read-write can; drop refuses an open
+  connection and succeeds after; hostile names change nothing; reset succeeds and
+  the old password stops working; a failing sink rolls back and the old password
+  still works; list/exists/revoke/drop plus the duplicate-role and missing-database
+  mappings and the closed-port `Connect` path.
 - Mutation checks (each reverted, the red output pasted in the worker report):
   weaken the allowlist, drop PostgreSQL identifier quoting, remove the rollback,
   grant write on a read-only level.

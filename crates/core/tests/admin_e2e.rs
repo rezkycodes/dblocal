@@ -4,11 +4,15 @@
 //!
 //! Everything here is `#[ignore]`d: it needs the PostgreSQL archive cached in
 //! `~/.cache/dblocal-dev` (the same one `service_e2e` uses) and starts a real
-//! engine. Run it with
+//! engine. Real-engine runs are serialized machine-wide (Common Rules 12): every
+//! run must hold the shared lock, because the tests use ports from 20000 up and
+//! several workers plus the reviewer run engines on this one machine. Run it
+//! with
 //!
 //! ```sh
 //! export CARGO_TARGET_DIR="$HOME/.cache/dblocal-target"
-//! DBLOCAL_E2E=1 cargo test -p dblocal-core --test admin_e2e -- --ignored --test-threads=1 --nocapture
+//! DBLOCAL_E2E=1 flock -w 3600 "$HOME/.cache/dblocal-e2e.lock" \
+//!   cargo test -p dblocal-core --test admin_e2e -- --ignored --test-threads=1 --nocapture
 //! ```
 //!
 //! Design notes and the recorded runs live in `docs/architecture/admin.md`.
@@ -43,7 +47,8 @@ fn require_e2e() {
     if std::env::var("DBLOCAL_E2E").ok().as_deref() != Some("1") {
         panic!(
             "admin_e2e needs `DBLOCAL_E2E=1`; run \
-             `DBLOCAL_E2E=1 cargo test -p dblocal-core --test admin_e2e -- --ignored`"
+             `DBLOCAL_E2E=1 flock -w 3600 $HOME/.cache/dblocal-e2e.lock \
+             cargo test -p dblocal-core --test admin_e2e -- --ignored`"
         );
     }
 }
