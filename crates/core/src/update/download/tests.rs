@@ -470,6 +470,77 @@ async fn download_update_rejects_wrong_digest() {
     assert!(!dir.path().join("dblocal-update.bin").exists());
 }
 
+#[tokio::test]
+async fn download_update_rejects_oversized_asset() {
+    let body = vec![0u8; 4096];
+    let checksum = sha2_hex(&body);
+    let checksums_body = format!("{checksum}  dblocal-linux-x86_64.tar.gz\n").into_bytes();
+    let checksums_server = start_server(checksums_body).await;
+    let asset_server = start_server(body.clone()).await;
+    let dir = tempdir().expect("tmp");
+    let update = AvailableUpdate::new(
+        semver::Version::parse("1.2.3").unwrap(),
+        "v1.2.3",
+        "notes",
+        ReleaseAsset::new(
+            "dblocal-linux-x86_64.tar.gz",
+            asset_server.url("/asset"),
+            1024,
+            UpdateAssetKind::TarGz,
+        ),
+        ReleaseAsset::new(
+            "checksums.txt",
+            checksums_server.url("/checksums.txt"),
+            64,
+            UpdateAssetKind::Checksums,
+        ),
+    );
+    let err = download_update(
+        &update,
+        dir.path(),
+        &UpdateDownloadOptions::loopback_for_tests_with_max(1024),
+    )
+    .await
+    .expect_err("oversized asset");
+    assert_eq!(err.code(), crate::update::error::CODE_UPDATE_NETWORK);
+    assert!(!dir.path().join("dblocal-update.bin").exists());
+}
+
+#[tokio::test]
+async fn download_update_rejects_truncated_asset() {
+    let body = b"short".to_vec();
+    let checksum = sha2_hex(b"much-longer-expected-body");
+    let checksums_body = format!("{checksum}  dblocal-linux-x86_64.tar.gz\n").into_bytes();
+    let checksums_server = start_server(checksums_body).await;
+    let asset_server = start_server(body.clone()).await;
+    let dir = tempdir().expect("tmp");
+    let update = AvailableUpdate::new(
+        semver::Version::parse("1.2.3").unwrap(),
+        "v1.2.3",
+        "notes",
+        ReleaseAsset::new(
+            "dblocal-linux-x86_64.tar.gz",
+            asset_server.url("/asset"),
+            24,
+            UpdateAssetKind::TarGz,
+        ),
+        ReleaseAsset::new(
+            "checksums.txt",
+            checksums_server.url("/checksums.txt"),
+            64,
+            UpdateAssetKind::Checksums,
+        ),
+    );
+    let err = download_update(
+        &update,
+        dir.path(),
+        &UpdateDownloadOptions::loopback_for_tests(),
+    )
+    .await
+    .expect_err("truncated asset");
+    assert_eq!(err.code(), crate::update::error::CODE_UPDATE_VERIFY_FAILED);
+}
+
 fn sha2_hex(bytes: &[u8]) -> String {
     use sha2::{Digest, Sha256};
     let mut hasher = Sha256::new();
