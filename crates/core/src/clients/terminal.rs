@@ -62,7 +62,14 @@ pub fn resolve_terminal(host: &dyn HostProbe, os: OsKind) -> ClientResult<Termin
 }
 
 fn resolve_linux_terminal(host: &dyn HostProbe) -> ClientResult<TerminalChoice> {
-    if let Some(path) = std::env::var_os("TERMINAL") {
+    resolve_linux_terminal_with(host, std::env::var_os("TERMINAL"))
+}
+
+pub(crate) fn resolve_linux_terminal_with(
+    host: &dyn HostProbe,
+    terminal_env: Option<OsString>,
+) -> ClientResult<TerminalChoice> {
+    if let Some(path) = terminal_env {
         let path = PathBuf::from(path);
         if !path.as_os_str().is_empty() && terminal_exists(host, &path) {
             return Ok(TerminalChoice::new(path, TerminalKind::GenericArgv));
@@ -76,7 +83,7 @@ fn resolve_linux_terminal(host: &dyn HostProbe) -> ClientResult<TerminalChoice> 
     Err(ClientError::NoTerminal)
 }
 
-fn terminal_exists(host: &dyn HostProbe, path: &Path) -> bool {
+pub(crate) fn terminal_exists(host: &dyn HostProbe, path: &Path) -> bool {
     if path.components().count() > 1 {
         host.path_exists(path)
     } else {
@@ -116,25 +123,49 @@ pub fn launcher_dir(os: OsKind) -> ClientResult<PathBuf> {
 }
 
 fn linux_launcher_dir() -> ClientResult<PathBuf> {
-    if let Some(xdg) = std::env::var_os("XDG_RUNTIME_DIR")
+    linux_launcher_dir_from(
+        std::env::var_os("XDG_RUNTIME_DIR"),
+        std::env::var_os("HOME"),
+    )
+}
+
+pub(crate) fn linux_launcher_dir_from(
+    xdg: Option<OsString>,
+    home: Option<OsString>,
+) -> ClientResult<PathBuf> {
+    if let Some(xdg) = xdg
         && !xdg.is_empty()
     {
         return Ok(PathBuf::from(xdg).join("dblocal"));
     }
-    let home = std::env::var_os("HOME").ok_or_else(|| ClientError::ScriptError {
+    let home = home.ok_or_else(|| ClientError::ScriptError {
         reason: "HOME missing".to_owned(),
     })?;
     Ok(PathBuf::from(home).join(".dblocal").join("run"))
 }
 
 fn macos_launcher_dir() -> ClientResult<PathBuf> {
-    let tmp = std::env::var_os("TMPDIR").unwrap_or_else(|| OsString::from("/tmp"));
+    macos_launcher_dir_from(std::env::var_os("TMPDIR"))
+}
+
+pub(crate) fn macos_launcher_dir_from(tmpdir: Option<OsString>) -> ClientResult<PathBuf> {
+    let tmp = tmpdir.unwrap_or_else(|| OsString::from("/tmp"));
     Ok(PathBuf::from(tmp).join("dblocal"))
 }
 
 fn windows_launcher_dir() -> ClientResult<PathBuf> {
-    let base = std::env::var_os("LOCALAPPDATA")
-        .or_else(|| std::env::var_os("USERPROFILE"))
+    windows_launcher_dir_from(
+        std::env::var_os("LOCALAPPDATA"),
+        std::env::var_os("USERPROFILE"),
+    )
+}
+
+pub(crate) fn windows_launcher_dir_from(
+    local_app_data: Option<OsString>,
+    user_profile: Option<OsString>,
+) -> ClientResult<PathBuf> {
+    let base = local_app_data
+        .or(user_profile)
         .ok_or_else(|| ClientError::ScriptError {
             reason: "LOCALAPPDATA missing".to_owned(),
         })?;

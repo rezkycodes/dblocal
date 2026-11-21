@@ -4,6 +4,7 @@ mod golden;
 mod h4_launcher;
 mod hostile;
 mod plan;
+mod plan_extra;
 mod real_host;
 mod run_extra;
 mod scan;
