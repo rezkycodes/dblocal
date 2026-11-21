@@ -1,4 +1,5 @@
 mod detect;
+mod f1_terminal;
 mod golden;
 mod hostile;
 mod plan;
@@ -7,4 +8,3 @@ mod run_extra;
 mod scan;
 mod spawn;
 mod terminal_extra;
-mod f1_terminal;

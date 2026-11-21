@@ -1,6 +1,6 @@
 //! Pure launch planning (F-OPN-02).
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use super::error::{ClientError, ClientResult};
 use crate::model::EngineKey;
@@ -522,7 +522,6 @@ fn build_linux_terminal_plan(
         (argv, None, None)
     } else {
         let temp_file = launcher_temp_file(&client_program, &client_argv, &env, OsKind::Linux)?;
-        let _placeholder = SCRIPT_PLACEHOLDER.to_owned();
         let cmd = format!("sh {}", shell_quote(SCRIPT_PLACEHOLDER));
         let mut argv = Vec::new();
         push_linux_script_argv(&mut argv, terminal.kind());
@@ -538,10 +537,53 @@ fn build_linux_terminal_plan(
     ))
 }
 
+fn build_macos_terminal_plan(
+    client_program: PathBuf,
+    client_argv: Vec<String>,
+    env: Vec<LaunchEnv>,
+) -> ClientResult<LaunchPlan> {
+    let temp_file = launcher_temp_file(&client_program, &client_argv, &env, OsKind::Macos)?;
+    let command_string = format!("sh {}", shell_quote(SCRIPT_PLACEHOLDER));
+    let apple_script = format!(
+        "tell application \"Terminal\" to do script \"{}\"",
+        escape_applescript(&command_string)
+    );
+    Ok(LaunchPlan::new(
+        "osascript",
+        vec!["-e".to_owned(), apple_script],
+        vec![],
+        None,
+        Some(temp_file),
+        Some(command_string),
+    ))
+}
+
+fn build_windows_terminal_plan(
+    client_program: PathBuf,
+    client_argv: Vec<String>,
+    env: Vec<LaunchEnv>,
+    terminal: &TerminalChoice,
+) -> ClientResult<LaunchPlan> {
+    let temp_file = launcher_temp_file(&client_program, &client_argv, &env, OsKind::Windows)?;
+    let script_path = SCRIPT_PLACEHOLDER.to_owned();
+    let argv = match terminal.kind() {
+        TerminalKind::WindowsTerminal => vec!["cmd.exe".to_owned(), "/c".to_owned(), script_path],
+        _ => vec!["/c".to_owned(), script_path],
+    };
+    Ok(LaunchPlan::new(
+        terminal.program().clone(),
+        argv,
+        vec![],
+        None,
+        Some(temp_file),
+        None,
+    ))
+}
+
 fn push_linux_exec_argv(
     argv: &mut Vec<String>,
     kind: TerminalKind,
-    program: &PathBuf,
+    program: &Path,
     client_argv: &[String],
 ) {
     let prog = program.to_string_lossy().into_owned();
@@ -603,66 +645,6 @@ fn push_linux_script_argv(argv: &mut Vec<String>, kind: TerminalKind) {
             argv.push(p.to_owned());
         }
     }
-}
-
-fn script_placeholder(name: &str) -> String {
-    format!("{{script:{name}}}")
-}
-
-fn script_placeholder_from_cmd(cmd: &str) -> String {
-    // cmd is "sh '<placeholder>'" or "sh <placeholder>"; extract placeholder token.
-    // We keep a simple format: script_placeholder returns {script:name}; cmd embeds quoted placeholder.
-    // Here we reconstruct by finding {script:...}
-    let start = cmd.find("{script:").unwrap_or(0);
-    let end = cmd[start..]
-        .find('}')
-        .map(|i| start + i + 1)
-        .unwrap_or(cmd.len());
-    cmd[start..end].to_owned()
-}
-
-fn build_macos_terminal_plan(
-    client_program: PathBuf,
-    client_argv: Vec<String>,
-    env: Vec<LaunchEnv>,
-) -> ClientResult<LaunchPlan> {
-    let temp_file = launcher_temp_file(&client_program, &client_argv, &env, OsKind::Macos)?;
-    let script_path = SCRIPT_PLACEHOLDER.to_owned();
-    let command_string = format!("sh {}", shell_quote(&script_path));
-    let apple_script = format!(
-        "tell application \"Terminal\" to do script \"{}\"",
-        escape_applescript(&command_string)
-    );
-    Ok(LaunchPlan::new(
-        "osascript",
-        vec!["-e".to_owned(), apple_script],
-        vec![],
-        None,
-        Some(temp_file),
-        Some(command_string),
-    ))
-}
-
-fn build_windows_terminal_plan(
-    client_program: PathBuf,
-    client_argv: Vec<String>,
-    env: Vec<LaunchEnv>,
-    terminal: &TerminalChoice,
-) -> ClientResult<LaunchPlan> {
-    let temp_file = launcher_temp_file(&client_program, &client_argv, &env, OsKind::Windows)?;
-    let script_path = SCRIPT_PLACEHOLDER.to_owned();
-    let argv = match terminal.kind() {
-        TerminalKind::WindowsTerminal => vec!["cmd.exe".to_owned(), "/c".to_owned(), script_path],
-        _ => vec!["/c".to_owned(), script_path],
-    };
-    Ok(LaunchPlan::new(
-        terminal.program().clone(),
-        argv,
-        vec![],
-        None,
-        Some(temp_file),
-        None,
-    ))
 }
 
 fn encode_component(value: &str) -> String {

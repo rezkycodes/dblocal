@@ -84,10 +84,10 @@ pub fn launcher_dir(os: OsKind) -> ClientResult<PathBuf> {
 }
 
 fn linux_launcher_dir() -> ClientResult<PathBuf> {
-    if let Some(xdg) = std::env::var_os("XDG_RUNTIME_DIR") {
-        if !xdg.is_empty() {
-            return Ok(PathBuf::from(xdg).join("dblocal"));
-        }
+    if let Some(xdg) = std::env::var_os("XDG_RUNTIME_DIR")
+        && !xdg.is_empty()
+    {
+        return Ok(PathBuf::from(xdg).join("dblocal"));
     }
     let home = std::env::var_os("HOME").ok_or_else(|| ClientError::ScriptError {
         reason: "HOME missing".to_owned(),
