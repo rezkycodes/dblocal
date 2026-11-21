@@ -215,3 +215,21 @@ fn detect_package_manager_on_linux_path_does_not_panic() {
 fn command_reports_ownership_false_for_missing_cmd() {
     assert!(!command_reports_ownership("definitely-not-a-command", &["-S", "/bin/sh"]));
 }
+
+#[test]
+fn detect_from_env_with_appimage() {
+    let kind = detect_from_env_with(Path::new("/tmp/dblocal"), |k| (k == "APPIMAGE").then(|| "/tmp/DBLocal.AppImage".to_owned()));
+    assert!(matches!(kind, Some(InstallKind::AppImage { .. })));
+}
+
+#[test]
+fn detect_from_env_with_homebrew() {
+    let kind = detect_from_env_with(Path::new("/opt/homebrew/bin/dblocal"), |_| None);
+    assert!(matches!(kind, Some(InstallKind::Homebrew { .. })));
+}
+
+#[test]
+fn detect_from_env_with_none() {
+    let kind = detect_from_env_with(Path::new("/tmp/dblocal"), |_| None);
+    assert!(kind.is_none());
+}

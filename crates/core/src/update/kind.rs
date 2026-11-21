@@ -145,12 +145,17 @@ fn current_exe_path() -> UpdateResult<PathBuf> {
 }
 
 fn detect_from_env(exe_path: &Path) -> Option<InstallKind> {
-    if let Ok(appimage) = std::env::var("APPIMAGE") {
+    detect_from_env_with(exe_path, |k| std::env::var(k).ok())
+}
+
+fn detect_from_env_with(
+    exe_path: &Path,
+    lookup: impl Fn(&str) -> Option<String>,
+) -> Option<InstallKind> {
+    if let Some(appimage) = lookup("APPIMAGE") {
         let path = PathBuf::from(appimage);
         if !path.as_os_str().is_empty() {
-            return Some(InstallKind::AppImage {
-                appimage_path: path,
-            });
+            return Some(InstallKind::AppImage { appimage_path: path });
         }
     }
     if is_homebrew_path(exe_path) {
