@@ -478,6 +478,180 @@ fn ensure_target_writable_rejects_relative_target_without_parent() {
     assert_eq!(err.code(), crate::update::error::CODE_UPDATE_APPLY_FAILED);
 }
 
+#[cfg(unix)]
+#[test]
+fn ensure_target_writable_asks_the_os_without_writing_a_probe() {
+    use std::os::unix::fs::PermissionsExt;
+    if nix::unistd::Uid::effective().is_root() {
+        return;
+    }
+    let dir = tempdir().unwrap();
+    let target = dir.path().join("dblocal");
+    fs::write(&target, b"x").unwrap();
+    let before: Vec<_> = fs::read_dir(dir.path()).unwrap().collect::<Result<_, _>>().unwrap();
+    ensure_target_writable(&target).expect("writable dir");
+    let after: Vec<_> = fs::read_dir(dir.path()).unwrap().collect::<Result<_, _>>().unwrap();
+    assert_eq!(before.len(), after.len(), "probe file was created");
+
+    let original = fs::metadata(dir.path()).unwrap().permissions();
+    fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o555)).unwrap();
+    let result = ensure_target_writable(&target);
+    fs::set_permissions(dir.path(), original).unwrap();
+    let err = result.expect_err("read-only dir");
+    assert_eq!(
+        err.code(),
+        crate::update::error::CODE_UPDATE_UNSUPPORTED_KIND
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn apply_refuses_read_only_target_directory_and_leaves_it_untouched() {
+    use std::os::unix::fs::PermissionsExt;
+    if nix::unistd::Uid::effective().is_root() {
+        return;
+    }
+    let dir = tempdir().unwrap();
+    let current = dir.path().join("dblocal");
+    let staged = dir.path().join("staged");
+    write_fake_binary(&current, "1.0.0", true);
+    write_fake_binary(&staged, "1.1.0", true);
+    let original_bytes = fs::read(&current).unwrap();
+    let plan = plan_install(
+        &InstallKind::PortableTarball {
+            exe_path: current.clone(),
+        },
+        &staged,
+        &current,
+        &ver("1.1.0"),
+    )
+    .unwrap();
+    let mode = fs::metadata(dir.path()).unwrap().permissions().mode();
+    fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o555)).unwrap();
+    let result = apply(&plan);
+    fs::set_permissions(dir.path(), fs::Permissions::from_mode(mode)).unwrap();
+    let err = result.expect_err("read-only install dir");
+    assert_eq!(
+        err.code(),
+        crate::update::error::CODE_UPDATE_UNSUPPORTED_KIND
+    );
+    assert_eq!(fs::read(&current).unwrap(), original_bytes, "target changed");
+    assert!(!dir.path().join("dblocal.old").exists(), ".old left behind");
+    let names: Vec<String> = fs::read_dir(dir.path())
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().to_string())
+        .collect();
+    assert_eq!(
+        names.len(),
+        2,
+        "no sibling temp or probe file should remain: {names:?}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn apply_removes_staged_sibling_when_write_step_fails() {
+    let dir = tempdir().unwrap();
+    let current = dir.path().join("dblocal");
+    let staged = dir.path().join("staged");
+    write_fake_binary(&current, "1.0.0", true);
+    write_fake_binary(&staged, "1.1.0", true);
+    let plan = plan_install(
+        &InstallKind::PortableTarball {
+            exe_path: current.clone(),
+        },
+        &staged,
+        &current,
+        &ver("1.1.0"),
+    )
+    .unwrap();
+    super::inject_fail_after_write_for_test();
+    let err = apply(&plan).expect_err("injected write failure");
+    assert_eq!(err.code(), crate::update::error::CODE_UPDATE_APPLY_FAILED);
+    let names: Vec<String> = fs::read_dir(dir.path())
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().to_string())
+        .collect();
+    assert!(
+        !names.iter().any(|n| n.starts_with(".dblocal.update-")),
+        "staged sibling left behind: {names:?}"
+    );
+    assert!(!dir.path().join("dblocal.old").exists(), "no backup expected");
+    let out = version_output(&current);
+    assert!(String::from_utf8_lossy(&out.stdout).contains("1.0.0"));
+}
+
+#[cfg(unix)]
+#[test]
+fn smoke_failure_restores_old_bytes_and_removes_staged_sibling() {
+    let dir = tempdir().unwrap();
+    let current = dir.path().join("dblocal");
+    let staged = dir.path().join("staged");
+    write_fake_binary(&current, "1.0.0", true);
+    write_fake_binary(&staged, "1.1.0", false);
+    let old_bytes = fs::read(&current).unwrap();
+    let plan = plan_install(
+        &InstallKind::PortableTarball {
+            exe_path: current.clone(),
+        },
+        &staged,
+        &current,
+        &ver("1.1.0"),
+    )
+    .unwrap();
+    let err = apply(&plan).expect_err("smoke failure");
+    assert_eq!(err.code(), crate::update::error::CODE_UPDATE_APPLY_FAILED);
+    assert_eq!(fs::read(&current).unwrap(), old_bytes, "old bytes restored");
+    assert!(
+        !fs::read_dir(dir.path())
+            .unwrap()
+            .any(|e| e.unwrap().file_name().to_string_lossy().starts_with(".dblocal.update-")),
+        "staged sibling left behind after rollback"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn restore_backup_is_continuous_and_never_unlinks_the_target() {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+    };
+    let dir = tempdir().unwrap();
+    let target = dir.path().join("dblocal");
+    let backup = dir.path().join("dblocal.old");
+    write_fake_binary(&target, "2.0.0", true);
+    write_fake_binary(&backup, "1.0.0", true);
+    let stop = Arc::new(AtomicBool::new(false));
+    let missing = Arc::new(AtomicBool::new(false));
+    let reads = Arc::new(AtomicUsize::new(0));
+    let target_t = target.clone();
+    let (stop_t, missing_t, reads_t) = (stop.clone(), missing.clone(), reads.clone());
+    let reader = std::thread::spawn(move || {
+        while !stop_t.load(Ordering::SeqCst) {
+            if !target_t.exists() {
+                missing_t.store(true, Ordering::SeqCst);
+                break;
+            }
+            let _ = fs::read(&target_t);
+            reads_t.fetch_add(1, Ordering::SeqCst);
+            std::thread::yield_now();
+        }
+    });
+    for _ in 0..200 {
+        restore_backup(&backup, &target).expect("restore");
+    }
+    stop.store(true, Ordering::SeqCst);
+    reader.join().unwrap();
+    assert!(
+        !missing.load(Ordering::SeqCst),
+        "target went missing during restore"
+    );
+    assert!(reads.load(Ordering::SeqCst) > 0, "reader never observed target");
+    let out = version_output(&target);
+    assert!(String::from_utf8_lossy(&out.stdout).contains("1.0.0"));
+}
+
 #[test]
 fn install_target_path_prefers_kind_target() {
     let dir = tempdir().unwrap();
