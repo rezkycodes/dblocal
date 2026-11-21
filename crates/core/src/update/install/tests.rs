@@ -106,6 +106,22 @@ fn plan_dist_package_is_refused() {
 }
 
 #[cfg(unix)]
+fn version_output(path: &Path) -> std::process::Output {
+    // A sibling test thread may fork while a write fd to this file is open, so
+    // exec can transiently return ETXTBSY (code 26). Retry like production does.
+    for attempt in 0..10 {
+        match std::process::Command::new(path).arg("--version").output() {
+            Ok(out) => return out,
+            Err(err) if err.raw_os_error() == Some(26) && attempt < 9 => {
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            Err(err) => panic!("failed to run {}: {err}", path.display()),
+        }
+    }
+    unreachable!("loop always returns or panics")
+}
+
+#[cfg(unix)]
 fn write_fake_binary(path: &Path, version: &str, exit_ok: bool) {
     let status = if exit_ok { 0 } else { 1 };
     let script = format!(
@@ -135,10 +151,7 @@ fn apply_linux_replaces_binary_and_keeps_backup() {
     )
     .unwrap();
     apply(&plan).expect("apply");
-    let out = std::process::Command::new(&current)
-        .arg("--version")
-        .output()
-        .unwrap();
+    let out = version_output(&current);
     let text = String::from_utf8_lossy(&out.stdout);
     assert!(text.contains("1.1.0"));
     let backup = dir.path().join("dblocal.old");
@@ -164,10 +177,7 @@ fn apply_linux_rolls_back_on_smoke_failure() {
     .unwrap();
     let err = apply(&plan).expect_err("smoke failure");
     assert_eq!(err.code(), crate::update::error::CODE_UPDATE_APPLY_FAILED);
-    let out = std::process::Command::new(&current)
-        .arg("--version")
-        .output()
-        .unwrap();
+    let out = version_output(&current);
     let text = String::from_utf8_lossy(&out.stdout);
     assert!(text.contains("1.0.0"), "old binary restored");
 }
@@ -229,15 +239,9 @@ fn apply_linux_appimage_replaces_appimage_target_not_current_exe() {
     )
     .unwrap();
     apply(&plan).expect("apply");
-    let app_out = std::process::Command::new(&appimage)
-        .arg("--version")
-        .output()
-        .unwrap();
+    let app_out = version_output(&appimage);
     assert!(String::from_utf8_lossy(&app_out.stdout).contains("9.9.9"));
-    let exe_out = std::process::Command::new(&current_exe)
-        .arg("--version")
-        .output()
-        .unwrap();
+    let exe_out = version_output(&current_exe);
     assert!(String::from_utf8_lossy(&exe_out.stdout).contains("1.0.0"));
 }
 
@@ -267,10 +271,7 @@ fn apply_preserves_symlinked_executable() {
             .file_type()
             .is_symlink()
     );
-    let real_out = std::process::Command::new(&real)
-        .arg("--version")
-        .output()
-        .unwrap();
+    let real_out = version_output(&real);
     assert!(String::from_utf8_lossy(&real_out.stdout).contains("1.1.0"));
 }
 
@@ -343,10 +344,7 @@ fn apply_failure_after_backup_keeps_target() {
     let err = apply(&plan).expect_err("injected");
     super::clear_fail_after_backup_for_test();
     assert_eq!(err.code(), crate::update::error::CODE_UPDATE_APPLY_FAILED);
-    let out = std::process::Command::new(&current)
-        .arg("--version")
-        .output()
-        .unwrap();
+    let out = version_output(&current);
     assert!(String::from_utf8_lossy(&out.stdout).contains("1.0.0"));
 }
 

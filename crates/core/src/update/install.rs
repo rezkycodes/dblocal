@@ -13,6 +13,10 @@ use super::error::{UpdateError, UpdateResult};
 use super::kind::InstallKind;
 
 const SMOKE_TIMEOUT: Duration = Duration::from_secs(10);
+/// How long to keep retrying a spawn that failed with ETXTBSY.
+const EXEC_BUSY_RETRY_WINDOW: Duration = Duration::from_secs(5);
+/// Delay between ETXTBSY spawn retries.
+const EXEC_BUSY_RETRY_DELAY: Duration = Duration::from_millis(20);
 
 /// A pure, serializable-ish description of how to apply an update.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -491,13 +495,15 @@ fn run_with_timeout(
     use std::process::Stdio;
     use std::time::Instant;
 
-    let mut attempts = 0;
+    // A concurrent fork in the same process can briefly keep a write descriptor
+    // to the freshly written binary open, so exec fails with ETXTBSY (26).
+    // Retry within a bounded window instead of failing the whole update.
+    let spawn_deadline = Instant::now() + EXEC_BUSY_RETRY_WINDOW;
     let mut child = loop {
-        attempts += 1;
         match cmd.stdout(Stdio::piped()).stderr(Stdio::piped()).spawn() {
             Ok(child) => break child,
-            Err(source) if source.raw_os_error() == Some(26) && attempts < 10 => {
-                std::thread::sleep(std::time::Duration::from_millis(20));
+            Err(source) if source.raw_os_error() == Some(26) && Instant::now() < spawn_deadline => {
+                std::thread::sleep(EXEC_BUSY_RETRY_DELAY);
             }
             Err(source) => {
                 return Err(UpdateError::ApplyFailed {
