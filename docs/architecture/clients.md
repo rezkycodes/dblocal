@@ -61,15 +61,32 @@ window did not inherit caller env var).
 
 Launcher directory (one function): Linux `$XDG_RUNTIME_DIR/dblocal` or fallback `$HOME/.dblocal/run`;
 macOS `$TMPDIR/dblocal` (or `/tmp/dblocal`); Windows `%LOCALAPPDATA%\dblocal\run` or `%USERPROFILE%\dblocal\run`.
-Directory is created 0700; existing dir is verified via `symlink_metadata`: real dir, current uid, mode 0700.
+Directory is created 0700; existing dir is verified via `symlink_metadata`: real dir (a symlink is
+refused), owner equal to the process's effective uid, mode exactly 0700. `verify_secure_dir_for(dir, uid)`
+takes the expected uid as a parameter, so the owner check is testable with a wrong uid; the effective
+uid comes from `sysinfo` (`effective_user_id`, safe Rust, works on macOS where `/proc` does not exist).
 If verification fails, return typed `ScriptError` and never chmod.
 
-Script file: random 128-bit name, `O_CREAT|O_EXCL`, mode 0600, content written, `sync_all`.
-Script deletes itself first (`rm -f -- "$0"` on POSIX; cmd block with `del "%~f0"` on Windows),
-exports env vars, then execs client. Spawner deletes script on spawn failure and sweeps files older than 10 minutes.
+Script file: random 128-bit name, `O_CREAT|O_EXCL` (a second write to the same name fails), mode 0600,
+content written, `sync_all`.
 
-Residual exposure: password exists briefly in an owner-only 0600 file inside an owner-only 0700 dir
-from creation until script start/self-delete; swept after 10 minutes if terminal never starts.
+### Exact guarantee
+
+The launcher script exists on disk only between creation and the terminal starting it. While it exists
+it is owner-only (`0600`) inside an owner-only `0700` directory and has a random 128-bit name; it is
+deleted by its own first command (`rm -f -- "$0"` on POSIX; cmd block with `del "%~f0"` on Windows) and,
+if the terminal never starts it, swept on the next launch once it is older than 10 minutes.
+The spawner also deletes the script if the spawn itself fails. Secrets live only in that file; they are
+never in argv, URL, command string, or logs.
+
+### Verified command forms on this machine
+
+- **ptyxis** (Ptyxis 50.1): `ptyxis --new-window -- sh {script}` opens a new window that runs the script.
+  Verified by real execution in the `#[ignore]`d e2e test `real_ptyxis_receives_password_via_script`
+  with a ptyxis instance already running (the single-instance case that env inheritance would break):
+  the fake client observed `PGPASSWORD` and no `dblocal-open-*` file remained afterwards.
+- All other terminal forms (gnome-terminal, konsole, foot, wezterm, kitty, xterm, xdg-terminal-exec) are
+  from documentation and covered only by value-level tests, not by real execution here.
 
 ## Terminal handling (Linux)
 
@@ -81,6 +98,14 @@ Verified on this machine: `ptyxis --help` shows `--` command form and `--new-win
 `xdg-terminal-exec`, `foot`, `wezterm`, `kitty` not installed here; their flags are from documentation
 and marked unverified. Kitty uses positional command after `--` (unverified locally). macOS Terminal.app
 and Windows `wt.exe`/`cmd.exe` paths are value-tested only.
+
+## CLI client path
+
+CLI plans exec the **detected absolute client path** (`client.path()`), never a bare `psql`/`mysql`/...
+name. The GUI process's `PATH` is not the terminal shell's `PATH`; only the detected path guarantees the
+client that was found is the client that runs. The plan also carries `required_path`, so a client that
+disappeared between detection and launch fails with a typed `ClientNotFound` instead of a bare spawn error.
+
 
 ## Injection and quoting
 

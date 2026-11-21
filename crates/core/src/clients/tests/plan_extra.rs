@@ -224,6 +224,28 @@ fn macos_command_string_has_no_script_secret_and_escapes() {
 }
 
 #[test]
+fn ptyxis_argv_is_exactly_one_new_window_and_one_dashdash() {
+    // H3 regression guard: a wrapper that also adds `--new-window --` would ask
+    // ptyxis to run a command literally named `--new-window`.
+    let plan = plan_for(
+        ClientKind::Psql,
+        EngineKey::Postgresql,
+        OsKind::Linux,
+        TerminalChoice::new("/usr/bin/ptyxis", TerminalKind::Ptyxis),
+    );
+    assert_eq!(
+        plan.argv(),
+        &[
+            "--new-window".to_owned(),
+            "--".to_owned(),
+            "sh".to_owned(),
+            "{script}".to_owned(),
+        ]
+    );
+    assert_eq!(plan.program(), &PathBuf::from("/usr/bin/ptyxis"));
+}
+
+#[test]
 fn cli_plan_does_not_support_unknown_gui_kind_through_cli_path() {
     // Redis CLI on MariaDB is unsupported at the client level.
     let err = plan_open(
