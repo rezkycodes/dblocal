@@ -18,3 +18,6 @@ pub mod store;
 pub mod strings;
 
 pub use error::{DblError, Result};
+pub use instance::{
+    LocalService, ProcessTerminator, RuntimeSource, SecretAccess, ServiceOptions, Terminator,
+};

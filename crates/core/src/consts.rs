@@ -85,3 +85,12 @@ pub const SUPERUSER_VALKEY: &str = "default";
 
 /// Default database name used in connection URIs.
 pub const DEFAULT_DATABASE: &str = "postgres";
+
+/// Capacity of the broadcast channel carrying service events.
+pub const SERVICE_EVENT_CHANNEL_CAPACITY: usize = 256;
+
+/// Number of log lines kept in a start-failure diagnosis.
+pub const FAILURE_LOG_TAIL_LINES: usize = LOG_TAIL_ON_FAILURE;
+
+/// Poll interval for readiness probes while starting an engine.
+pub const HEALTH_CHECK_POLL_MS: u64 = 250;
