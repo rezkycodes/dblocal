@@ -1,0 +1,104 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  DBLocal Windows MSI (WiX v3 schema, F-PKG-04).
+
+  This source is authored for WiX v3/msitools-compatible XML structure and is
+  validated with xmllint on Linux. The actual MSI is built on Windows in CI
+  (release.yml, windows-latest) with WiX. wixl (msitools) may be used for a
+  best-effort local build if installed; it is not present in this environment.
+
+  Install scope: per-user by default (no administrator required).
+  Optional per-machine install: msiexec /i dblocal.msi ALLUSERS=1 MSIINSTALLPERUSER=""
+  (requires elevation; documented in docs/install/windows-smartscreen.md and
+  docs/release/RELEASING.md).
+
+  Uninstall keeps %USERPROFILE%\.dblocal (user data). The package never removes
+  it and never writes outside the install directory and Start Menu shortcut.
+-->
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+  <Product
+    Id="*"
+    Name="DBLocal"
+    Language="1033"
+    Version="$(var.ProductVersion)"
+    Manufacturer="DBLocal Contributors"
+    UpgradeCode="A3D5E2D1-7B4A-4D7E-9F3A-8C2B1D4E5F60">
+
+    <Package
+      InstallerVersion="500"
+      Compressed="yes"
+      InstallScope="perUser"
+      InstallPrivileges="limited"
+      Description="DBLocal - local database server manager"
+      Comments="Installs DBLocal. User data in %USERPROFILE%\.dblocal is kept on uninstall." />
+
+    <MajorUpgrade
+      DowngradeErrorMessage="A newer version of DBLocal is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+
+    <!-- Per-user default. Override for per-machine: ALLUSERS=1 MSIINSTALLPERUSER="" -->
+    <Property Id="ALLUSERS" Value="2" />
+    <Property Id="MSIINSTALLPERUSER" Value="1" />
+    <Property Id="ARPNOREPAIR" Value="yes" Secure="yes" />
+    <Property Id="ARPURLINFOABOUT" Value="https://github.com/rezkycodes/dblocal" />
+    <Property Id="ARPCONTACT" Value="DBLocal Contributors" />
+    <Property Id="ARPCOMMENTS" Value="User data in %USERPROFILE%\.dblocal is kept on uninstall." />
+
+    <Feature Id="ProductFeature" Title="DBLocal" Level="1">
+      <ComponentGroupRef Id="ProductComponents" />
+      <ComponentRef Id="ApplicationShortcut" />
+    </Feature>
+  </Product>
+
+  <Fragment>
+    <Directory Id="TARGETDIR" Name="SourceDir">
+      <Directory Id="LocalAppDataFolder">
+        <Directory Id="INSTALLFOLDER" Name="DBLocal" />
+      </Directory>
+      <Directory Id="ProgramMenuFolder">
+        <Directory Id="ApplicationProgramsFolder" Name="DBLocal" />
+      </Directory>
+    </Directory>
+  </Fragment>
+
+  <Fragment>
+    <ComponentGroup Id="ProductComponents" Directory="INSTALLFOLDER">
+      <Component Id="MainExecutable" Guid="B1C2D3E4-F5A6-47B8-9C0D-1E2F3A4B5C6D">
+        <RegistryValue
+          Root="HKCU"
+          Key="Software\DBLocal"
+          Name="InstallDir"
+          Type="string"
+          Value="[INSTALLFOLDER]"
+          KeyPath="yes" />
+        <File
+          Id="DblocalExe"
+          Source="$(var.DblocalExeSource)"
+          Name="dblocal.exe" />
+        <RemoveFolder Id="RemoveInstallFolder" Directory="INSTALLFOLDER" On="uninstall" />
+        <!-- Do NOT remove %USERPROFILE%\.dblocal. User data is intentionally kept. -->
+      </Component>
+    </ComponentGroup>
+  </Fragment>
+
+  <Fragment>
+    <DirectoryRef Id="ApplicationProgramsFolder">
+      <Component Id="ApplicationShortcut" Guid="C2D3E4F5-A6B7-48C9-0D1E-2F3A4B5C6D7E">
+        <Shortcut
+          Id="ApplicationStartMenuShortcut"
+          Name="DBLocal"
+          Description="Manage local PostgreSQL, MySQL, MariaDB, and Valkey servers"
+          Target="[INSTALLFOLDER]dblocal.exe"
+          WorkingDirectory="INSTALLFOLDER" />
+        <RemoveFolder Id="RemoveApplicationProgramsFolder" On="uninstall" />
+        <RegistryValue
+          Root="HKCU"
+          Key="Software\DBLocal"
+          Name="StartMenuShortcut"
+          Type="integer"
+          Value="1"
+          KeyPath="yes" />
+      </Component>
+    </DirectoryRef>
+  </Fragment>
+</Wix>
