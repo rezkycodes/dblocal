@@ -1,6 +1,7 @@
 //! `list`, `status`, `uri`, `logs`, the formatters and the exit-code table.
 
 use super::*;
+use dblocal_core::service::{OperationId, ServiceEvent};
 
 #[test]
 fn list_empty_table() {
@@ -326,4 +327,97 @@ fn exit_code_table_maps_codes() {
         output::code_for(&DblError::Storage { reason: "x".into() }),
         1
     );
+}
+
+/// A service whose every read fails, so the handlers' error branches run.
+struct BrokenService;
+
+macro_rules! broken {
+    ($($sig:tt)*) => {
+        $($sig)* {
+            Err(dblocal_core::DblError::Storage {
+                reason: "store unavailable".to_owned(),
+            })
+        }
+    };
+}
+
+impl DblService for BrokenService {
+    fn list_instances(&self) -> dblocal_core::Result<Vec<dblocal_core::service::InstanceView>> {
+        Err(dblocal_core::DblError::Storage {
+            reason: "store unavailable".to_owned(),
+        })
+    }
+    fn catalog(&self) -> dblocal_core::Result<dblocal_core::service::CatalogView> {
+        Err(dblocal_core::DblError::Storage {
+            reason: "store unavailable".to_owned(),
+        })
+    }
+    broken!(fn refresh_catalog(&self, _f: bool) -> dblocal_core::Result<dblocal_core::service::OperationId>);
+    fn validate_spec(&self, _s: &InstanceSpec) -> dblocal_core::Result<()> {
+        Ok(())
+    }
+    broken!(fn suggest_port(&self, _e: EngineKey) -> dblocal_core::Result<Port>);
+    broken!(fn create_instance(&self, _s: InstanceSpec) -> dblocal_core::Result<dblocal_core::service::OperationId>);
+    broken!(fn start_instance(&self, _i: &InstanceId) -> dblocal_core::Result<dblocal_core::service::OperationId>);
+    broken!(fn stop_instance(&self, _i: &InstanceId) -> dblocal_core::Result<dblocal_core::service::OperationId>);
+    broken!(fn delete_instance(&self, _i: &InstanceId, _m: dblocal_core::model::DeleteMode) -> dblocal_core::Result<dblocal_core::service::OperationId>);
+    fn change_port(&self, _i: &InstanceId, _p: Port) -> dblocal_core::Result<()> {
+        Ok(())
+    }
+    fn data_size(&self, _i: &InstanceId) -> dblocal_core::Result<u64> {
+        Ok(0)
+    }
+    fn set_autostart(&self, _i: &InstanceId, _e: bool) -> dblocal_core::Result<()> {
+        Ok(())
+    }
+    fn cancel_operation(&self, _o: &OperationId) -> dblocal_core::Result<()> {
+        Ok(())
+    }
+    broken!(fn connection_uri(&self, _i: &InstanceId, _f: dblocal_core::service::UriFormat) -> dblocal_core::Result<dblocal_core::secret::SecretString>);
+    broken!(fn tail_logs(&self, _i: &InstanceId, _n: usize) -> dblocal_core::Result<Vec<String>>);
+    fn watch_logs(&self, _i: &InstanceId, _e: bool) -> dblocal_core::Result<()> {
+        Ok(())
+    }
+    fn list_runtimes(&self) -> dblocal_core::Result<Vec<dblocal_core::model::Runtime>> {
+        Ok(Vec::new())
+    }
+    fn remove_runtime(&self, _r: &str) -> dblocal_core::Result<()> {
+        Ok(())
+    }
+    fn list_archives(&self) -> dblocal_core::Result<Vec<dblocal_core::model::ArchivedData>> {
+        Ok(Vec::new())
+    }
+    fn purge_archive(&self, _a: &str) -> dblocal_core::Result<()> {
+        Ok(())
+    }
+    fn subscribe(&self) -> tokio::sync::broadcast::Receiver<ServiceEvent> {
+        let (tx, rx) = tokio::sync::broadcast::channel(4);
+        drop(tx);
+        rx
+    }
+}
+
+#[test]
+fn list_and_inspection_propagate_a_store_failure() {
+    let service = BrokenService;
+    for cmd in [
+        Command::List { json: false },
+        Command::List { json: true },
+        Command::Status { name: "x".into() },
+        Command::Uri {
+            name: "x".into(),
+            env: false,
+        },
+        Command::Logs {
+            name: "x".into(),
+            follow: false,
+            lines: 5,
+        },
+    ] {
+        let (code, out, err) = run_cmd(&service, &cmd, false);
+        assert_eq!(code, EXIT_GENERAL, "{cmd:?}: {err}");
+        assert!(err.contains("DBL-3003"), "{cmd:?}: {err}");
+        assert!(!out.contains("DBL-3003"), "the code belongs on stderr");
+    }
 }
