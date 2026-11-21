@@ -19,7 +19,7 @@ use std::time::{Duration, Instant};
 const E2E_LIMIT: Duration = Duration::from_secs(45 * 60);
 
 /// The e2e test binaries to run.
-const TARGETS: &[&str] = &["service_e2e"];
+const TARGETS: &[&str] = &["service_e2e", "cli_e2e"];
 
 /// Prefix every e2e temp home uses, so a leaked engine is identifiable.
 const TEMP_HOME_PREFIX: &str = "dblocal-e2e-";

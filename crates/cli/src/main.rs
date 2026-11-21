@@ -1,9 +1,11 @@
 //! `dblocal` — one binary, two modes.
 //!
-//! With no arguments it opens the GUI. With a subcommand it runs the CLI. Every
-//! subcommand is a stub in Phase 0 and returns `DblError::NotImplemented`.
+//! With no arguments it opens the GUI. With a subcommand it runs the CLI.
 
 mod cli;
+mod commands;
+mod messages;
+mod output;
 
 use std::process::ExitCode;
 

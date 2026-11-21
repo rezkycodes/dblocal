@@ -1,10 +1,17 @@
-//! Command-line surface. Every subcommand is a documented stub for now.
+//! Command-line surface and dispatch.
 
 use std::ffi::OsString;
+use std::io::{self, Write};
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
+use dblocal_core::paths::DblPaths;
+use dblocal_core::service::{DblService, LocalService, ServiceOptions};
 use dblocal_core::DblError;
+
+use crate::commands::{self, Ctx};
+use crate::messages;
+use crate::output;
 
 /// Exit code for success, per `F-CLI`.
 pub const EXIT_OK: u8 = 0;
@@ -28,7 +35,7 @@ pub const EXIT_ENGINE_FAILED: u8 = 4;
 pub struct Cli {
     /// Subcommand to run. Without one, the GUI opens.
     #[command(subcommand)]
-    command: Option<Command>,
+    pub command: Option<Command>,
 }
 
 /// Every subcommand in PRD §8.
@@ -49,6 +56,9 @@ pub enum Command {
     Start {
         /// Instance name.
         name: String,
+        /// Seconds to wait for the instance to become healthy.
+        #[arg(long, default_value_t = 60)]
+        timeout: u64,
     },
     /// Stops an instance.
     Stop {
@@ -99,6 +109,9 @@ pub enum Command {
         /// Follow the log file.
         #[arg(long, short)]
         follow: bool,
+        /// Number of lines to show from the end.
+        #[arg(long, default_value_t = 200)]
+        lines: usize,
     },
 }
 
@@ -114,52 +127,84 @@ pub fn run(args: Vec<OsString>) -> ExitCode {
             Ok(()) => ExitCode::from(EXIT_OK),
             Err(err) => report(err),
         },
-        Some(command) => report(stub_error(&command)),
+        Some(command) => run_command(command),
     }
+}
+
+fn run_command(command: Command) -> ExitCode {
+    let mut out = io::stdout().lock();
+    let mut err = io::stderr().lock();
+    let code = run_with_service(&command, &mut out, &mut err, output::is_interactive_stdin(), output::is_tty_stdout(), output::is_tty_stderr());
+    ExitCode::from(code)
+}
+
+/// Builds the real service and dispatches a command. Testable via `run_with`.
+fn run_with_service(
+    command: &Command,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+    is_interactive: bool,
+    stdout_is_tty: bool,
+    stderr_is_tty: bool,
+) -> u8 {
+    let paths = match DblPaths::from_env() {
+        Ok(p) => p,
+        Err(e) => {
+            output::stderr_line(err, &messages::service_open_error(&e.diagnostic()));
+            return EXIT_GENERAL;
+        }
+    };
+    let service = match LocalService::new(paths, ServiceOptions::default()) {
+        Ok(s) => s,
+        Err(e) => {
+            output::stderr_line(err, &messages::service_open_error(&e.diagnostic()));
+            return EXIT_GENERAL;
+        }
+    };
+    run_with(&service, command, out, err, is_interactive, stdout_is_tty, stderr_is_tty)
+}
+
+/// Dispatches a command against an injected service. This is the library entry
+/// used by tests: it takes `&dyn DblService`, injected writers, and an
+/// `is_interactive` flag.
+pub fn run_with(
+    service: &dyn DblService,
+    command: &Command,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+    is_interactive: bool,
+    stdout_is_tty: bool,
+    stderr_is_tty: bool,
+) -> u8 {
+    let mut ctx = Ctx {
+        service,
+        out,
+        err,
+        is_interactive,
+        stdout_is_tty,
+        stderr_is_tty,
+    };
+    commands::dispatch(&mut ctx, command)
 }
 
 fn clap_exit(err: clap::Error) -> ExitCode {
     // `--help` and `--version` are successful outcomes, not failures.
-    if err.use_stderr() {
-        let _ = err.print();
-        ExitCode::from(EXIT_BAD_ARGS)
-    } else {
-        let _ = err.print();
-        ExitCode::from(EXIT_OK)
-    }
+    let code = if err.use_stderr() { EXIT_BAD_ARGS } else { EXIT_OK };
+    let _ = err.print();
+    ExitCode::from(code)
 }
 
 fn report(err: DblError) -> ExitCode {
     eprintln!("{}", err.diagnostic());
-    ExitCode::from(code_for(&err))
+    ExitCode::from(output::code_for(&err))
 }
 
 /// Maps an error to the exit code contract in `F-CLI`.
+#[cfg(test)]
 pub fn code_for(err: &DblError) -> u8 {
-    match err {
-        DblError::NotFound { .. } => EXIT_NOT_FOUND,
-        DblError::Engine { .. } => EXIT_ENGINE_FAILED,
-        DblError::InvalidInput { .. } | DblError::InvalidTransition { .. } => EXIT_BAD_ARGS,
-        _ => EXIT_GENERAL,
-    }
+    output::code_for(err)
 }
 
-/// Returns the stub error for a parsed command; helpers below keep this honest.
-pub fn stub_error(command: &Command) -> DblError {
-    let name = match command {
-        Command::List { .. } => "list",
-        Command::Status { .. } => "status",
-        Command::Start { .. } => "start",
-        Command::Stop { .. } => "stop",
-        Command::Uri { .. } => "uri",
-        Command::Create { .. } => "create",
-        Command::Delete { .. } => "delete",
-        Command::Logs { .. } => "logs",
-    };
-    DblError::NotImplemented(format!("command `{name}`"))
-}
-
-/// Parses arguments without running anything, used by tests.
 #[cfg(test)]
 pub fn parse(args: &[&str]) -> dblocal_core::Result<Cli> {
     Cli::try_parse_from(std::iter::once("dblocal").chain(args.iter().copied())).map_err(|err| {
@@ -181,6 +226,7 @@ mod tests {
             &["list", "--json"],
             &["status", "app"],
             &["start", "app"],
+            &["start", "app", "--timeout", "30"],
             &["stop", "app"],
             &["uri", "app"],
             &["uri", "app", "--env"],
@@ -198,11 +244,10 @@ mod tests {
             ],
             &["delete", "app", "--yes", "--purge"],
             &["logs", "app", "--follow"],
+            &["logs", "app", "--lines", "50"],
         ];
         for args in cases {
-            let cli = parse(args).unwrap_or_else(|err| panic!("{args:?}: {err}"));
-            let command = cli.command.expect("subcommand present");
-            assert!(matches!(stub_error(&command), DblError::NotImplemented(_)));
+            parse(args).unwrap_or_else(|err| panic!("{args:?}: {err}"));
         }
     }
 
@@ -210,20 +255,6 @@ mod tests {
     fn no_arguments_means_gui() {
         let cli = parse(&[]).expect("parses");
         assert!(cli.command.is_none());
-    }
-
-    #[test]
-    fn no_arguments_runs_the_gui_and_succeeds() {
-        // The Phase 0 GUI stub returns Ok, so the bare binary exits 0.
-        assert!(dblocal_gui::run().is_ok());
-        let code = run(Vec::new());
-        assert_eq!(code, ExitCode::from(EXIT_OK));
-    }
-
-    #[test]
-    fn stub_subcommand_exits_one() {
-        let code = run(vec![OsString::from("list")]);
-        assert_eq!(code, ExitCode::from(EXIT_GENERAL));
     }
 
     #[test]
@@ -252,29 +283,29 @@ mod tests {
                 kind: "instance",
                 name: "x".into()
             }),
-            3
+            EXIT_NOT_FOUND
         );
         assert_eq!(
             code_for(&DblError::Engine {
                 reason: "boom".into()
             }),
-            4
+            EXIT_ENGINE_FAILED
         );
         assert_eq!(
             code_for(&DblError::InvalidInput {
                 field: "name",
                 reason: "bad".into()
             }),
-            2
+            EXIT_BAD_ARGS
         );
         assert_eq!(
             code_for(&DblError::InvalidTransition {
                 from: "stopped",
                 to: "running"
             }),
-            2
+            EXIT_BAD_ARGS
         );
-        assert_eq!(code_for(&DblError::NotImplemented("x".into())), 1);
-        assert_eq!(code_for(&DblError::Storage { reason: "x".into() }), 1);
+        assert_eq!(code_for(&DblError::NotImplemented("x".into())), EXIT_GENERAL);
+        assert_eq!(code_for(&DblError::Storage { reason: "x".into() }), EXIT_GENERAL);
     }
 }
