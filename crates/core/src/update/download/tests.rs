@@ -229,3 +229,27 @@ async fn download_rejects_oversized_declared_size() {
     .expect_err("big");
     assert_eq!(err.code(), crate::update::error::CODE_UPDATE_MALFORMED);
 }
+
+#[tokio::test]
+async fn download_rejects_disallowed_https_host() {
+    let dir = tempdir().expect("tmp");
+    let dest = dir.path().join("asset.bin");
+    let err = download_and_verify(
+        "https://example.com/asset.bin",
+        &dest,
+        &"4".repeat(64),
+        10,
+        &UpdateDownloadOptions::default(),
+    )
+    .await
+    .expect_err("host");
+    assert_eq!(err.code(), crate::update::error::CODE_UPDATE_NETWORK);
+}
+
+#[test]
+fn is_loopback_recognizes_localhost() {
+    let url = reqwest::Url::parse("http://localhost:1234/x").unwrap();
+    assert!(is_loopback(&url));
+    let url = reqwest::Url::parse("http://127.0.0.1/x").unwrap();
+    assert!(is_loopback(&url));
+}

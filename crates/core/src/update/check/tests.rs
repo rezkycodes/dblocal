@@ -269,3 +269,70 @@ fn sanitize_release_notes_handles_control_and_newlines() {
     let out = sanitize_release_notes("a\r\nb\tc");
     assert_eq!(out, "a b c");
 }
+
+#[test]
+fn parse_release_version_rejects_garbage() {
+    assert!(parse_release_version("nope").is_err());
+}
+
+#[test]
+fn is_repo_segment_rejects_empty() {
+    assert!(!is_repo_segment(""));
+}
+
+#[test]
+fn looks_rate_limited_by_body() {
+    assert!(looks_rate_limited(403, "API rate limit exceeded"));
+    assert!(!looks_rate_limited(403, "forbidden"));
+}
+
+#[tokio::test]
+async fn check_returns_up_to_date_when_no_matching_platform_asset() {
+    let json = serde_json::json!([{
+        "tag_name": "v1.1.0",
+        "draft": false,
+        "prerelease": false,
+        "body": "notes",
+        "assets": [
+            {"name":"dblocal-windows-x86_64.zip","browser_download_url":"https://github.com/a/b/releases/download/v1.1/dblocal-windows-x86_64.zip","size":1},
+            {"name":"checksums.txt","browser_download_url":"https://github.com/a/b/releases/download/v1.1/checksums.txt","size":1}
+        ]
+    }]).to_string();
+    let fetcher = MockFetcher::new(vec![Ok(FetchResponse::new(200, json.into_bytes()))]);
+    let result = check(&Version::parse("1.0.0").unwrap(), &fetcher, &linux_options()).await.unwrap();
+    assert!(matches!(result, UpdateCheck::UpToDate { .. }));
+}
+
+#[tokio::test]
+async fn check_skips_release_when_no_checksums() {
+    let json = serde_json::json!([{
+        "tag_name": "v1.1.0",
+        "draft": false,
+        "prerelease": false,
+        "body": "notes",
+        "assets": [
+            {"name":"dblocal-linux-x86_64.tar.gz","browser_download_url":"https://github.com/a/b/releases/download/v1.1/dblocal-linux-x86_64.tar.gz","size":1}
+        ]
+    }]).to_string();
+    let fetcher = MockFetcher::new(vec![Ok(FetchResponse::new(200, json.into_bytes()))]);
+    let result = check(&Version::parse("1.0.0").unwrap(), &fetcher, &linux_options()).await.unwrap();
+    assert!(matches!(result, UpdateCheck::UpToDate { .. }));
+}
+
+#[test]
+fn sanitize_release_notes_truncates_on_char_boundary() {
+    let mut s = String::new();
+    while s.len() < MAX_RELEASE_NOTES_BYTES + 10 {
+        s.push('é');
+    }
+    let out = sanitize_release_notes(&s);
+    assert!(out.len() <= MAX_RELEASE_NOTES_BYTES);
+}
+
+#[test]
+fn validate_asset_name_rejects_control_and_slashes() {
+    assert!(validate_asset_name("a/b").is_err());
+    assert!(validate_asset_name("a\\b").is_err());
+    assert!(validate_asset_name("..a").is_err());
+    assert!(validate_asset_name("a\0b").is_err());
+}
