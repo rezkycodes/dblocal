@@ -21,6 +21,14 @@ pub struct SystemSpawner;
 
 impl Spawner for SystemSpawner {
     fn spawn(&self, plan: &LaunchPlan) -> Result<()> {
+        if let Some(required) = plan.required_path() {
+            if !required.exists() {
+                return Err(DblError::NotFound {
+                    kind: "client",
+                    name: required.display().to_string(),
+                });
+            }
+        }
         let script_path = materialize_temp_file(plan.temp_file())?;
         let mut cmd = Command::new(plan.program());
         cmd.args(plan.argv());
@@ -43,8 +51,6 @@ impl Spawner for SystemSpawner {
                 DblError::Io { source: err }
             }
         })?;
-        // We do not wait; launcher scripts remove themselves. Reap in a thread
-        // to avoid zombies.
         std::thread::spawn(move || {
             let _ = child.wait();
         });
@@ -86,6 +92,7 @@ fn materialize_temp_file(temp: Option<&TempFile>) -> Result<Option<PathBuf>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::clients::LaunchPlan;
     use crate::secret::SecretString;
 
     struct NoopSpawner;
@@ -107,5 +114,13 @@ mod tests {
             None,
         );
         run(&plan, &NoopSpawner).expect("noop");
+    }
+
+    #[test]
+    fn missing_required_client_returns_not_found() {
+        let plan = LaunchPlan::new("missing-client", vec![], vec![], None, None, None)
+            .with_required_path("/tmp/definitely-missing-dblocal-client");
+        let err = SystemSpawner.spawn(&plan).unwrap_err();
+        assert!(matches!(err, DblError::NotFound { .. }), "{err:?}");
     }
 }

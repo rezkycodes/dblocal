@@ -53,10 +53,6 @@ fn secret() -> SecretString {
     SecretString::from("s3cr3t-P@ss!")
 }
 
-fn all_secrets() -> Vec<&'static str> {
-    vec!["s3cr3t-P@ss!", "p@ss:w/rd?#[]% x", "hunter2"]
-}
-
 #[test]
 fn psql_plan_uses_pgpassword_env_not_argv() {
     let s = secret();

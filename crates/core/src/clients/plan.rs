@@ -6,7 +6,7 @@ use crate::error::{DblError, Result};
 use crate::model::EngineKey;
 use crate::secret::SecretString;
 
-use super::detect::{ClientKind, DetectedClient, HostProbe};
+use super::detect::{ClientKind, DetectedClient};
 use super::quote::shell_quote;
 use super::terminal::{
     escape_applescript, launcher_temp_file, macos_launcher_script_path,
@@ -138,6 +138,7 @@ pub struct LaunchPlan {
     url: Option<String>,
     temp_file: Option<TempFile>,
     command_string: Option<String>,
+    required_path: Option<PathBuf>,
 }
 
 impl LaunchPlan {
@@ -149,14 +150,29 @@ impl LaunchPlan {
         temp_file: Option<TempFile>,
         command_string: Option<String>,
     ) -> Self {
-        Self { program: program.into(), argv, env, url, temp_file, command_string }
+        Self {
+            program: program.into(),
+            argv,
+            env,
+            url,
+            temp_file,
+            command_string,
+            required_path: None,
+        }
     }
+
+    pub fn with_required_path(mut self, path: impl Into<PathBuf>) -> Self {
+        self.required_path = Some(path.into());
+        self
+    }
+
     pub fn program(&self) -> &PathBuf { &self.program }
     pub fn argv(&self) -> &[String] { &self.argv }
     pub fn env(&self) -> &[LaunchEnv] { &self.env }
     pub fn url(&self) -> Option<&str> { self.url.as_deref() }
     pub fn temp_file(&self) -> Option<&TempFile> { self.temp_file.as_ref() }
     pub fn command_string(&self) -> Option<&str> { self.command_string.as_deref() }
+    pub fn required_path(&self) -> Option<&PathBuf> { self.required_path.as_ref() }
 }
 
 /// Plans how to open `client` against `target`.
@@ -177,7 +193,7 @@ pub fn plan_open(
         });
     }
     match client.kind() {
-        ClientKind::TablePlus => plan_tableplus(target),
+        ClientKind::TablePlus => plan_tableplus(target, os),
         ClientKind::DBeaver => plan_dbeaver(client, target),
         ClientKind::DbDelve => plan_dbdelve(client, target),
         ClientKind::Psql | ClientKind::Mysql | ClientKind::Mariadb
@@ -187,7 +203,7 @@ pub fn plan_open(
     }
 }
 
-fn plan_tableplus(target: &OpenTarget) -> Result<LaunchPlan> {
+fn plan_tableplus(target: &OpenTarget, os: OsKind) -> Result<LaunchPlan> {
     let driver = match target.engine {
         EngineKey::Postgresql => "postgresql",
         EngineKey::Mysql | EngineKey::Mariadb => "mysql",
@@ -201,7 +217,12 @@ fn plan_tableplus(target: &OpenTarget) -> Result<LaunchPlan> {
         encode_component(target.username()),
         encode_component(target.database()),
     );
-    Ok(LaunchPlan::new("xdg-open", vec![url.clone()], vec![], Some(url), None, None))
+    let (program, argv) = match os {
+        OsKind::Linux => ("xdg-open".to_owned(), vec![url.clone()]),
+        OsKind::Macos => ("open".to_owned(), vec![url.clone()]),
+        OsKind::Windows => ("cmd.exe".to_owned(), vec!["/c".to_owned(), "start".to_owned(), "".to_owned(), url.clone()]),
+    };
+    Ok(LaunchPlan::new(program, argv, vec![], Some(url), None, None))
 }
 
 fn plan_dbeaver(client: &DetectedClient, target: &OpenTarget) -> Result<LaunchPlan> {
@@ -219,7 +240,7 @@ fn plan_dbeaver(client: &DetectedClient, target: &OpenTarget) -> Result<LaunchPl
         sanitize_con_value(target.username()),
         sanitize_con_value(target.database()),
     );
-    Ok(LaunchPlan::new(client.path().clone(), vec!["-con".to_owned(), spec], vec![], None, None, None))
+    Ok(LaunchPlan::new(client.path().clone(), vec!["-con".to_owned(), spec], vec![], None, None, None).with_required_path(client.path().clone()))
 }
 
 fn plan_dbdelve(client: &DetectedClient, target: &OpenTarget) -> Result<LaunchPlan> {
@@ -243,7 +264,7 @@ fn plan_dbdelve(client: &DetectedClient, target: &OpenTarget) -> Result<LaunchPl
             "--name".to_owned(), target.instance_name().to_owned(),
         ],
         vec![], None, None, None,
-    ))
+    ).with_required_path(client.path().clone()))
 }
 
 fn plan_cli(
