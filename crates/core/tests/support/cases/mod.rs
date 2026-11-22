@@ -4,6 +4,7 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
+pub mod autostart_instances;
 pub mod cancel_and_checksum;
 pub mod concurrency;
 pub mod engines_outlive_app;

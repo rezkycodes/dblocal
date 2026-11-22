@@ -368,6 +368,10 @@ mod tests {
             &["delete", "app", "--yes", "--purge"],
             &["logs", "app", "--follow"],
             &["logs", "app", "--lines", "50"],
+            &["autostart", "status"],
+            &["autostart", "enable", "--json"],
+            &["autostart", "disable"],
+            &["autostart-run", "--headless"],
         ];
         for args in cases {
             parse(args).unwrap_or_else(|err| panic!("{args:?}: {err}"));
@@ -397,6 +401,40 @@ mod tests {
     fn help_succeeds() {
         let code = run(vec![OsString::from("--help")]);
         assert_eq!(code, ExitCode::from(EXIT_OK));
+    }
+
+    #[test]
+    fn the_login_item_flag_normalizes_to_the_autostart_mode() {
+        // The login item passes the raw `--autostart` token; normalization turns
+        // it into the hidden subcommand before parsing.
+        let normalized = normalize_autostart_flag(vec![OsString::from(AUTOSTART_FLAG)]);
+        let cli = Cli::try_parse_from(std::iter::once(OsString::from("dblocal")).chain(normalized))
+            .expect("parses");
+        assert!(matches!(cli.command, Some(Command::AutostartRun { .. })));
+        // Without the flag, nothing changes.
+        let plain = normalize_autostart_flag(vec![OsString::from("list")]);
+        assert_eq!(plain, vec![OsString::from("list")]);
+    }
+
+    #[test]
+    fn autostart_actions_parse_with_an_optional_json_flag() {
+        match parse(&["autostart", "status"]).expect("parses").command {
+            Some(Command::Autostart { action, json }) => {
+                assert_eq!(action, "status");
+                assert!(!json);
+            }
+            other => panic!("unexpected {other:?}"),
+        }
+        match parse(&["autostart", "enable", "--json"])
+            .expect("parses")
+            .command
+        {
+            Some(Command::Autostart { action, json }) => {
+                assert_eq!(action, "enable");
+                assert!(json);
+            }
+            other => panic!("unexpected {other:?}"),
+        }
     }
 
     #[test]

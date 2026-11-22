@@ -66,7 +66,7 @@ use crate::quit::QuitMachine;
 use crate::service_bridge::UiEvent;
 
 pub use actions::{ROOT_CONTEXT, modifier_label, palette_hint};
-pub use bootstrap::{appearance_is_dark, run_with_service};
+pub use bootstrap::{appearance_is_dark, run_autostart_with_service, run_with_service};
 pub use state::{ActiveDownload, InnerTab, OpenTab, ShellState, Tabs, UriView};
 
 /// Opens the GUI on the in-memory demo service.

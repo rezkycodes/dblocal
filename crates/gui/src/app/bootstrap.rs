@@ -115,6 +115,28 @@ pub(crate) fn run_with_mock() -> dblocal_core::Result<()> {
 
 /// Opens the GUI against any [`DblService`] implementation.
 pub fn run_with_service(service: Arc<dyn DblService>) -> dblocal_core::Result<()> {
+    run_with_service_mode(service, LaunchMode::Normal)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LaunchMode {
+    Normal,
+    LoginAutostart,
+}
+
+/// Opens the GUI as a login item: tray-only, no window on success (F-AUT-01 AC3).
+///
+/// If no tray is available the process keeps running headless only while at
+/// least one flagged instance was started; otherwise it exits with a clear
+/// message instead of surprising the user with a window.
+pub fn run_autostart_with_service(service: Arc<dyn DblService>) -> dblocal_core::Result<()> {
+    run_with_service_mode(service, LaunchMode::LoginAutostart)
+}
+
+fn run_with_service_mode(
+    service: Arc<dyn DblService>,
+    mode: LaunchMode,
+) -> dblocal_core::Result<()> {
     gpui_kit::platform::application()
         .with_assets(gpui_kit::assets::AllAssets)
         .run(move |cx: &mut App| {
@@ -122,7 +144,7 @@ pub fn run_with_service(service: Arc<dyn DblService>) -> dblocal_core::Result<()
             crate::theme::init(cx);
             super::actions::bind_keys(cx);
 
-            let runtime = AppRuntime::new(service);
+            let runtime = AppRuntime::new(service.clone());
             let tray_available = runtime.tray_available();
             cx.set_global(runtime);
             cx.set_global(QuitLedger::default());
@@ -134,12 +156,76 @@ pub fn run_with_service(service: Arc<dyn DblService>) -> dblocal_core::Result<()
 
             start_app_loops(cx);
 
-            if let Err(err) = open_main_window(cx) {
-                tracing::error!("could not open the main window: {err:#}");
-                request_app_quit(cx);
+            match mode {
+                LaunchMode::Normal => {
+                    if let Err(err) = open_main_window(cx) {
+                        tracing::error!("could not open the main window: {err:#}");
+                        request_app_quit(cx);
+                    }
+                }
+                LaunchMode::LoginAutostart => {
+                    handle_login_autostart(service.clone(), tray_available, cx);
+                }
             }
         });
     Ok(())
+}
+
+fn handle_login_autostart(service: Arc<dyn DblService>, tray_available: bool, cx: &mut App) {
+    let decision = dblocal_core::autostart::decide_mode(tray_available, 0);
+    if matches!(decision, dblocal_core::autostart::AutostartMode::TrayOnly) {
+        // Do not open a window: the tray is the UI (F-AUT-01 AC3).
+        start_flagged_instances(service, false, cx);
+        return;
+    }
+    // No tray: decide after we know how many flagged instances can start.
+    let svc = service.clone();
+    cx.spawn(async move |cx: &mut gpui_kit::AsyncApp| {
+        let views = cx
+            .background_spawn({
+                let svc = svc.clone();
+                async move { svc.list_instances().unwrap_or_default() }
+            })
+            .await;
+        let targets = dblocal_core::autostart::flagged_targets(&views);
+        let mode = dblocal_core::autostart::decide_mode(false, targets.len());
+        match mode {
+            dblocal_core::autostart::AutostartMode::HeadlessExit => {
+                tracing::info!(
+                    "{}",
+                    dblocal_core::autostart::messages::MODE_EXIT_NO_INSTANCES
+                );
+                cx.update(|cx| request_app_quit(cx));
+            }
+            _ => {
+                tracing::info!("{}", dblocal_core::autostart::messages::MODE_HEADLESS_KEEP);
+                cx.update(|cx| start_flagged_instances(svc, true, cx));
+            }
+        }
+    })
+    .detach();
+}
+
+fn start_flagged_instances(service: Arc<dyn DblService>, _headless: bool, cx: &mut App) {
+    let svc = service;
+    cx.spawn(async move |cx: &mut gpui_kit::AsyncApp| {
+        let views = cx
+            .background_spawn({
+                let svc = svc.clone();
+                async move { svc.list_instances().unwrap_or_default() }
+            })
+            .await;
+        let targets = dblocal_core::autostart::flagged_targets(&views);
+        if targets.is_empty() {
+            return;
+        }
+        let _ = cx
+            .background_spawn(async move {
+                let _ = dblocal_core::autostart::start_targets(&svc, &targets);
+            })
+            .await;
+    })
+    .detach();
 }
 
 /// Starts the app-level loops. This is the only place the app wires its event
