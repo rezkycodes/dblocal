@@ -389,47 +389,47 @@ mod linux {
         }
 
         fn menu(&self) -> Vec<MenuItem<Self>> {
-        let model = self.model.lock().unwrap_or_else(|p| p.into_inner()).clone();
-        let mut items: Vec<MenuItem<Self>> = Vec::new();
-        for entry in &model.instances {
-            let action = entry.action.clone();
-            let enabled = entry.enabled;
-            let label = entry.label.clone();
-            let tx = self.tx.clone();
-            let icon_data = entry_icon_data(entry, 16);
+            let model = self.model.lock().unwrap_or_else(|p| p.into_inner()).clone();
+            let mut items: Vec<MenuItem<Self>> = Vec::new();
+            for entry in &model.instances {
+                let action = entry.action.clone();
+                let enabled = entry.enabled;
+                let label = entry.label.clone();
+                let tx = self.tx.clone();
+                let icon_data = entry_icon_data(entry, 16);
+                items.push(MenuItem::Standard(StandardItem {
+                    label,
+                    enabled,
+                    icon_data,
+                    activate: Box::new(move |_| {
+                        let _ = tx.send(action.clone());
+                    }),
+                    ..Default::default()
+                }));
+            }
+            if !model.instances.is_empty() {
+                items.push(MenuItem::Separator);
+            }
+            let open_action = model.open.action.clone();
+            let tx_open = self.tx.clone();
             items.push(MenuItem::Standard(StandardItem {
-                label,
-                enabled,
-                icon_data,
+                label: model.open.label,
                 activate: Box::new(move |_| {
-                    let _ = tx.send(action.clone());
+                    let _ = tx_open.send(open_action.clone());
                 }),
                 ..Default::default()
             }));
+            let quit_action = model.quit.action.clone();
+            let tx_quit = self.tx.clone();
+            items.push(MenuItem::Standard(StandardItem {
+                label: model.quit.label,
+                activate: Box::new(move |_| {
+                    let _ = tx_quit.send(quit_action.clone());
+                }),
+                ..Default::default()
+            }));
+            items
         }
-        if !model.instances.is_empty() {
-            items.push(MenuItem::Separator);
-        }
-        let open_action = model.open.action.clone();
-        let tx_open = self.tx.clone();
-        items.push(MenuItem::Standard(StandardItem {
-            label: model.open.label,
-            activate: Box::new(move |_| {
-                let _ = tx_open.send(open_action.clone());
-            }),
-            ..Default::default()
-        }));
-        let quit_action = model.quit.action.clone();
-        let tx_quit = self.tx.clone();
-        items.push(MenuItem::Standard(StandardItem {
-            label: model.quit.label,
-            activate: Box::new(move |_| {
-                let _ = tx_quit.send(quit_action.clone());
-            }),
-            ..Default::default()
-        }));
-        items
-    }
     }
 
     struct KsniBackend {
@@ -604,10 +604,7 @@ mod tests {
             aggregate_tray_status(&[running.clone(), failed.clone()]),
             InstanceStatus::Failed
         );
-        assert_eq!(
-            aggregate_tray_status(&[stopped]),
-            InstanceStatus::Stopped
-        );
+        assert_eq!(aggregate_tray_status(&[stopped]), InstanceStatus::Stopped);
     }
 
     #[test]
@@ -624,9 +621,17 @@ mod tests {
             let center = (4 * 8 + 4) * 4;
             assert_eq!(bytes[center], 0xff);
         }
-        let a = model.instances.iter().find(|e| e.label.contains("pg-a")).unwrap();
+        let a = model
+            .instances
+            .iter()
+            .find(|e| e.label.contains("pg-a"))
+            .unwrap();
         assert_eq!(status_from_tray_label(&a.label), InstanceStatus::Running);
-        let b = model.instances.iter().find(|e| e.label.contains("pg-b")).unwrap();
+        let b = model
+            .instances
+            .iter()
+            .find(|e| e.label.contains("pg-b"))
+            .unwrap();
         assert_eq!(status_from_tray_label(&b.label), InstanceStatus::Failed);
     }
 }

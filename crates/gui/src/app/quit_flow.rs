@@ -56,11 +56,7 @@ impl Workspace {
 
     /// Request quit with a precomputed running list (R1: tray quit without
     /// window loads instances from service before opening the window).
-    pub(crate) fn request_quit_with(
-        &mut self,
-        running: Vec<InstanceId>,
-        cx: &mut Context<Self>,
-    ) {
+    pub(crate) fn request_quit_with(&mut self, running: Vec<InstanceId>, cx: &mut Context<Self>) {
         let action = self.quit.apply(QuitEvent::QuitRequested { running });
         self.handle_quit_action(action, cx);
     }
@@ -84,10 +80,9 @@ impl Workspace {
                             match result {
                                 Ok(op) => {
                                     if let Some(ok) = this.quit_stop_buffer.remove(&op) {
-                                        let action = this.quit.apply(QuitEvent::StopFinished {
-                                            id: iid,
-                                            ok,
-                                        });
+                                        let action = this
+                                            .quit
+                                            .apply(QuitEvent::StopFinished { id: iid, ok });
                                         this.handle_quit_action(action, cx);
                                     } else {
                                         this.quit_stops.insert(op, iid);
@@ -539,7 +534,9 @@ mod glue_tests {
         view.update(cx, |this, cx| {
             let id = this.instances()[0].id.clone();
             if let Some(ok) = this.quit_stop_buffer.remove(&op) {
-                let action = this.quit.apply(crate::quit::QuitEvent::StopFinished { id, ok });
+                let action = this
+                    .quit
+                    .apply(crate::quit::QuitEvent::StopFinished { id, ok });
                 this.handle_quit_action(action, cx);
             }
         });

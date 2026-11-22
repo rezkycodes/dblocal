@@ -255,10 +255,7 @@ impl Workspace {
             workspace.delete_target = Some(id.clone());
             workspace.delete_mode = dblocal_core::model::DeleteMode::ArchiveData;
             workspace.delete_name_input = Some(name_input);
-            workspace.delete_size = workspace
-                .service
-                .data_size(&id)
-                .unwrap_or(0);
+            workspace.delete_size = workspace.service.data_size(&id).unwrap_or(0);
         }
         workspace
     }

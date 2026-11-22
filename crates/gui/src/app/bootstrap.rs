@@ -138,10 +138,7 @@ pub fn start_app_event_loop(cx: &mut App) {
     .detach();
 }
 
-async fn refresh_tray_from_service(
-    service: Arc<dyn DblService>,
-    cx: &mut gpui_kit::AsyncApp,
-) {
+async fn refresh_tray_from_service(service: Arc<dyn DblService>, cx: &mut gpui_kit::AsyncApp) {
     let views = cx
         .background_spawn(async move { service.list_instances().unwrap_or_default() })
         .await;
@@ -216,10 +213,7 @@ pub(crate) fn open_main_window(cx: &mut App) -> anyhow::Result<WindowHandle<Root
 }
 
 /// Window-close decision, extracted for headless tests (R4).
-pub fn handle_window_should_close(
-    weak: gpui_kit::WeakEntity<Workspace>,
-    cx: &mut App,
-) -> bool {
+pub fn handle_window_should_close(weak: gpui_kit::WeakEntity<Workspace>, cx: &mut App) -> bool {
     if let Some(workspace) = weak.upgrade() {
         workspace.update(cx, |this, cx| {
             this.handle_window_close_request(cx);
@@ -441,14 +435,25 @@ mod tests {
                 engines: Vec::new(),
             })
         }
-        fn refresh_catalog(&self, _force: bool) -> Result<OperationId> { Ok(OperationId::new("op")) }
-        fn validate_spec(&self, _spec: &InstanceSpec) -> Result<()> { Ok(()) }
-        fn suggest_port(&self, engine: EngineKey) -> Result<Port> { Port::new(engine.canonical_port()) }
-        fn create_instance(&self, _spec: InstanceSpec) -> Result<OperationId> { Ok(OperationId::new("op")) }
+        fn refresh_catalog(&self, _force: bool) -> Result<OperationId> {
+            Ok(OperationId::new("op"))
+        }
+        fn validate_spec(&self, _spec: &InstanceSpec) -> Result<()> {
+            Ok(())
+        }
+        fn suggest_port(&self, engine: EngineKey) -> Result<Port> {
+            Port::new(engine.canonical_port())
+        }
+        fn create_instance(&self, _spec: InstanceSpec) -> Result<OperationId> {
+            Ok(OperationId::new("op"))
+        }
         fn start_instance(&self, _id: &InstanceId) -> Result<OperationId> {
             self.start_calls.fetch_add(1, Ordering::SeqCst);
             if self.fail_start.load(Ordering::SeqCst) {
-                return Err(dblocal_core::DblError::NotFound { kind: "instance", name: "x".to_owned() });
+                return Err(dblocal_core::DblError::NotFound {
+                    kind: "instance",
+                    name: "x".to_owned(),
+                });
             }
             Ok(OperationId::new("op-start"))
         }
@@ -456,20 +461,44 @@ mod tests {
             self.stop_calls.fetch_add(1, Ordering::SeqCst);
             Ok(OperationId::new("op-stop"))
         }
-        fn delete_instance(&self, _id: &InstanceId, _mode: DeleteMode) -> Result<OperationId> { Ok(OperationId::new("op")) }
-        fn change_port(&self, _id: &InstanceId, _port: Port) -> Result<()> { Ok(()) }
-        fn data_size(&self, _id: &InstanceId) -> Result<u64> { Ok(0) }
-        fn set_autostart(&self, _id: &InstanceId, _enabled: bool) -> Result<()> { Ok(()) }
-        fn cancel_operation(&self, _id: &OperationId) -> Result<()> { Ok(()) }
-        fn connection_uri(&self, _id: &InstanceId, _format: UriFormat) -> Result<SecretString> {
-            Ok(SecretString::new("postgresql://postgres:p@127.0.0.1:5432/postgres"))
+        fn delete_instance(&self, _id: &InstanceId, _mode: DeleteMode) -> Result<OperationId> {
+            Ok(OperationId::new("op"))
         }
-        fn tail_logs(&self, _id: &InstanceId, _lines: usize) -> Result<Vec<String>> { Ok(Vec::new()) }
-        fn watch_logs(&self, _id: &InstanceId, _enabled: bool) -> Result<()> { Ok(()) }
-        fn list_runtimes(&self) -> Result<Vec<Runtime>> { Ok(Vec::new()) }
-        fn remove_runtime(&self, _runtime: &str) -> Result<()> { Ok(()) }
-        fn list_archives(&self) -> Result<Vec<ArchivedData>> { Ok(Vec::new()) }
-        fn purge_archive(&self, _archive: &str) -> Result<()> { Ok(()) }
+        fn change_port(&self, _id: &InstanceId, _port: Port) -> Result<()> {
+            Ok(())
+        }
+        fn data_size(&self, _id: &InstanceId) -> Result<u64> {
+            Ok(0)
+        }
+        fn set_autostart(&self, _id: &InstanceId, _enabled: bool) -> Result<()> {
+            Ok(())
+        }
+        fn cancel_operation(&self, _id: &OperationId) -> Result<()> {
+            Ok(())
+        }
+        fn connection_uri(&self, _id: &InstanceId, _format: UriFormat) -> Result<SecretString> {
+            Ok(SecretString::new(
+                "postgresql://postgres:p@127.0.0.1:5432/postgres",
+            ))
+        }
+        fn tail_logs(&self, _id: &InstanceId, _lines: usize) -> Result<Vec<String>> {
+            Ok(Vec::new())
+        }
+        fn watch_logs(&self, _id: &InstanceId, _enabled: bool) -> Result<()> {
+            Ok(())
+        }
+        fn list_runtimes(&self) -> Result<Vec<Runtime>> {
+            Ok(Vec::new())
+        }
+        fn remove_runtime(&self, _runtime: &str) -> Result<()> {
+            Ok(())
+        }
+        fn list_archives(&self) -> Result<Vec<ArchivedData>> {
+            Ok(Vec::new())
+        }
+        fn purge_archive(&self, _archive: &str) -> Result<()> {
+            Ok(())
+        }
         fn subscribe(&self) -> broadcast::Receiver<ServiceEvent> {
             self.subscribe_calls.fetch_add(1, Ordering::SeqCst);
             self.tx.subscribe()
@@ -488,9 +517,10 @@ mod tests {
     fn tray_quit_no_window_with_running_instance_opens_confirming(cx: &mut TestAppContext) {
         cx.update(gpui_kit::init);
         cx.update(crate::theme::init);
-        let service = Arc::new(CountingService::new(vec![
-            CountingService::view("pg1", InstanceStatus::Running),
-        ]));
+        let service = Arc::new(CountingService::new(vec![CountingService::view(
+            "pg1",
+            InstanceStatus::Running,
+        )]));
         let svc: Arc<dyn DblService> = service.clone();
         let (tx, rx) = flume::unbounded::<crate::service_bridge::UiEvent>();
         drop(tx);
@@ -503,9 +533,9 @@ mod tests {
             cx.run_until_parked();
             let ok = cx.update(|cx| {
                 let rt = cx.global::<AppRuntime>();
-                rt.workspace.as_ref().is_some_and(|ws| {
-                    ws.read(cx).quit_machine().is_confirming()
-                })
+                rt.workspace
+                    .as_ref()
+                    .is_some_and(|ws| ws.read(cx).quit_machine().is_confirming())
             });
             if ok {
                 break;
@@ -518,16 +548,20 @@ mod tests {
                 .as_ref()
                 .is_some_and(|ws| ws.read(cx).quit_machine().is_confirming())
         });
-        assert!(confirming, "R1: tray quit with no window must confirm when running");
+        assert!(
+            confirming,
+            "R1: tray quit with no window must confirm when running"
+        );
     }
 
     #[gpui_kit::test]
     fn tray_start_no_window_reaches_service(cx: &mut TestAppContext) {
         cx.update(gpui_kit::init);
         cx.update(crate::theme::init);
-        let service = Arc::new(CountingService::new(vec![
-            CountingService::view("pg1", InstanceStatus::Stopped),
-        ]));
+        let service = Arc::new(CountingService::new(vec![CountingService::view(
+            "pg1",
+            InstanceStatus::Stopped,
+        )]));
         let id = service.views.lock().unwrap()[0].id.to_string();
         let svc: Arc<dyn DblService> = service.clone();
         let (tx, rx) = flume::unbounded::<crate::service_bridge::UiEvent>();
@@ -544,6 +578,9 @@ mod tests {
             }
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
-        assert!(service.start_calls.load(Ordering::SeqCst) > 0, "R4/R5: tray start must reach service");
+        assert!(
+            service.start_calls.load(Ordering::SeqCst) > 0,
+            "R4/R5: tray start must reach service"
+        );
     }
 }

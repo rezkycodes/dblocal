@@ -116,4 +116,3 @@ fn breadcrumb(
         .child(Label::new(strings::UI_BREADCRUMB_SEPARATOR.to_owned()).text_color(muted))
         .child(Label::new(name.to_owned()).text_color(bright))
 }
-
