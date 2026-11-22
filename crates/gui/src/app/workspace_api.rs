@@ -225,7 +225,6 @@ impl Workspace {
         self.choose_auth(auth);
     }
 
-
     /// Next free port for an instance's engine, falling back to its port + 1.
     /// Uses cached suggestion; never calls the service on the render path.
     pub(crate) fn instance_port_proposal(&self, id: &InstanceId) -> u16 {

@@ -106,7 +106,7 @@ impl Workspace {
                 self.quit_stops.clear();
                 self.quit_stop_buffer.clear();
                 self.quit_timeout_task = None;
-                cx.quit();
+                crate::app::bootstrap::request_app_quit(cx);
             }
         }
     }

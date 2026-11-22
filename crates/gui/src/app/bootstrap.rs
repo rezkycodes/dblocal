@@ -27,6 +27,35 @@ pub struct AppRuntime {
 
 impl Global for AppRuntime {}
 
+/// Counts quit requests for headless assertions (the test platform's `quit()`
+/// is a no-op, so "the app asked to quit" must be observable).
+#[derive(Default)]
+pub struct QuitLedger {
+    requests: std::sync::atomic::AtomicUsize,
+}
+
+impl Global for QuitLedger {}
+
+/// The single quit path: record the request, then ask the platform to quit.
+pub(crate) fn request_app_quit(cx: &mut App) {
+    if cx.has_global::<QuitLedger>() {
+        cx.update_global::<QuitLedger, _>(|ledger, _| {
+            ledger
+                .requests
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        });
+    }
+    cx.quit();
+}
+
+/// How many times this app asked to quit (tests only).
+#[cfg(test)]
+pub fn quit_requests(cx: &App) -> usize {
+    cx.try_global::<QuitLedger>()
+        .map(|ledger| ledger.requests.load(std::sync::atomic::Ordering::SeqCst))
+        .unwrap_or(0)
+}
+
 impl AppRuntime {
     pub fn new(service: Arc<dyn DblService>) -> Self {
         crate::tray::enable_for_app();
@@ -84,6 +113,7 @@ pub fn run_with_service(service: Arc<dyn DblService>) -> dblocal_core::Result<()
             let runtime = AppRuntime::new(service);
             let tray_available = runtime.tray_available();
             cx.set_global(runtime);
+            cx.set_global(QuitLedger::default());
             cx.set_quit_mode(if tray_available {
                 QuitMode::Explicit
             } else {
@@ -95,7 +125,7 @@ pub fn run_with_service(service: Arc<dyn DblService>) -> dblocal_core::Result<()
 
             if let Err(err) = open_main_window(cx) {
                 tracing::error!("could not open the main window: {err:#}");
-                cx.quit();
+                request_app_quit(cx);
             }
         });
     Ok(())
@@ -270,7 +300,7 @@ fn handle_tray_quit_no_window(service: Arc<dyn DblService>, cx: &mut App) {
             Ok(views) => {
                 let running = crate::quit::running_instance_ids(&views);
                 if running.is_empty() {
-                    cx.quit();
+                    request_app_quit(cx);
                     return;
                 }
                 match open_main_window(cx) {
@@ -582,5 +612,282 @@ mod tests {
             service.start_calls.load(Ordering::SeqCst) > 0,
             "R4/R5: tray start must reach service"
         );
+    }
+
+    fn install_runtime(
+        cx: &mut TestAppContext,
+        service: Arc<CountingService>,
+        tray: crate::tray::TrayHandle,
+    ) -> Arc<dyn DblService> {
+        let svc: Arc<dyn DblService> = service;
+        let (tx, rx) = flume::unbounded::<crate::service_bridge::UiEvent>();
+        drop(tx);
+        let runtime = AppRuntime::new_for_test(svc.clone(), tray, rx);
+        cx.update(|cx| {
+            cx.set_global(QuitLedger::default());
+            cx.set_global(runtime);
+        });
+        svc
+    }
+
+    /// R1a: nothing running + window closed + tray Quit -> the app quits at once.
+    #[gpui_kit::test]
+    fn tray_quit_no_window_nothing_running_quits(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+        cx.update(crate::theme::init);
+        let service = Arc::new(CountingService::new(vec![CountingService::view(
+            "pg1",
+            InstanceStatus::Stopped,
+        )]));
+        install_runtime(cx, service, crate::tray::TrayHandle::unavailable());
+        cx.update(|cx| handle_tray_action(crate::tray::TrayAction::Quit, cx));
+        for _ in 0..100 {
+            cx.run_until_parked();
+            if cx.read(quit_requests) > 0 {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert_eq!(cx.read(quit_requests), 1, "R1: nothing running must quit");
+        let confirming = cx.update(|cx| {
+            cx.global::<AppRuntime>()
+                .workspace
+                .as_ref()
+                .is_some_and(|ws| ws.read(cx).quit_machine().is_confirming())
+        });
+        assert!(!confirming, "R1: nothing running must not show the dialog");
+    }
+
+    /// R1b: a failed instance read must not quit; it opens the window with the error.
+    #[gpui_kit::test]
+    fn tray_quit_no_window_list_failure_does_not_quit(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+        cx.update(crate::theme::init);
+        let service = Arc::new(CountingService::new(vec![]));
+        service.fail_list.store(true, Ordering::SeqCst);
+        install_runtime(cx, service, crate::tray::TrayHandle::unavailable());
+        cx.update(|cx| handle_tray_action(crate::tray::TrayAction::Quit, cx));
+        for _ in 0..100 {
+            cx.run_until_parked();
+            let shown = cx.update(|cx| {
+                cx.global::<AppRuntime>()
+                    .workspace
+                    .as_ref()
+                    .is_some_and(|ws| ws.read(cx).toast_text().is_some())
+            });
+            if shown {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert_eq!(cx.read(quit_requests), 0, "R1: a failed read must not quit");
+        let toast = cx.update(|cx| {
+            cx.global::<AppRuntime>()
+                .workspace
+                .as_ref()
+                .is_some_and(|ws| ws.read(cx).toast_text().is_some())
+        });
+        assert!(toast, "R1: a failed read must show the error in the window");
+    }
+
+    /// R4.1: tray available + close request closes the window, no quit.
+    #[gpui_kit::test]
+    fn close_with_tray_closes_the_window_and_keeps_the_app(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+        cx.update(crate::theme::init);
+        let service = Arc::new(CountingService::new(vec![CountingService::view(
+            "pg1",
+            InstanceStatus::Running,
+        )]));
+        let tray = crate::tray::TrayHandle::new(Box::new(FakeTray { available: true }));
+        install_runtime(cx, service, tray);
+        let _window = cx.update(|cx| open_main_window(cx).expect("window"));
+        let weak = cx.update(|cx| {
+            cx.global::<AppRuntime>()
+                .workspace
+                .clone()
+                .map(|ws| ws.downgrade())
+                .expect("workspace")
+        });
+        let closed = cx.update(|cx| handle_window_should_close(weak, cx));
+        assert!(
+            closed,
+            "R4: with a tray, close must really close the window"
+        );
+        assert_eq!(
+            cx.read(quit_requests),
+            0,
+            "R4: close with a tray must not quit"
+        );
+        cx.run_until_parked();
+        let cleared = cx.update(|cx| {
+            let rt = cx.global::<AppRuntime>();
+            rt.workspace.is_none() && rt.main_window.is_none()
+        });
+        assert!(cleared, "R4: runtime must forget the closed window");
+    }
+
+    /// R4.2: no tray + close request with nothing running quits.
+    #[gpui_kit::test]
+    fn close_without_tray_nothing_running_quits(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+        cx.update(crate::theme::init);
+        let service = Arc::new(CountingService::new(vec![]));
+        install_runtime(cx, service, crate::tray::TrayHandle::unavailable());
+        let _window = cx.update(|cx| open_main_window(cx).expect("window"));
+        let weak = cx.update(|cx| {
+            cx.global::<AppRuntime>()
+                .workspace
+                .clone()
+                .map(|ws| ws.downgrade())
+                .expect("workspace")
+        });
+        let closed = cx.update(|cx| handle_window_should_close(weak, cx));
+        assert!(
+            !closed,
+            "R4: without a tray the close goes through the quit flow"
+        );
+        cx.run_until_parked();
+        assert_eq!(cx.read(quit_requests), 1, "R4: nothing running must quit");
+    }
+
+    /// R4.3: "Buka DBLocal" with a window open keeps exactly one window.
+    #[gpui_kit::test]
+    fn tray_open_reuses_the_existing_window(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+        cx.update(crate::theme::init);
+        let service = Arc::new(CountingService::new(vec![]));
+        install_runtime(cx, service, crate::tray::TrayHandle::unavailable());
+        let _first = cx.update(|cx| open_main_window(cx).expect("window"));
+        let before = cx.read(|cx| cx.windows().len());
+        cx.update(|cx| handle_tray_action(crate::tray::TrayAction::OpenWindow, cx));
+        cx.run_until_parked();
+        let after = cx.read(|cx| cx.windows().len());
+        assert_eq!(before, after, "R4: 'Buka DBLocal' must not duplicate");
+        assert_eq!(after, 1);
+    }
+
+    /// R4.4: "Buka DBLocal" with no window opens exactly one, showing the instances.
+    #[gpui_kit::test]
+    fn tray_open_with_no_window_opens_one_showing_instances(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+        cx.update(crate::theme::init);
+        let service = Arc::new(CountingService::new(vec![
+            CountingService::view("pg1", InstanceStatus::Running),
+            CountingService::view("pg2", InstanceStatus::Stopped),
+        ]));
+        install_runtime(cx, service, crate::tray::TrayHandle::unavailable());
+        cx.update(|cx| handle_tray_action(crate::tray::TrayAction::OpenWindow, cx));
+        for _ in 0..200 {
+            cx.run_until_parked();
+            let ready = cx.update(|cx| {
+                cx.global::<AppRuntime>()
+                    .workspace
+                    .as_ref()
+                    .is_some_and(|ws| ws.read(cx).instances().len() == 2)
+            });
+            if ready {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert_eq!(cx.read(|cx| cx.windows().len()), 1, "R4: one window");
+        let shown = cx.update(|cx| {
+            cx.global::<AppRuntime>()
+                .workspace
+                .as_ref()
+                .map(|ws| ws.read(cx).instances().len())
+                .unwrap_or(0)
+        });
+        assert_eq!(shown, 2, "R4: the new window reads the service's list");
+    }
+
+    /// R5: a failing tray Start reaches the service (and is logged, not panicked).
+    #[gpui_kit::test]
+    fn tray_start_failure_is_logged(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+        cx.update(crate::theme::init);
+        let service = Arc::new(CountingService::new(vec![CountingService::view(
+            "pg1",
+            InstanceStatus::Stopped,
+        )]));
+        service.fail_start.store(true, Ordering::SeqCst);
+        let id = service.views.lock().unwrap()[0].id.to_string();
+        install_runtime(cx, service.clone(), crate::tray::TrayHandle::unavailable());
+        cx.update(|cx| handle_tray_action(crate::tray::TrayAction::Start(id), cx));
+        for _ in 0..50 {
+            cx.run_until_parked();
+            if service.start_calls.load(Ordering::SeqCst) > 0 {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(
+            service.start_calls.load(Ordering::SeqCst) > 0,
+            "R5: start reached the service"
+        );
+    }
+
+    /// R3: the app-level loop is the only consumer, and one bridge is made.
+    #[gpui_kit::test]
+    fn app_uses_exactly_one_bridge_and_drops_events_with_no_window(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+        cx.update(crate::theme::init);
+        let service = Arc::new(CountingService::new(vec![]));
+        let svc: Arc<dyn DblService> = service.clone();
+        let events = crate::service_bridge::spawn_bridge(svc.clone());
+        let observed = events.clone();
+        assert_eq!(
+            service.subscribe_calls.load(Ordering::SeqCst),
+            1,
+            "R3: spawn_bridge subscribes once"
+        );
+        let runtime = AppRuntime::new_for_test(svc, crate::tray::TrayHandle::unavailable(), events);
+        cx.update(|cx| {
+            cx.set_global(QuitLedger::default());
+            cx.set_global(runtime);
+            start_app_event_loop(cx);
+        });
+        for _ in 0..10_000 {
+            let _ = service.tx.send(ServiceEvent::CatalogUpdated {
+                status: dblocal_core::model::CatalogStatus::Fresh,
+            });
+        }
+        for _ in 0..50 {
+            cx.run_until_parked();
+            if observed.len() <= 1 {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert_eq!(
+            service.subscribe_calls.load(Ordering::SeqCst),
+            1,
+            "R3: the app-level loop must not create a second bridge"
+        );
+        assert!(
+            observed.len() <= 4,
+            "R3: {} events accumulated with no window open",
+            observed.len()
+        );
+        let has_workspace = cx.update(|cx| cx.global::<AppRuntime>().workspace.is_some());
+        assert!(!has_workspace, "R3: no window was opened");
+    }
+
+    struct FakeTray {
+        available: bool,
+    }
+
+    impl crate::tray::TrayBackend for FakeTray {
+        fn refresh(
+            &mut self,
+            _model: &crate::tray::TrayMenuModel,
+            _views: &[InstanceView],
+        ) -> bool {
+            self.available
+        }
+        fn is_available(&self) -> bool {
+            self.available
+        }
     }
 }
