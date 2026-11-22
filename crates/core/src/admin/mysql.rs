@@ -48,7 +48,10 @@ pub const MANAGED_ACCOUNT_HOST: &str = "127.0.0.1";
 /// Immutable: the builders return a new value.
 #[derive(Clone)]
 pub struct MysqlTarget {
+    /// The instance's unix socket. When empty, the target dials loopback TCP on
+    /// `port` instead (the documented fallback when a socket is unavailable).
     socket: std::path::PathBuf,
+    port: u16,
     superuser: String,
     password: SecretString,
     connect_timeout: Duration,
@@ -61,14 +64,17 @@ impl MysqlTarget {
     /// Default statement timeout.
     pub const DEFAULT_STATEMENT_TIMEOUT: Duration = Duration::from_secs(30);
 
-    /// Creates a target that dials `socket` as `superuser`.
+    /// Creates a target that dials `socket` as `superuser` (port for the TCP
+    /// fallback).
     pub fn new(
         socket: impl Into<std::path::PathBuf>,
+        port: u16,
         superuser: impl Into<String>,
         password: SecretString,
     ) -> Self {
         Self {
             socket: socket.into(),
+            port,
             superuser: superuser.into(),
             password,
             connect_timeout: Self::DEFAULT_CONNECT_TIMEOUT,
@@ -76,9 +82,14 @@ impl MysqlTarget {
         }
     }
 
-    /// The unix socket this target dials.
+    /// The unix socket this target dials (empty means the TCP fallback).
     pub fn socket(&self) -> &std::path::Path {
         &self.socket
+    }
+
+    /// The loopback TCP port the fallback dials.
+    pub fn port(&self) -> u16 {
+        self.port
     }
 
     /// Superuser name.
@@ -113,16 +124,30 @@ impl MysqlTarget {
 
     /// The `mysql_async` connection options for this target.
     ///
-    /// The socket is set explicitly so `mysql_async` never falls back to TCP
-    /// (which would send the password unencrypted for `caching_sha2_password`).
+    /// Prefers the unix socket, and only falls back to loopback TCP on `port` when
+    /// no socket path is known. The socket is a secure channel, so a
+    /// `caching_sha2_password` handshake completes there without the
+    /// unencrypted RSA exchange TCP would need.
     fn opts(&self, db_name: Option<&str>) -> Opts {
+        let db = db_name.unwrap_or("");
+        if self.socket.as_os_str().is_empty() {
+            let builder = OptsBuilder::default()
+                .user(Some(self.superuser.as_str()))
+                .pass(Some(self.password.expose()))
+                .ip_or_hostname("127.0.0.1")
+                .tcp_port(self.port)
+                .prefer_socket(false)
+                .stmt_cache_size(0)
+                .db_name(Some(db));
+            return Opts::from(builder);
+        }
         let builder = OptsBuilder::default()
             .user(Some(self.superuser.as_str()))
             .pass(Some(self.password.expose()))
             .socket(Some(self.socket.to_string_lossy().into_owned()))
             .prefer_socket(true)
             .stmt_cache_size(0)
-            .db_name(Some(db_name.unwrap_or("")));
+            .db_name(Some(db));
         Opts::from(builder)
     }
 }
@@ -131,6 +156,7 @@ impl std::fmt::Debug for MysqlTarget {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("MysqlTarget")
             .field("socket", &self.socket)
+            .field("port", &self.port)
             .field("superuser", &self.superuser)
             .field("password", &"[REDACTED]")
             .field("connect_timeout", &self.connect_timeout)
@@ -480,6 +506,7 @@ mod tests {
         // A non-existent socket: calls fail at connect, never at a live server.
         MysqlTarget::new(
             "/nonexistent/dblocal-test.sock",
+            3306,
             "root",
             SecretString::from("secret-canary-pw"),
         )
@@ -508,6 +535,21 @@ mod tests {
         assert_eq!(opts.db_name(), Some("appdb"));
         // A named db for the statement, none for the admin connection.
         assert_eq!(target().opts(None).db_name(), Some(""));
+    }
+
+    #[test]
+    fn opts_fall_back_to_tcp_when_no_socket_is_known() {
+        let no_socket = MysqlTarget::new(
+            std::path::PathBuf::new(),
+            3307,
+            "root",
+            SecretString::from("pw"),
+        );
+        let opts = no_socket.opts(None);
+        assert_eq!(opts.socket(), None);
+        assert!(!opts.prefer_socket());
+        assert_eq!(opts.tcp_port(), 3307);
+        assert_eq!(opts.ip_or_hostname(), "127.0.0.1");
     }
 
     #[test]
