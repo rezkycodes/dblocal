@@ -125,8 +125,13 @@ fn a_real_archive_can_be_listed_and_purged() {
     let h = Harness::new(EngineKey::Postgresql);
     let port = test_port();
     let spec = h.spec("archived", EngineKey::Postgresql, port);
-    h.create(spec);
-    let instance = h.instances().into_iter().next().expect("instance");
+    let events = h.create(spec);
+    let instance = h.instances().into_iter().next().unwrap_or_else(|| {
+        panic!(
+            "instance after create; events={:?}",
+            super::harness::describe(&events)
+        )
+    });
     let id = instance.id().clone();
 
     let (_op, run) = h.run_call(|| h.service.delete_instance(&id, DeleteMode::ArchiveData));
