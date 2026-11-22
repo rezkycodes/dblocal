@@ -119,16 +119,34 @@ fn autostart_two_flagged_one_blocked() {
     assert_eq!(
         summary.outcomes.len(),
         targets.len(),
-        "one outcome per accepted request"
+        "one outcome per target"
     );
     let blocked_outcome = summary
         .outcomes
         .iter()
         .find(|o| o.target.name == "auto-blocked")
         .expect("blocked outcome");
+    // D1: the pass waits for each start, so the blocked instance is recorded as
+    // a failure carrying its DBL code, not merely "request accepted".
     assert!(
-        blocked_outcome.result.is_ok(),
-        "the pass accepts the request; the port probe fails inside the operation"
+        blocked_outcome.is_err(),
+        "the blocked start must be recorded as a failure, got {:?}",
+        blocked_outcome.result
+    );
+    let detail = blocked_outcome.result.as_ref().unwrap_err();
+    assert!(
+        detail.contains(CODE_PORT_IN_USE),
+        "the blocked outcome must carry DBL-1005: {detail}"
+    );
+    let ok_outcome = summary
+        .outcomes
+        .iter()
+        .find(|o| o.target.name == "auto-ok")
+        .expect("ok outcome");
+    assert!(
+        ok_outcome.result.is_ok(),
+        "the free start must have completed: {:?}",
+        ok_outcome.result
     );
     // The decisive AC2 evidence: the free instance is genuinely Running while
     // the other is Failed, so the failure provably did not block it.
