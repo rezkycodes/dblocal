@@ -322,3 +322,38 @@ fn cleanup_entrypoint_reads_xdg_and_removes_a_verified_socket() {
     cleanup_fallback_socket_from_my_cnf(&cnf, 42600);
     assert!(!sock.exists(), "the verified fallback socket is removed");
 }
+
+/// `initialize` (`data_dir.parent()`) and `sync_port` (`run_dir.parent()`) must
+/// compute the same fallback socket for a deep home, or a `change_port` would
+/// rewrite `socket=` to a different path than the one the server was started
+/// with. This pins the agreement directly.
+#[test]
+fn initialize_and_sync_port_agree_on_a_fallback_socket_for_a_deep_home() {
+    let dir = tempfile::tempdir().expect("tmp");
+    let data_dir = dir.path().join("d".repeat(120)).join("inst/data");
+    fs::create_dir_all(&data_dir).expect("data");
+    // run_dir is what `sibling_dir(data_dir, "run")` produces.
+    let run_dir = data_dir.parent().unwrap().join("run");
+    fs::create_dir_all(&run_dir).expect("run");
+
+    let initialize_identity = data_dir.parent().unwrap_or(data_dir.as_path());
+    let sync_port_identity = run_dir.parent().unwrap_or(run_dir.as_path());
+    assert_eq!(
+        initialize_identity, sync_port_identity,
+        "the two call sites must share one instance identity"
+    );
+
+    let from_initialize =
+        resolve_socket_path_with_env(&run_dir, 42077, initialize_identity, None, uid())
+            .expect("initialize socket");
+    let from_sync_port =
+        resolve_socket_path_with_env(&run_dir, 42077, sync_port_identity, None, uid())
+            .expect("sync_port socket");
+    assert_eq!(
+        from_initialize, from_sync_port,
+        "a port change and a start must agree on the socket path"
+    );
+    // The deep natural path cannot fit, so both used the same fallback.
+    assert_ne!(from_initialize, socket_path(&run_dir, 42077));
+    assert!(sockdir::socket_path_fits(&from_initialize));
+}

@@ -1089,3 +1089,41 @@ fn greeting_error_from_io_error_wraps() {
 fn parse_greeting_rejects_empty_payload() {
     assert!(parse_greeting(&[]).is_err());
 }
+
+/// `initialize` and `sync_port` both resolve the socket through
+/// `resolve_socket_path(data_dir, port)` with `data_dir` as the identity, so a
+/// `change_port` rewrites `socket=` to exactly the path the server was started
+/// with, including on a deep home that needs the fallback directory.
+#[test]
+fn sync_port_keeps_the_fallback_socket_path_it_started_with() {
+    let dir = tempdir().expect("tmp");
+    let deep = dir.path().join("d".repeat(120));
+    let data = deep.join("inst/data");
+    fs::create_dir_all(&data).expect("data");
+    let old_sock = resolve_socket_path(&data, 3307).expect("old socket");
+    assert_ne!(
+        old_sock,
+        socket_path(&data, 3307),
+        "the deep natural path must need the fallback"
+    );
+    let ctx = InitContext {
+        instance_name: "m".into(),
+        runtime_dir: dir.path().join("rt"),
+        data_dir: data.clone(),
+        port: Port::new(3307).expect("port"),
+        superuser: "root".into(),
+        auth: AuthMode::None,
+        password: None,
+    };
+    let conf = render_config(&config_params(&ctx, &old_sock).expect("params"));
+    write_private_config(&config_path(&data), conf.expose()).expect("write");
+
+    sync_port(&data, 43111).expect("sync");
+    let expected = resolve_socket_path(&data, 43111).expect("new socket");
+    let updated = fs::read_to_string(config_path(&data)).expect("read");
+    assert!(updated.contains("port=43111"));
+    assert!(
+        updated.contains(&format!("socket={}", expected.display())),
+        "sync_port must write the same resolver's socket:\n{updated}"
+    );
+}
