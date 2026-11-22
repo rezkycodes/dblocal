@@ -378,3 +378,71 @@ fn choose_engine_switches_the_form(cx: &mut TestAppContext) {
         Some(EngineKey::Mysql)
     );
 }
+
+#[gpui_kit::test]
+fn purge_refuses_without_the_typed_name(cx: &mut TestAppContext) {
+    let (view, service, cx) = fixture(cx);
+    let id = service.id_with(InstanceStatus::Stopped);
+    view.update_in(cx, |this, window, cx| {
+        this.open_delete_dialog(id.clone(), window, cx);
+        this.set_delete_mode(dblocal_core::model::DeleteMode::PurgeData);
+        this.delete_typed_name = Some("salah".to_owned());
+        this.confirm_delete(cx);
+    });
+    cx.run_until_parked();
+    assert_eq!(
+        view.read_with(cx, |this, _| this.toast_text())
+            .as_deref()
+            .map(ToString::to_string),
+        Some(strings::UI_DELETE_TYPE_NAME.to_owned())
+    );
+    assert!(
+        view.read_with(cx, |this, _| this.delete_target.is_some()),
+        "the dialog stays open after a refusal"
+    );
+}
+
+#[gpui_kit::test]
+fn purge_with_the_right_name_deletes_and_closes(cx: &mut TestAppContext) {
+    let (view, service, cx) = fixture(cx);
+    let id = service.id_with(InstanceStatus::Stopped);
+    let name = view.read_with(cx, |this, _| {
+        this.instance(&id).expect("instance").name.clone()
+    });
+    view.update_in(cx, |this, window, cx| {
+        this.open_delete_dialog(id.clone(), window, cx);
+        this.set_delete_mode(dblocal_core::model::DeleteMode::PurgeData);
+        // The dialog owns an InputState; it takes precedence over the mirror.
+        if let Some(input) = this.delete_name_input.clone() {
+            input.update(cx, |state, cx| state.set_value(name.clone(), window, cx));
+        }
+        this.delete_typed_name = Some(name.clone());
+        this.confirm_delete(cx);
+    });
+    cx.run_until_parked();
+    assert_eq!(
+        view.read_with(cx, |this, _| this.toast_text())
+            .as_deref()
+            .map(ToString::to_string),
+        Some(strings::UI_TOAST_DELETED.to_owned())
+    );
+    assert!(
+        view.read_with(cx, |this, _| this.delete_target.is_none()),
+        "a completed delete must close the dialog"
+    );
+}
+
+#[gpui_kit::test]
+fn choose_version_updates_the_form_and_the_suggested_name(cx: &mut TestAppContext) {
+    let (view, _service, cx) = fixture(cx);
+    view.update_in(cx, |this, window, cx| {
+        this.open_create_dialog(window, cx);
+        this.choose_version("17.5".to_owned(), window, cx);
+    });
+    assert_eq!(
+        view.read_with(cx, |this, _| {
+            this.create_form().map(|f| f.version.clone())
+        }),
+        Some("17.5".to_owned())
+    );
+}
