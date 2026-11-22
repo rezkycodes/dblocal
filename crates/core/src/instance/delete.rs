@@ -10,7 +10,7 @@ use crate::service::{OperationId, OperationStage};
 
 use super::helpers::{
     OpResult, blocking, db_async, dir_size, emit_changed, emit_removed, emit_stage,
-    finish_operation, identity_of, load, remove_tree, safe_within,
+    finish_operation, identity_of, load, remove_tree_retrying, safe_within,
 };
 use super::service::Inner;
 
@@ -414,7 +414,7 @@ async fn purge_data(inner: &Arc<Inner>, instance: &Instance) -> Result<()> {
     let instance_dir = inner.paths.instance_dir(instance.name());
     // Re-validate before removing: a corrupt row must not delete outside home.
     safe_within(&inner.paths, &instance_dir)?;
-    blocking(move || remove_tree(&instance_dir)).await
+    blocking(move || remove_tree_retrying(&instance_dir)).await
 }
 
 async fn archive_data(inner: &Arc<Inner>, instance: &Instance) -> OpResult<ArchivedData> {
@@ -464,7 +464,7 @@ async fn archive_data(inner: &Arc<Inner>, instance: &Instance) -> OpResult<Archi
             super::helpers::ensure_private_dir(&target_for_move)?;
         }
         // The instance shell (logs, run) is gone once its data is archived.
-        remove_tree(&instance_dir)
+        remove_tree_retrying(&instance_dir)
     })
     .await?;
 
