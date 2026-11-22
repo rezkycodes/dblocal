@@ -288,6 +288,25 @@ impl MysqlAdmin {
         })
     }
 
+    /// Runs several role statements on **one** connection (so a password change
+    /// that invalidates the connect credential on some accounts does not break the
+    /// rest). A statement that fails because its host account does not exist
+    /// (`1396`) is skipped; any other failure is returned.
+    fn exec_user_batch(&self, statements: &[String]) -> AdminResult<()> {
+        let statements = statements.to_vec();
+        self.with_client(self.target.opts(None), move |mut conn| async move {
+            let _ = conn.query_drop("SET sql_log_off = 1").await;
+            for statement in &statements {
+                match conn.query_drop(statement).await {
+                    Ok(()) => {}
+                    Err(err) if server_error(&err).is_some_and(|s| s.code == 1396) => {}
+                    Err(err) => return Err(map_user_error(err)),
+                }
+            }
+            Ok(())
+        })
+    }
+
     /// Opens a connection with `opts`, runs `f`, and maps a connection failure.
     fn with_client<T, F, Fut>(&self, opts: Opts, f: F) -> AdminResult<T>
     where
@@ -392,19 +411,22 @@ impl PasswordEngine for MysqlAdmin {
     fn apply(&self, connect_as: &SecretString, target: &SecretString) -> AdminResult<()> {
         let user = Identifier::role(&self.target.superuser)
             .map_err(|_| AdminError::InvalidTarget(TargetProblem::EmptySuperuser))?;
+        // Build every loopback `ALTER USER` up front and run them on **one**
+        // connection opened with the connect credential. Reconnecting per host
+        // would fail the second host: after the first ALTER the engine no longer
+        // accepts the connect password on the accounts already changed.
+        let statements: Vec<String> = MYSQL_LOOPBACK_HOSTS
+            .iter()
+            .map(|host| {
+                alter_password_mysql_at(&user, host, target.expose())
+                    .sql()
+                    .to_owned()
+            })
+            .collect();
         // Keep every loopback account of the superuser in sync, so the socket
         // (`localhost`) and the TCP URI (`127.0.0.1`, `::1`) all keep working.
-        for host in MYSQL_LOOPBACK_HOSTS {
-            let stmt = alter_password_mysql_at(&user, host, target.expose());
-            let connector = MysqlAdmin::new(self.target.with_password(connect_as.clone()));
-            match connector.exec_user(stmt.sql()) {
-                // A host account that does not exist answers 1396/unknown user;
-                // only the accounts that do exist need to move to the new value.
-                Ok(()) | Err(AdminError::UserExists) | Err(AdminError::UserNotFound) => {}
-                Err(err) => return Err(err),
-            }
-        }
-        Ok(())
+        let connector = MysqlAdmin::new(self.target.with_password(connect_as.clone()));
+        connector.exec_user_batch(&statements)
     }
 
     fn verify(&self, password: &SecretString) -> AdminResult<()> {

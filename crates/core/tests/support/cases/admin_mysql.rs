@@ -183,7 +183,19 @@ fn run_admin_case(engine: EngineKey, name: &str, archive: &str) {
     // (Proven at the service level with a failing sink in the unit tests; here the
     // reset that just succeeded is the live-engine half.)
 
-    // --- drop the created database and delete the instance ---
+    // --- drop the created database: `force=false` refuses a live session ---
+    let err = harness
+        .service
+        .drop_database(&id, "admdb", false)
+        .expect_err("a live session must block the drop");
+    assert_eq!(
+        err.code,
+        dblocal_core::admin::error::CODE_DATABASE_IN_USE,
+        "{label}: a live ro/rw session must block force=false"
+    );
+    // Close the ro/rw connections; then it succeeds.
+    drop(rw);
+    drop(ro);
     harness
         .service
         .drop_database(&id, "admdb", false)
@@ -198,8 +210,6 @@ fn run_admin_case(engine: EngineKey, name: &str, archive: &str) {
         "{label}: admdb must be gone"
     );
     drop(after);
-    drop(rw);
-    drop(ro);
     drop(superuser);
 
     let delete = harness.delete(&id, DeleteMode::PurgeData);
