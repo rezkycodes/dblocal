@@ -10,6 +10,7 @@ use std::fs;
 use std::net::TcpStream;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::OnceLock;
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -367,8 +368,50 @@ fn ensure_libcrypt_shim(base: &Path) -> Option<PathBuf> {
     None
 }
 
-fn setup_runtime(tmp: &Path) -> PathBuf {
-    if let Some(shim) = ensure_libcrypt_shim(tmp) {
+fn shared_runtime_118() -> PathBuf {
+    static RUNTIME: OnceLock<PathBuf> = OnceLock::new();
+    RUNTIME
+        .get_or_init(|| {
+            let base = PathBuf::from(std::env::var_os("HOME").expect("HOME"))
+                .join(".cache/dblocal-e2e-shared");
+            fs::create_dir_all(&base).expect("shared base");
+            maybe_install_libcrypt_shim(&base);
+            let cache = cache_dir();
+            let a118 = cache.join(MDB118_ARCHIVE);
+            assert!(a118.is_file(), "missing {}", a118.display());
+            let rt = runtime_dir(&base, "11.8.10");
+            if !rt.join("bin").join("mariadbd").is_file() {
+                extract_tar_gz(&a118, &base);
+            }
+            rt
+        })
+        .clone()
+}
+
+fn shared_runtime_114() -> Option<PathBuf> {
+    static RUNTIME: OnceLock<Option<PathBuf>> = OnceLock::new();
+    RUNTIME
+        .get_or_init(|| {
+            let base = PathBuf::from(std::env::var_os("HOME").expect("HOME"))
+                .join(".cache/dblocal-e2e-shared");
+            fs::create_dir_all(&base).expect("shared base");
+            maybe_install_libcrypt_shim(&base);
+            let cache = cache_dir();
+            let a114 = cache.join(MDB114_ARCHIVE);
+            if !a114.is_file() {
+                return None;
+            }
+            let rt = runtime_dir(&base, "11.4.14");
+            if !rt.join("bin").join("mariadbd").is_file() {
+                extract_tar_gz(&a114, &base);
+            }
+            Some(rt)
+        })
+        .clone()
+}
+
+fn maybe_install_libcrypt_shim(base: &Path) {
+    if let Some(shim) = ensure_libcrypt_shim(base) {
         let prev = std::env::var("LD_LIBRARY_PATH").unwrap_or_default();
         let val = if prev.is_empty() {
             shim.display().to_string()
@@ -380,11 +423,10 @@ fn setup_runtime(tmp: &Path) -> PathBuf {
             std::env::set_var("LD_LIBRARY_PATH", val)
         };
     }
-    let cache = cache_dir();
-    let a118 = cache.join(MDB118_ARCHIVE);
-    assert!(a118.is_file(), "missing {}", a118.display());
-    extract_tar_gz(&a118, tmp);
-    runtime_dir(tmp, "11.8.10")
+}
+
+fn setup_runtime(_tmp: &Path) -> PathBuf {
+    shared_runtime_118()
 }
 
 fn scan_dir_for_secrets(root: &Path, needles: &[&str]) -> Vec<(PathBuf, String)> {
@@ -868,9 +910,7 @@ fn mariadb_two_instances_side_by_side() {
     assert!(wait_tcp_gone(port1, Duration::from_secs(30)));
     assert!(wait_tcp_gone(port2, Duration::from_secs(30)));
 
-    if a114.is_file() {
-        extract_tar_gz(&a114, tmp.path());
-        let rt114 = runtime_dir(tmp.path(), "11.4.14");
+    if let Some(rt114) = shared_runtime_114() {
         let port3 = 43108u16;
         require_port_free(port3);
         let (_i3, d3, l3, r3) = mk_instance(tmp.path(), "s114");
@@ -883,7 +923,6 @@ fn mariadb_two_instances_side_by_side() {
                     || msg.contains("error while loading shared libraries")
                 {
                     eprintln!("skip 11.4 side-by-side: host cannot load 11.4 binary: {msg}");
-                    // still report 11.8 side-by-side as OK
                     eprintln!("mariadb side-by-side OK (11.8 only)");
                     return;
                 }

@@ -8,6 +8,8 @@ mod identity;
 pub mod socket;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_hardening;
 
 use std::fmt::Write as _;
 use std::fs;
@@ -27,7 +29,7 @@ use crate::service::UriFormat;
 #[cfg(test)]
 pub(super) use identity::{
     ExpectedIdentity, PidIdentity, cmdline_targets_instance, is_zombie_stat, parse_cmdline,
-    verify_pid_identity,
+    shutdown_verified_pid, verify_pid_identity, verify_ps_command_output,
 };
 /// MariaDB protocol version byte for the server greeting.
 const PROTOCOL_VERSION_10: u8 = 10;
@@ -73,6 +75,7 @@ impl EngineAdapter for MariaDbAdapter {
         // Never forward a password in the environment to the server process.
         cmd.env_remove("MYSQL_PWD");
         cmd.env_remove("MYSQL_TCP_PORT");
+        cmd.env("TMPDIR", tmpdir_path(&ctx.data_dir));
         cmd
     }
 
@@ -110,6 +113,7 @@ struct ConfigParams {
     socket: PathBuf,
     pid_file: PathBuf,
     log_error: PathBuf,
+    tmpdir: PathBuf,
 }
 
 fn config_params(ctx: &InitContext, socket: &Path) -> Result<ConfigParams> {
@@ -120,6 +124,7 @@ fn config_params(ctx: &InitContext, socket: &Path) -> Result<ConfigParams> {
         socket: socket.to_path_buf(),
         pid_file: pidfile_path(&ctx.data_dir),
         log_error: log_error_path(&ctx.data_dir),
+        tmpdir: tmpdir_path(&ctx.data_dir),
     })
 }
 
@@ -133,6 +138,10 @@ fn pidfile_path(data_dir: &Path) -> PathBuf {
 
 fn log_error_path(data_dir: &Path) -> PathBuf {
     sibling_dir(data_dir, consts::DIR_LOGS).join("mariadb.err")
+}
+
+fn tmpdir_path(data_dir: &Path) -> PathBuf {
+    sibling_dir(data_dir, consts::DIR_RUN).join("tmp")
 }
 
 #[cfg(test)]
@@ -157,6 +166,7 @@ fn render_config(p: &ConfigParams) -> SecretString {
     let _ = writeln!(out, "socket={}", p.socket.display());
     let _ = writeln!(out, "pid-file={}", p.pid_file.display());
     let _ = writeln!(out, "log-error={}", p.log_error.display());
+    let _ = writeln!(out, "tmpdir={}", p.tmpdir.display());
     let _ = writeln!(out, "skip-name-resolve");
     // Never 0.0.0.0; never a password in config.
     SecretString::new(out)
@@ -165,10 +175,73 @@ fn render_config(p: &ConfigParams) -> SecretString {
 fn prepare_dirs(ctx: &InitContext) -> Result<()> {
     let logs = sibling_dir(&ctx.data_dir, consts::DIR_LOGS);
     let run = sibling_dir(&ctx.data_dir, consts::DIR_RUN);
+    let tmp = tmpdir_path(&ctx.data_dir);
     for (dir, label) in [(&ctx.data_dir, "data"), (&logs, "logs"), (&run, "run")] {
         crate::fsutil::ensure_private_dir(dir).map_err(|e| DblError::Engine {
             reason: format!("cannot create {label} directory {}: {e}", dir.display()),
         })?;
+    }
+    ensure_private_tmpdir(&tmp)?;
+    Ok(())
+}
+
+fn ensure_private_tmpdir(dir: &Path) -> Result<()> {
+    if dir.exists() {
+        let meta = fs::symlink_metadata(dir).map_err(|e| DblError::Engine {
+            reason: format!("cannot inspect tmpdir {}: {e}", dir.display()),
+        })?;
+        if meta.file_type().is_symlink() || !meta.is_dir() {
+            return Err(DblError::Engine {
+                reason: format!("tmpdir {} is not a real directory", dir.display()),
+            });
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::{MetadataExt, PermissionsExt};
+            if meta.uid() != nix::unistd::geteuid().as_raw() {
+                return Err(DblError::Engine {
+                    reason: format!("tmpdir {} has wrong owner", dir.display()),
+                });
+            }
+            let mode = meta.mode() & 0o777;
+            if mode != 0o700 {
+                fs::set_permissions(dir, fs::Permissions::from_mode(0o700)).map_err(|e| {
+                    DblError::Engine {
+                        reason: format!("cannot secure tmpdir {}: {e}", dir.display()),
+                    }
+                })?;
+            }
+        }
+        clean_stale_tmpdir(dir)?;
+        return Ok(());
+    }
+    crate::fsutil::ensure_private_dir(dir).map_err(|e| DblError::Engine {
+        reason: format!("cannot create tmpdir {}: {e}", dir.display()),
+    })?;
+    Ok(())
+}
+
+fn clean_stale_tmpdir(dir: &Path) -> Result<()> {
+    let entries = fs::read_dir(dir).map_err(|e| DblError::Engine {
+        reason: format!("cannot read tmpdir {}: {e}", dir.display()),
+    })?;
+    for entry in entries {
+        let entry = entry.map_err(|e| DblError::Engine {
+            reason: format!("cannot read tmpdir entry in {}: {e}", dir.display()),
+        })?;
+        let path = entry.path();
+        let ft = entry.file_type().map_err(|e| DblError::Engine {
+            reason: format!("cannot inspect tmpdir entry {}: {e}", path.display()),
+        })?;
+        if ft.is_dir() {
+            fs::remove_dir_all(&path).map_err(|e| DblError::Engine {
+                reason: format!("cannot remove stale tmpdir entry {}: {e}", path.display()),
+            })?;
+        } else {
+            fs::remove_file(&path).map_err(|e| DblError::Engine {
+                reason: format!("cannot remove stale tmpdir entry {}: {e}", path.display()),
+            })?;
+        }
     }
     Ok(())
 }
@@ -196,6 +269,7 @@ fn build_install_db_command(ctx: &InitContext) -> Command {
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
     cmd.env_remove("MYSQL_PWD");
+    cmd.env("TMPDIR", tmpdir_path(&ctx.data_dir));
     cmd
 }
 
@@ -269,7 +343,7 @@ fn escape_sql_single_quoted(value: &str) -> String {
     out
 }
 
-fn run_bootstrap_server(ctx: &InitContext, init_file: &Path) -> Result<()> {
+fn build_bootstrap_command(ctx: &InitContext, init_file: &Path) -> Command {
     let server = ctx.runtime_dir.join("bin").join(exe_name("mariadbd"));
     let mut cmd = Command::new(server);
     cmd.arg(format!(
@@ -282,7 +356,12 @@ fn run_bootstrap_server(ctx: &InitContext, init_file: &Path) -> Result<()> {
     cmd.stderr(Stdio::piped());
     cmd.env_remove("MYSQL_PWD");
     cmd.env_remove("MYSQL_TCP_PORT");
+    cmd.env("TMPDIR", tmpdir_path(&ctx.data_dir));
+    cmd
+}
 
+fn run_bootstrap_server(ctx: &InitContext, init_file: &Path) -> Result<()> {
+    let mut cmd = build_bootstrap_command(ctx, init_file);
     let mut child = cmd.spawn().map_err(|e| {
         let _ = fs::remove_dir_all(&ctx.data_dir);
         DblError::Engine {

@@ -14,10 +14,23 @@ use crate::error::{DblError, Result};
 use super::{config_path, pidfile_path};
 
 pub(super) fn shutdown_by_sigterm(ctx: &RunContext) -> Result<()> {
+    shutdown_by_sigterm_with_grace(ctx, Duration::from_secs(consts::STOP_GRACE_SECS))
+}
+
+pub(super) fn shutdown_by_sigterm_with_grace(ctx: &RunContext, grace: Duration) -> Result<()> {
     let pid_path = pidfile_path(&ctx.data_dir);
     let pid = read_pidfile(&pid_path)?;
     let identity = expected_identity(ctx);
-    match verify_pid_identity(pid, &identity) {
+    let verified = verify_pid_identity(pid, &identity);
+    shutdown_verified_pid(pid, verified, grace)
+}
+
+pub(crate) fn shutdown_verified_pid(
+    pid: u32,
+    identity: PidIdentity,
+    grace: Duration,
+) -> Result<()> {
+    match identity {
         PidIdentity::Match => {}
         PidIdentity::NoSuchProcess => {
             tracing::info!(pid, "mariadb pid already gone");
@@ -32,18 +45,15 @@ pub(super) fn shutdown_by_sigterm(ctx: &RunContext) -> Result<()> {
             return Ok(());
         }
         PidIdentity::Unverifiable(reason) => {
-            tracing::warn!(
-                pid,
-                reason = %reason,
-                "mariadb pid identity unverifiable; refusing to signal"
-            );
-            return Ok(());
+            return Err(DblError::Engine {
+                reason: format!(
+                    "mariadb pid {pid} identity unverifiable; refusing to signal: {reason}"
+                ),
+            });
         }
     }
 
     let start = Instant::now();
-    let grace = Duration::from_secs(consts::STOP_GRACE_SECS);
-
     send_term(pid)?;
 
     while start.elapsed() < grace {
@@ -59,7 +69,7 @@ pub(super) fn shutdown_by_sigterm(ctx: &RunContext) -> Result<()> {
     Err(DblError::Engine {
         reason: format!(
             "mariadbd pid {pid} did not exit within {}s after SIGTERM",
-            consts::STOP_GRACE_SECS
+            grace.as_secs()
         ),
     })
 }
@@ -156,9 +166,6 @@ fn verify_pid_identity_fallback(pid: u32, expected: &ExpectedIdentity) -> PidIde
     if !pid_alive(pid) {
         return PidIdentity::NoSuchProcess;
     }
-    // On macOS/BSD, /proc is not available. Use ps -p <pid> -o command= as a
-    // best-effort identity check; this is weaker than the Linux /proc check and
-    // is documented as unverified on macOS in the architecture notes.
     let out = Command::new("ps")
         .args(["-p", &pid.to_string(), "-o", "command="])
         .stdout(Stdio::piped())
@@ -171,26 +178,62 @@ fn verify_pid_identity_fallback(pid: u32, expected: &ExpectedIdentity) -> PidIde
         return PidIdentity::NoSuchProcess;
     }
     let cmd = String::from_utf8_lossy(&out.stdout);
-    let cmd = cmd.trim();
+    verify_ps_command_output(cmd.trim(), expected)
+}
+
+pub(crate) fn verify_ps_command_output(cmd: &str, expected: &ExpectedIdentity) -> PidIdentity {
     if cmd.is_empty() {
         return PidIdentity::NoSuchProcess;
     }
-    let args: Vec<String> = cmd.split_whitespace().map(|s| s.to_owned()).collect();
-    let Some(exe_arg) = args.first() else {
-        return PidIdentity::Unverifiable("empty ps output".to_owned());
-    };
-    let observed_exe = PathBuf::from(exe_arg);
-    if !same_executable(&observed_exe, &expected.exe) {
+    let expected_exe = expected.exe.to_string_lossy();
+    let Some(rest) = command_starts_with_executable(cmd, &expected_exe) else {
+        let observed = cmd.split_whitespace().next().unwrap_or(cmd);
         return PidIdentity::NotOurs(format!(
             "exe {} != {}",
-            observed_exe.display(),
+            observed,
             expected.exe.display()
         ));
-    }
-    if !cmdline_targets_instance(&args, expected) {
+    };
+    let args_tail = rest.trim_start();
+    if !ps_command_targets_instance(args_tail, expected) {
         return PidIdentity::NotOurs("cmdline does not target this instance".to_owned());
     }
     PidIdentity::Match
+}
+
+fn command_starts_with_executable<'a>(cmd: &'a str, expected_exe: &str) -> Option<&'a str> {
+    let rest = cmd.strip_prefix(expected_exe)?;
+    if rest.is_empty() || rest.starts_with(char::is_whitespace) {
+        return Some(rest);
+    }
+    None
+}
+
+fn ps_command_targets_instance(args_tail: &str, expected: &ExpectedIdentity) -> bool {
+    let datadir = expected.data_dir.to_string_lossy();
+    let conf = expected.config_path.to_string_lossy();
+    let datadir_arg = format!("--datadir={datadir}");
+    let conf_arg = format!("--defaults-file={conf}");
+    contains_arg_token(args_tail, &datadir_arg) || contains_arg_token(args_tail, &conf_arg)
+}
+
+fn contains_arg_token(haystack: &str, token: &str) -> bool {
+    let mut offset = 0;
+    while let Some(pos) = haystack[offset..].find(token) {
+        let start = offset + pos;
+        let end = start + token.len();
+        let before_ok = start == 0 || haystack.as_bytes()[start - 1].is_ascii_whitespace();
+        let after_ok =
+            end == haystack.len() || haystack.as_bytes()[end].is_ascii_whitespace();
+        if before_ok && after_ok {
+            return true;
+        }
+        offset = start + 1;
+        if offset >= haystack.len() {
+            break;
+        }
+    }
+    false
 }
 
 pub(super) fn same_executable(observed: &Path, expected: &Path) -> bool {

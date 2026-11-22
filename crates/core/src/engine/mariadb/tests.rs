@@ -47,6 +47,7 @@ fn config_renders_required_settings_and_no_password() {
     assert!(text.contains("socket="));
     assert!(text.contains("pid-file="));
     assert!(text.contains("log-error="));
+    assert!(text.contains("tmpdir=/tmp/dblocal/instances/mdb/run/tmp"));
     assert!(text.contains("skip-name-resolve"));
     assert!(!text.contains("0.0.0.0"));
     assert!(!text.contains("s3cret"));
@@ -310,12 +311,22 @@ fn install_db_command_has_no_password_and_uses_normal_auth() {
             "password-ish arg: {a}"
         );
     }
+    let mut saw_tmpdir = false;
     for (k, v) in cmd.get_envs() {
         if let Some(v) = v {
-            assert_ne!(k.to_string_lossy(), "MYSQL_PWD");
+            let k = k.to_string_lossy();
+            assert_ne!(k.as_ref(), "MYSQL_PWD");
             assert!(!v.to_string_lossy().contains("super-secret"));
+            if k == "TMPDIR" {
+                assert_eq!(
+                    v.to_string_lossy(),
+                    "/tmp/dblocal/instances/mdb/run/tmp"
+                );
+                saw_tmpdir = true;
+            }
         }
     }
+    assert!(saw_tmpdir, "install-db must set TMPDIR to instance tmpdir");
 }
 
 #[test]

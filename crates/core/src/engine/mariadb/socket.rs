@@ -138,7 +138,7 @@ fn current_euid() -> u32 {
     0
 }
 
-fn ensure_secure_runtime_dir(dir: &Path) -> Result<()> {
+pub(super) fn ensure_secure_runtime_dir(dir: &Path) -> Result<()> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt;
