@@ -12,6 +12,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
+use sha2::Digest as _;
+
 use crate::consts;
 use crate::engine::uri::{self, exe_name};
 use crate::engine::{Credential, EngineAdapter, Health, InitContext, RunContext};
@@ -22,8 +24,6 @@ use crate::service::UriFormat;
 
 /// MySQL listens on loopback only.
 pub const BIND: &str = "127.0.0.1";
-/// Maximum length of a Unix socket path on Linux (`sun_path`, 107 bytes).
-const UNIX_SOCKET_PATH_LIMIT: usize = 107;
 /// Name of the one-shot init SQL file used to bootstrap credentials.
 const INIT_FILE_NAME: &str = "dblocal-init.sql";
 
@@ -46,11 +46,16 @@ impl EngineAdapter for MysqlAdapter {
         ] {
             ensure_private_dir(dir, label)?;
         }
-        validate_socket_path_len(&socket_path(&run_dir, ctx.port.get()))?;
+        let instance_dir = ctx
+            .data_dir
+            .parent()
+            .unwrap_or(ctx.data_dir.as_path())
+            .to_path_buf();
+        let socket = resolve_socket_path(&run_dir, ctx.port.get(), &instance_dir)?;
 
         let outcome = (|| -> Result<()> {
             run_initialize_insecure(ctx, &logs_dir)?;
-            write_my_cnf(ctx, &run_dir, &logs_dir)?;
+            write_my_cnf(ctx, &run_dir, &logs_dir, &socket)?;
             bootstrap_credentials(ctx, &run_dir, &logs_dir)?;
             Ok(())
         })();
@@ -58,10 +63,11 @@ impl EngineAdapter for MysqlAdapter {
         if let Err(err) = outcome {
             let _ = fs::remove_dir_all(&ctx.data_dir);
             let _ = fs::remove_file(init_file_path(&run_dir));
+            cleanup_fallback_socket(&socket, &run_dir, ctx.port.get());
             return Err(err);
         }
         let _ = fs::remove_file(init_file_path(&run_dir));
-        tracing::debug!(instance = %ctx.instance_name, "mysql initialized");
+        tracing::debug!(instance = %ctx.instance_name, socket = %socket.display(), "mysql initialized");
         Ok(())
     }
 
@@ -86,40 +92,25 @@ impl EngineAdapter for MysqlAdapter {
     }
 
     fn shutdown(&self, ctx: &RunContext) -> Result<()> {
-        let mysqladmin = ctx.runtime_dir.join("bin").join(exe_name("mysqladmin"));
-        let mut cmd = Command::new(mysqladmin);
-        cmd.arg("--no-defaults")
-            .arg("-h")
-            .arg(BIND)
-            .arg("-P")
-            .arg(ctx.port.get().to_string())
-            .arg("-u")
-            .arg(&ctx.superuser)
-            .arg("--protocol=TCP")
-            .arg("shutdown");
-        cmd.stdin(Stdio::null());
-        cmd.stdout(Stdio::piped());
-        cmd.stderr(Stdio::piped());
-        if ctx.auth == AuthMode::Password
-            && let Some(cred) = ctx.credential.as_ref()
-        {
-            cmd.env("MYSQL_PWD", cred.password.expose());
-        }
-        strip_password_env_keep_mysql_pwd(&mut cmd);
-        let out = cmd.output().map_err(|e| DblError::Engine {
-            reason: format!("failed to execute mysqladmin shutdown: {e}"),
-        })?;
-        if out.status.success() {
-            return Ok(());
-        }
-        let tail = combined_output(out.stdout, out.stderr);
-        Err(DblError::Engine {
-            reason: format!(
-                "mysqladmin shutdown failed (code {:?}): {}",
-                out.status.code(),
-                tail.trim_end()
-            ),
-        })
+        let out = shutdown_command(ctx)
+            .output()
+            .map_err(|e| DblError::Engine {
+                reason: format!("failed to execute mysqladmin shutdown: {e}"),
+            })?;
+        let result = if out.status.success() {
+            Ok(())
+        } else {
+            let tail = combined_output(out.stdout, out.stderr);
+            Err(DblError::Engine {
+                reason: format!(
+                    "mysqladmin shutdown failed (code {:?}): {}",
+                    out.status.code(),
+                    tail.trim_end()
+                ),
+            })
+        };
+        cleanup_fallback_socket_from_my_cnf(&my_cnf_path(&ctx.run_dir), &ctx.run_dir, ctx.port.get());
+        result
     }
 
     fn connection_uri(
@@ -143,6 +134,7 @@ struct MyCnfParams<'a> {
     run_dir: &'a Path,
     logs_dir: &'a Path,
     runtime_dir: &'a Path,
+    socket: &'a Path,
 }
 
 fn render_my_cnf(params: &MyCnfParams<'_>) -> String {
@@ -151,11 +143,7 @@ fn render_my_cnf(params: &MyCnfParams<'_>) -> String {
     let _ = writeln!(out, "bind-address={BIND}");
     let _ = writeln!(out, "port={}", params.port);
     let _ = writeln!(out, "datadir={}", params.data_dir.display());
-    let _ = writeln!(
-        out,
-        "socket={}",
-        socket_path(params.run_dir, params.port).display()
-    );
+    let _ = writeln!(out, "socket={}", params.socket.display());
     let _ = writeln!(out, "pid-file={}", pidfile_path(params.run_dir).display());
     let _ = writeln!(out, "log-error={}", log_path(params.logs_dir).display());
     let _ = writeln!(out, "mysqlx=OFF");
@@ -164,31 +152,31 @@ fn render_my_cnf(params: &MyCnfParams<'_>) -> String {
     out
 }
 
-fn write_my_cnf(ctx: &InitContext, run_dir: &Path, logs_dir: &Path) -> Result<()> {
+fn write_my_cnf(
+    ctx: &InitContext,
+    run_dir: &Path,
+    logs_dir: &Path,
+    socket: &Path,
+) -> Result<()> {
     let params = MyCnfParams {
         port: ctx.port.get(),
         data_dir: &ctx.data_dir,
         run_dir,
         logs_dir,
         runtime_dir: &ctx.runtime_dir,
+        socket,
     };
     let rendered = render_my_cnf(&params);
     write_private_config_atomic(&my_cnf_path(run_dir), &rendered)
 }
 
 fn run_initialize_insecure(ctx: &InitContext, logs_dir: &Path) -> Result<()> {
-    let mysqld = ctx.runtime_dir.join("bin").join(exe_name("mysqld"));
     let init_err = logs_dir.join("init.err");
-    let mut cmd = Command::new(mysqld);
-    cmd.arg("--no-defaults")
-        .arg("--initialize-insecure")
-        .arg(format!("--datadir={}", ctx.data_dir.display()))
-        .arg(format!("--basedir={}", ctx.runtime_dir.display()))
-        .arg(format!("--log-error={}", init_err.display()));
-    strip_password_env(&mut cmd);
-    let out = cmd.output().map_err(|e| DblError::Engine {
-        reason: format!("failed to execute mysqld --initialize-insecure: {e}"),
-    })?;
+    let out = initialize_insecure_command(ctx, &init_err)
+        .output()
+        .map_err(|e| DblError::Engine {
+            reason: format!("failed to execute mysqld --initialize-insecure: {e}"),
+        })?;
     if out.status.success() {
         return Ok(());
     }
@@ -208,6 +196,21 @@ fn run_initialize_insecure(ctx: &InitContext, logs_dir: &Path) -> Result<()> {
     })
 }
 
+pub(super) fn initialize_insecure_command(ctx: &InitContext, init_err: &Path) -> Command {
+    let mysqld = ctx.runtime_dir.join("bin").join(exe_name("mysqld"));
+    let mut cmd = Command::new(mysqld);
+    cmd.arg("--no-defaults")
+        .arg("--initialize-insecure")
+        .arg(format!("--datadir={}", ctx.data_dir.display()))
+        .arg(format!("--basedir={}", ctx.runtime_dir.display()))
+        .arg(format!("--log-error={}", init_err.display()));
+    cmd.stdin(Stdio::null());
+    cmd.stdout(Stdio::piped());
+    cmd.stderr(Stdio::piped());
+    strip_password_env(&mut cmd);
+    cmd
+}
+
 fn bootstrap_credentials(ctx: &InitContext, run_dir: &Path, logs_dir: &Path) -> Result<()> {
     let init_sql = render_init_sql(ctx)?;
     let init_path = init_file_path(run_dir);
@@ -216,17 +219,11 @@ fn bootstrap_credentials(ctx: &InitContext, run_dir: &Path, logs_dir: &Path) -> 
             reason: format!("cannot write init SQL {}: {e}", init_path.display()),
         })?;
     let cfg = my_cnf_path(run_dir);
-    let mut cmd = Command::new(ctx.runtime_dir.join("bin").join(exe_name("mysqld")));
-    cmd.arg(format!("--defaults-file={}", cfg.display()))
-        .arg(format!("--init-file={}", init_path.display()))
-        .arg("--daemonize=OFF");
-    cmd.stdin(Stdio::null());
-    cmd.stdout(Stdio::piped());
-    cmd.stderr(Stdio::piped());
-    strip_password_env(&mut cmd);
-    let mut child = cmd.spawn().map_err(|e| DblError::Engine {
-        reason: format!("failed to start mysqld for credential bootstrap: {e}"),
-    })?;
+    let mut child = bootstrap_mysqld_command(ctx, &cfg, &init_path)
+        .spawn()
+        .map_err(|e| DblError::Engine {
+            reason: format!("failed to start mysqld for credential bootstrap: {e}"),
+        })?;
     let port = ctx.port.get();
     let deadline = std::time::Instant::now() + Duration::from_secs(consts::START_TIMEOUT_SECS);
     let ready = loop {
@@ -259,13 +256,14 @@ fn bootstrap_credentials(ctx: &InitContext, run_dir: &Path, logs_dir: &Path) -> 
         let _ = child.wait();
         let log_tail = read_log_tail(&log_path(logs_dir), 40);
         return Err(DblError::Engine {
-            reason: format!("mysqld bootstrap timed out on port {port}\n{}", log_tail),
+            reason: format!("mysqld bootstrap timed out on port {port}\n{log_tail}"),
         });
     }
     let shutdown_res = shutdown_bootstrap(
         &ctx.runtime_dir,
         ctx.port.get(),
         &ctx.superuser,
+        ctx.auth,
         ctx.password.as_ref(),
     );
     let wait_deadline = std::time::Instant::now() + Duration::from_secs(consts::STOP_GRACE_SECS);
@@ -293,33 +291,30 @@ fn bootstrap_credentials(ctx: &InitContext, run_dir: &Path, logs_dir: &Path) -> 
     shutdown_res
 }
 
+pub(super) fn bootstrap_mysqld_command(ctx: &InitContext, cfg: &Path, init_path: &Path) -> Command {
+    let mut cmd = Command::new(ctx.runtime_dir.join("bin").join(exe_name("mysqld")));
+    cmd.arg(format!("--defaults-file={}", cfg.display()))
+        .arg(format!("--init-file={}", init_path.display()))
+        .arg("--daemonize=OFF");
+    cmd.stdin(Stdio::null());
+    cmd.stdout(Stdio::piped());
+    cmd.stderr(Stdio::piped());
+    strip_password_env(&mut cmd);
+    cmd
+}
+
 fn shutdown_bootstrap(
     runtime_dir: &Path,
     port: u16,
     superuser: &str,
+    auth: AuthMode,
     password: Option<&SecretString>,
 ) -> Result<()> {
-    let mysqladmin = runtime_dir.join("bin").join(exe_name("mysqladmin"));
-    let mut cmd = Command::new(mysqladmin);
-    cmd.arg("--no-defaults")
-        .arg("-h")
-        .arg(BIND)
-        .arg("-P")
-        .arg(port.to_string())
-        .arg("-u")
-        .arg(superuser)
-        .arg("--protocol=TCP")
-        .arg("shutdown");
-    cmd.stdin(Stdio::null());
-    cmd.stdout(Stdio::piped());
-    cmd.stderr(Stdio::piped());
-    if let Some(pw) = password {
-        cmd.env("MYSQL_PWD", pw.expose());
-    }
-    strip_password_env_keep_mysql_pwd(&mut cmd);
-    let out = cmd.output().map_err(|e| DblError::Engine {
-        reason: format!("failed to shutdown bootstrap mysqld: {e}"),
-    })?;
+    let out = bootstrap_shutdown_command(runtime_dir, port, superuser, auth, password)
+        .output()
+        .map_err(|e| DblError::Engine {
+            reason: format!("failed to shutdown bootstrap mysqld: {e}"),
+        })?;
     if out.status.success() {
         return Ok(());
     }
@@ -333,7 +328,59 @@ fn shutdown_bootstrap(
     })
 }
 
-fn render_init_sql(ctx: &InitContext) -> Result<SecretString> {
+pub(super) fn shutdown_command(ctx: &RunContext) -> Command {
+    mysqladmin_command(
+        &ctx.runtime_dir,
+        ctx.port.get(),
+        &ctx.superuser,
+        ctx.auth,
+        ctx.credential.as_ref().map(|c| &c.password),
+        "shutdown",
+    )
+}
+
+pub(super) fn bootstrap_shutdown_command(
+    runtime_dir: &Path,
+    port: u16,
+    superuser: &str,
+    auth: AuthMode,
+    password: Option<&SecretString>,
+) -> Command {
+    mysqladmin_command(runtime_dir, port, superuser, auth, password, "shutdown")
+}
+
+fn mysqladmin_command(
+    runtime_dir: &Path,
+    port: u16,
+    superuser: &str,
+    auth: AuthMode,
+    password: Option<&SecretString>,
+    subcommand: &str,
+) -> Command {
+    let mysqladmin = runtime_dir.join("bin").join(exe_name("mysqladmin"));
+    let mut cmd = Command::new(mysqladmin);
+    cmd.arg("--no-defaults")
+        .arg("-h")
+        .arg(BIND)
+        .arg("-P")
+        .arg(port.to_string())
+        .arg("-u")
+        .arg(superuser)
+        .arg("--protocol=TCP")
+        .arg(subcommand);
+    cmd.stdin(Stdio::null());
+    cmd.stdout(Stdio::piped());
+    cmd.stderr(Stdio::piped());
+    if auth == AuthMode::Password
+        && let Some(pw) = password
+    {
+        cmd.env("MYSQL_PWD", pw.expose());
+    }
+    strip_password_env_keep_mysql_pwd(&mut cmd);
+    cmd
+}
+
+pub(super) fn render_init_sql(ctx: &InitContext) -> Result<SecretString> {
     let superuser = effective_superuser(&ctx.superuser);
     let mut out = String::new();
     match ctx.auth {
@@ -376,15 +423,31 @@ fn render_init_sql(ctx: &InitContext) -> Result<SecretString> {
     Ok(SecretString::new(out))
 }
 
-fn effective_superuser(superuser: &str) -> &str {
-    if superuser.is_empty() {
+pub(super) fn effective_superuser(superuser: &str) -> &str {
+    let name = if superuser.is_empty() {
         consts::SUPERUSER_MYSQL
     } else {
         superuser
-    }
+    };
+    debug_assert!(
+        is_safe_sql_identifier(name),
+        "mysql superuser must be a SQL identifier"
+    );
+    name
 }
 
-fn escape_sql_single_quoted(value: &str) -> String {
+pub(super) fn is_safe_sql_identifier(name: &str) -> bool {
+    let mut chars = name.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    if !(first.is_ascii_alphabetic() || first == '_') {
+        return false;
+    }
+    chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+pub(super) fn escape_sql_single_quoted(value: &str) -> String {
     let mut out = String::with_capacity(value.len());
     for ch in value.chars() {
         match ch {
@@ -412,16 +475,239 @@ pub fn pidfile_path(run_dir: &Path) -> PathBuf {
     run_dir.join("mysqld.pid")
 }
 
+/// Preferred socket path under the instance run directory.
 pub fn socket_path(run_dir: &Path, port: u16) -> PathBuf {
     run_dir.join(format!("mysqld-{port}.sock"))
+}
+
+/// Returns the platform Unix socket path limit for MySQL.
+///
+/// Linux `sun_path` allows 107 bytes; macOS and BSDs allow 103 usable bytes.
+pub const fn socket_path_limit() -> usize {
+    #[cfg(target_os = "linux")]
+    {
+        107
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        103
+    }
+}
+
+/// Resolves the socket path for `my.cnf`.
+///
+/// Uses the run-dir socket when it fits within the platform limit; otherwise
+/// falls back to a short private directory so instance creation does not fail
+/// on long homes (notably macOS). The fallback is verified as a real 0700
+/// directory owned by the current euid and not a symlink.
+pub fn resolve_socket_path(run_dir: &Path, port: u16, instance_dir: &Path) -> Result<PathBuf> {
+    let preferred = socket_path(run_dir, port);
+    if socket_path_fits(&preferred) {
+        return Ok(preferred);
+    }
+    let fallback_dir = ensure_fallback_socket_dir()?;
+    resolve_socket_path_with_fallback_dir(run_dir, port, instance_dir, &fallback_dir)
+}
+
+pub(super) fn resolve_socket_path_with_fallback_dir(
+    run_dir: &Path,
+    port: u16,
+    instance_dir: &Path,
+    fallback_dir: &Path,
+) -> Result<PathBuf> {
+    let preferred = socket_path(run_dir, port);
+    if socket_path_fits(&preferred) {
+        return Ok(preferred);
+    }
+    let name = fallback_socket_name(port, instance_dir);
+    let fallback = fallback_dir.join(name);
+    if !socket_path_fits(&fallback) {
+        return Err(DblError::InvalidInput {
+            field: "socket",
+            reason: format!(
+                "mysql socket path {} is {} bytes, maximum is {}",
+                fallback.display(),
+                fallback.as_os_str().as_encoded_bytes().len(),
+                socket_path_limit()
+            ),
+        });
+    }
+    tracing::info!(
+        preferred = %preferred.display(),
+        fallback = %fallback.display(),
+        limit = socket_path_limit(),
+        "mysql socket path too long; using short fallback socket directory"
+    );
+    Ok(fallback)
+}
+
+fn socket_path_fits(path: &Path) -> bool {
+    path.as_os_str().as_encoded_bytes().len() <= socket_path_limit()
+}
+
+fn fallback_socket_name(port: u16, instance_dir: &Path) -> String {
+    let mut hasher = sha2::Sha256::new();
+    hasher.update(instance_dir.as_os_str().as_encoded_bytes());
+    let digest = hasher.finalize();
+    let hex: String = digest.iter().map(|b| format!("{b:02x}")).collect();
+    let short_hash = &hex[..12];
+    format!("m{port}-{short_hash}.sock")
+}
+
+fn fallback_socket_dir_candidates() -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+    if let Some(runtime) = std::env::var_os("XDG_RUNTIME_DIR") {
+        let runtime = PathBuf::from(runtime);
+        if !runtime.as_os_str().is_empty() {
+            candidates.push(runtime.join("dblocal"));
+        }
+    }
+    let uid = current_euid();
+    candidates.push(PathBuf::from(format!("/tmp/dblocal-{uid}")));
+    candidates
+}
+
+/// Returns the fallback socket directory if one can be created/verified safely.
+pub fn ensure_fallback_socket_dir() -> Result<PathBuf> {
+    let uid = current_euid();
+    let mut last_err = None;
+    for dir in fallback_socket_dir_candidates() {
+        match ensure_verified_private_dir(&dir, uid) {
+            Ok(()) => return Ok(dir),
+            Err(err) => last_err = Some((dir, err)),
+        }
+    }
+    let (dir, err) = last_err.unwrap_or_else(|| {
+        (
+            PathBuf::from("/tmp/dblocal-unknown"),
+            DblError::Engine {
+                reason: "no fallback socket directory candidate".to_owned(),
+            },
+        )
+    });
+    Err(DblError::Engine {
+        reason: format!(
+            "cannot create verified mysql fallback socket dir {}: {err}",
+            dir.display()
+        ),
+    })
+}
+
+fn current_euid() -> u32 {
+    #[cfg(unix)]
+    {
+        nix::unistd::geteuid().as_raw()
+    }
+    #[cfg(not(unix))]
+    {
+        0
+    }
+}
+
+fn ensure_verified_private_dir(dir: &Path, uid: u32) -> Result<()> {
+    if dir.exists() {
+        verify_secure_dir(dir, uid)?;
+        return Ok(());
+    }
+    if let Some(parent) = dir.parent() {
+        fs::create_dir_all(parent).map_err(|e| DblError::Engine {
+            reason: format!(
+                "cannot create fallback socket parent {}: {e}",
+                parent.display()
+            ),
+        })?;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        match std::fs::DirBuilder::new().mode(0o700).create(dir) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(e) => {
+                return Err(DblError::Engine {
+                    reason: format!("cannot create fallback socket dir {}: {e}", dir.display()),
+                });
+            }
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        fs::create_dir_all(dir).map_err(|e| DblError::Engine {
+            reason: format!("cannot create fallback socket dir {}: {e}", dir.display()),
+        })?;
+    }
+    verify_secure_dir(dir, uid)
+}
+
+fn verify_secure_dir(dir: &Path, uid: u32) -> Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let meta = fs::symlink_metadata(dir).map_err(|e| DblError::Engine {
+            reason: format!("cannot stat fallback socket dir {}: {e}", dir.display()),
+        })?;
+        if meta.file_type().is_symlink() || !meta.is_dir() {
+            return Err(DblError::Engine {
+                reason: format!(
+                    "fallback socket dir {} is not a real directory",
+                    dir.display()
+                ),
+            });
+        }
+        if meta.uid() != uid {
+            return Err(DblError::Engine {
+                reason: format!("fallback socket dir {} has wrong owner", dir.display()),
+            });
+        }
+        if meta.mode() & 0o777 != 0o700 {
+            return Err(DblError::Engine {
+                reason: format!("fallback socket dir {} is not mode 0700", dir.display()),
+            });
+        }
+        Ok(())
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (dir, uid);
+        Ok(())
+    }
 }
 
 fn init_file_path(run_dir: &Path) -> PathBuf {
     run_dir.join(INIT_FILE_NAME)
 }
 
-fn cleanup_init_file(path: &Path) {
+pub(super) fn cleanup_init_file(path: &Path) {
     let _ = fs::remove_file(path);
+}
+
+pub(super) fn cleanup_fallback_socket(socket: &Path, run_dir: &Path, port: u16) {
+    let preferred = socket_path(run_dir, port);
+    if socket == preferred {
+        return;
+    }
+    let _ = fs::remove_file(socket);
+}
+
+fn cleanup_fallback_socket_from_my_cnf(my_cnf: &Path, run_dir: &Path, port: u16) {
+    let Some(socket) = socket_path_from_my_cnf(my_cnf) else {
+        return;
+    };
+    cleanup_fallback_socket(&socket, run_dir, port);
+}
+
+pub(super) fn socket_path_from_my_cnf(my_cnf: &Path) -> Option<PathBuf> {
+    let contents = fs::read_to_string(my_cnf).ok()?;
+    for line in contents.lines() {
+        let line = line.trim();
+        if let Some(value) = line.strip_prefix("socket=") {
+            let value = value.trim();
+            if !value.is_empty() {
+                return Some(PathBuf::from(value));
+            }
+        }
+    }
+    None
 }
 
 pub fn sibling_dir(data_dir: &Path, leaf: &str) -> PathBuf {
@@ -448,16 +734,18 @@ fn write_private_config_atomic(path: &Path, contents: &str) -> Result<()> {
     })
 }
 
+/// Validates that a socket path fits within the platform limit.
 pub fn validate_socket_path_len(sock: &Path) -> Result<()> {
     let len = sock.as_os_str().as_encoded_bytes().len();
-    if len > UNIX_SOCKET_PATH_LIMIT {
+    let limit = socket_path_limit();
+    if len > limit {
         return Err(DblError::InvalidInput {
             field: "socket",
             reason: format!(
                 "mysql socket path {} is {} bytes, maximum is {}",
                 sock.display(),
                 len,
-                UNIX_SOCKET_PATH_LIMIT
+                limit
             ),
         });
     }
@@ -645,306 +933,4 @@ fn is_binary_missing(output: &str) -> bool {
 }
 
 #[cfg(test)]
-mod tests {
-    #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
-
-    use super::*;
-    use crate::engine::Credential;
-    use crate::model::Port;
-
-    const SECRET: &str = "S3cret-Canary-Pw-MySql!9x";
-
-    fn init_ctx(port: u16, auth: AuthMode, password: Option<&str>) -> InitContext {
-        InitContext {
-            instance_name: "app".into(),
-            runtime_dir: PathBuf::from("/opt/mysql"),
-            data_dir: PathBuf::from("/data"),
-            port: Port::new(port).expect("port"),
-            superuser: "root".into(),
-            auth,
-            password: password.map(SecretString::from),
-        }
-    }
-
-    fn run_ctx(port: u16, auth: AuthMode, password: Option<&str>) -> RunContext {
-        RunContext {
-            instance_name: "app".into(),
-            runtime_dir: PathBuf::from("/opt/mysql"),
-            data_dir: PathBuf::from("/data"),
-            logs_dir: PathBuf::from("/logs"),
-            run_dir: PathBuf::from("/run"),
-            port: Port::new(port).expect("port"),
-            superuser: "root".into(),
-            auth,
-            credential: password.map(|p| Credential::new("root", SecretString::from(p))),
-        }
-    }
-
-    fn assert_no_secret_in_command(cmd: &Command, secret: &str) {
-        let prog = cmd.get_program().to_string_lossy();
-        assert!(!prog.contains(secret), "secret in program: {prog}");
-        for arg in cmd.get_args() {
-            let a = arg.to_string_lossy();
-            assert!(!a.contains(secret), "secret in arg: {a}");
-        }
-        for (k, v) in cmd.get_envs() {
-            let k = k.to_string_lossy();
-            assert!(!k.contains(secret), "secret in env key: {k}");
-            if let Some(v) = v {
-                let v = v.to_string_lossy();
-                assert!(!v.contains(secret), "secret in env value {k}={v}");
-            }
-        }
-    }
-
-    #[test]
-    fn render_my_cnf_contains_required_security_settings() {
-        let cnf = render_my_cnf(&MyCnfParams {
-            port: 42345,
-            data_dir: Path::new("/i/data"),
-            run_dir: Path::new("/i/run"),
-            logs_dir: Path::new("/i/logs"),
-            runtime_dir: Path::new("/rt/mysql"),
-        });
-        assert!(cnf.contains("bind-address=127.0.0.1\n"));
-        assert!(cnf.contains("port=42345\n"));
-        assert!(cnf.contains("datadir=/i/data\n"));
-        assert!(cnf.contains("socket=/i/run/mysqld-42345.sock\n"));
-        assert!(cnf.contains("pid-file=/i/run/mysqld.pid\n"));
-        assert!(cnf.contains("log-error=/i/logs/error.log\n"));
-        assert!(cnf.contains("mysqlx=OFF\n"));
-        assert!(cnf.contains("skip-name-resolve\n"));
-        assert!(cnf.contains("basedir=/rt/mysql\n"));
-        assert!(!cnf.contains("0.0.0.0"));
-    }
-
-    #[test]
-    fn spawn_command_uses_defaults_file_and_no_password() {
-        let ctx = run_ctx(42345, AuthMode::Password, Some(SECRET));
-        let cmd = MysqlAdapter.spawn_command(&ctx);
-        let args: Vec<String> = cmd
-            .get_args()
-            .map(|a| a.to_string_lossy().into_owned())
-            .collect();
-        assert_eq!(args.len(), 1);
-        assert!(args[0].starts_with("--defaults-file="));
-        assert!(args[0].contains("/run/my.cnf"));
-        assert!(cmd.get_program().to_string_lossy().ends_with("bin/mysqld"));
-        assert_no_secret_in_command(&cmd, SECRET);
-    }
-
-    #[test]
-    fn connection_uri_password_and_no_password_shapes() {
-        let ctx_pw = run_ctx(3306, AuthMode::Password, Some("p@:/?#[]% x"));
-        let cred = Credential::new("root", SecretString::from("p@:/?#[]% x"));
-        let uri = MysqlAdapter.connection_uri(&ctx_pw, &cred, UriFormat::Uri);
-        assert!(uri.expose().starts_with("mysql://root:"));
-        assert!(uri.expose().ends_with("@127.0.0.1:3306/"));
-        assert!(uri.expose().contains("%40"));
-        assert!(uri.expose().contains("%20"));
-        let env = MysqlAdapter.connection_uri(&ctx_pw, &cred, UriFormat::DotEnv);
-        assert!(env.expose().contains("DB_PASSWORD=p@:/?#[]% x\n"));
-        let ctx_none = run_ctx(3306, AuthMode::None, None);
-        let no_pw = MysqlAdapter.connection_uri_no_password(&ctx_none, UriFormat::Uri);
-        assert_eq!(no_pw.expose(), "mysql://root@127.0.0.1:3306/");
-        let no_env = MysqlAdapter.connection_uri_no_password(&ctx_none, UriFormat::DotEnv);
-        assert!(!no_env.expose().contains("DB_PASSWORD"));
-    }
-
-    #[test]
-    fn init_sql_password_mode_sets_both_hosts_and_flushes() {
-        let ctx = init_ctx(42345, AuthMode::Password, Some(SECRET));
-        let s = render_init_sql(&ctx).expect("sql").expose().to_owned();
-        assert!(
-            s.contains("ALTER USER 'root'@'localhost' IDENTIFIED BY 'S3cret-Canary-Pw-MySql!9x';")
-        );
-        assert!(s.contains("CREATE USER IF NOT EXISTS 'root'@'127.0.0.1' IDENTIFIED BY 'S3cret-Canary-Pw-MySql!9x';"));
-        assert!(s.contains("GRANT ALL PRIVILEGES ON *.* TO 'root'@'127.0.0.1' WITH GRANT OPTION;"));
-        assert!(s.contains("FLUSH PRIVILEGES;"));
-    }
-
-    #[test]
-    fn init_sql_no_password_mode_adds_loopback_user() {
-        let ctx = init_ctx(42345, AuthMode::None, None);
-        let s = render_init_sql(&ctx).expect("sql").expose().to_owned();
-        assert!(s.contains("CREATE USER IF NOT EXISTS 'root'@'127.0.0.1' IDENTIFIED BY '';"));
-        assert!(!s.contains("ALTER USER 'root'@'localhost' IDENTIFIED BY"));
-        assert!(s.contains("FLUSH PRIVILEGES;"));
-    }
-
-    #[test]
-    fn init_sql_escapes_single_quote_and_backslash() {
-        let ctx = init_ctx(42345, AuthMode::Password, Some("p'w\\rd"));
-        let s = render_init_sql(&ctx).expect("sql").expose().to_owned();
-        assert!(s.contains("IDENTIFIED BY 'p''w\\\\rd';"));
-    }
-
-    #[test]
-    fn init_sql_debug_redacted() {
-        let ctx = init_ctx(42345, AuthMode::Password, Some(SECRET));
-        let sql = render_init_sql(&ctx).expect("sql");
-        assert!(!format!("{sql:?}").contains(SECRET));
-        assert!(!format!("{sql}").contains(SECRET));
-    }
-
-    #[test]
-    fn validate_socket_path_len_rejects_long_path() {
-        let long = PathBuf::from(format!("/tmp/{}/mysqld-3306.sock", "x".repeat(120)));
-        let err = validate_socket_path_len(&long).unwrap_err();
-        assert!(matches!(
-            err,
-            DblError::InvalidInput {
-                field: "socket",
-                ..
-            }
-        ));
-    }
-
-    #[test]
-    fn parse_handshake_protocol_10_ready() {
-        let mut payload = vec![10u8];
-        payload.extend_from_slice(b"8.4.11\0");
-        payload.extend_from_slice(&[0u8; 60]);
-        assert_eq!(parse_handshake_payload(&payload).unwrap(), Handshake::Ready);
-    }
-
-    #[test]
-    fn parse_handshake_real_greeting_packet_fixture() {
-        // Captured from mysqld 8.4.11 minimal, 127.0.0.1:41108, 2026-11-22.
-        // Full packet: 4-byte header + 74-byte payload (protocol 10, 8.4.11, caching_sha2_password).
-        let pkt = hex_to_bytes(
-            "4a0000000a382e342e3131000a0000002b452a0f663f0b7e00ffffff0200ffdf15000000000000000000002f793f2347727f7a046f1b720063616368696e675f736861325f70617373776f726400",
-        );
-        let payload = &pkt[4..];
-        assert_eq!(payload[0], 10);
-        assert_eq!(parse_handshake_payload(payload).unwrap(), Handshake::Ready);
-    }
-
-    #[test]
-    fn parse_handshake_real_err_1130_host_not_allowed_is_ready() {
-        // Captured from mysqld 8.4.11 minimal before root@127.0.0.1 existed.
-        let pkt = hex_to_bytes(
-            "42000000ff6a04486f737420273132372e302e302e3127206973206e6f7420616c6c6f77656420746f20636f6e6e65637420746f2074686973204d7953514c20736572766572",
-        );
-        let payload = &pkt[4..];
-        assert_eq!(payload[0], 0xFF);
-        assert_eq!(parse_handshake_payload(payload).unwrap(), Handshake::Ready);
-    }
-
-    fn hex_to_bytes(hex: &str) -> Vec<u8> {
-        (0..hex.len())
-            .step_by(2)
-            .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).expect("hex"))
-            .collect()
-    }
-
-    #[test]
-    fn parse_handshake_auth_challenges_are_ready() {
-        let mut p1045 = vec![0xFF, 0x15, 0x04, b'#'];
-        p1045.extend_from_slice(b"28000Access denied for user 'root'@'127.0.0.1'");
-        assert_eq!(parse_handshake_payload(&p1045).unwrap(), Handshake::Ready);
-        let mut p1130 = vec![0xFF, 0x6A, 0x04, b'#'];
-        p1130.extend_from_slice(
-            b"HY000Host '127.0.0.1' is not allowed to connect to this MySQL server",
-        );
-        assert_eq!(parse_handshake_payload(&p1130).unwrap(), Handshake::Ready);
-    }
-
-    #[test]
-    fn parse_handshake_other_err_empty_unknown_no_panic() {
-        let mut other = vec![0xFF, 0x10, 0x04, b'#'];
-        other.extend_from_slice(b"HY000Too many connections");
-        assert!(matches!(
-            parse_handshake_payload(&other).unwrap(),
-            Handshake::NotReady(_)
-        ));
-        assert!(matches!(
-            parse_handshake_payload(&[]).unwrap(),
-            Handshake::NotReady(_)
-        ));
-        assert!(matches!(
-            parse_handshake_payload(&[0xFE, 0, 0]).unwrap(),
-            Handshake::NotReady(_)
-        ));
-        assert!(matches!(
-            parse_handshake_payload(&[0xFF]).unwrap(),
-            Handshake::NotReady(_) | Handshake::Ready
-        ));
-        let big = vec![10u8; 1024 * 1024];
-        assert_eq!(parse_handshake_payload(&big).unwrap(), Handshake::Ready);
-    }
-
-    fn diag_cases() -> Vec<(&'static str, StartFailure)> {
-        vec![
-            (
-                "2026-11-21T23:56:30.686109Z 0 [ERROR] [MY-010262] [Server] Can't start server: Bind on TCP/IP port: Address already in use\n2026-11-21T23:56:30.686124Z 0 [ERROR] [MY-010257] [Server] Do you already have another mysqld server running on port: 41102 ?\n",
-                StartFailure::PortInUse,
-            ),
-            (
-                "Can't create test file /tmp/x/ro/mysqld_tmp_file_case_insensitive_test.lower-test\nmysqld: File './binlog.index' not found (OS errno 13 - Permission denied)\n",
-                StartFailure::PermissionDenied,
-            ),
-            (
-                "2026-11-21T23:56:34.517296Z 0 [ERROR] [MY-010267] [Server] The socket file path is too long (> 107): /tmp/very/long/path/mysqld.sock\n",
-                StartFailure::Unknown,
-            ),
-            (
-                "2026-11-21T23:56:33.765723Z 0 [ERROR] [MY-000058] [Server] Unknown suffix 'n' used for variable 'port' (value 'not-a-number').\n",
-                StartFailure::Unknown,
-            ),
-            (
-                "2026-11-21T23:56:32.516055Z 1 [ERROR] [MY-012646] [InnoDB] File ./ibdata1: 'open' returned OS error 71. Cannot continue operation\n2026-11-21T23:56:32.516068Z 1 [ERROR] [MY-012981] [InnoDB] Cannot continue operation.\n",
-                StartFailure::Unknown,
-            ),
-            (
-                "2026-11-21T23:56:32.767385Z 1 [ERROR] [MY-012263] [InnoDB] The Auto-extending innodb_system data file './ibdata1' is of a different size 0 pages\n2026-11-21T23:56:33.268000Z 0 [ERROR] [MY-010020] [Server] Data Dictionary initialization failed.\n",
-                StartFailure::Unknown,
-            ),
-            (
-                "mysqld: error while loading shared libraries: libfoo.so.1: cannot open shared object file: No such file or directory\n",
-                StartFailure::BinaryMissing,
-            ),
-            (
-                "bash: /opt/mysql/bin/mysqld: No such file or directory\n",
-                StartFailure::BinaryMissing,
-            ),
-        ]
-    }
-
-    #[test]
-    fn cleanup_init_file_removes_one_shot_sql() {
-        let dir = tempfile::tempdir().expect("tmp");
-        let p = dir.path().join("dblocal-init.sql");
-        fs::write(&p, "ALTER USER root@localhost IDENTIFIED BY 'x';").expect("write");
-        assert!(p.exists());
-        cleanup_init_file(&p);
-        assert!(!p.exists(), "init file must be removed");
-    }
-    #[test]
-    fn diagnose_real_spike_texts() {
-        for (text, expected) in diag_cases() {
-            assert_eq!(diagnose_failure_text(text), expected, "text: {text:?}");
-        }
-    }
-
-    #[test]
-    fn diagnose_unknown_for_unrelated_text() {
-        assert_eq!(
-            diagnose_failure_text("2026-11-21T00:00:00Z 0 [Note] [MY-000000] [Server] some note\n"),
-            StartFailure::Unknown
-        );
-    }
-
-    #[test]
-    fn init_sql_requires_password_when_auth_password() {
-        let ctx = init_ctx(3306, AuthMode::Password, None);
-        let err = render_init_sql(&ctx).unwrap_err();
-        assert!(matches!(
-            err,
-            DblError::InvalidInput {
-                field: "password",
-                ..
-            }
-        ));
-    }
-}
+mod tests;
