@@ -297,6 +297,10 @@ fn mysql_84_full_cycle() {
     );
 
     // start
+    let decoy_dir = std::env::temp_dir();
+    let decoy = decoy_dir.join(format!("dblocal-mysql-decoy-{port}-#sql-decoy"));
+    fs::write(&decoy, b"decoy").expect("write decoy");
+
     let mut guard = mysql_start(&rt, &data, &logs, &run, port, pw);
     assert!(
         wait_tcp(port, Duration::from_secs(30)),
@@ -305,6 +309,18 @@ fn mysql_84_full_cycle() {
     );
     let pid = guard.0.as_ref().unwrap().id();
     assert_only_instance_loopback_port(pid, port);
+    let tmpdir = run.join("tmp");
+    assert!(
+        tmpdir.is_dir(),
+        "private tmpdir must exist while server runs"
+    );
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let meta = fs::symlink_metadata(&tmpdir).expect("tmpdir meta");
+        assert_eq!(meta.mode() & 0o777, 0o700, "tmpdir must be 0700");
+        assert_eq!(meta.uid(), nix::unistd::geteuid().as_raw());
+    }
 
     // health
     let ctx = run_ctx(&rt, &data, &logs, &run, port, AuthMode::Password, Some(pw));
@@ -399,6 +415,11 @@ fn mysql_84_full_cycle() {
         let _ = c.wait();
     }
     assert!(wait_tcp_gone(port, Duration::from_secs(30)));
+    assert!(
+        decoy.exists(),
+        "shared TMPDIR decoy must not be removed by mysql"
+    );
+    let _ = fs::remove_file(&decoy);
 }
 
 #[test]
