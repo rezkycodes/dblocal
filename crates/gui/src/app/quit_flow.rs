@@ -835,6 +835,120 @@ mod glue_tests {
         assert!(ledger.is_empty());
     }
 
+    /// The quit dialog's four states render without a panic and pick the right
+    /// button row (confirmation, stopping, failure, hidden).
+    #[gpui_kit::test]
+    fn quit_dialog_renders_every_state(cx: &mut TestAppContext) {
+        let (view, _service, cx) = fixture(cx);
+        // Hidden while idle.
+        assert!(view.read_with(cx, |this, _| !this.quit.is_confirming()));
+        view.update(cx, |this, cx| this.request_quit(cx));
+        cx.run_until_parked();
+        assert!(view.read_with(cx, |this, _| this.quit.is_confirming()));
+        // Render the element tree through the window.
+        cx.run_until_parked();
+        view.update(cx, |this, cx| this.quit_stop_all(cx));
+        for _ in 0..40 {
+            cx.run_until_parked();
+            if view.read_with(cx, |this, _| this.quit_stop_pending_count()) > 0 {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        assert!(view.read_with(cx, |this, _| this.quit.is_confirming()));
+        cx.run_until_parked();
+        let ops = view.read_with(cx, |this, _| this.quit_stop_pending_ops());
+        for op in ops {
+            view.update(cx, |this, cx| {
+                this.apply_event_with_cx(
+                    crate::service_bridge::UiEvent::OperationFinished {
+                        id: op,
+                        result: Err(dblocal_core::service::UserFacingError::new(
+                            "DBL-9999", "boom",
+                        )),
+                    },
+                    cx,
+                )
+            });
+            cx.run_until_parked();
+        }
+        assert!(view.read_with(cx, |this, _| this.quit.is_confirming()));
+        cx.run_until_parked();
+    }
+
+    /// The glue's action surface: bad tray ids, force exit, cancel after a
+    /// failed stop, a second stop-all, and detaching from the runtime.
+    #[gpui_kit::test]
+    fn quit_glue_handles_every_entry_point(cx: &mut TestAppContext) {
+        let (view, service, cx) = fixture(cx);
+
+        // Unparsable ids never panic and never touch the service.
+        let before = service.calls();
+        view.update(cx, |this, cx| {
+            this.apply_tray_action(TrayAction::Start("not-an-id".to_owned()), cx);
+            this.apply_tray_action(TrayAction::Stop("not-an-id".to_owned()), cx);
+        });
+        cx.run_until_parked();
+        assert_eq!(service.calls(), before, "bad ids must not call the service");
+
+        // Stop-all while idle is a no-op transition.
+        view.update(cx, |this, cx| this.quit_stop_all(cx));
+        assert!(matches!(
+            view.read_with(cx, |this, _| this.quit_machine().state().clone()),
+            QuitState::Idle
+        ));
+
+        // A failed stop can be cancelled back to idle from the glue.
+        view.update(cx, |this, cx| this.request_quit(cx));
+        cx.run_until_parked();
+        view.update(cx, |this, cx| this.quit_stop_all(cx));
+        for _ in 0..40 {
+            cx.run_until_parked();
+            if view.read_with(cx, |this, _| this.quit_stop_pending_count()) > 0 {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        let ops = view.read_with(cx, |this, _| this.quit_stop_pending_ops());
+        for op in ops {
+            view.update(cx, |this, cx| {
+                this.apply_event_with_cx(
+                    crate::service_bridge::UiEvent::OperationFinished {
+                        id: op,
+                        result: Err(dblocal_core::service::UserFacingError::new(
+                            "DBL-9999", "boom",
+                        )),
+                    },
+                    cx,
+                )
+            });
+            cx.run_until_parked();
+        }
+        assert!(matches!(
+            view.read_with(cx, |this, _| this.quit_machine().state().clone()),
+            QuitState::StopFailed { .. }
+        ));
+        view.update(cx, |this, cx| this.quit_cancel(cx));
+        assert!(matches!(
+            view.read_with(cx, |this, _| this.quit_machine().state().clone()),
+            QuitState::Idle
+        ));
+
+        // Force exit reaches `Exit` from a failed state.
+        view.update(cx, |this, cx| this.request_quit(cx));
+        cx.run_until_parked();
+        view.update(cx, |this, cx| this.quit_stop_all(cx));
+        view.update(cx, |this, cx| this.quit_force_exit(cx));
+        assert_eq!(
+            view.read_with(cx, |this, _| this.quit_machine().state().clone()),
+            QuitState::Done
+        );
+
+        // Detaching drops the workspace's own tasks; the app pump owns actions.
+        view.update(cx, |this, cx| this.detach_from_app_runtime(cx));
+        cx.run_until_parked();
+    }
+
     /// With no tray, closing the window is a quit; with one, it hides.
     #[gpui_kit::test]
     fn close_without_a_tray_asks_to_quit(cx: &mut TestAppContext) {

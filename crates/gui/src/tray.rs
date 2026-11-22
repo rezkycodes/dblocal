@@ -167,6 +167,11 @@ pub fn aggregate_tray_status(views: &[InstanceView]) -> InstanceStatus {
     InstanceStatus::Stopped
 }
 
+/// ARGB32 dot bytes for one menu entry, from the status its label carries (R8).
+pub fn entry_icon_data(entry: &TrayMenuEntry, size: u32) -> Vec<u8> {
+    status_dot_argb(status_from_tray_label(&entry.label), size)
+}
+
 /// Status indicated by a tray menu entry label (R8).
 pub fn status_from_tray_label(label: &str) -> InstanceStatus {
     if label.starts_with('●') {
@@ -357,10 +362,6 @@ mod linux {
         }
     }
 
-    fn entry_icon_data(entry: &TrayMenuEntry, size: u32) -> Vec<u8> {
-        status_dot_argb(status_from_tray_label(&entry.label), size)
-    }
-
     impl Tray for DblocalTray {
         fn id(&self) -> String {
             "dblocal".to_owned()
@@ -396,7 +397,7 @@ mod linux {
                 let enabled = entry.enabled;
                 let label = entry.label.clone();
                 let tx = self.tx.clone();
-                let icon_data = entry_icon_data(entry, 16);
+                let icon_data = super::entry_icon_data(entry, 16);
                 items.push(MenuItem::Standard(StandardItem {
                     label,
                     enabled,
@@ -605,6 +606,33 @@ mod tests {
             InstanceStatus::Failed
         );
         assert_eq!(aggregate_tray_status(&[stopped]), InstanceStatus::Stopped);
+    }
+
+    #[test]
+    fn every_instance_entry_carries_its_own_status_dot() {
+        let views = vec![
+            view("pg-run", EngineKey::Postgresql, InstanceStatus::Running),
+            view("pg-bad", EngineKey::Postgresql, InstanceStatus::Failed),
+            view("pg-off", EngineKey::Postgresql, InstanceStatus::Stopped),
+        ];
+        let model = TrayMenuModel::from_views(&views);
+        for entry in &model.instances {
+            let bytes = entry_icon_data(entry, 16);
+            assert_eq!(bytes.len(), 16 * 16 * 4, "{} has no icon data", entry.id);
+            let center = (8 * 16 + 8) * 4;
+            assert_eq!(bytes[center], 0xff, "{} alpha must be first", entry.id);
+        }
+        let status = |name: &str| {
+            let entry = model
+                .instances
+                .iter()
+                .find(|e| e.label.contains(name))
+                .expect("entry");
+            status_from_tray_label(&entry.label)
+        };
+        assert_eq!(status("pg-run"), InstanceStatus::Running);
+        assert_eq!(status("pg-bad"), InstanceStatus::Failed);
+        assert_eq!(status("pg-off"), InstanceStatus::Stopped);
     }
 
     #[test]
