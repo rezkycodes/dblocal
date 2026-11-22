@@ -37,6 +37,27 @@ trailing newline), not with `contains`, because stdout is what gets piped.
 
 `uri` is the only command that may print a password.
 
+### No-password instances (`AuthMode::None`)
+
+`create --no-password` creates an instance with no stored credential. The
+instance is reachable only on loopback; a password-less database exposed beyond
+`127.0.0.1` would be an open service, so this mode is appropriate only for local
+development on a trusted machine. The contract is the same as for any other
+instance, with the password removed rather than replaced by an empty one:
+
+| Engine | `uri` / `create` stdout | `uri --env` |
+|---|---|---|
+| PostgreSQL | `postgresql://<superuser>@127.0.0.1:<port>/<db>\n` | `DATABASE_URL=...`, `DB_HOST/PORT/DATABASE/USERNAME`; **no `DB_PASSWORD` line** |
+| MySQL / MariaDB | `mysql://<superuser>@127.0.0.1:<port>/\n` | `DATABASE_URL=...`, `DB_HOST/PORT/DATABASE/USERNAME`; **no `DB_PASSWORD` line** |
+| Valkey | `redis://127.0.0.1:<port>/0\n` | `REDIS_URL=...`, `REDIS_HOST/PORT`; **no `REDIS_PASSWORD` line**, **no userinfo** |
+
+The no-password URI never carries `user:@`, `default:`, or a colon before `@`:
+a colon would be read by many clients as an empty password. The `.env` block
+omits the password key entirely rather than writing `DB_PASSWORD=` or
+`REDIS_PASSWORD=`, for the same reason. The core renders the shape
+(`engine::uri::render_no_password` / the mock mirror in `service::mock::uri`);
+the CLI prints whatever the service returns, verbatim.
+
 - `list` has no colour option: `format_list_table(instances)` takes no `color`
   parameter. A parameter is added only when a colour path exists.
 - `status <name>` exits 0 only when `running`, 3 when missing, 1 otherwise for
@@ -189,6 +210,12 @@ mechanism. This worker does not implement GUI behaviour.
   `new_lines` cases (a)-(e), and the follow command driven by a service that
   scripts one snapshot per read.
 - Integration: every command against `dblocal_core::service::mock::MockService`.
+  The no-password shape is pinned twice: `create --no-password` stdout is the
+  exact no-password URI (not just a prefix), and `uri` / `uri --env` for a seeded
+  no-password instance return exit 0 and the exact expected blocks for
+  PostgreSQL/MySQL/MariaDB/Valkey. The mock renders through its own
+  `service::mock::uri`, so the CLI tests fail if either side drifts back to the
+  "credential required" behaviour that produced `DBL-1002` in W3-D round 1.
 - Race table: `commands/tests/races.rs` drives a service wrapper for each
   concrete status in the table above, with its own deadline so a command that
   waits for a timeout fails as a red test instead of hanging.

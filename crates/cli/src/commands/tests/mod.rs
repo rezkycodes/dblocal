@@ -37,6 +37,18 @@ fn spec(name: &str, engine: EngineKey, version: &str, port: u16) -> InstanceSpec
     .expect("spec")
 }
 
+/// The same spec with [`AuthMode::None`], i.e. `create --no-password`.
+fn no_password_spec(name: &str, engine: EngineKey, version: &str, port: u16) -> InstanceSpec {
+    InstanceSpec::new(
+        InstanceName::new(name).expect("name"),
+        engine,
+        version,
+        Some(Port::new(port).expect("port")),
+        AuthMode::None,
+    )
+    .expect("spec")
+}
+
 fn run_cmd(service: &dyn DblService, cmd: &Command, interactive: bool) -> (u8, String, String) {
     run_cmd_with(service, cmd, interactive, &|| None)
 }
