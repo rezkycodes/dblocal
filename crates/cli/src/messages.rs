@@ -42,6 +42,17 @@ pub const MSG_ALREADY_STOPPED: &str = "sudah berhenti";
 pub const MSG_READY: &str = "Siap.";
 pub const PROMPT_DELETE: &str = "Ketik nama instance untuk konfirmasi penghapusan: ";
 
+/// Reply to `autostart status`/`enable` when the login item exists.
+pub const AUTOSTART_ENABLED: &str = "autostart: aktif";
+/// Reply to `autostart status`/`disable` when the login item is absent.
+pub const AUTOSTART_DISABLED: &str = "autostart: nonaktif";
+/// Label in front of the login-item location.
+pub const AUTOSTART_LOCATION: &str = "lokasi";
+/// Unknown `autostart` action (English noun kept for the parser contract).
+pub const ERR_AUTOSTART_ACTION: &str = "Aksi autostart tidak dikenal";
+/// The running executable path could not be resolved for `autostart enable`.
+pub const ERR_AUTOSTART_EXE: &str = "lokasi aplikasi tidak bisa ditentukan";
+
 /// Formats the service-open failure with a stable-looking diagnostic.
 pub fn service_open_error(detail: &str) -> String {
     format!("{ERR_SERVICE_OPEN} {detail}")

@@ -118,10 +118,37 @@ pub enum Command {
         #[arg(long, default_value_t = crate::consts::DEFAULT_LOG_LINES)]
         lines: usize,
     },
+    /// Mengatur autostart aplikasi saat login (status, enable, disable).
+    Autostart {
+        /// Aksi: status, enable, atau disable.
+        action: String,
+        /// Cetak JSON yang bisa dipipe.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Mode login item: buka ke tray tanpa jendela dan jalankan instance bertanda.
+    ///
+    /// Flag ini dipasang sendiri oleh entri login yang dibuat `dblocal autostart
+    /// enable`; biasanya tidak dipanggil manual.
+    #[command(name = "autostart-run")]
+    AutostartRun {
+        /// Tetap jalankan headless walau tray tidak tersedia.
+        #[arg(long)]
+        headless: bool,
+    },
 }
+
+/// The hidden flag the login item passes to the app.
+///
+/// `--autostart` is the canonical token in `crates/core/src/autostart/consts.rs`;
+/// the parser also exposes a long subcommand so the mode is discoverable in
+/// `--help`. The launched-by-login-item check reads the raw argv, so both the
+/// bare flag and `autostart-run` work.
+pub const AUTOSTART_FLAG: &str = dblocal_core::autostart::AUTOSTART_FLAG;
 
 /// Entry point used by `main`; returns the process exit code.
 pub fn run(args: Vec<OsString>) -> ExitCode {
+    let args = normalize_autostart_flag(args);
     let cli = match Cli::try_parse_from(std::iter::once(OsString::from("dblocal")).chain(args)) {
         Ok(cli) => cli,
         Err(err) => return clap_exit(err),
@@ -132,8 +159,45 @@ pub fn run(args: Vec<OsString>) -> ExitCode {
             Ok(()) => ExitCode::from(EXIT_OK),
             Err(err) => report(err),
         },
+        Some(Command::AutostartRun { headless }) => run_autostart_mode(headless),
+        // `autostart` is a pure login-item operation: it needs no state database,
+        // so it is dispatched before the service is built (a first run on a
+        // login item must not fail because the store could not be opened).
+        Some(Command::Autostart { action, json }) => run_autostart_command(&action, json),
         Some(command) => run_command(command),
     }
+}
+
+fn run_autostart_command(action: &str, json: bool) -> ExitCode {
+    let mut out = io::stdout().lock();
+    let mut err = io::stderr().lock();
+    ExitCode::from(commands::autostart::run_action(
+        &mut out, &mut err, action, json,
+    ))
+}
+
+fn normalize_autostart_flag(args: Vec<OsString>) -> Vec<OsString> {
+    // The login item passes `--autostart`. Clap does not know it as a flag, so
+    // map it to the hidden subcommand before parsing. A user who explicitly
+    // wrote `autostart-run` keeps it.
+    if args.iter().any(|a| a == AUTOSTART_FLAG) {
+        let mut out = Vec::with_capacity(args.len());
+        for arg in args {
+            if arg == AUTOSTART_FLAG {
+                out.push(OsString::from("autostart-run"));
+            } else {
+                out.push(arg);
+            }
+        }
+        out
+    } else {
+        args
+    }
+}
+
+fn run_autostart_mode(headless: bool) -> ExitCode {
+    let code = commands::autostart::run_login_mode(headless);
+    ExitCode::from(code)
 }
 
 fn run_command(command: Command) -> ExitCode {
