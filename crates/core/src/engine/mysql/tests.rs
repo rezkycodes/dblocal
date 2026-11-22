@@ -238,12 +238,13 @@ fn diag_cases() -> Vec<(&'static str, StartFailure)> {
             "Can't create test file /tmp/x/ro/mysqld_tmp_file_case_insensitive_test.lower-test\nmysqld: File './binlog.index' not found (OS errno 13 - Permission denied)\n",
             StartFailure::PermissionDenied,
         ),
+        // P4: four distinct cases that keep Unknown but deserve pinned fixtures.
         (
             "2026-11-21T23:56:34.517296Z 0 [ERROR] [MY-010267] [Server] The socket file path is too long (> 107): /tmp/very/long/path/mysqld.sock\n",
             StartFailure::Unknown,
         ),
         (
-            "2026-11-21T23:56:33.765723Z 0 [ERROR] [MY-000058] [Server] Unknown suffix 'n' used for variable 'port' (value 'not-a-number').\n",
+            "2026-11-21T23:56:33.765723Z 0 [ERROR] [MY-000058] [Server] Unknown suffix 'n' used for variable 'port' (value 'not-a-number').\n2026-11-21T23:56:33.765729Z 0 [ERROR] [MY-000077] [Server] /tmp/.../bin/mysqld: Error while setting value 'not-a-number' to 'port'.\n2026-11-21T23:56:33.765762Z 0 [ERROR] [MY-010119] [Server] Aborting\n",
             StartFailure::Unknown,
         ),
         (
