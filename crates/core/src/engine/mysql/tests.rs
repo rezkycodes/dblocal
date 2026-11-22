@@ -67,6 +67,7 @@ fn render_my_cnf_contains_required_security_settings() {
     assert!(cnf.contains("socket=/i/run/mysqld-42345.sock\n"));
     assert!(cnf.contains("pid-file=/i/run/mysqld.pid\n"));
     assert!(cnf.contains("log-error=/i/logs/error.log\n"));
+    assert!(cnf.contains("tmpdir=/i/run/tmp\n"));
     assert!(cnf.contains("mysqlx=OFF\n"));
     assert!(cnf.contains("skip-name-resolve\n"));
     assert!(cnf.contains("basedir=/rt/mysql\n"));
@@ -943,7 +944,7 @@ fn cleanup_fallback_socket_removes_real_socket_with_right_name_and_parent() {
     );
 }
 
-fn write_fake_bin(dir: &Path, name: &str, script: &str) -> PathBuf {
+fn _write_fake_bin(dir: &Path, name: &str, script: &str) -> PathBuf {
     let bin = dir.join("bin");
     fs::create_dir_all(&bin).expect("bin");
     let p = bin.join(name);
@@ -1137,4 +1138,22 @@ fn read_handshake_half_open_and_non_mysql_banner() {
     let h = read_handshake(port, Duration::from_millis(500)).expect("handshake");
     assert!(matches!(h, Handshake::NotReady(_)));
     t.join().expect("join");
+}
+
+
+#[test]
+fn command_builders_set_tmpdir_env() {
+    let ctx_i = init_ctx(42345, AuthMode::Password, Some(SECRET));
+    let init_cmd = initialize_insecure_command(&ctx_i, Path::new("/logs/init.err"));
+    let tmp = init_cmd.get_envs().find(|(k, _)| *k == "TMPDIR").and_then(|(_, v)| v).expect("TMPDIR");
+    assert_eq!(tmp.to_string_lossy(), "/run/tmp");
+
+    let boot = bootstrap_mysqld_command(&ctx_i, Path::new("/run/my.cnf"), Path::new("/run/init.sql"));
+    let tmp = boot.get_envs().find(|(k, _)| *k == "TMPDIR").and_then(|(_, v)| v).expect("TMPDIR");
+    assert_eq!(tmp.to_string_lossy(), "/run/tmp");
+
+    let ctx_r = run_ctx(42345, AuthMode::Password, Some(SECRET));
+    let spawn = MysqlAdapter.spawn_command(&ctx_r);
+    let tmp = spawn.get_envs().find(|(k, _)| *k == "TMPDIR").and_then(|(_, v)| v).expect("TMPDIR");
+    assert_eq!(tmp.to_string_lossy(), "/run/tmp");
 }

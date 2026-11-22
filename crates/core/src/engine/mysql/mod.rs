@@ -37,10 +37,12 @@ impl EngineAdapter for MysqlAdapter {
     fn initialize(&self, ctx: &InitContext) -> Result<()> {
         let run_dir = sibling_dir(&ctx.data_dir, consts::DIR_RUN);
         let logs_dir = sibling_dir(&ctx.data_dir, consts::DIR_LOGS);
+        let tmp_dir = tmpdir_path(&run_dir);
         for (dir, label) in [
             (&ctx.data_dir, "data"),
             (&run_dir, "run"),
             (&logs_dir, "logs"),
+            (&tmp_dir, "tmp"),
         ] {
             ensure_private_dir(dir, label)?;
         }
@@ -78,6 +80,7 @@ impl EngineAdapter for MysqlAdapter {
         ));
         cmd.stdin(Stdio::null());
         strip_password_env(&mut cmd);
+        cmd.env("TMPDIR", tmpdir_path(&ctx.run_dir));
         cmd
     }
 
@@ -148,6 +151,7 @@ fn render_my_cnf(params: &MyCnfParams<'_>) -> String {
     let _ = writeln!(out, "socket={}", params.socket.display());
     let _ = writeln!(out, "pid-file={}", pidfile_path(params.run_dir).display());
     let _ = writeln!(out, "log-error={}", log_path(params.logs_dir).display());
+    let _ = writeln!(out, "tmpdir={}", tmpdir_path(params.run_dir).display());
     let _ = writeln!(out, "mysqlx=OFF");
     let _ = writeln!(out, "skip-name-resolve");
     let _ = writeln!(out, "basedir={}", params.runtime_dir.display());
@@ -205,6 +209,10 @@ pub(super) fn initialize_insecure_command(ctx: &InitContext, init_err: &Path) ->
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
     strip_password_env(&mut cmd);
+    cmd.env(
+        "TMPDIR",
+        sibling_dir(&ctx.data_dir, consts::DIR_RUN).join("tmp"),
+    );
     cmd
 }
 
@@ -297,6 +305,10 @@ pub(super) fn bootstrap_mysqld_command(ctx: &InitContext, cfg: &Path, init_path:
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
     strip_password_env(&mut cmd);
+    cmd.env(
+        "TMPDIR",
+        sibling_dir(&ctx.data_dir, consts::DIR_RUN).join("tmp"),
+    );
     cmd
 }
 
@@ -483,12 +495,15 @@ pub fn pidfile_path(run_dir: &Path) -> PathBuf {
     run_dir.join("mysqld.pid")
 }
 
+pub fn tmpdir_path(run_dir: &Path) -> PathBuf {
+    run_dir.join("tmp")
+}
+
 mod socket;
 
 pub(in crate::engine::mysql) use socket::{
     cleanup_fallback_socket, cleanup_fallback_socket_from_my_cnf,
 };
-pub use socket::{resolve_socket_path, socket_path, socket_path_limit, validate_socket_path_len};
 #[cfg(test)]
 pub(in crate::engine::mysql) use socket::{
     cleanup_fallback_socket_with_candidates, ensure_fallback_socket_dir_for,
@@ -497,6 +512,7 @@ pub(in crate::engine::mysql) use socket::{
     resolve_socket_path_for, resolve_socket_path_with_fallback_dir, socket_path_from_my_cnf,
     verify_secure_dir_for_test,
 };
+pub use socket::{resolve_socket_path, socket_path, socket_path_limit, validate_socket_path_len};
 
 pub fn sibling_dir(data_dir: &Path, leaf: &str) -> PathBuf {
     match data_dir.parent() {
