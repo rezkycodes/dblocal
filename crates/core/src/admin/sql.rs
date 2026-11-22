@@ -310,6 +310,18 @@ pub fn role_exists_postgres(user: &Identifier) -> SqlStatement {
     )
 }
 
+/// Query checking whether a database exists, with the name bound as `$1`.
+///
+/// Used before creating a role so a missing target database reports
+/// `DatabaseNotFound` (`DBL-8105`) instead of the grant step's connect failure
+/// (`DBL-8100`).
+pub fn database_exists_postgres(db: &Identifier) -> SqlStatement {
+    SqlStatement::with_params(
+        "SELECT count(*)::bigint FROM pg_database WHERE datname = $1",
+        vec![SqlParam::Text(db.as_str().to_owned())],
+    )
+}
+
 /// Builds a PostgreSQL role creation statement from a precomputed credential.
 ///
 /// `credential` is a SCRAM-SHA-256 verifier (`SCRAM-SHA-256$4096:...`), computed

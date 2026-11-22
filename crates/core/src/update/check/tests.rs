@@ -194,6 +194,49 @@ async fn check_reports_network_failure() {
 }
 
 #[tokio::test]
+async fn check_maps_an_unknown_repository_to_source_not_found() {
+    // A 404 from the releases API means the repository does not exist or is not
+    // public; "check your connection" would be a wrong diagnosis.
+    let fetcher = MockFetcher::new(vec![Ok(FetchResponse::new(
+        404,
+        br#"{"message":"Not Found"}"#.to_vec(),
+    ))]);
+    let err = check(
+        &Version::parse("1.0.0").unwrap(),
+        &fetcher,
+        &linux_options(),
+    )
+    .await
+    .expect_err("source not found");
+    assert_eq!(
+        err.code(),
+        crate::update::error::CODE_UPDATE_SOURCE_NOT_FOUND
+    );
+    assert_ne!(err.code(), crate::update::error::CODE_UPDATE_NETWORK);
+}
+
+#[tokio::test]
+async fn check_maps_a_non_rate_limit_403_to_source_not_found() {
+    // 403 without a rate-limit body is a private/gone repository, not a rate
+    // limit and not a connection failure.
+    let fetcher = MockFetcher::new(vec![Ok(FetchResponse::new(
+        403,
+        br#"{"message":"Forbidden"}"#.to_vec(),
+    ))]);
+    let err = check(
+        &Version::parse("1.0.0").unwrap(),
+        &fetcher,
+        &linux_options(),
+    )
+    .await
+    .expect_err("source not found");
+    assert_eq!(
+        err.code(),
+        crate::update::error::CODE_UPDATE_SOURCE_NOT_FOUND
+    );
+}
+
+#[tokio::test]
 async fn check_reports_malformed_json() {
     let fetcher = MockFetcher::new(vec![Ok(FetchResponse::new(200, b"not json".to_vec()))]);
     let err = check(

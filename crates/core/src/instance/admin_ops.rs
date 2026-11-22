@@ -45,6 +45,8 @@ pub trait AdminExecutor: Send + Sync {
     fn drop_database(&self, db: &Identifier, force: bool) -> AdminResult<()>;
     /// Creates a login role and returns its password once.
     fn create_user(&self, user: &Identifier) -> AdminResult<SecretString>;
+    /// Whether `db` exists, checked before a role is created in it.
+    fn database_exists(&self, db: &Identifier) -> AdminResult<bool>;
     /// Grants `level` on `db` to `user`.
     fn grant(&self, user: &Identifier, db: &Identifier, level: PrivilegeLevel) -> AdminResult<()>;
     /// Drops a role (used to undo a half-created user).
@@ -68,6 +70,9 @@ impl AdminExecutor for PgAdmin {
     }
     fn create_user(&self, user: &Identifier) -> AdminResult<SecretString> {
         PgAdmin::create_user(self, user)
+    }
+    fn database_exists(&self, db: &Identifier) -> AdminResult<bool> {
+        PgAdmin::database_exists(self, db)
     }
     fn grant(&self, user: &Identifier, db: &Identifier, level: PrivilegeLevel) -> AdminResult<()> {
         PgAdmin::grant(self, user, db, level)
@@ -117,10 +122,16 @@ fn with_admin<T>(
 
 /// Builds the executor for `instance`, enforcing the engine gate first.
 fn executor_for(inner: &Inner, instance: &Instance) -> ServiceResult<Box<dyn AdminExecutor>> {
-    if instance.engine() != EngineKey::Postgresql || instance.auth() != AuthMode::Password {
+    if instance.engine() != EngineKey::Postgresql {
         // MySQL/MariaDB await W4-A2 and Valkey has no named databases or login
         // roles: both are a typed "not supported", not an empty list.
         return Err(AdminError::Unsupported.into());
+    }
+    if instance.auth() != AuthMode::Password {
+        // PostgreSQL *is* supported; this instance was created without a
+        // password, so there is nothing to authenticate an admin session with.
+        // That is a different answer from the engine gate above (`F-DBU`).
+        return Err(AdminError::NoPassword.into());
     }
     let password = superuser_password(inner, instance)?;
     (inner.admin_factory)(instance, password)
@@ -181,6 +192,9 @@ pub(crate) fn create_user(
     let user = Identifier::role(name).map_err(UserFacingError::from)?;
     let database = Identifier::new(db).map_err(UserFacingError::from)?;
     let password = with_admin(inner, id, |admin| {
+        if !admin.database_exists(&database)? {
+            return Err(AdminError::DatabaseNotFound);
+        }
         let password = admin.create_user(&user)?;
         if let Err(err) = admin.grant(&user, &database, level) {
             let _ = admin.drop_user(&user);

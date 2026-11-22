@@ -23,8 +23,8 @@ use super::error::{AdminError, AdminResult, RollbackState, SqlStateCode, TargetP
 use super::sql::{
     self, Dialect, Identifier, PrivilegeLevel, alter_role_password_postgres,
     create_database_postgres, create_role_postgres, database_connection_count_postgres,
-    drop_database_postgres, drop_user_postgres, grant_privileges, list_databases_postgres,
-    list_users_postgres, revoke_privileges, role_exists_postgres,
+    database_exists_postgres, drop_database_postgres, drop_user_postgres, grant_privileges,
+    list_databases_postgres, list_users_postgres, revoke_privileges, role_exists_postgres,
 };
 
 /// Connection target for admin operations.
@@ -462,6 +462,29 @@ impl PgAdmin {
         Ok(count > 0)
     }
 
+    /// Whether `db` exists.
+    ///
+    /// Checked before creating a role in it: the grant step connects to `db`, so
+    /// a missing database would otherwise surface as a connect failure
+    /// (`DBL-8100`, "server unreachable") even though the server is up.
+    pub fn database_exists(&self, db: &Identifier) -> AdminResult<bool> {
+        let stmt = database_exists_postgres(db);
+        let db_name = db.as_str().to_owned();
+        let count = self.with_client(
+            &self.target,
+            consts::DEFAULT_DATABASE,
+            move |client, _| async move {
+                let row = client
+                    .query_one(stmt.sql(), &[&db_name.as_str()])
+                    .await
+                    .map_err(|err| map_pg_error(&err))?;
+                let count: i64 = row.try_get(0).map_err(|err| map_pg_error(&err))?;
+                Ok(count)
+            },
+        )?;
+        Ok(count > 0)
+    }
+
     /// Resets the superuser password with the F-DBU-03 AC2 guarantee.
     ///
     /// Steps: generate, `ALTER ROLE`, verify a **new** connection with the new
@@ -573,10 +596,14 @@ impl PgAdmin {
 }
 
 /// Maps a connection failure to [`AdminError`]. Wrong/stale credentials are
-/// distinct from an unreachable engine (F2), but the driver text is dropped.
+/// distinct from an unreachable engine (F2), and a server that answers with
+/// `3D000` (`invalid_catalog_name`, unknown database) is a *reachable* server
+/// naming a missing database, not an unreachable one. The driver text is
+/// dropped.
 fn map_connect_error(err: &tokio_postgres::Error) -> AdminError {
     match err.code().map(|code| code.code()) {
         Some("28P01" | "28000") => AdminError::AuthFailed,
+        Some("3D000") => AdminError::DatabaseNotFound,
         _ => AdminError::Connect,
     }
 }

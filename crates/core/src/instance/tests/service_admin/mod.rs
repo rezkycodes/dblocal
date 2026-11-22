@@ -33,6 +33,9 @@ struct FakeAdmin {
     fail_create: bool,
     fail_grant: bool,
     fail_reset: bool,
+    /// When set, `database_exists` reports the target database as missing, so a
+    /// create-user is refused before any role is created (F2).
+    database_missing: bool,
     password: Option<SecretString>,
 }
 
@@ -74,6 +77,13 @@ impl super::super::admin_ops::AdminExecutor for FakeAdmin {
             .unwrap()
             .push(format!("create_user:{}", user.as_str()));
         Ok(SecretString::new("user-once-pw"))
+    }
+    fn database_exists(&self, db: &Identifier) -> AdminResult<bool> {
+        self.calls
+            .lock()
+            .unwrap()
+            .push(format!("database_exists:{}", db.as_str()));
+        Ok(!self.database_missing)
     }
     fn grant(&self, user: &Identifier, db: &Identifier, level: PrivilegeLevel) -> AdminResult<()> {
         self.calls.lock().unwrap().push(format!(
@@ -141,6 +151,9 @@ impl super::super::admin_ops::AdminExecutor for SharedAdmin {
     }
     fn create_user(&self, user: &Identifier) -> AdminResult<SecretString> {
         self.0.create_user(user)
+    }
+    fn database_exists(&self, db: &Identifier) -> AdminResult<bool> {
+        self.0.database_exists(db)
     }
     fn grant(&self, user: &Identifier, db: &Identifier, level: PrivilegeLevel) -> AdminResult<()> {
         self.0.grant(user, db, level)
@@ -315,9 +328,31 @@ fn create_user_grants_and_returns_the_password_once() {
     assert_eq!(
         admin.calls(),
         vec![
+            "database_exists:app_dev",
             "create_user:report_user",
             "grant:report_user:app_dev:ReadOnly"
         ]
+    );
+}
+
+#[test]
+fn create_user_reports_database_not_found_without_creating_a_role() {
+    // F2: a missing target database must be DBL-8105, not a connect failure, and
+    // no role may be created.
+    let admin = Arc::new(FakeAdmin {
+        database_missing: true,
+        ..FakeAdmin::default()
+    });
+    let (h, id) = harness_with_admin(EngineKey::Postgresql, Arc::clone(&admin));
+    let err = h
+        .service
+        .create_user(&id, "ghost", "nosuchdb", PrivilegeLevel::ReadOnly)
+        .expect_err("unknown database");
+    assert_eq!(err.code, crate::admin::error::CODE_DATABASE_NOT_FOUND);
+    assert_eq!(
+        admin.calls(),
+        vec!["database_exists:nosuchdb"],
+        "no role is created when the database is missing"
     );
 }
 
@@ -336,6 +371,7 @@ fn a_failed_grant_drops_the_half_created_role() {
     assert_eq!(
         admin.calls(),
         vec![
+            "database_exists:app_dev",
             "create_user:ghost",
             "grant:ghost:app_dev:ReadWrite",
             "drop_user:ghost"
@@ -380,6 +416,72 @@ fn reset_success_persists_the_new_pointer_and_announces() {
         event,
         crate::service::ServiceEvent::AdminChanged { .. }
     ));
+}
+
+#[test]
+fn reset_moves_the_credential_pointer_to_the_backend_that_stored_it() {
+    // F1 (F-DBU-03 with a keychain that became unavailable): the pointer says
+    // keychain, but the write falls back to the file, so after the reset the
+    // pointer MUST say file. Otherwise the engine has the new password while
+    // DBLocal reads the old backend — an instance DBLocal can never log in to
+    // again.
+    use crate::secrets::SecretBackend as _;
+    let admin = Arc::new(FakeAdmin::default());
+    let (h, id) = harness_with_admin(EngineKey::Postgresql, Arc::clone(&admin));
+
+    // The instance was created while the keychain was available: the old
+    // password lives in the keychain and the pointer names that backend.
+    let keychain_ref = crate::secrets::credential_ref_for(
+        &id,
+        crate::model::CredentialBackend::Keychain,
+        "postgres",
+    );
+    h.secrets
+        .keychain
+        .set(&keychain_ref, &SecretString::new("old-keychain-pw"))
+        .expect("seed the keychain backend");
+    h.store()
+        .set_credential(&keychain_ref)
+        .expect("seed the keychain pointer");
+    assert_eq!(
+        h.store()
+            .get_credential(&id)
+            .expect("read")
+            .expect("pointer")
+            .backend(),
+        crate::model::CredentialBackend::Keychain,
+        "precondition: the pointer names the keychain"
+    );
+    // The keychain is now unavailable, so the reset's write falls back to the
+    // file backend and reports `File`.
+    h.secrets
+        .keychain_available
+        .store(false, std::sync::atomic::Ordering::SeqCst);
+
+    let new_password = h.service.reset_superuser_password(&id).expect("reset");
+
+    let pointer = h
+        .store()
+        .get_credential(&id)
+        .expect("read")
+        .expect("pointer");
+    assert_eq!(
+        pointer.backend(),
+        crate::model::CredentialBackend::File,
+        "the pointer must follow the password into the file backend"
+    );
+    // The credential the pointer names now holds the new password, and the URI
+    // built from it carries that password.
+    let stored = h.secrets.get(&pointer).expect("stored");
+    assert_eq!(stored.expose(), new_password.expose());
+    let uri = h
+        .service
+        .connection_uri(&id, crate::service::UriFormat::Uri)
+        .expect("uri");
+    assert!(
+        uri.expose().contains(new_password.expose()),
+        "the URI must carry the new password from the file backend"
+    );
 }
 
 #[test]
@@ -468,6 +570,63 @@ fn mysql_and_valkey_report_not_supported_per_engine() {
             engine.display_name()
         );
     }
+}
+
+#[test]
+fn a_no_password_postgres_instance_reports_its_own_error() {
+    // F3: a PostgreSQL instance created with --no-password is a supported
+    // engine, so it must NOT say "engine not supported" (DBL-8111); it reports a
+    // distinct, actionable code that says the instance has no password.
+    let admin = Arc::new(FakeAdmin::default());
+    let h = Harness::with_options(EngineKey::Postgresql, {
+        let admin = Arc::clone(&admin);
+        move |options| {
+            options.admin_factory = Some(Arc::new(move |_instance, _password| {
+                let admin = Arc::clone(&admin);
+                Ok(Box::new(SharedAdmin(admin)) as Box<dyn super::super::admin_ops::AdminExecutor>)
+            }));
+        }
+    });
+    let name = format!("nopw{}", test_port() % 1000);
+    // Seed a no-password row directly: the create path needs a runtime, and the
+    // gate under test reads only the row's engine and auth.
+    let spec = crate::model::InstanceSpec::new(
+        crate::model::InstanceName::new(&name).expect("name"),
+        EngineKey::Postgresql,
+        "17.4",
+        Some(crate::model::Port::new(test_port()).expect("port")),
+        crate::model::AuthMode::None,
+    )
+    .expect("spec");
+    let id = InstanceId::new();
+    let instance = Instance::new(
+        &spec,
+        id.clone(),
+        crate::model::InstanceStatus::Stopped,
+        std::time::SystemTime::now(),
+    );
+    h.store().insert_instance(&instance).expect("seed row");
+
+    let err = h.service.list_databases(&id).expect_err("no-password");
+    assert_eq!(
+        err.code,
+        crate::admin::error::CODE_NO_PASSWORD,
+        "the message must name the missing password, not the engine"
+    );
+    assert_ne!(
+        err.code,
+        crate::admin::error::CODE_UNSUPPORTED,
+        "a no-password PostgreSQL instance is not an unsupported engine"
+    );
+    let err = h
+        .service
+        .reset_superuser_password(&id)
+        .expect_err("no-password");
+    assert_eq!(err.code, crate::admin::error::CODE_NO_PASSWORD);
+    assert!(
+        admin.calls().is_empty(),
+        "the engine gate must reject before the executor is built"
+    );
 }
 
 #[test]
