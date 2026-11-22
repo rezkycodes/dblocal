@@ -741,6 +741,11 @@ fn restore_backup_is_continuous_and_never_unlinks_the_target() {
     let reads = Arc::new(AtomicUsize::new(0));
     let target_t = target.clone();
     let (stop_t, missing_t, reads_t) = (stop.clone(), missing.clone(), reads.clone());
+    // The reader must actually get scheduled; on 4 pinned cores it can be starved
+    // until the main thread finishes all its restores, leaving `reads == 0`. It
+    // signals the first read, and the loop below waits for that before finishing.
+    let first_read = Arc::new(AtomicBool::new(false));
+    let first_read_t = Arc::clone(&first_read);
     let reader = std::thread::spawn(move || {
         while !stop_t.load(Ordering::SeqCst) {
             if !target_t.exists() {
@@ -749,11 +754,30 @@ fn restore_backup_is_continuous_and_never_unlinks_the_target() {
             }
             let _ = fs::read(&target_t);
             reads_t.fetch_add(1, Ordering::SeqCst);
+            first_read_t.store(true, Ordering::SeqCst);
             std::thread::yield_now();
         }
     });
-    for _ in 0..200 {
+    // Wait, bounded, for the reader to have observed the target at least once before
+    // the restores start, so the reader is provably running rather than starved.
+    let started = std::time::Instant::now();
+    while !first_read.load(Ordering::SeqCst) {
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(30),
+            "the reader never got scheduled to observe the target"
+        );
+        std::thread::yield_now();
+    }
+    // Keep restoring until the reader has observed the target many times or a
+    // generous deadline passes, so the restores genuinely overlap the reads.
+    let mut restores = 0;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    while reads.load(Ordering::SeqCst) < 100 && std::time::Instant::now() < deadline {
         restore_backup(&backup, &target).expect("restore");
+        restores += 1;
+        if restores > 5000 {
+            break;
+        }
     }
     stop.store(true, Ordering::SeqCst);
     reader.join().unwrap();
