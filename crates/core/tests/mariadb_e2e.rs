@@ -263,18 +263,24 @@ fn sql_query(runtime: &Path, port: u16, user: &str, password: &str, sql: &str) -
 }
 
 fn assert_no_ss_outside(port: u16) {
-    // Verify only this port is listening for our test range is hard globally,
-    // but we can assert the process on this port binds 127.0.0.1.
     let out = Command::new("ss").args(["-ltnp"]).output().expect("ss");
     let text = String::from_utf8_lossy(&out.stdout);
     for line in text.lines() {
-        if line.contains(&format!(":{port}")) {
-            assert!(
-                line.contains("127.0.0.1"),
-                "listener not on loopback: {line}"
-            );
-            assert!(!line.contains("0.0.0.0"), "listener on 0.0.0.0: {line}");
+        if !line.contains(&format!(":{port}")) {
+            continue;
         }
+        let cols: Vec<&str> = line.split_whitespace().collect();
+        let local = cols.get(3).copied().unwrap_or("");
+        assert!(
+            local.starts_with("127.0.0.1:") || local.starts_with("[::1]:"),
+            "listener not on loopback: {line}"
+        );
+        assert!(
+            !local.starts_with("0.0.0.0:")
+                && !local.starts_with("*:")
+                && !local.starts_with("[::]:"),
+            "listener on wildcard: {line}"
+        );
     }
 }
 
