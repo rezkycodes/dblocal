@@ -874,11 +874,14 @@ fn mariadb_two_instances_side_by_side() {
         let port3 = 43108u16;
         require_port_free(port3);
         let (_i3, d3, l3, r3) = mk_instance(tmp.path(), "s114");
-        match MariaDbAdapter.initialize(&init_ctx(&rt114, &d3, port3, AuthMode::Password, Some(pw))) {
+        match MariaDbAdapter.initialize(&init_ctx(&rt114, &d3, port3, AuthMode::Password, Some(pw)))
+        {
             Ok(()) => {}
             Err(e) => {
                 let msg = format!("{e:?}");
-                if msg.contains("libcrypt.so.1") || msg.contains("error while loading shared libraries") {
+                if msg.contains("libcrypt.so.1")
+                    || msg.contains("error while loading shared libraries")
+                {
                     eprintln!("skip 11.4 side-by-side: host cannot load 11.4 binary: {msg}");
                     // still report 11.8 side-by-side as OK
                     eprintln!("mariadb side-by-side OK (11.8 only)");
