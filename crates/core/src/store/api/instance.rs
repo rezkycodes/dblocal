@@ -248,6 +248,49 @@ impl Store {
             }
         }
     }
+
+    /// Compares and sets the status **and** forgets the recorded process identity
+    /// in one transaction.
+    ///
+    /// A row whose status is terminal (`Stopped`, `Failed`) must never still carry
+    /// the identity of a process that was declared gone: the next start, a stop,
+    /// the supervisor and `identity_of` all read that identity. Writing the status
+    /// and clearing the identity as two statements leaves an observable window in
+    /// which a reader on another connection (the GUI, the CLI, a second service, a
+    /// test's fresh `Store::open`) sees the terminal status with the old pid, so
+    /// both writes happen here under one `BEGIN IMMEDIATE`.
+    ///
+    /// Returns `true` when the row existed and its status matched `from`.
+    pub fn transition_status_and_clear_identity(
+        &self,
+        id: &InstanceId,
+        from: InstanceStatus,
+        to: InstanceStatus,
+    ) -> crate::Result<bool> {
+        self.conn
+            .execute_batch("BEGIN IMMEDIATE")
+            .map_err(map_sql)?;
+        let result = self.conn.execute(
+            "UPDATE instances
+             SET status = ?1, pid = NULL, process_started_at_secs = NULL,
+                 process_started_at_nanos = NULL, process_exe = NULL
+             WHERE id = ?2 AND status = ?3",
+            params![to.as_str(), id.as_str(), from.as_str()],
+        );
+        match result {
+            Ok(affected) => match self.conn.execute_batch("COMMIT") {
+                Ok(()) => Ok(affected == 1),
+                Err(err) => {
+                    let _ = self.conn.execute_batch("ROLLBACK");
+                    Err(map_sql(err))
+                }
+            },
+            Err(err) => {
+                let _ = self.conn.execute_batch("ROLLBACK");
+                Err(map_sql(err))
+            }
+        }
+    }
 }
 
 fn instance_conflict(err: rusqlite::Error) -> DblError {

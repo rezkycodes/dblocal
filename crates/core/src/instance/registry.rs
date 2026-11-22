@@ -1,6 +1,6 @@
 //! In-process operation registry: one operation per instance at a time.
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -18,8 +18,28 @@ use crate::service::{OperationId, UserFacingError};
 /// growing one entry per operation forever.
 pub const FINISHED_HISTORY: usize = 1024;
 
+/// Who owns an instance's guard.
+///
+/// The distinction is what lets a real operation wait for startup reconciliation
+/// instead of being refused: reconciliation holds the guard only for the brief
+/// startup pass, and a user command that arrives then did nothing wrong, so it
+/// waits bounded rather than failing with "busy". A guard held by a real operation
+/// still refuses at once.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum LockKind {
+    /// A user-visible operation (create/start/stop/delete/...).
+    Operation,
+    /// The startup reconciliation pass.
+    Reconciliation,
+}
+
 /// Outcome of a finished operation, kept so a late subscriber can still observe it.
 pub type OperationOutcome = std::result::Result<(), UserFacingError>;
+
+/// How long an operation waits for a reconciliation guard before reporting busy.
+pub const RECONCILE_LOCK_WAIT_MS: u64 = 5_000;
+/// Poll interval while waiting for a reconciliation guard.
+const RECONCILE_LOCK_POLL_MS: u64 = 10;
 
 /// Operation ids and per-instance exclusivity.
 #[derive(Clone, Debug, Default)]
@@ -30,7 +50,7 @@ pub struct Ops {
 
 #[derive(Debug, Default)]
 struct OpsInner {
-    locked: Mutex<HashSet<InstanceId>>,
+    locked: Mutex<HashMap<InstanceId, LockKind>>,
     cancels: Mutex<HashMap<OperationId, CancellationToken>>,
     /// Operations that have reported `OperationFinished`, oldest first.
     ///
@@ -57,32 +77,85 @@ impl Ops {
     }
 
     /// Reserves `id` for one operation, or reports it as busy.
+    ///
+    /// A guard held by a **real** operation refuses at once: that is a genuine
+    /// busy instance. A guard held by **startup reconciliation** is waited on,
+    /// bounded, because a user command issued within milliseconds of process start
+    /// (a one-shot `dblocal stop`, a tray click right after launch) did nothing
+    /// wrong and the reconciliation pass is short. If reconciliation does not
+    /// release within [`RECONCILE_LOCK_WAIT_MS`], the call is refused as busy just
+    /// like any other.
     pub fn lock_instance(&self, id: &InstanceId) -> Result<InstanceLock> {
+        let deadline =
+            std::time::Instant::now() + std::time::Duration::from_millis(RECONCILE_LOCK_WAIT_MS);
+        loop {
+            let waited = {
+                let mut locked = self.inner.locked.lock().map_err(|_| poisoned())?;
+                match locked.get(id) {
+                    None => {
+                        locked.insert(id.clone(), LockKind::Operation);
+                        return Ok(InstanceLock {
+                            inner: Arc::clone(&self.inner),
+                            id: id.clone(),
+                            kind: LockKind::Operation,
+                        });
+                    }
+                    // A real operation owns it: refuse, never wait.
+                    Some(LockKind::Operation) => false,
+                    // Reconciliation owns it briefly: wait for it.
+                    Some(LockKind::Reconciliation) => true,
+                }
+            };
+            if !waited {
+                return Err(DblError::InvalidTransition {
+                    from: "busy",
+                    to: "operation",
+                });
+            }
+            if std::time::Instant::now() >= deadline {
+                return Err(DblError::InvalidTransition {
+                    from: "busy",
+                    to: "operation",
+                });
+            }
+            std::thread::sleep(std::time::Duration::from_millis(RECONCILE_LOCK_POLL_MS));
+        }
+    }
+
+    /// Reserves `id` for the startup reconciliation pass.
+    ///
+    /// Refuses when any guard is already held (a real operation owns the row, or a
+    /// concurrent reconciliation is deciding it): reconciliation must not wait, it
+    /// simply skips a row it cannot own right now.
+    pub fn lock_instance_for_reconcile(&self, id: &InstanceId) -> Result<InstanceLock> {
         let mut locked = self.inner.locked.lock().map_err(|_| poisoned())?;
-        if !locked.insert(id.clone()) {
+        if locked.contains_key(id) {
             return Err(DblError::InvalidTransition {
                 from: "busy",
-                to: "operation",
+                to: "reconcile",
             });
         }
+        locked.insert(id.clone(), LockKind::Reconciliation);
         Ok(InstanceLock {
             inner: Arc::clone(&self.inner),
             id: id.clone(),
+            kind: LockKind::Reconciliation,
         })
     }
 
     /// Whether an operation currently owns `id` in this process.
     ///
     /// The supervisor uses this to skip a row an operation holds. Reconciliation
-    /// does **not** use it: it takes the instance lock itself (`lock_instance`) and
-    /// re-reads the row, which both excludes an in-flight operation and proves the
-    /// row it acts on is fresh, so a snapshot it took earlier cannot be overwritten.
-    /// A caller that needs the exclusion *and* a fresh row must lock, not read this.
+    /// does **not** use it: it takes the instance lock itself
+    /// (`lock_instance_for_reconcile`) and re-reads the row, which both excludes an
+    /// in-flight operation and proves the row it acts on is fresh, so a snapshot it
+    /// took earlier cannot be overwritten. A caller that needs the exclusion *and*
+    /// a fresh row must lock, not read this.
     pub fn is_busy(&self, id: &InstanceId) -> bool {
         self.inner
             .locked
             .lock()
-            .map(|locked| locked.contains(id))
+            .map(|locked| locked.contains_key(id))
             .unwrap_or(true)
     }
 
@@ -179,15 +252,22 @@ fn poisoned() -> DblError {
 }
 
 /// Released on drop, so an operation that panics or returns early unlocks.
+///
+/// The `kind` is what the guard was taken with, so `Drop` never removes a guard a
+/// different owner installed meanwhile (in practice none can, since the map entry
+/// is single-owner, but recording it keeps the intent explicit).
 #[derive(Debug)]
 pub struct InstanceLock {
     inner: Arc<OpsInner>,
     id: InstanceId,
+    kind: LockKind,
 }
 
 impl Drop for InstanceLock {
     fn drop(&mut self) {
-        if let Ok(mut locked) = self.inner.locked.lock() {
+        if let Ok(mut locked) = self.inner.locked.lock()
+            && locked.get(&self.id) == Some(&self.kind)
+        {
             locked.remove(&self.id);
         }
     }
