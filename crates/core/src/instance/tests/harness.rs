@@ -774,8 +774,8 @@ impl EngineAdapter for ScriptedAdapterClone {
 // file stays under the size limit; re-export them so `harness::` call sites are
 // unchanged.
 pub use super::harness_assert::{
-    describe, finished_count, finished_result, removed_for, stages, stop_forced_for, test_port,
-    wait_for_removed, wait_until_row_gone,
+    describe, finished_count, finished_result, recv_for, recv_until, removed_for, stages,
+    stop_forced_for, test_port, wait_for_removed, wait_until_row_gone,
 };
 
 use super::harness_assert::wait_for_finished;

@@ -68,6 +68,29 @@ fn release_nonce(nonce: &str) {
     }
 }
 
+/// A process-wide counter for delete nonces.
+///
+/// `Ops::next_id` is **per service**, so two `LocalService`s in one process (each
+/// with its own `Ops`) both hand out `op-1` for their first delete; a nonce built
+/// from the operation id alone would then be identical across services, and the
+/// loser's marker `Drop` would remove the winner's marker. This counter is shared
+/// by the whole process, so every delete gets a distinct nonce regardless of which
+/// service issued it.
+fn next_delete_sequence() -> u64 {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1
+}
+
+/// Builds the in-flight marker nonce for one delete.
+///
+/// `sequence` is the process-wide [`next_delete_sequence`] value and `op_id` the
+/// issuing service's operation id. The sequence is what makes the nonce distinct
+/// across services: two services can both be at `op-1`, but never at the same
+/// sequence value.
+fn delete_nonce(sequence: u64, op_id: &str) -> String {
+    format!("{}-{}-{}", std::process::id(), sequence, op_id)
+}
+
 /// The owner recorded by an in-flight marker.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct MarkerOwner {
@@ -254,12 +277,13 @@ pub(crate) fn delete_instance(
     // set leaves a window in which another process's reconciliation sees a
     // `Deleting` row with no owner and mistakes it for a crash.
     //
-    // The nonce must be unique per operation, not per (process, instance): two
-    // deletes of the same id in one process would otherwise share it, and the
-    // loser's `Drop` would delete the winner's marker. A unique operation id is
-    // what the marker contract ("a per-operation nonce") promises.
+    // The nonce must be unique per delete *process-wide*. It is not enough to build
+    // it from the operation id: two `LocalService`s in one process each have their
+    // own `Ops`, so both hand out `op-1` for their first delete, the nonces match,
+    // and the loser's marker `Drop` would remove the winner's marker. A process-wide
+    // sequence guarantees a distinct nonce for every delete regardless of service.
     let op_id = inner.ops.next_id();
-    let nonce = format!("{}-{}", std::process::id(), op_id.as_str());
+    let nonce = delete_nonce(next_delete_sequence(), op_id.as_str());
     let marker = InFlightMarker::create(inner, &inner.paths.instance_dir(instance.name()), &nonce);
 
     // Claim `Deleting` synchronously, like `start_instance` claims `Starting`.
@@ -493,4 +517,74 @@ fn archive_stamp(now: SystemTime) -> u64 {
         .as_secs()
         .saturating_mul(1000)
         .saturating_add(u64::from(elapsed.subsec_millis()))
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
+    use super::*;
+
+    fn owner(nonce: &str) -> String {
+        format!("pid=1\nstarted=1.0\nexe=/x\nnonce={nonce}\n")
+    }
+
+    /// The loser's marker `Drop` must not remove the winner's marker: a marker whose
+    /// recorded nonce differs from the file's is somebody else's and is left alone.
+    ///
+    /// This is the property the per-operation nonce exists for; without distinct
+    /// nonces the loser's `Drop` deletes the winner's in-flight file and a concurrent
+    /// reconciliation then mistakes a live delete for a crash.
+    #[test]
+    fn a_marker_drop_leaves_another_writers_file_alone() {
+        let dir = tempfile::tempdir().expect("tmp");
+        let path = dir.path().join(IN_FLIGHT_MARKER);
+        // The winner has written its marker.
+        std::fs::write(&path, owner("winner-nonce")).expect("write");
+
+        // The loser's guard names a different nonce; dropping it must not remove the
+        // file.
+        drop(InFlightMarker {
+            path: path.clone(),
+            nonce: "loser-nonce".to_owned(),
+        });
+        assert!(
+            path.exists(),
+            "the loser must not remove the winner's marker"
+        );
+
+        // The owner's own drop does remove it.
+        drop(InFlightMarker {
+            path: path.clone(),
+            nonce: "winner-nonce".to_owned(),
+        });
+        assert!(!path.exists(), "the owner removes its own marker");
+    }
+
+    /// The process-wide sequence gives every delete a distinct nonce even though
+    /// `Ops::next_id` is per service.
+    #[test]
+    fn delete_sequence_is_unique_process_wide() {
+        let first = next_delete_sequence();
+        let second = next_delete_sequence();
+        assert_ne!(first, second, "the process-wide sequence never repeats");
+    }
+
+    /// Item 5(b): two services in one process can both be at `op-1` for their first
+    /// delete (`Ops::next_id` is per service). The nonce must still differ, or the
+    /// loser's marker `Drop` removes the winner's marker.
+    ///
+    /// This pins the exact collision without racing two threads: the same `op_id`
+    /// with two different process-wide sequences must yield two different nonces.
+    /// Reverting to `{pid}-{op_id}` (or any per-(process,instance) shape) makes them
+    /// equal and fails here.
+    #[test]
+    fn a_nonce_differs_for_two_services_both_at_op_1() {
+        let a = delete_nonce(next_delete_sequence(), "op-1");
+        let b = delete_nonce(next_delete_sequence(), "op-1");
+        assert_ne!(
+            a, b,
+            "two deletes with the same per-service op id must still get distinct nonces: {a:?} / {b:?}"
+        );
+    }
 }

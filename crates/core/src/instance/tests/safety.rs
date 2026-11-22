@@ -405,19 +405,21 @@ fn sentinel_password_never_appears_in_events_errors_or_the_database() {
 
     let mut receiver = h.service.subscribe();
     let op = h.service.start_instance(&id).expect("start");
+    // Bounded: a start whose `OperationFinished` never arrives must fail, not hang.
+    let events = super::harness::recv_until(
+        &mut receiver,
+        std::time::Duration::from_secs(30),
+        "the start never reported OperationFinished",
+        |event| {
+            matches!(
+                event,
+                crate::service::ServiceEvent::OperationFinished { id, .. } if id == &op
+            )
+        },
+    );
     let mut rendered = String::new();
-    loop {
-        match receiver.blocking_recv() {
-            Ok(event) => {
-                rendered.push_str(&format!("{event:?}"));
-                if matches!(&event, crate::service::ServiceEvent::OperationFinished { id, .. } if id == &op)
-                {
-                    break;
-                }
-            }
-            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
-            Err(_) => break,
-        }
+    for event in &events {
+        rendered.push_str(&format!("{event:?}"));
     }
     let uri = h
         .service

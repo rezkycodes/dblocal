@@ -864,3 +864,114 @@ fn a_stop_arriving_during_reconciliation_waits_instead_of_refusing() {
         "the row ends Stopped after the stop waits for reconciliation"
     );
 }
+
+/// Audit (reviewer): `stop_instance` reads the row **before** `lock_instance`, so a
+/// stop that waited on reconciliation may then act on a stale status. This pins
+/// what actually happens, and that `claim_from`'s compare-and-set is what protects
+/// it.
+///
+/// Setup: a `Running` row whose process is dead. `on_guard_held` parks
+/// reconciliation in phase 3 holding the guard, so the stop (issued from another
+/// thread) reads `Running` and then blocks on the guard. When the hook releases,
+/// reconciliation probes the dead process and writes `Stopped` (identity cleared,
+/// in one transaction). The stop then resumes with its **stale** `Running` read.
+///
+/// The CAS in `claim_from` is what protects the write: it claims `Running ->
+/// Stopping` from the stale `Running`, which now matches nothing, so it is refused
+/// and the row stays `Stopped` — never `Stopping` (which would strand a bogus
+/// in-flight stop) and never `Running` again. The refusal surfaces as a typed
+/// transition error (`DBL-1004`), not a corruption.
+#[test]
+fn a_stop_that_waited_on_reconciliation_never_clobbers_the_settled_status() {
+    let h = Harness::paused(EngineKey::Postgresql);
+    let root = h.paths.root().to_path_buf();
+    let id = crate::model::InstanceId::new();
+    let name = crate::model::InstanceName::new("stale-stop").expect("name");
+    let port = test_port();
+    let procs = Arc::clone(&h.procs);
+    let service = h.service.clone();
+
+    // A `Running` row with a DEAD identity: reconciliation will mark it `Stopped`.
+    let before_id = id.clone();
+    let before_name = name.clone();
+    let before_procs = Arc::clone(&procs);
+    super::super::reconcile::on_reconcile(
+        &root,
+        move |inner| {
+            let identity = before_procs.spawn("/fake/engine/bin/postgres");
+            before_procs.kill(identity.pid());
+            let spec = crate::model::InstanceSpec::new(
+                before_name,
+                EngineKey::Postgresql,
+                "18.7",
+                Some(crate::model::Port::new(port).expect("port")),
+                crate::model::AuthMode::Password,
+            )
+            .expect("spec");
+            let row = crate::model::Instance::new(
+                &spec,
+                before_id,
+                InstanceStatus::Running,
+                std::time::SystemTime::now(),
+            )
+            .with_process(
+                identity.pid(),
+                identity.started_at(),
+                identity.exe().to_path_buf(),
+            );
+            inner
+                .db(|store| store.insert_instance(&row))
+                .expect("insert running row");
+        },
+        |_| {},
+    );
+
+    // Park reconciliation in phase 3 (guard held, before the probe); the stop reads
+    // the row and blocks on the guard while we release reconciliation.
+    let (held_tx, held_rx) = std::sync::mpsc::channel::<()>();
+    let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+    let held_tx = std::sync::Mutex::new(held_tx);
+    let release_rx = std::sync::Mutex::new(release_rx);
+    super::super::reconcile::on_guard_held(&root, move |_inner, _id| {
+        let _ = held_tx.lock().expect("held").send(());
+        let _ = release_rx
+            .lock()
+            .expect("release")
+            .recv_timeout(std::time::Duration::from_secs(10));
+    });
+
+    h.service.start_background();
+    held_rx
+        .recv_timeout(std::time::Duration::from_secs(10))
+        .expect("reconciliation reaches the guarded window");
+
+    // Issue the stop while the guard is held: it reads `Running`, then waits.
+    let stop_id = id.clone();
+    let stop_service = service.clone();
+    let stop = std::thread::spawn(move || stop_service.stop_instance(&stop_id));
+    std::thread::sleep(std::time::Duration::from_millis(150));
+    // Release reconciliation: it marks the dead row `Stopped` and drops the guard.
+    let _ = release_tx.send(());
+
+    let result = stop.join().expect("stop thread");
+    // The row must be `Stopped` with no identity, whatever the stop returned.
+    let row = h.instance(&id).expect("row survives");
+    assert_eq!(
+        row.status(),
+        InstanceStatus::Stopped,
+        "the settled status must survive a stop that acted on a stale read"
+    );
+    assert!(
+        row.pid().is_none(),
+        "the identity stays cleared; a stale stop must not resurrect it"
+    );
+    // The CAS refuses the stale claim, so the stop reports a typed transition error
+    // rather than stranding a fake `Stopping` operation. This is the protection: the
+    // stale `Running` it read no longer matches the store, so `claim_from` loses.
+    let err = result.expect_err("the stale stop is refused by the compare-and-set");
+    assert_eq!(
+        err.code(),
+        crate::error::CODE_INVALID_TRANSITION,
+        "a stale stop is refused as a transition, not something else: {err:?}"
+    );
+}

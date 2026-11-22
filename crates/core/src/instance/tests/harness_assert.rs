@@ -155,6 +155,74 @@ pub(super) fn drain(
     }
 }
 
+/// Receives events for up to `timeout`, returning every event seen.
+///
+/// The non-panicking counterpart of [`recv_until`]: a caller that wants to retry a
+/// stimulus (for example append to a log again) uses this and checks the result
+/// itself, and still never blocks unboundedly.
+pub fn recv_for(
+    receiver: &mut tokio::sync::broadcast::Receiver<ServiceEvent>,
+    timeout: Duration,
+) -> Vec<ServiceEvent> {
+    let deadline = std::time::Instant::now() + timeout;
+    let mut seen = Vec::new();
+    loop {
+        match receiver.try_recv() {
+            Ok(event) => seen.push(event),
+            Err(tokio::sync::broadcast::error::TryRecvError::Empty) => {}
+            Err(tokio::sync::broadcast::error::TryRecvError::Lagged(_)) => continue,
+            Err(tokio::sync::broadcast::error::TryRecvError::Closed) => return seen,
+        }
+        if std::time::Instant::now() >= deadline {
+            return seen;
+        }
+        if !seen.is_empty() {
+            // Drain anything already queued before returning.
+            drain(receiver, &mut seen);
+            return seen;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+/// Receives events until `accept` returns true, with a hard deadline.
+///
+/// Uses `try_recv` plus a short sleep, never `blocking_recv`: a `blocking_recv`
+/// loop whose deadline is only checked after an event arrives hangs forever when
+/// nothing is ever delivered (a missing event must fail the test, not stall it).
+/// Every event seen is pushed to `seen`. Panics with `missing` at the deadline.
+pub fn recv_until(
+    receiver: &mut tokio::sync::broadcast::Receiver<ServiceEvent>,
+    timeout: Duration,
+    missing: &str,
+    mut accept: impl FnMut(&ServiceEvent) -> bool,
+) -> Vec<ServiceEvent> {
+    let deadline = std::time::Instant::now() + timeout;
+    let mut seen = Vec::new();
+    loop {
+        match receiver.try_recv() {
+            Ok(event) => {
+                let accepted = accept(&event);
+                seen.push(event);
+                if accepted {
+                    return seen;
+                }
+            }
+            Err(tokio::sync::broadcast::error::TryRecvError::Empty) => {}
+            Err(tokio::sync::broadcast::error::TryRecvError::Lagged(_)) => continue,
+            Err(tokio::sync::broadcast::error::TryRecvError::Closed) => {
+                panic!("{missing}: the event channel closed before it arrived")
+            }
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "{missing}; saw: {:?}",
+            describe(&seen)
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
 fn row_gone_diagnostic(paths: &DblPaths, id: &InstanceId) -> String {
     let store = match Store::open(paths) {
         Ok(store) => store,
