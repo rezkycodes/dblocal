@@ -446,3 +446,65 @@ fn choose_version_updates_the_form_and_the_suggested_name(cx: &mut TestAppContex
         Some("17.5".to_owned())
     );
 }
+
+/// The command palette: opening, filtering, and running every action kind.
+#[gpui_kit::test]
+fn palette_actions_reach_the_same_handlers(cx: &mut TestAppContext) {
+    let (view, service, cx) = fixture(cx);
+    assert!(!view.read_with(cx, |this, _| this.palette_is_open()));
+    view.update(cx, |this, _| this.toggle_palette());
+    assert!(view.read_with(cx, |this, _| this.palette_is_open()));
+    let labels = view.read_with(cx, |this, _| this.palette_labels());
+    assert!(
+        labels.iter().any(|l| l.contains("Instance baru")),
+        "{labels:?}"
+    );
+
+    let actions = view.read_with(cx, |this, _| this.palette_actions());
+    assert!(!actions.is_empty());
+    // Run the New-instance entry (index 0 in the unfiltered list).
+    let new_index = actions
+        .iter()
+        .position(|a| matches!(a, crate::format::PaletteAction::NewInstance))
+        .expect("new-instance entry");
+    view.update_in(cx, |this, window, cx| {
+        this.run_palette_action(new_index, window, cx)
+    });
+    cx.run_until_parked();
+    assert!(
+        view.read_with(cx, |this, _| this.create_form().is_some()),
+        "the palette must open the create dialog"
+    );
+    assert!(!view.read_with(cx, |this, _| this.palette_is_open()));
+    view.update(cx, |this, _| this.cancel_create());
+
+    // Start, stop, open and copy each route to their handler.
+    let id = service.id_with(InstanceStatus::Stopped);
+    let entries = view.read_with(cx, |this, _| this.palette_actions());
+    for (index, action) in entries.iter().enumerate() {
+        match action {
+            crate::format::PaletteAction::Start(value)
+            | crate::format::PaletteAction::Stop(value)
+            | crate::format::PaletteAction::Open(value)
+            | crate::format::PaletteAction::CopyUri(value) => {
+                if value == &id.to_string() {
+                    view.update_in(cx, |this, window, cx| {
+                        this.run_palette_action(index, window, cx)
+                    });
+                    cx.run_until_parked();
+                }
+            }
+            crate::format::PaletteAction::NewInstance => {}
+        }
+    }
+    assert!(
+        service.calls() > 0,
+        "the palette actions must reach the service"
+    );
+    // An out-of-range index closes the palette without a panic.
+    view.update(cx, |this, _| this.toggle_palette());
+    view.update_in(cx, |this, window, cx| {
+        this.run_palette_action(999, window, cx)
+    });
+    assert!(!view.read_with(cx, |this, _| this.palette_is_open()));
+}

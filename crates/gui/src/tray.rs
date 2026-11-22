@@ -493,6 +493,110 @@ mod linux {
             }
         }
     }
+
+    #[cfg(test)]
+    mod glue_tests {
+        #![allow(clippy::expect_used, clippy::unwrap_used)]
+
+        use super::*;
+
+        fn tray_with(views: Vec<InstanceView>) -> (DblocalTray, flume::Receiver<TrayAction>) {
+            let (tx, rx) = flume::unbounded();
+            let tray = DblocalTray {
+                model: Arc::new(Mutex::new(TrayMenuModel::from_views(&views))),
+                views: Arc::new(Mutex::new(views)),
+                tx,
+            };
+            (tray, rx)
+        }
+
+        fn sample(status: InstanceStatus) -> InstanceView {
+            use dblocal_core::model::{
+                AuthMode, EngineKey, InstanceId, InstanceName, InstanceSpec, Port,
+            };
+            let spec = InstanceSpec::new(
+                InstanceName::new("pg-glue").expect("name"),
+                EngineKey::Postgresql,
+                "17.4",
+                Some(Port::new(5432).expect("port")),
+                AuthMode::Password,
+            )
+            .expect("spec");
+            let instance = dblocal_core::model::Instance::new(
+                &spec,
+                InstanceId::new(),
+                status,
+                std::time::SystemTime::UNIX_EPOCH,
+            );
+            InstanceView::from_instance(&instance)
+        }
+
+        /// The D-Bus-facing accessors answer from the model, with an empty
+        /// `icon_name` so the host prefers the pixmap (R8).
+        #[test]
+        fn the_glue_reports_title_icon_and_tooltip() {
+            let (tray, _rx) = tray_with(vec![sample(InstanceStatus::Running)]);
+            assert_eq!(tray.id(), "dblocal");
+            assert_eq!(tray.title(), strings::APP_NAME);
+            assert_eq!(tray.icon_name(), "");
+            let pixmap = tray.icon_pixmap();
+            assert_eq!(pixmap.len(), 1);
+            assert_eq!((pixmap[0].width, pixmap[0].height), (22, 22));
+            let center = (11 * 22 + 11) * 4;
+            assert_eq!(
+                &pixmap[0].data[center..center + 4],
+                &[0xff, 0x59, 0xa8, 0x69],
+                "a running aggregate must be the green dot"
+            );
+            assert_eq!(tray.tool_tip().title, strings::APP_NAME);
+        }
+
+        /// The aggregate icon is grey with nothing running and red with a failure.
+        #[test]
+        fn the_glue_icon_follows_the_aggregate() {
+            let (idle, _) = tray_with(vec![sample(InstanceStatus::Stopped)]);
+            let grey = idle.icon_pixmap();
+            let center = (11 * 22 + 11) * 4;
+            assert_eq!(&grey[0].data[center..center + 4], &[0xff, 0x8a, 0x8f, 0x98]);
+            let (failing, _) = tray_with(vec![
+                sample(InstanceStatus::Running),
+                sample(InstanceStatus::Failed),
+            ]);
+            let red = failing.icon_pixmap();
+            assert_eq!(&red[0].data[center..center + 4], &[0xff, 0xe0, 0x6c, 0x75]);
+        }
+
+        /// Every menu entry carries icon data, and activating one sends its action.
+        #[test]
+        fn the_glue_menu_carries_icons_and_actions() {
+            let (tray, rx) = tray_with(vec![sample(InstanceStatus::Running)]);
+            let menu = tray.menu();
+            // instance + separator + open + quit
+            assert_eq!(menu.len(), 4);
+            let mut saw_icon = false;
+            for item in &menu {
+                if let MenuItem::Standard(standard) = item {
+                    assert!(!standard.label.is_empty());
+                    if standard.label.contains("pg-glue") {
+                        assert!(!standard.icon_data.is_empty(), "entry has no icon");
+                        saw_icon = true;
+                    }
+                }
+            }
+            assert!(saw_icon, "the instance entry was missing");
+            // Activate the instance row: the action reaches the channel.
+            let (mut target, _rx_keep) = tray_with(vec![sample(InstanceStatus::Running)]);
+            for item in menu {
+                if let MenuItem::Standard(standard) = item
+                    && standard.label.contains("pg-glue")
+                {
+                    (standard.activate)(&mut target);
+                }
+            }
+            let action = rx.try_recv().expect("an activation sends an action");
+            assert!(matches!(action, TrayAction::Stop(_) | TrayAction::Start(_)));
+        }
+    }
 }
 
 #[cfg(test)]
@@ -633,6 +737,34 @@ mod tests {
         assert_eq!(status("pg-run"), InstanceStatus::Running);
         assert_eq!(status("pg-bad"), InstanceStatus::Failed);
         assert_eq!(status("pg-off"), InstanceStatus::Stopped);
+    }
+
+    #[test]
+    fn busy_status_draws_the_amber_dot() {
+        let bytes = status_dot_argb(InstanceStatus::Starting, 8);
+        let center = (4 * 8 + 4) * 4;
+        assert_eq!(&bytes[center..center + 4], &[0xff, 0xe5, 0xc0, 0x7b]);
+        assert_eq!(
+            status_from_tray_label("◐ pg running"),
+            InstanceStatus::Starting
+        );
+        assert_eq!(
+            status_from_tray_label("○ pg stopped"),
+            InstanceStatus::Stopped
+        );
+    }
+
+    #[test]
+    fn the_app_flag_and_the_empty_startup_are_wired() {
+        // The flag is process-wide; set it and read it back through both paths.
+        enable_for_app();
+        assert!(app_enabled());
+        let mut startup = TrayStartup::none();
+        assert!(!startup.handle.is_available());
+        assert_eq!(startup.backend_name, "none");
+        assert!(!startup.handle.refresh(&[]));
+        // A handle with no backend never yields tray actions.
+        assert!(startup.handle.subscribe_actions().try_recv().is_err());
     }
 
     #[test]
