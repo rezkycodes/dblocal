@@ -181,6 +181,7 @@ fn verify_pid_identity_fallback(pid: u32, expected: &ExpectedIdentity) -> PidIde
     verify_ps_command_output(cmd.trim(), expected)
 }
 
+#[cfg(any(test, not(target_os = "linux")))]
 pub(crate) fn verify_ps_command_output(cmd: &str, expected: &ExpectedIdentity) -> PidIdentity {
     if cmd.is_empty() {
         return PidIdentity::NoSuchProcess;
@@ -188,11 +189,7 @@ pub(crate) fn verify_ps_command_output(cmd: &str, expected: &ExpectedIdentity) -
     let expected_exe = expected.exe.to_string_lossy();
     let Some(rest) = command_starts_with_executable(cmd, &expected_exe) else {
         let observed = cmd.split_whitespace().next().unwrap_or(cmd);
-        return PidIdentity::NotOurs(format!(
-            "exe {} != {}",
-            observed,
-            expected.exe.display()
-        ));
+        return PidIdentity::NotOurs(format!("exe {} != {}", observed, expected.exe.display()));
     };
     let args_tail = rest.trim_start();
     if !ps_command_targets_instance(args_tail, expected) {
@@ -201,6 +198,7 @@ pub(crate) fn verify_ps_command_output(cmd: &str, expected: &ExpectedIdentity) -
     PidIdentity::Match
 }
 
+#[cfg(any(test, not(target_os = "linux")))]
 fn command_starts_with_executable<'a>(cmd: &'a str, expected_exe: &str) -> Option<&'a str> {
     let rest = cmd.strip_prefix(expected_exe)?;
     if rest.is_empty() || rest.starts_with(char::is_whitespace) {
@@ -209,6 +207,7 @@ fn command_starts_with_executable<'a>(cmd: &'a str, expected_exe: &str) -> Optio
     None
 }
 
+#[cfg(any(test, not(target_os = "linux")))]
 fn ps_command_targets_instance(args_tail: &str, expected: &ExpectedIdentity) -> bool {
     let datadir = expected.data_dir.to_string_lossy();
     let conf = expected.config_path.to_string_lossy();
@@ -217,14 +216,14 @@ fn ps_command_targets_instance(args_tail: &str, expected: &ExpectedIdentity) -> 
     contains_arg_token(args_tail, &datadir_arg) || contains_arg_token(args_tail, &conf_arg)
 }
 
+#[cfg(any(test, not(target_os = "linux")))]
 fn contains_arg_token(haystack: &str, token: &str) -> bool {
     let mut offset = 0;
     while let Some(pos) = haystack[offset..].find(token) {
         let start = offset + pos;
         let end = start + token.len();
         let before_ok = start == 0 || haystack.as_bytes()[start - 1].is_ascii_whitespace();
-        let after_ok =
-            end == haystack.len() || haystack.as_bytes()[end].is_ascii_whitespace();
+        let after_ok = end == haystack.len() || haystack.as_bytes()[end].is_ascii_whitespace();
         if before_ok && after_ok {
             return true;
         }
