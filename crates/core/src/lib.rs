@@ -18,6 +18,7 @@ pub mod secrets;
 pub mod service;
 pub mod store;
 pub mod strings;
+pub mod update;
 
 pub use error::{DblError, Result};
 pub use instance::{
