@@ -1353,8 +1353,8 @@ fn mariadb_two_instances_side_by_side() {
 #[test]
 #[ignore = "e2e: requires cached MariaDB 11.8 tarball; run with DBLOCAL_E2E=1 under flock $HOME/.cache/dblocal-e2e.lock"]
 fn mariadb_118_bootstrap_init_succeeds_with_foreign_listener_on_instance_port() {
-    // E2: the password bootstrap must not bind the instance TCP port, so a
-    // foreign listener there must not make `initialize` fail.
+    // E2: the password bootstrap must not bind the instance TCP port, so
+    // initialize must not depend on that port being free.
     require_e2e();
     let tmp = tempfile::tempdir().expect("tmp");
     let rt = setup_runtime(tmp.path());

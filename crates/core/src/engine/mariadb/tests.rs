@@ -427,8 +427,7 @@ fn mutation_auth_root_normal_required_in_install_db() {
 #[test]
 fn bootstrap_command_skips_networking() {
     // The bootstrap server runs before the password exists; binding the
-    // instance TCP port would expose `root` with an empty password to any local
-    // user and would fail when another process holds the port.
+    // instance TCP port would make initialize depend on that port being free.
     let ctx = init_ctx(AuthMode::Password, Some("pw"));
     let init_file = PathBuf::from("/tmp/dblocal/instances/mdb/run/.mariadb-init.sql");
     let args: Vec<String> = build_bootstrap_command(&ctx, &init_file)

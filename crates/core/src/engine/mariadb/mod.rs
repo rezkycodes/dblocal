@@ -410,9 +410,8 @@ fn build_bootstrap_command(ctx: &InitContext, init_file: &Path) -> Command {
     ));
     cmd.arg(format!("--init-file={}", init_file.display()));
     // The bootstrap server only needs the local socket for the init-file SQL
-    // (including SHUTDOWN). Binding the TCP instance port would expose an empty
-    // root account to any local user for the duration of bootstrap and would
-    // fail if anything else holds the port.
+    // (including SHUTDOWN). Binding the TCP instance port would make initialize
+    // depend on that port being free between the port check and bootstrap.
     cmd.arg("--skip-networking");
     cmd.stdin(Stdio::null());
     cmd.stdout(Stdio::piped());

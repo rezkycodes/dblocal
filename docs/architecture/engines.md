@@ -227,11 +227,11 @@ REST API `checksum.sha256sum`.
   FLUSH PRIVILEGES; SHUTDOWN;`, starts
   `mariadbd --defaults-file=... --init-file=... --skip-networking`, waits for it
   to exit within `START_TIMEOUT_SECS`, then deletes the init file on both success
-  and failure. `--skip-networking` is required: until the init file runs,
-  `root@127.0.0.1` has an empty password, so binding the instance TCP port would
-  expose it to any local user for the whole bootstrap, and any foreign listener
-  on that port would make initialization fail. The init file and its `SHUTDOWN`
-  only need the unix socket from `my.cnf`. The SQL literal escapes backslashes,
+  and failure. `--skip-networking` is required so initialization does not depend
+  on the instance TCP port being free: the bootstrap server would otherwise bind
+  it, and a foreign listener between the port check and the bootstrap would make
+  `initialize` fail with `Address already in use`. The init file and its
+  `SHUTDOWN` only need the unix socket from `my.cnf`. The SQL literal escapes backslashes,
   single quotes and control chars. The password never appears in argv, env, or
   logs; init-file contents are not logged. On failure the data dir is removed.
 
