@@ -723,15 +723,15 @@ fn mariadb_118_long_socket_path_fallback() {
     let port = 43105u16;
     require_port_free(port);
 
-    // Build a deliberately deep instance dir so natural socket path exceeds 120 bytes.
-    let mut deep = tmp.path().join("deep");
-    for _ in 0..8 {
-        deep = deep.join("very_long_directory_name_for_socket_path_test");
-    }
-    let inst = deep.join("inst");
+    // Deepen the run dir only so the natural socket path exceeds 120 bytes,
+    // while keeping data/logs short enough for mariadb-install-db.
+    let inst = tmp.path().join("lsock");
     let data = inst.join("data");
     let logs = inst.join("logs");
-    let run = inst.join("run");
+    let mut run = inst.join("run");
+    for _ in 0..8 {
+        run = run.join("very_long_directory_name_for_socket_path_test");
+    }
     fs::create_dir_all(&logs).unwrap();
     fs::create_dir_all(&run).unwrap();
     fs::create_dir_all(&data).unwrap();

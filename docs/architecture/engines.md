@@ -202,15 +202,26 @@ REST API `checksum.sha256sum`.
   --auth-root-authentication-method=normal --skip-test-db`.
   On failure the data dir is removed and raw output is returned. It writes the
   DBLocal-managed `my.cnf` (0600) with `bind-address=127.0.0.1`, `port`,
-  `datadir`, `basedir`, a short socket path `run/mariadb-<port>.sock`,
-  `pid-file`, `log-error`, `skip-name-resolve`. No password in config.
+  `datadir`, `basedir`, a socket path, `pid-file`, `log-error`, `skip-name-resolve`.
+  No password in config.
+
+- **Socket path fallback (C-09 analogue).** AF_UNIX `sun_path` is 107 bytes on
+  Linux and 103 bytes on macOS/BSD. The natural path is
+  `<instance>/run/mariadb-<port>.sock`; when it exceeds the platform limit the
+  adapter selects a short private fallback (`$XDG_RUNTIME_DIR/dblocal/` if set
+  and short enough, else `/tmp/dblocal-<euid>/`, mode 0700, owned by current
+  euid, not a symlink) with a deterministic file name derived from port and a
+  short hash of the data directory. The chosen path is written into `my.cnf`, so
+  initialize, bootstrap and start agree. macOS behavior is implemented but
+  unverified on this Linux host.
 
 - **Password bootstrap (`AuthMode::Password`).** After install-db, the adapter
   writes a 0600 one-shot init file containing `ALTER USER ... IDENTIFIED BY ...;
   FLUSH PRIVILEGES; SHUTDOWN;`, starts `mariadbd --defaults-file=... --init-file=...`,
   waits for it to exit within `START_TIMEOUT_SECS`, then deletes the init file
-  on both success and failure. The password never appears in argv, env, or logs;
-  init-file contents are not logged. On failure the data dir is removed.
+  on both success and failure. The SQL literal escapes backslashes, single quotes
+  and control chars. The password never appears in argv, env, or logs; init-file
+  contents are not logged. On failure the data dir is removed.
 
 - **Start command:** `bin/mariadbd --defaults-file=<data_dir>/my.cnf` with
   stdin null. No password in argv/env; `MYSQL_PWD` and `MYSQL_TCP_PORT` are
@@ -223,10 +234,15 @@ REST API `checksum.sha256sum`.
   server spoke the protocol. Connect/read failures are engine errors. No
   `mysqladmin ping` exit-code trust.
 
-- **Shutdown:** read `data_dir/mariadbd.pid`, send `SIGTERM`, wait up to
-  `STOP_GRACE_SECS` for the PID to disappear. The spike showed SIGTERM produces
-  `Normal shutdown` / `Shutdown complete`; the bounded wait returns a clear
-  engine error on timeout so the service can escalate.
+- **Shutdown:** read `data_dir/mariadbd.pid`, verify the PID identity before
+  signalling (Linux: `/proc/<pid>/exe` resolved to the runtime `mariadbd` and
+  cmdline contains this instance's `--datadir` or `--defaults-file`; macOS/BSD:
+  `ps -p <pid> -o command=` best-effort check, documented as unverified), then
+  send `SIGTERM` and wait up to `STOP_GRACE_SECS` for the PID to disappear.
+  Liveness uses `kill(pid,0)` and treats Linux zombie state (`Z`) as dead. A
+  stale/unrelated pid is never signalled; shutdown returns `Ok(())` with a log
+  line. The bounded wait returns a clear engine error on timeout so the service
+  can escalate.
 
 - **Connection values:**
   - `UriFormat::Uri`: `mysql://<user>:<enc_pw>@127.0.0.1:<port>/`
@@ -246,10 +262,6 @@ REST API `checksum.sha256sum`.
   - `BinaryMissing`: exec `Exec format error` or missing mariadbd/install-db.
   - `Unknown`: socket path too long, bad config/unknown variable, missing data
     dir / `Can't change dir to`, disk full, and anything unrecognized.
-
-- **Socket path limit.** AF_UNIX `sun_path` is 107 bytes. The adapter validates
-  the socket path before writing config/start; over-limit is a typed
-  `InvalidInput` (config rewrite also validates).
 
 ## Host glibc detection (`engine::glibc`, C-03)
 
