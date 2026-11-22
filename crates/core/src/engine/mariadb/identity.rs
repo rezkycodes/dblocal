@@ -74,7 +74,7 @@ pub(crate) fn shutdown_verified_pid(
     })
 }
 
-pub(super) fn read_pidfile(path: &Path) -> Result<u32> {
+pub(crate) fn read_pidfile(path: &Path) -> Result<u32> {
     let contents = fs::read_to_string(path).map_err(|e| DblError::Engine {
         reason: format!("cannot read pidfile {}: {e}", path.display()),
     })?;
@@ -355,7 +355,7 @@ fn send_term(pid: u32) -> Result<()> {
 }
 
 #[cfg(unix)]
-pub(super) fn pid_alive(pid: u32) -> bool {
+pub(crate) fn pid_alive(pid: u32) -> bool {
     use nix::sys::signal::kill;
     use nix::unistd::Pid;
     #[cfg(target_os = "linux")]

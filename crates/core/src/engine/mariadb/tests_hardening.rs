@@ -4,6 +4,8 @@ use super::*;
 use crate::engine::{InitContext, RunContext};
 use crate::model::{AuthMode, Port};
 use std::ffi::OsString;
+use std::process::{Command, Stdio};
+use std::time::Duration;
 use tempfile::tempdir;
 
 fn init_ctx(auth: AuthMode, password: Option<&str>) -> InitContext {
@@ -228,4 +230,177 @@ fn shutdown_not_ours_is_ok() {
         Duration::from_millis(10),
     )
     .expect("not ours is ok");
+}
+
+#[test]
+fn read_pidfile_rejects_empty_garbage_and_multiline() {
+    let dir = tempdir().expect("tmp");
+    let empty = dir.path().join("empty.pid");
+    fs::write(&empty, "").expect("write");
+    assert!(read_pidfile(&empty).is_err());
+
+    let garbage = dir.path().join("garbage.pid");
+    fs::write(&garbage, "not-a-pid\n").expect("write");
+    assert!(read_pidfile(&garbage).is_err());
+
+    let two = dir.path().join("two.pid");
+    fs::write(&two, "123\n456\n").expect("write");
+    let pid = read_pidfile(&two).expect("first line");
+    assert_eq!(pid, 123);
+}
+
+#[test]
+fn pid_alive_reports_current_process() {
+    let pid = std::process::id();
+    assert!(pid_alive(pid));
+}
+
+#[cfg(unix)]
+#[test]
+fn pid_alive_reports_reaped_child_as_dead() {
+    let mut child = Command::new("true")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn");
+    let pid = child.id();
+    let _ = child.wait().expect("wait");
+    std::thread::sleep(Duration::from_millis(20));
+    assert!(!pid_alive(pid));
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn pid_alive_reports_zombie_as_dead() {
+    use nix::sys::wait::waitpid;
+    use nix::unistd::{ForkResult, Pid, fork};
+
+    // SAFETY: test-only fork; child exits immediately.
+    #[allow(unsafe_code)]
+    let forked = unsafe { fork() }.expect("fork");
+    match forked {
+        ForkResult::Child => std::process::exit(0),
+        ForkResult::Parent { child } => {
+            let pid = child.as_raw() as u32;
+            let deadline = std::time::Instant::now() + Duration::from_secs(2);
+            let mut saw_zombie = false;
+            while std::time::Instant::now() < deadline {
+                let stat = fs::read_to_string(format!("/proc/{pid}/stat")).unwrap_or_default();
+                if is_zombie_stat(&stat) {
+                    saw_zombie = true;
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            if saw_zombie {
+                assert!(!pid_alive(pid), "zombie must not be treated as alive");
+            }
+            let _ = waitpid(Pid::from_raw(pid as i32), None);
+        }
+    }
+}
+
+#[test]
+fn install_db_failure_removes_data_dir() {
+    let dir = tempdir().expect("tmp");
+    let root = dir.path();
+    let runtime = root.join("rt/scripts");
+    fs::create_dir_all(&runtime).expect("scripts");
+    let prog = runtime.join("mariadb-install-db");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::write(&prog, "#!/bin/sh\necho boom >&2\nexit 7\n").expect("write");
+        fs::set_permissions(&prog, fs::Permissions::from_mode(0o755)).expect("chmod");
+    }
+    let data = root.join("inst/data");
+    fs::create_dir_all(&data).expect("data");
+    let ctx = InitContext {
+        instance_name: "m".into(),
+        runtime_dir: root.join("rt"),
+        data_dir: data.clone(),
+        port: Port::new(43150).expect("port"),
+        superuser: "root".into(),
+        auth: AuthMode::None,
+        password: None,
+    };
+    let err = run_install_db(&ctx).expect_err("should fail");
+    let msg = format!("{err:?}");
+    assert!(msg.contains("mariadb-install-db failed"));
+    assert!(msg.contains("boom"));
+    assert!(!data.exists(), "data dir must be removed on install-db failure");
+}
+
+#[test]
+fn bootstrap_failure_carries_output_tail() {
+    let dir = tempdir().expect("tmp");
+    let root = dir.path();
+    let runtime = root.join("rt/bin");
+    fs::create_dir_all(&runtime).expect("bin");
+    let server = runtime.join(exe_name("mariadbd"));
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::write(&server, "#!/bin/sh\necho bootstrap-tail >&2\nexit 3\n").expect("write");
+        fs::set_permissions(&server, fs::Permissions::from_mode(0o755)).expect("chmod");
+    }
+    let data = root.join("inst/data");
+    let logs = root.join("inst/logs");
+    let run = root.join("inst/run");
+    fs::create_dir_all(&data).expect("data");
+    fs::create_dir_all(&logs).expect("logs");
+    fs::create_dir_all(&run).expect("run");
+    let ctx = InitContext {
+        instance_name: "m".into(),
+        runtime_dir: root.join("rt"),
+        data_dir: data.clone(),
+        port: Port::new(43151).expect("port"),
+        superuser: "root".into(),
+        auth: AuthMode::Password,
+        password: Some(SecretString::from("pw")),
+    };
+    let sock = socket_path(&data, 43151);
+    let conf = render_config(&config_params(&ctx, &sock).expect("params"));
+    write_private_config(&config_path(&data), conf.expose()).expect("conf");
+    let init_file = run.join(".mariadb-init.sql");
+    fs::write(&init_file, "SELECT 1;").expect("init");
+    let err = run_bootstrap_server(&ctx, &init_file).expect_err("should fail");
+    let msg = format!("{err:?}");
+    assert!(msg.contains("bootstrap-tail") || msg.contains("bootstrap failed"));
+    assert!(!data.exists(), "data dir removed on bootstrap failure");
+}
+
+#[cfg(unix)]
+#[test]
+fn shutdown_timeout_names_pid() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempdir().expect("tmp");
+    let root = dir.path();
+    let bin = root.join("bin");
+    fs::create_dir_all(&bin).expect("bin");
+    let fake = bin.join("mariadbd");
+    fs::write(&fake, "#!/bin/sh\ntrap '' TERM\nwhile true; do sleep 1; done\n").expect("write");
+    fs::set_permissions(&fake, fs::Permissions::from_mode(0o755)).expect("chmod");
+    let data = root.join("inst/data");
+    let conf = data.join("my.cnf");
+    fs::create_dir_all(&data).expect("data");
+    fs::write(&conf, "[mysqld]\n").expect("conf");
+    let mut child = Command::new(&fake)
+        .arg(format!("--defaults-file={}", conf.display()))
+        .arg(format!("--datadir={}", data.display()))
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn");
+    let pid = child.id();
+    std::thread::sleep(Duration::from_millis(100));
+    let err = shutdown_verified_pid(pid, PidIdentity::Match, Duration::from_millis(300))
+        .expect_err("timeout");
+    let msg = format!("{err:?}");
+    assert!(msg.contains(&pid.to_string()));
+    assert!(msg.contains("did not exit"));
+    let _ = child.kill();
+    let _ = child.wait();
 }

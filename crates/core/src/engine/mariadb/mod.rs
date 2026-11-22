@@ -29,7 +29,7 @@ use crate::service::UriFormat;
 #[cfg(test)]
 pub(super) use identity::{
     ExpectedIdentity, PidIdentity, cmdline_targets_instance, is_zombie_stat, parse_cmdline,
-    shutdown_verified_pid, verify_pid_identity, verify_ps_command_output,
+    pid_alive, read_pidfile, shutdown_verified_pid, verify_pid_identity, verify_ps_command_output,
 };
 /// MariaDB protocol version byte for the server greeting.
 const PROTOCOL_VERSION_10: u8 = 10;
