@@ -264,7 +264,10 @@ fn detail_values_name_the_engine_and_mark_the_canonical_port() {
     assert!(is_canonical_port(&v));
     let off = view("app2", EngineKey::Postgresql, InstanceStatus::Running, 5433);
     assert!(!is_canonical_port(&off));
-    assert_eq!(data_dir("app"), "~/.dblocal/instances/app/data");
+    assert_eq!(
+        data_dir(std::path::Path::new("/home/u/.dblocal"), None, "app"),
+        "/home/u/.dblocal/instances/app/data"
+    );
     assert_eq!(credential_ref("app"), "dblocal:app");
 }
 
@@ -763,4 +766,25 @@ fn placeholder_layouts_match_the_prototype_structure() {
     );
     assert_eq!(placeholder_phase_label(PlaceholderTab::Databases), "2");
     assert_eq!(placeholder_phase_label(PlaceholderTab::Config), "3");
+}
+
+#[test]
+fn abbreviate_home_replaces_prefix() {
+    let home = std::path::Path::new("/home/alice");
+    assert_eq!(
+        abbreviate_home(std::path::Path::new("/home/alice/.dblocal"), Some(home)),
+        "~/.dblocal"
+    );
+    assert_eq!(
+        abbreviate_home(std::path::Path::new("/home/alice"), Some(home)),
+        "~"
+    );
+    assert_eq!(
+        abbreviate_home(std::path::Path::new("/var/lib/dblocal"), Some(home)),
+        "/var/lib/dblocal"
+    );
+    assert_eq!(
+        abbreviate_home(std::path::Path::new("/var/lib/dblocal"), None),
+        "/var/lib/dblocal"
+    );
 }

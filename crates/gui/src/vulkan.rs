@@ -4,6 +4,10 @@
 //! process would panic or show a black window (W0-C evidence: `raw-panic` with
 //! exit 101). This check fails early with actionable install instructions and a
 //! dedicated exit code instead. It never panics.
+//!
+//! The check applies to Linux/BSD only. Windows renders through DirectX and
+//! macOS through Metal; neither uses Vulkan ICD manifests, so the Linux
+//! preflight must not run there.
 
 use std::env;
 use std::ffi::OsString;
@@ -19,9 +23,23 @@ const ENV_SKIP: &str = "DBLOCAL_SPIKE_SKIP_PREFLIGHT";
 const DOCS_URL: &str = "docs/dev/linux-build-deps.md";
 
 /// Returns `Ok(())` when Vulkan looks usable, or an actionable report when it
-/// does not.
+/// does not. On Windows and macOS the check is a no-op (DirectX / Metal).
 pub fn preflight() -> Result<(), String> {
-    preflight_with_skip(env::var_os(ENV_SKIP).is_some())
+    preflight_for_os(env::consts::OS, env::var_os(ENV_SKIP).is_some())
+}
+
+/// OS-aware pre-flight, pure in its decision so every platform can be tested on
+/// Linux. Only Linux/BSD use Vulkan ICD manifests.
+pub fn preflight_for_os(os: &str, skip: bool) -> Result<(), String> {
+    if !os_uses_vulkan_preflight(os) {
+        return Ok(());
+    }
+    preflight_with_skip(skip)
+}
+
+/// Whether this OS needs the Linux Vulkan ICD/adapter pre-flight.
+pub fn os_uses_vulkan_preflight(os: &str) -> bool {
+    matches!(os, "linux" | "freebsd" | "dragonfly" | "netbsd" | "openbsd")
 }
 
 /// The pre-flight body with the escape hatch decided by the caller, so the
@@ -263,5 +281,18 @@ mod tests {
     #[test]
     fn skip_flag_disables_the_check() {
         assert!(preflight_with_skip(true).is_ok());
+    }
+
+    #[test]
+    fn preflight_is_os_aware() {
+        assert!(os_uses_vulkan_preflight("linux"));
+        assert!(os_uses_vulkan_preflight("freebsd"));
+        assert!(!os_uses_vulkan_preflight("macos"));
+        assert!(!os_uses_vulkan_preflight("windows"));
+
+        assert_eq!(preflight_for_os("macos", false), Ok(()));
+        assert_eq!(preflight_for_os("windows", false), Ok(()));
+        // Linux/BSD take the Linux path: skip makes the decision deterministic.
+        assert_eq!(preflight_for_os("linux", true), Ok(()));
     }
 }

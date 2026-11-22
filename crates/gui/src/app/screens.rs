@@ -34,11 +34,14 @@ use super::components::{engine_badge, icon, status_glyph, status_pill};
 use super::state::InnerTab;
 
 impl Workspace {
-    /// The centre pane: welcome screen, or the selected instance's tab.
+    /// The centre pane: welcome screen, select-instance prompt, or a tab.
     pub(crate) fn render_center(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme().clone();
         if self.tabs.is_empty() {
-            return self.render_welcome(&theme, cx).into_any_element();
+            if self.instances().is_empty() {
+                return self.render_welcome(&theme, cx).into_any_element();
+            }
+            return self.render_select_instance(&theme).into_any_element();
         }
 
         v_flex()
@@ -86,6 +89,31 @@ impl Workspace {
             )
     }
 
+    /// Instances exist but none is selected: prompt to pick one.
+    fn render_select_instance(&self, theme: &Theme) -> impl IntoElement {
+        div()
+            .id("select-instance")
+            .flex_1()
+            .h_full()
+            .min_w_0()
+            .bg(theme.background)
+            .flex()
+            .flex_col()
+            .items_center()
+            .justify_center()
+            .gap_2()
+            .child(
+                Label::new(strings::UI_SELECT_INSTANCE_TITLE)
+                    .text_xl()
+                    .font_weight(gpui_kit::FontWeight::SEMIBOLD),
+            )
+            .child(
+                Label::new(strings::UI_SELECT_INSTANCE_SUBTITLE)
+                    .text_sm()
+                    .text_color(theme.muted_foreground),
+            )
+    }
+
     /// One tab per opened instance, with its status glyph and a close button.
     fn render_instance_tabs(&self, theme: &Theme, cx: &mut Context<Self>) -> impl IntoElement {
         h_flex()
@@ -123,7 +151,7 @@ impl Workspace {
                             .hover(|s| s.text_color(theme.foreground))
                     })
                     .on_click(cx.listener(move |this, _, _, cx| {
-                        this.select_tab(index);
+                        this.select_tab(index, cx);
                         cx.notify();
                     }))
                     .child(status_glyph(status, 8.0, theme))
@@ -245,9 +273,9 @@ impl Workspace {
                             .disabled(busy)
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 if running {
-                                    this.stop_instance(id_run.clone());
+                                    this.stop_instance(id_run.clone(), cx);
                                 } else {
-                                    this.start_instance(id_run.clone());
+                                    this.start_instance(id_run.clone(), cx);
                                 }
                                 cx.notify();
                             })),
@@ -258,7 +286,7 @@ impl Workspace {
                             .label(strings::UI_ACTION_RESTART)
                             .disabled(!format::can_restart(view.status) || busy)
                             .on_click(cx.listener(move |this, _, _, cx| {
-                                this.stop_instance(id_restart.clone());
+                                this.stop_instance(id_restart.clone(), cx);
                                 cx.notify();
                             })),
                     )
@@ -314,7 +342,7 @@ impl Workspace {
                     .underline()
                     .selected_index(active.index())
                     .on_click(cx.listener(|this, index: &usize, _window, cx| {
-                        this.set_inner_tab(InnerTab::from_index(*index));
+                        this.set_inner_tab(InnerTab::from_index(*index), cx);
                         cx.notify();
                     }))
                     .children(

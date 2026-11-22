@@ -22,12 +22,11 @@ use gpui_kit::assets::IconName;
 pub(super) fn render(workspace: &Workspace, cx: &mut Context<Workspace>) -> impl IntoElement {
     let theme = cx.theme().clone();
     let counts = workspace.counts();
-    let total_bytes: u64 = workspace
-        .instances()
-        .iter()
-        .filter_map(|view| workspace.data_size(&view.id))
-        .sum();
-    let total = format::format_bytes_id(total_bytes);
+    let total = workspace
+        .total_home_size()
+        .map(format::format_bytes_id)
+        .unwrap_or_else(|| strings::UI_VALUE_UNKNOWN.to_owned());
+    let data_dir = workspace.home_display();
     let backend = credential_backend_label(workspace);
     let platform = format::platform_label(std::env::consts::OS, std::env::consts::ARCH);
 
@@ -64,7 +63,7 @@ pub(super) fn render(workspace: &Workspace, cx: &mut Context<Workspace>) -> impl
                 .gap_1p5()
                 .child(icon(IconName::HardDrive, 13.0, theme.muted_foreground))
                 .child(
-                    Label::new(format!("~/.dblocal · {total}"))
+                    Label::new(format!("{data_dir} · {total}"))
                         .font_family(theme.mono_font_family.clone()),
                 ),
         )
@@ -79,11 +78,24 @@ pub(super) fn render(workspace: &Workspace, cx: &mut Context<Workspace>) -> impl
                 ))),
         )
         .child(Label::new(platform))
+        .when(workspace.pending(), |this| {
+            this.child(
+                Label::new(strings::UI_PENDING)
+                    .text_xs()
+                    .px_2()
+                    .rounded_full()
+                    .bg(crate::theme::tokens::tint(theme.warning, 0.20))
+                    .text_color(theme.warning),
+            )
+        })
         .child(Label::new(if workspace.tray_available() {
             strings::UI_TRAY_ACTIVE
         } else {
             strings::UI_TRAY_UNAVAILABLE
         }))
+        .when_some(workspace.tray_note(), |this, note| {
+            this.child(Label::new(note).text_xs().text_color(theme.warning))
+        })
         .child(downloads_popover(workspace, &theme, cx))
         .when_some(workspace.toast_text(), |this, toast| {
             this.child(
