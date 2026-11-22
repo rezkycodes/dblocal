@@ -232,7 +232,20 @@ fn delete_after_a_failed_start_uses_the_failed_source_status() {
     let port = test_port();
     let spec = h.spec("failed-then-deleted", EngineKey::Postgresql, port);
     h.create(spec);
-    let instance = h.instances().into_iter().next().expect("instance");
+    let instance = h.instances().into_iter().next().unwrap_or_else(|| {
+        panic!(
+            "instance vanished after create; service={:?} fresh={:?} db={} meta={:?}",
+            h.service
+                .list_instances()
+                .map(|views| views.into_iter().map(|v| v.name).collect::<Vec<_>>()),
+            h.instances()
+                .into_iter()
+                .map(|i| i.name().as_str().to_owned())
+                .collect::<Vec<_>>(),
+            h.paths.state_db().display(),
+            std::fs::metadata(h.paths.state_db()).map(|m| m.len()),
+        )
+    });
     let id = instance.id().clone();
     let (_op, start_run) = h.run_call(|| h.service.start_instance(&id));
     assert!(start_run.is_err() || matches!(start_run.result(), Some(Ok(()))));
