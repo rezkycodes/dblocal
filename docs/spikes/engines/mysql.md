@@ -81,9 +81,9 @@ Socket path length 43 bytes worked. A conventional socket path of 159 bytes caus
 2026-11-21T23:56:34.517313Z 0 [ERROR] [MY-010119] [Server] Aborting
 ```
 
-The process stayed alive long enough to be confusing in one run but logged abort; the adapter validates the full socket path length at create/start and returns a typed invalid-input error before spawning.
+The process stayed alive long enough to be confusing in one run but logged abort. The spike originally recorded a proactive invalid-input rejection; W3-B1-fix1 changed the adapter behavior: it uses the platform `sun_path` limit (107 Linux, 103 macOS/BSD; macOS unverified on this machine), and if the preferred run-dir socket path is too long it falls back to a short verified private directory (`$XDG_RUNTIME_DIR/dblocal/` or `/tmp/dblocal-<euid>/`, 0700, euid-owned, not symlink) with a port+instance-hash socket name. It returns `InvalidInput` only when even the fallback cannot fit.
 
-Linux abstract-namespace socket (`socket=@name`) was accepted by mysqld and the server listened; however `mysqladmin -S @name` did not connect via the usual client path in this quick test. The adapter does **not** use abstract sockets; it uses a short conventional socket under `<instance>/run/mysqld-<port>.sock` and rejects over-long paths.
+Linux abstract-namespace socket (`socket=@name`) was accepted by mysqld and the server listened; however `mysqladmin -S @name` did not connect via the usual client path in this quick test. The adapter does **not** use abstract sockets.
 
 ## Bootstrap / credential strategy
 
