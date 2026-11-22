@@ -159,13 +159,6 @@ pub(in crate::engine::mysql) fn fallback_socket_dir_candidates(
     candidates
 }
 
-/// Returns the fallback socket directory if one can be created/verified safely.
-pub fn ensure_fallback_socket_dir() -> Result<PathBuf> {
-    let uid = current_euid();
-    let xdg = std::env::var_os("XDG_RUNTIME_DIR");
-    ensure_fallback_socket_dir_for(xdg, uid)
-}
-
 pub(in crate::engine::mysql) fn ensure_fallback_socket_dir_for(
     xdg: Option<std::ffi::OsString>,
     uid: u32,
@@ -375,6 +368,7 @@ pub(in crate::engine::mysql) fn cleanup_fallback_socket_from_my_cnf_with_candida
     cleanup_fallback_socket_with_candidates(&socket, run_dir, port, xdg, uid);
 }
 
+#[cfg(test)]
 fn is_safe_fallback_socket_for_port(socket: &Path, port: u16) -> bool {
     let uid = current_euid();
     let xdg = std::env::var_os("XDG_RUNTIME_DIR");

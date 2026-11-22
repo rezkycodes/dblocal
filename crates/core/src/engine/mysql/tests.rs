@@ -1,7 +1,7 @@
 use super::*;
-use sha2::Digest;
 use crate::engine::Credential;
 use crate::model::Port;
+use sha2::Digest;
 
 const SECRET: &str = "S3cret-Canary-Pw-MySql!9x";
 
@@ -177,7 +177,10 @@ fn escape_sql_single_quoted_handles_control_chars_and_mixed() {
             _ => {}
         }
     }
-    assert_eq!(top_level_stmts, 1, "escaped value must keep one statement: {sql:?}");
+    assert_eq!(
+        top_level_stmts, 1,
+        "escaped value must keep one statement: {sql:?}"
+    );
     let _ = stmt_count;
 }
 
@@ -460,8 +463,10 @@ fn resolve_socket_path_for_chooses_first_candidate_whose_socket_fits() {
         uid,
     )
     .expect("chosen");
-    assert!(chosen.starts_with(&second.join("dblocal")) || chosen.starts_with(&second),
-        "should pick second short candidate: {chosen:?}");
+    assert!(
+        chosen.starts_with(&second.join("dblocal")) || chosen.starts_with(&second),
+        "should pick second short candidate: {chosen:?}"
+    );
 }
 
 fn resolve_socket_path_with_candidates_for_test(
@@ -497,7 +502,10 @@ fn resolve_socket_path_with_candidates_for_test(
         }
         return Ok(fallback);
     }
-    Err(DblError::InvalidInput { field: "socket", reason: rejections.join("; ") })
+    Err(DblError::InvalidInput {
+        field: "socket",
+        reason: rejections.join("; "),
+    })
 }
 
 #[test]
@@ -702,7 +710,6 @@ fn bootstrap_mysqld_command_has_no_password() {
     assert!(args.iter().any(|a| a == "--daemonize=OFF"));
 }
 
-
 #[test]
 fn fallback_socket_dir_candidates_respects_xdg_and_uid() {
     let uid = 4242u32;
@@ -769,10 +776,9 @@ fn resolve_socket_path_for_reports_candidate_rejections() {
     }
 }
 
-
 #[test]
 fn verify_secure_dir_rejects_symlink_file_mode_and_wrong_owner() {
-    use std::os::unix::fs::{symlink, PermissionsExt};
+    use std::os::unix::fs::{PermissionsExt, symlink};
     let dir = tempfile::tempdir().expect("tmp");
     let real = dir.path().join("real");
     crate::fsutil::ensure_private_dir(&real).expect("real");
@@ -820,14 +826,20 @@ fn ensure_verified_private_dir_creates_and_rejects_preexisting_wrong_mode() {
     let err = ensure_verified_private_dir_for_test(&bad, uid).unwrap_err();
     assert!(err.to_string().contains("0700") || err.to_string().contains("mode"));
     let meta = fs::symlink_metadata(&bad).expect("meta");
-    assert_eq!(meta.permissions().mode() & 0o777, 0o770, "must not chmod pre-existing wrong mode");
+    assert_eq!(
+        meta.permissions().mode() & 0o777,
+        0o770,
+        "must not chmod pre-existing wrong mode"
+    );
 }
 
 #[test]
 fn ensure_verified_private_dir_missing_parent_error_when_parent_not_writable() {
     use std::os::unix::fs::PermissionsExt;
     if nix::unistd::geteuid().is_root() {
-        eprintln!("skipping ensure_verified_private_dir_missing_parent_error_when_parent_not_writable: running as root");
+        eprintln!(
+            "skipping ensure_verified_private_dir_missing_parent_error_when_parent_not_writable: running as root"
+        );
         return;
     }
     let dir = tempfile::tempdir().expect("tmp");
@@ -837,20 +849,39 @@ fn ensure_verified_private_dir_missing_parent_error_when_parent_not_writable() {
     let uid = nix::unistd::geteuid().as_raw();
     let target = parent.join("child");
     let err = ensure_verified_private_dir_for_test(&target, uid).unwrap_err();
-    assert!(err.to_string().contains("cannot create") || err.to_string().contains("fallback socket"));
+    assert!(
+        err.to_string().contains("cannot create") || err.to_string().contains("fallback socket")
+    );
     fs::set_permissions(&parent, fs::Permissions::from_mode(0o700)).expect("restore");
 }
 
-
 #[test]
 fn fallback_socket_name_validation_for_port() {
-    assert!(is_fallback_socket_name_for_port("m42000-abcdef012345.sock", 42000));
-    assert!(!is_fallback_socket_name_for_port("m42001-abcdef012345.sock", 42000));
-    assert!(!is_fallback_socket_name_for_port("m42000-abcdef01234.sock", 42000));
+    assert!(is_fallback_socket_name_for_port(
+        "m42000-abcdef012345.sock",
+        42000
+    ));
+    assert!(!is_fallback_socket_name_for_port(
+        "m42001-abcdef012345.sock",
+        42000
+    ));
+    assert!(!is_fallback_socket_name_for_port(
+        "m42000-abcdef01234.sock",
+        42000
+    ));
     // uppercase hex is accepted by is_ascii_hexdigit; that is harmless here
-    assert!(is_fallback_socket_name_for_port("m42000-ABCDEF012345.sock", 42000));
-    assert!(!is_fallback_socket_name_for_port("other-abcdef012345.sock", 42000));
-    assert!(!is_fallback_socket_name_for_port("m42000-abcdef012345.socket", 42000));
+    assert!(is_fallback_socket_name_for_port(
+        "m42000-ABCDEF012345.sock",
+        42000
+    ));
+    assert!(!is_fallback_socket_name_for_port(
+        "other-abcdef012345.sock",
+        42000
+    ));
+    assert!(!is_fallback_socket_name_for_port(
+        "m42000-abcdef012345.socket",
+        42000
+    ));
 }
 
 #[test]
@@ -863,13 +894,7 @@ fn cleanup_fallback_socket_refuses_regular_file_with_valid_name() {
     let fallback = fallback_root.join("m42010-abc123def456.sock");
     let _ = fs::remove_file(&fallback);
     fs::write(&fallback, b"not a socket").expect("write");
-    cleanup_fallback_socket_with_candidates(
-        &fallback,
-        &run_dir,
-        42010,
-        None,
-        uid,
-    );
+    cleanup_fallback_socket_with_candidates(&fallback, &run_dir, 42010, None, uid);
     assert!(fallback.exists(), "regular file must not be deleted");
     let _ = fs::remove_file(&fallback);
 }
@@ -912,9 +937,11 @@ fn cleanup_fallback_socket_removes_real_socket_with_right_name_and_parent() {
     drop(listener);
     assert!(fallback.exists());
     cleanup_fallback_socket_with_candidates(&fallback, &run_dir, 42013, None, uid);
-    assert!(!fallback.exists(), "verified fallback socket should be removed");
+    assert!(
+        !fallback.exists(),
+        "verified fallback socket should be removed"
+    );
 }
-
 
 fn write_fake_bin(dir: &Path, name: &str, script: &str) -> PathBuf {
     let bin = dir.join("bin");
@@ -958,7 +985,10 @@ fn initialize_insecure_command_failure_cleans_up_and_reports_tail() {
     };
     let err = MysqlAdapter.initialize(&ctx).unwrap_err();
     let msg = err.to_string();
-    assert!(msg.contains("init boom") || msg.contains("code"), "msg: {msg}");
+    assert!(
+        msg.contains("init boom") || msg.contains("code"),
+        "msg: {msg}"
+    );
     assert!(!data.exists(), "data dir should be cleaned on init failure");
     assert!(!run.join("dblocal-init.sql").exists());
 }
@@ -1051,7 +1081,10 @@ fn shutdown_command_failure_reports_tail_and_cleans_fallback_socket() {
     let msg = err.to_string();
     assert!(msg.contains("shutdown bad"), "msg: {msg}");
     assert!(msg.contains("9") || msg.contains("code"), "msg: {msg}");
-    assert!(!socket.exists(), "fallback socket should be removed even on shutdown failure");
+    assert!(
+        !socket.exists(),
+        "fallback socket should be removed even on shutdown failure"
+    );
 }
 
 #[test]
