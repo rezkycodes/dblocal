@@ -403,6 +403,8 @@ A debug build panic was seen once on a real desktop with accessibility enabled: 
 - **GNOME without AppIndicator extension:** code degrades to no tray and close-to-quit fallback; not
   exhaustively exercised in this round.
 - **X11:** not re-verified in this round.
+- **Windows/macOS instance paths:** `format::data_dir`/`engine_log_path` build from the real root and
+  keep `\` separators; asserted on Linux against a synthetic `C:\...` path, not executed on Windows.
 - **macOS / Windows:** cannot be built or run on this Linux machine. The GUI display preflight and
   Vulkan preflight are gated by pure OS-aware functions so they do not block Windows/macOS startup, but
   tray backend and real window/quit semantics on those OSes remain unverified here. macOS tray and
