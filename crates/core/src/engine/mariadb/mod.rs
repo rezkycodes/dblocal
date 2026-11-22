@@ -297,10 +297,6 @@ pub fn prepare_run(ctx: &RunContext) -> Result<()> {
                 })?;
             }
         }
-        #[cfg(not(unix))]
-        {
-            let _ = meta;
-        }
     }
     Ok(())
 }
