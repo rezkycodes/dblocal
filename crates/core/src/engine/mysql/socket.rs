@@ -31,15 +31,76 @@ pub fn socket_path(run_dir: &Path, port: u16) -> PathBuf {
 /// on long homes (notably macOS). The fallback is verified as a real 0700
 /// directory owned by the current euid and not a symlink.
 pub fn resolve_socket_path(run_dir: &Path, port: u16, instance_dir: &Path) -> Result<PathBuf> {
+    let uid = current_euid();
+    let xdg = std::env::var_os("XDG_RUNTIME_DIR");
+    resolve_socket_path_for(run_dir, port, instance_dir, xdg, uid)
+}
+
+pub(in crate::engine::mysql) fn resolve_socket_path_for(
+    run_dir: &Path,
+    port: u16,
+    instance_dir: &Path,
+    xdg: Option<std::ffi::OsString>,
+    uid: u32,
+) -> Result<PathBuf> {
     let preferred = socket_path(run_dir, port);
     if socket_path_fits(&preferred) {
         return Ok(preferred);
     }
-    let fallback_dir = ensure_fallback_socket_dir()?;
-    resolve_socket_path_with_fallback_dir(run_dir, port, instance_dir, &fallback_dir)
+    let mut rejections: Vec<String> = Vec::new();
+    for dir in fallback_socket_dir_candidates(xdg, uid) {
+        match ensure_verified_private_dir(&dir, uid) {
+            Ok(()) => {}
+            Err(err) => {
+                rejections.push(format!("{}: {err}", dir.display()));
+                continue;
+            }
+        }
+        let fallback = dir.join(fallback_socket_name(port, instance_dir));
+        if !socket_path_fits(&fallback) {
+            rejections.push(format!(
+                "{}: socket path {} is {} bytes, maximum is {}",
+                dir.display(),
+                fallback.display(),
+                fallback.as_os_str().as_encoded_bytes().len(),
+                socket_path_limit()
+            ));
+            continue;
+        }
+        tracing::info!(
+            preferred = %preferred.display(),
+            fallback = %fallback.display(),
+            limit = socket_path_limit(),
+            "mysql socket path too long; using short fallback socket directory"
+        );
+        return Ok(fallback);
+    }
+    Err(DblError::InvalidInput {
+        field: "socket",
+        reason: format!(
+            "mysql socket path {} is {} bytes, maximum is {}, and no verified fallback directory produced a fitting socket path: {}",
+            preferred.display(),
+            preferred.as_os_str().as_encoded_bytes().len(),
+            socket_path_limit(),
+            if rejections.is_empty() {
+                "no candidates".to_owned()
+            } else {
+                rejections.join("; ")
+            }
+        ),
+    })
 }
 
 pub(in crate::engine::mysql) fn resolve_socket_path_with_fallback_dir(
+    run_dir: &Path,
+    port: u16,
+    instance_dir: &Path,
+    fallback_dir: &Path,
+) -> Result<PathBuf> {
+    resolve_socket_path_with_single_fallback_dir(run_dir, port, instance_dir, fallback_dir)
+}
+
+pub(in crate::engine::mysql) fn resolve_socket_path_with_single_fallback_dir(
     run_dir: &Path,
     port: u16,
     instance_dir: &Path,
@@ -84,15 +145,16 @@ fn fallback_socket_name(port: u16, instance_dir: &Path) -> String {
     format!("m{port}-{short_hash}.sock")
 }
 
-fn fallback_socket_dir_candidates() -> Vec<PathBuf> {
+pub(in crate::engine::mysql) fn fallback_socket_dir_candidates(
+    xdg: Option<std::ffi::OsString>,
+    uid: u32,
+) -> Vec<PathBuf> {
     let mut candidates = Vec::new();
-    if let Some(runtime) = std::env::var_os("XDG_RUNTIME_DIR") {
-        let runtime = PathBuf::from(runtime);
-        if !runtime.as_os_str().is_empty() {
-            candidates.push(runtime.join("dblocal"));
+    if let Some(runtime) = xdg {
+        if !runtime.is_empty() {
+            candidates.push(PathBuf::from(runtime).join("dblocal"));
         }
     }
-    let uid = current_euid();
     candidates.push(PathBuf::from(format!("/tmp/dblocal-{uid}")));
     candidates
 }
@@ -100,8 +162,16 @@ fn fallback_socket_dir_candidates() -> Vec<PathBuf> {
 /// Returns the fallback socket directory if one can be created/verified safely.
 pub fn ensure_fallback_socket_dir() -> Result<PathBuf> {
     let uid = current_euid();
+    let xdg = std::env::var_os("XDG_RUNTIME_DIR");
+    ensure_fallback_socket_dir_for(xdg, uid)
+}
+
+pub(in crate::engine::mysql) fn ensure_fallback_socket_dir_for(
+    xdg: Option<std::ffi::OsString>,
+    uid: u32,
+) -> Result<PathBuf> {
     let mut last_err = None;
-    for dir in fallback_socket_dir_candidates() {
+    for dir in fallback_socket_dir_candidates(xdg, uid) {
         match ensure_verified_private_dir(&dir, uid) {
             Ok(()) => return Ok(dir),
             Err(err) => last_err = Some((dir, err)),
@@ -222,11 +292,64 @@ pub fn validate_socket_path_len(sock: &Path) -> Result<()> {
 }
 
 pub(in crate::engine::mysql) fn cleanup_fallback_socket(socket: &Path, run_dir: &Path, port: u16) {
+    let uid = current_euid();
+    let xdg = std::env::var_os("XDG_RUNTIME_DIR");
+    cleanup_fallback_socket_with_candidates(socket, run_dir, port, xdg, uid);
+}
+
+pub(in crate::engine::mysql) fn cleanup_fallback_socket_with_candidates(
+    socket: &Path,
+    run_dir: &Path,
+    port: u16,
+    xdg: Option<std::ffi::OsString>,
+    uid: u32,
+) {
     let preferred = socket_path(run_dir, port);
     if socket == preferred {
         return;
     }
-    let _ = fs::remove_file(socket);
+    if !is_safe_fallback_socket_for_port_with_candidates(socket, port, xdg, uid) {
+        tracing::warn!(
+            socket = %socket.display(),
+            port,
+            "refusing to remove mysql socket path that is not a verified fallback socket"
+        );
+        return;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::FileTypeExt;
+        match fs::symlink_metadata(socket) {
+            Ok(meta) if meta.file_type().is_socket() => {}
+            Ok(meta) => {
+                tracing::warn!(
+                    socket = %socket.display(),
+                    port,
+                    file_type = ?meta.file_type(),
+                    "refusing to remove mysql fallback path that is not a socket"
+                );
+                return;
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return,
+            Err(err) => {
+                tracing::warn!(
+                    socket = %socket.display(),
+                    port,
+                    "cannot stat mysql fallback socket for cleanup: {err}"
+                );
+                return;
+            }
+        }
+    }
+    if let Err(err) = fs::remove_file(socket) {
+        if err.kind() != std::io::ErrorKind::NotFound {
+            tracing::warn!(
+                socket = %socket.display(),
+                port,
+                "failed to remove mysql fallback socket: {err}"
+            );
+        }
+    }
 }
 
 pub(in crate::engine::mysql) fn cleanup_fallback_socket_from_my_cnf(
@@ -234,10 +357,70 @@ pub(in crate::engine::mysql) fn cleanup_fallback_socket_from_my_cnf(
     run_dir: &Path,
     port: u16,
 ) {
+    let uid = current_euid();
+    let xdg = std::env::var_os("XDG_RUNTIME_DIR");
+    cleanup_fallback_socket_from_my_cnf_with_candidates(my_cnf, run_dir, port, xdg, uid);
+}
+
+pub(in crate::engine::mysql) fn cleanup_fallback_socket_from_my_cnf_with_candidates(
+    my_cnf: &Path,
+    run_dir: &Path,
+    port: u16,
+    xdg: Option<std::ffi::OsString>,
+    uid: u32,
+) {
     let Some(socket) = socket_path_from_my_cnf(my_cnf) else {
         return;
     };
-    cleanup_fallback_socket(&socket, run_dir, port);
+    cleanup_fallback_socket_with_candidates(&socket, run_dir, port, xdg, uid);
+}
+
+fn is_safe_fallback_socket_for_port(socket: &Path, port: u16) -> bool {
+    let uid = current_euid();
+    let xdg = std::env::var_os("XDG_RUNTIME_DIR");
+    is_safe_fallback_socket_for_port_with_candidates(socket, port, xdg, uid)
+}
+
+pub(in crate::engine::mysql) fn is_safe_fallback_socket_for_port_with_candidates(
+    socket: &Path,
+    port: u16,
+    xdg: Option<std::ffi::OsString>,
+    uid: u32,
+) -> bool {
+    let Some(parent) = socket.parent() else {
+        return false;
+    };
+    let allowed = fallback_socket_dir_candidates(xdg, uid);
+    if !allowed.iter().any(|p| p == parent) {
+        return false;
+    }
+    let Some(name) = socket.file_name().and_then(|n| n.to_str()) else {
+        return false;
+    };
+    is_fallback_socket_name_for_port(name, port)
+}
+
+pub(in crate::engine::mysql) fn is_fallback_socket_name_for_port(name: &str, port: u16) -> bool {
+    let Some(rest) = name.strip_prefix(&format!("m{port}-")) else {
+        return false;
+    };
+    let Some(hash) = rest.strip_suffix(".sock") else {
+        return false;
+    };
+    hash.len() == 12 && hash.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
+#[cfg(test)]
+pub(in crate::engine::mysql) fn verify_secure_dir_for_test(dir: &Path, uid: u32) -> Result<()> {
+    verify_secure_dir(dir, uid)
+}
+
+#[cfg(test)]
+pub(in crate::engine::mysql) fn ensure_verified_private_dir_for_test(
+    dir: &Path,
+    uid: u32,
+) -> Result<()> {
+    ensure_verified_private_dir(dir, uid)
 }
 
 pub(in crate::engine::mysql) fn socket_path_from_my_cnf(my_cnf: &Path) -> Option<PathBuf> {

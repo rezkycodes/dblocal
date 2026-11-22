@@ -378,7 +378,7 @@ fn mysqladmin_command(
 }
 
 pub(super) fn render_init_sql(ctx: &InitContext) -> Result<SecretString> {
-    let superuser = effective_superuser(&ctx.superuser);
+    let superuser = effective_superuser(&ctx.superuser)?;
     let mut out = String::new();
     match ctx.auth {
         AuthMode::None => {
@@ -420,17 +420,21 @@ pub(super) fn render_init_sql(ctx: &InitContext) -> Result<SecretString> {
     Ok(SecretString::new(out))
 }
 
-pub(super) fn effective_superuser(superuser: &str) -> &str {
+pub(super) fn effective_superuser(superuser: &str) -> Result<&str> {
     let name = if superuser.is_empty() {
         consts::SUPERUSER_MYSQL
     } else {
         superuser
     };
-    debug_assert!(
-        is_safe_sql_identifier(name),
-        "mysql superuser must be a SQL identifier"
-    );
-    name
+    if !is_safe_sql_identifier(name) {
+        return Err(DblError::InvalidInput {
+            field: "superuser",
+            reason: format!(
+                "superuser must start with ASCII letter or underscore and contain only ASCII letters, digits, or underscores: {name:?}"
+            ),
+        });
+    }
+    Ok(name)
 }
 
 pub(super) fn is_safe_sql_identifier(name: &str) -> bool {
@@ -487,7 +491,11 @@ pub(in crate::engine::mysql) use socket::{
 pub use socket::{resolve_socket_path, socket_path, socket_path_limit, validate_socket_path_len};
 #[cfg(test)]
 pub(in crate::engine::mysql) use socket::{
-    resolve_socket_path_with_fallback_dir, socket_path_from_my_cnf,
+    cleanup_fallback_socket_with_candidates, ensure_fallback_socket_dir_for,
+    ensure_verified_private_dir_for_test, fallback_socket_dir_candidates,
+    is_fallback_socket_name_for_port, is_safe_fallback_socket_for_port_with_candidates,
+    resolve_socket_path_for, resolve_socket_path_with_fallback_dir, socket_path_from_my_cnf,
+    verify_secure_dir_for_test,
 };
 
 pub fn sibling_dir(data_dir: &Path, leaf: &str) -> PathBuf {

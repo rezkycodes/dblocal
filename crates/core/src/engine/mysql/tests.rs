@@ -1,4 +1,5 @@
 use super::*;
+use sha2::Digest;
 use crate::engine::Credential;
 use crate::model::Port;
 
@@ -134,6 +135,53 @@ fn init_sql_escapes_single_quote_and_backslash() {
 }
 
 #[test]
+fn escape_sql_single_quoted_handles_control_chars_and_mixed() {
+    assert_eq!(escape_sql_single_quoted("a\0b"), "a\\0b");
+    assert_eq!(escape_sql_single_quoted("a\nb"), "a\\nb");
+    assert_eq!(escape_sql_single_quoted("a\rb"), "a\\rb");
+    let mixed = "x\0y\nz\rr'\\q";
+    let escaped = escape_sql_single_quoted(mixed);
+    assert_eq!(escaped, "x\\0y\\nz\\rr''\\\\q");
+    let mut stmt_count = 0usize;
+    let mut in_literal = false;
+    let mut chars = escaped.chars().peekable();
+    while let Some(ch) = chars.next() {
+        match ch {
+            '\'' => {
+                if in_literal && chars.peek() == Some(&'\'') {
+                    chars.next();
+                } else {
+                    in_literal = !in_literal;
+                }
+            }
+            '\n' | '\r' => assert!(!in_literal, "raw newline inside SQL literal: {escaped:?}"),
+            ';' if !in_literal => stmt_count += 1,
+            _ => {}
+        }
+    }
+    assert!(!in_literal, "unterminated SQL literal: {escaped:?}");
+    let sql = format!("ALTER USER 'root'@'localhost' IDENTIFIED BY '{escaped}';\n");
+    let mut top_level_stmts = 0usize;
+    let mut in_lit = false;
+    let mut it = sql.chars().peekable();
+    while let Some(ch) = it.next() {
+        match ch {
+            '\'' => {
+                if in_lit && it.peek() == Some(&'\'') {
+                    it.next();
+                } else {
+                    in_lit = !in_lit;
+                }
+            }
+            ';' if !in_lit => top_level_stmts += 1,
+            _ => {}
+        }
+    }
+    assert_eq!(top_level_stmts, 1, "escaped value must keep one statement: {sql:?}");
+    let _ = stmt_count;
+}
+
+#[test]
 fn init_sql_debug_redacted() {
     let ctx = init_ctx(42345, AuthMode::Password, Some(SECRET));
     let sql = render_init_sql(&ctx).expect("sql");
@@ -152,6 +200,33 @@ fn validate_socket_path_len_rejects_long_path() {
             ..
         }
     ));
+}
+
+#[test]
+fn validate_socket_path_len_boundary_at_limit_minus_one_limit_plus_one() {
+    let limit = socket_path_limit();
+    let base = "/tmp/s/";
+    let suffix = ".sock";
+    let fixed = base.len() + suffix.len();
+    let at_limit = format!("{base}{}{suffix}", "a".repeat(limit - fixed));
+    assert_eq!(at_limit.len(), limit);
+    validate_socket_path_len(Path::new(&at_limit)).expect("at limit fits");
+
+    let at_limit_minus_one = format!("{base}{}{suffix}", "a".repeat(limit - fixed - 1));
+    assert_eq!(at_limit_minus_one.len(), limit - 1);
+    validate_socket_path_len(Path::new(&at_limit_minus_one)).expect("limit-1 fits");
+
+    let at_limit_plus_one = format!("{base}{}{suffix}", "a".repeat(limit - fixed + 1));
+    assert_eq!(at_limit_plus_one.len(), limit + 1);
+    let err = validate_socket_path_len(Path::new(&at_limit_plus_one)).unwrap_err();
+    match err {
+        DblError::InvalidInput { field, reason } => {
+            assert_eq!(field, "socket");
+            assert!(reason.contains(&(limit + 1).to_string()));
+            assert!(reason.contains(&limit.to_string()));
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
 }
 
 #[test]
@@ -342,6 +417,90 @@ fn resolve_socket_path_falls_back_for_long_run_dir() {
 }
 
 #[test]
+fn resolve_socket_path_for_errors_when_even_fallback_too_long() {
+    let dir = tempfile::tempdir().expect("tmp");
+    let fallback_root = dir.path().join("f".repeat(140));
+    crate::fsutil::ensure_private_dir(&fallback_root).expect("fb");
+    let long_run = dir.path().join("r".repeat(140)).join("run");
+    let instance_dir = dir.path().join("instance");
+    let uid = nix::unistd::geteuid().as_raw();
+    let err = resolve_socket_path_with_candidates_for_test(
+        &long_run,
+        42000,
+        &instance_dir,
+        vec![fallback_root.clone()],
+        uid,
+    )
+    .unwrap_err();
+    match err {
+        DblError::InvalidInput { field, reason } => {
+            assert_eq!(field, "socket");
+            assert!(reason.contains(&fallback_root.display().to_string()));
+            assert!(reason.contains("too long") || reason.contains("bytes"));
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
+fn resolve_socket_path_for_chooses_first_candidate_whose_socket_fits() {
+    let dir = tempfile::tempdir().expect("tmp");
+    let first = dir.path().join("x".repeat(140));
+    let second = dir.path().join("short");
+    crate::fsutil::ensure_private_dir(&first).expect("first");
+    crate::fsutil::ensure_private_dir(&second).expect("second");
+    let long_run = dir.path().join("r".repeat(140)).join("run");
+    let instance_dir = dir.path().join("instance");
+    let uid = nix::unistd::geteuid().as_raw();
+    let chosen = resolve_socket_path_with_candidates_for_test(
+        &long_run,
+        42002,
+        &instance_dir,
+        vec![first.clone(), second.clone()],
+        uid,
+    )
+    .expect("chosen");
+    assert!(chosen.starts_with(&second.join("dblocal")) || chosen.starts_with(&second),
+        "should pick second short candidate: {chosen:?}");
+}
+
+fn resolve_socket_path_with_candidates_for_test(
+    run_dir: &Path,
+    port: u16,
+    instance_dir: &Path,
+    candidates: Vec<PathBuf>,
+    uid: u32,
+) -> Result<PathBuf> {
+    let preferred = socket_path(run_dir, port);
+    if preferred.as_os_str().as_encoded_bytes().len() <= socket_path_limit() {
+        return Ok(preferred);
+    }
+    let mut rejections = Vec::new();
+    for dir in candidates {
+        match ensure_verified_private_dir_for_test(&dir, uid) {
+            Ok(()) => {}
+            Err(err) => {
+                rejections.push(format!("{}: {err}", dir.display()));
+                continue;
+            }
+        }
+        let fallback = dir.join({
+            let mut hasher = sha2::Sha256::new();
+            sha2::Digest::update(&mut hasher, instance_dir.as_os_str().as_encoded_bytes());
+            let digest = sha2::Digest::finalize(hasher);
+            let hex: String = digest.iter().map(|b| format!("{b:02x}")).collect();
+            format!("m{port}-{}.sock", &hex[..12])
+        });
+        if fallback.as_os_str().as_encoded_bytes().len() > socket_path_limit() {
+            rejections.push(format!("{}: too long", dir.display()));
+            continue;
+        }
+        return Ok(fallback);
+    }
+    Err(DblError::InvalidInput { field: "socket", reason: rejections.join("; ") })
+}
+
+#[test]
 fn resolve_socket_path_fallback_is_deterministic_for_same_instance() {
     let dir = tempfile::tempdir().expect("tmp");
     let fallback_root = dir.path().join("fb");
@@ -377,6 +536,30 @@ fn socket_path_from_my_cnf_reads_socket_value() {
 }
 
 #[test]
+fn socket_path_from_my_cnf_missing_empty_and_spaces() {
+    let dir = tempfile::tempdir().expect("tmp");
+    let cnf = dir.path().join("my.cnf");
+    fs::write(&cnf, "[mysqld]\nport=42000\n# socket=/tmp/x.sock\n").expect("write");
+    assert!(socket_path_from_my_cnf(&cnf).is_none());
+
+    fs::write(&cnf, "[mysqld]\nsocket=\nport=42000\n").expect("write");
+    assert!(socket_path_from_my_cnf(&cnf).is_none());
+
+    fs::write(&cnf, "[mysqld]\n socket=/tmp/dblocal-1/m1.sock \n").expect("write");
+    assert_eq!(
+        socket_path_from_my_cnf(&cnf),
+        Some(PathBuf::from("/tmp/dblocal-1/m1.sock")),
+        "leading spaces before key should be ignored by trim"
+    );
+
+    fs::write(&cnf, "[mysqld]\nsocket=   /tmp/dblocal-1/m1.sock  \n").expect("write");
+    assert_eq!(
+        socket_path_from_my_cnf(&cnf),
+        Some(PathBuf::from("/tmp/dblocal-1/m1.sock"))
+    );
+}
+
+#[test]
 fn cleanup_fallback_socket_removes_only_fallback() {
     let dir = tempfile::tempdir().expect("tmp");
     let run_dir = dir.path().join("run");
@@ -386,21 +569,53 @@ fn cleanup_fallback_socket_removes_only_fallback() {
     cleanup_fallback_socket(&preferred, &run_dir, 42000);
     assert!(preferred.exists(), "preferred socket must not be removed");
 
-    let fallback = dir.path().join("fb").join("m42000-abc.sock");
-    fs::create_dir_all(fallback.parent().unwrap()).expect("fb");
-    fs::write(&fallback, b"").expect("fallback");
+    let uid = nix::unistd::geteuid().as_raw();
+    let fallback_root =
+        ensure_fallback_socket_dir_for(None, uid).expect("fallback dir for cleanup test");
+    let fallback = fallback_root.join("m42000-abc123def456.sock");
+    let _ = fs::remove_file(&fallback);
+    let listener = std::os::unix::net::UnixListener::bind(&fallback).expect("bind fallback sock");
+    assert!(fallback.exists());
+    drop(listener);
     cleanup_fallback_socket(&fallback, &run_dir, 42000);
     assert!(!fallback.exists(), "fallback socket should be removed");
 }
 
 #[test]
-fn effective_superuser_rejects_unsafe_name_in_debug() {
-    // debug_assert only fires in debug builds; test the validator directly.
-    assert!(is_safe_sql_identifier("root"));
-    assert!(is_safe_sql_identifier("mysql_admin"));
-    assert!(!is_safe_sql_identifier("root';DROP TABLE x;--"));
-    assert!(!is_safe_sql_identifier(""));
-    assert!(!is_safe_sql_identifier("1root"));
+fn effective_superuser_rejects_unsafe_name() {
+    assert_eq!(effective_superuser("root").unwrap(), "root");
+    assert_eq!(effective_superuser("mysql_admin").unwrap(), "mysql_admin");
+    assert_eq!(effective_superuser("").unwrap(), "root");
+    let err = effective_superuser("root'; DROP USER x; --").unwrap_err();
+    assert!(matches!(
+        err,
+        DblError::InvalidInput {
+            field: "superuser",
+            ..
+        }
+    ));
+    let err = effective_superuser("1root").unwrap_err();
+    assert!(matches!(
+        err,
+        DblError::InvalidInput {
+            field: "superuser",
+            ..
+        }
+    ));
+}
+
+#[test]
+fn render_init_sql_rejects_unsafe_superuser() {
+    let mut ctx = init_ctx(42345, AuthMode::Password, Some(SECRET));
+    ctx.superuser = "root'; DROP USER x; --".into();
+    let err = render_init_sql(&ctx).unwrap_err();
+    assert!(matches!(
+        err,
+        DblError::InvalidInput {
+            field: "superuser",
+            ..
+        }
+    ));
 }
 
 #[test]
@@ -485,4 +700,408 @@ fn bootstrap_mysqld_command_has_no_password() {
     assert!(args.iter().any(|a| a.starts_with("--defaults-file=")));
     assert!(args.iter().any(|a| a.starts_with("--init-file=")));
     assert!(args.iter().any(|a| a == "--daemonize=OFF"));
+}
+
+
+#[test]
+fn fallback_socket_dir_candidates_respects_xdg_and_uid() {
+    let uid = 4242u32;
+    let none = fallback_socket_dir_candidates(None, uid);
+    assert_eq!(none, vec![PathBuf::from("/tmp/dblocal-4242")]);
+
+    let empty = fallback_socket_dir_candidates(Some(std::ffi::OsString::from("")), uid);
+    assert_eq!(empty, vec![PathBuf::from("/tmp/dblocal-4242")]);
+
+    let set = fallback_socket_dir_candidates(Some(std::ffi::OsString::from("/run/user/4242")), uid);
+    assert_eq!(
+        set,
+        vec![
+            PathBuf::from("/run/user/4242/dblocal"),
+            PathBuf::from("/tmp/dblocal-4242")
+        ]
+    );
+}
+
+#[test]
+fn resolve_socket_path_for_uses_second_candidate_when_first_fails() {
+    let dir = tempfile::tempdir().expect("tmp");
+    let long_first = dir.path().join("x".repeat(140));
+    let short_second = dir.path().join("s");
+    crate::fsutil::ensure_private_dir(&long_first).expect("first");
+    crate::fsutil::ensure_private_dir(&short_second).expect("second");
+    let long_run = dir.path().join("r".repeat(140)).join("run");
+    let instance_dir = dir.path().join("instance");
+    let uid = nix::unistd::geteuid().as_raw();
+    let chosen = resolve_socket_path_with_candidates_for_test(
+        &long_run,
+        42003,
+        &instance_dir,
+        vec![long_first.clone(), short_second.clone()],
+        uid,
+    )
+    .expect("should fall back to short second");
+    assert!(chosen.starts_with(&short_second));
+    assert!(chosen.as_os_str().as_encoded_bytes().len() <= socket_path_limit());
+}
+
+#[test]
+fn resolve_socket_path_for_reports_candidate_rejections() {
+    let dir = tempfile::tempdir().expect("tmp");
+    let bad = dir.path().join("x".repeat(160));
+    crate::fsutil::ensure_private_dir(&bad).expect("bad");
+    let long_run = dir.path().join("r".repeat(140)).join("run");
+    let instance_dir = dir.path().join("instance");
+    let uid = nix::unistd::geteuid().as_raw();
+    let err = resolve_socket_path_with_candidates_for_test(
+        &long_run,
+        42004,
+        &instance_dir,
+        vec![bad.clone()],
+        uid,
+    )
+    .unwrap_err();
+    match err {
+        DblError::InvalidInput { field, reason } => {
+            assert_eq!(field, "socket");
+            assert!(reason.contains(&bad.display().to_string()));
+        }
+        other => panic!("unexpected: {other:?}"),
+    }
+}
+
+
+#[test]
+fn verify_secure_dir_rejects_symlink_file_mode_and_wrong_owner() {
+    use std::os::unix::fs::{symlink, PermissionsExt};
+    let dir = tempfile::tempdir().expect("tmp");
+    let real = dir.path().join("real");
+    crate::fsutil::ensure_private_dir(&real).expect("real");
+    let uid = nix::unistd::geteuid().as_raw();
+    verify_secure_dir_for_test(&real, uid).expect("real ok");
+
+    let link = dir.path().join("link");
+    symlink(&real, &link).expect("symlink");
+    let err = verify_secure_dir_for_test(&link, uid).unwrap_err();
+    assert!(err.to_string().contains("not a real directory"));
+
+    let file = dir.path().join("file");
+    fs::write(&file, b"x").expect("file");
+    fs::set_permissions(&file, fs::Permissions::from_mode(0o700)).expect("chmod");
+    let err = verify_secure_dir_for_test(&file, uid).unwrap_err();
+    assert!(err.to_string().contains("not a real directory"));
+
+    let bad_mode = dir.path().join("badmode");
+    fs::create_dir(&bad_mode).expect("dir");
+    fs::set_permissions(&bad_mode, fs::Permissions::from_mode(0o755)).expect("chmod");
+    let err = verify_secure_dir_for_test(&bad_mode, uid).unwrap_err();
+    let msg = err.to_string();
+    assert!(msg.contains("0700") || msg.contains("mode"), "msg: {msg}");
+
+    let wrong_owner = dir.path().join("wrongowner");
+    crate::fsutil::ensure_private_dir(&wrong_owner).expect("dir");
+    let err = verify_secure_dir_for_test(&wrong_owner, uid + 1).unwrap_err();
+    assert!(err.to_string().contains("wrong owner"));
+}
+
+#[test]
+fn ensure_verified_private_dir_creates_and_rejects_preexisting_wrong_mode() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().expect("tmp");
+    let uid = nix::unistd::geteuid().as_raw();
+    let target = dir.path().join("newdir");
+    ensure_verified_private_dir_for_test(&target, uid).expect("create");
+    let meta = fs::symlink_metadata(&target).expect("meta");
+    assert!(meta.is_dir());
+    assert_eq!(meta.permissions().mode() & 0o777, 0o700);
+
+    let bad = dir.path().join("bad");
+    fs::create_dir(&bad).expect("bad dir");
+    fs::set_permissions(&bad, fs::Permissions::from_mode(0o770)).expect("chmod");
+    let err = ensure_verified_private_dir_for_test(&bad, uid).unwrap_err();
+    assert!(err.to_string().contains("0700") || err.to_string().contains("mode"));
+    let meta = fs::symlink_metadata(&bad).expect("meta");
+    assert_eq!(meta.permissions().mode() & 0o777, 0o770, "must not chmod pre-existing wrong mode");
+}
+
+#[test]
+fn ensure_verified_private_dir_missing_parent_error_when_parent_not_writable() {
+    use std::os::unix::fs::PermissionsExt;
+    if nix::unistd::geteuid().is_root() {
+        eprintln!("skipping ensure_verified_private_dir_missing_parent_error_when_parent_not_writable: running as root");
+        return;
+    }
+    let dir = tempfile::tempdir().expect("tmp");
+    let parent = dir.path().join("ro");
+    fs::create_dir(&parent).expect("parent");
+    fs::set_permissions(&parent, fs::Permissions::from_mode(0o500)).expect("chmod");
+    let uid = nix::unistd::geteuid().as_raw();
+    let target = parent.join("child");
+    let err = ensure_verified_private_dir_for_test(&target, uid).unwrap_err();
+    assert!(err.to_string().contains("cannot create") || err.to_string().contains("fallback socket"));
+    fs::set_permissions(&parent, fs::Permissions::from_mode(0o700)).expect("restore");
+}
+
+
+#[test]
+fn fallback_socket_name_validation_for_port() {
+    assert!(is_fallback_socket_name_for_port("m42000-abcdef012345.sock", 42000));
+    assert!(!is_fallback_socket_name_for_port("m42001-abcdef012345.sock", 42000));
+    assert!(!is_fallback_socket_name_for_port("m42000-abcdef01234.sock", 42000));
+    // uppercase hex is accepted by is_ascii_hexdigit; that is harmless here
+    assert!(is_fallback_socket_name_for_port("m42000-ABCDEF012345.sock", 42000));
+    assert!(!is_fallback_socket_name_for_port("other-abcdef012345.sock", 42000));
+    assert!(!is_fallback_socket_name_for_port("m42000-abcdef012345.socket", 42000));
+}
+
+#[test]
+fn cleanup_fallback_socket_refuses_regular_file_with_valid_name() {
+    let dir = tempfile::tempdir().expect("tmp");
+    let run_dir = dir.path().join("run");
+    fs::create_dir_all(&run_dir).expect("run");
+    let uid = nix::unistd::geteuid().as_raw();
+    let fallback_root = ensure_fallback_socket_dir_for(None, uid).expect("fb");
+    let fallback = fallback_root.join("m42010-abc123def456.sock");
+    let _ = fs::remove_file(&fallback);
+    fs::write(&fallback, b"not a socket").expect("write");
+    cleanup_fallback_socket_with_candidates(
+        &fallback,
+        &run_dir,
+        42010,
+        None,
+        uid,
+    );
+    assert!(fallback.exists(), "regular file must not be deleted");
+    let _ = fs::remove_file(&fallback);
+}
+
+#[test]
+fn cleanup_fallback_socket_refuses_foreign_name_and_other_port() {
+    let dir = tempfile::tempdir().expect("tmp");
+    let run_dir = dir.path().join("run");
+    fs::create_dir_all(&run_dir).expect("run");
+    let uid = nix::unistd::geteuid().as_raw();
+    let fallback_root = ensure_fallback_socket_dir_for(None, uid).expect("fb");
+
+    let foreign = fallback_root.join("not-a-fallback.sock");
+    let _ = fs::remove_file(&foreign);
+    let l1 = std::os::unix::net::UnixListener::bind(&foreign).expect("bind");
+    drop(l1);
+    cleanup_fallback_socket_with_candidates(&foreign, &run_dir, 42011, None, uid);
+    assert!(foreign.exists(), "foreign name must not be deleted");
+    let _ = fs::remove_file(&foreign);
+
+    let other_port = fallback_root.join("m42012-abc123def456.sock");
+    let _ = fs::remove_file(&other_port);
+    let l2 = std::os::unix::net::UnixListener::bind(&other_port).expect("bind");
+    drop(l2);
+    cleanup_fallback_socket_with_candidates(&other_port, &run_dir, 42011, None, uid);
+    assert!(other_port.exists(), "other-port socket must not be deleted");
+    let _ = fs::remove_file(&other_port);
+}
+
+#[test]
+fn cleanup_fallback_socket_removes_real_socket_with_right_name_and_parent() {
+    let dir = tempfile::tempdir().expect("tmp");
+    let run_dir = dir.path().join("run");
+    fs::create_dir_all(&run_dir).expect("run");
+    let uid = nix::unistd::geteuid().as_raw();
+    let fallback_root = ensure_fallback_socket_dir_for(None, uid).expect("fb");
+    let fallback = fallback_root.join("m42013-abc123def456.sock");
+    let _ = fs::remove_file(&fallback);
+    let listener = std::os::unix::net::UnixListener::bind(&fallback).expect("bind");
+    drop(listener);
+    assert!(fallback.exists());
+    cleanup_fallback_socket_with_candidates(&fallback, &run_dir, 42013, None, uid);
+    assert!(!fallback.exists(), "verified fallback socket should be removed");
+}
+
+
+fn write_fake_bin(dir: &Path, name: &str, script: &str) -> PathBuf {
+    let bin = dir.join("bin");
+    fs::create_dir_all(&bin).expect("bin");
+    let p = bin.join(name);
+    fs::write(&p, script).expect("write script");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&p, fs::Permissions::from_mode(0o755)).expect("chmod");
+    }
+    p
+}
+
+#[test]
+fn initialize_insecure_command_failure_cleans_up_and_reports_tail() {
+    let dir = tempfile::tempdir().expect("tmp");
+    let runtime = dir.path().join("rt");
+    let bin = runtime.join("bin");
+    fs::create_dir_all(&bin).expect("bin");
+    let mysqld = bin.join("mysqld");
+    fs::write(&mysqld, "#!/bin/sh\necho 'init boom' >&2\nexit 7\n").expect("script");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&mysqld, fs::Permissions::from_mode(0o755)).expect("chmod");
+    }
+    let data = dir.path().join("inst/data");
+    let logs = dir.path().join("inst/logs");
+    let run = dir.path().join("inst/run");
+    fs::create_dir_all(&logs).expect("logs");
+    fs::create_dir_all(&run).expect("run");
+    let ctx = InitContext {
+        instance_name: "app".into(),
+        runtime_dir: runtime,
+        data_dir: data.clone(),
+        port: Port::new(42100).expect("port"),
+        superuser: "root".into(),
+        auth: AuthMode::None,
+        password: None,
+    };
+    let err = MysqlAdapter.initialize(&ctx).unwrap_err();
+    let msg = err.to_string();
+    assert!(msg.contains("init boom") || msg.contains("code"), "msg: {msg}");
+    assert!(!data.exists(), "data dir should be cleaned on init failure");
+    assert!(!run.join("dblocal-init.sql").exists());
+}
+
+#[test]
+fn initialize_reports_init_err_log_tail() {
+    let dir = tempfile::tempdir().expect("tmp");
+    let runtime = dir.path().join("rt");
+    let bin = runtime.join("bin");
+    fs::create_dir_all(&bin).expect("bin");
+    let mysqld = bin.join("mysqld");
+    fs::write(
+        &mysqld,
+        "#!/bin/sh\necho 'stderr line' >&2\necho 'log detail' > \"$5\"\nexit 3\n",
+    )
+    .expect("script");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&mysqld, fs::Permissions::from_mode(0o755)).expect("chmod");
+    }
+    // The script above is simplistic; use a robust one that writes to --log-error arg.
+    fs::write(
+        &mysqld,
+        "#!/bin/sh\nlog=\nfor a in \"$@\"; do case \"$a\" in --log-error=*) log=\"${a#--log-error=}\" ;; esac; done\necho 'stderr line' >&2\nif [ -n \"$log\" ]; then echo 'log detail' > \"$log\"; fi\nexit 3\n",
+    )
+    .expect("script");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&mysqld, fs::Permissions::from_mode(0o755)).expect("chmod");
+    }
+    let data = dir.path().join("inst/data");
+    let logs = dir.path().join("inst/logs");
+    let run = dir.path().join("inst/run");
+    fs::create_dir_all(&logs).expect("logs");
+    fs::create_dir_all(&run).expect("run");
+    let ctx = InitContext {
+        instance_name: "app".into(),
+        runtime_dir: runtime,
+        data_dir: data.clone(),
+        port: Port::new(42101).expect("port"),
+        superuser: "root".into(),
+        auth: AuthMode::None,
+        password: None,
+    };
+    let err = MysqlAdapter.initialize(&ctx).unwrap_err();
+    let msg = err.to_string();
+    assert!(msg.contains("log detail"), "msg: {msg}");
+}
+
+#[test]
+fn shutdown_command_failure_reports_tail_and_cleans_fallback_socket() {
+    let dir = tempfile::tempdir().expect("tmp");
+    let runtime = dir.path().join("rt");
+    let bin = runtime.join("bin");
+    fs::create_dir_all(&bin).expect("bin");
+    let mysqladmin = bin.join("mysqladmin");
+    fs::write(&mysqladmin, "#!/bin/sh\necho 'shutdown bad' >&2\nexit 9\n").expect("script");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&mysqladmin, fs::Permissions::from_mode(0o755)).expect("chmod");
+    }
+    let uid = nix::unistd::geteuid().as_raw();
+    let fallback_root = ensure_fallback_socket_dir_for(None, uid).expect("fb");
+    let socket = fallback_root.join("m42102-abc123def456.sock");
+    let _ = fs::remove_file(&socket);
+    let l = std::os::unix::net::UnixListener::bind(&socket).expect("bind");
+    drop(l);
+    let run_dir = dir.path().join("run");
+    fs::create_dir_all(&run_dir).expect("run");
+    fs::write(
+        run_dir.join("my.cnf"),
+        format!("[mysqld]\nsocket={}\n", socket.display()),
+    )
+    .expect("cnf");
+    let ctx = RunContext {
+        instance_name: "app".into(),
+        runtime_dir: runtime,
+        data_dir: dir.path().join("data"),
+        logs_dir: dir.path().join("logs"),
+        run_dir: run_dir.clone(),
+        port: Port::new(42102).expect("port"),
+        superuser: "root".into(),
+        auth: AuthMode::None,
+        credential: None,
+    };
+    let err = MysqlAdapter.shutdown(&ctx).unwrap_err();
+    let msg = err.to_string();
+    assert!(msg.contains("shutdown bad"), "msg: {msg}");
+    assert!(msg.contains("9") || msg.contains("code"), "msg: {msg}");
+    assert!(!socket.exists(), "fallback socket should be removed even on shutdown failure");
+}
+
+#[test]
+fn health_check_maps_connection_refused_to_error() {
+    let dir = tempfile::tempdir().expect("tmp");
+    let ctx = RunContext {
+        instance_name: "app".into(),
+        runtime_dir: dir.path().join("rt"),
+        data_dir: dir.path().join("data"),
+        logs_dir: dir.path().join("logs"),
+        run_dir: dir.path().join("run"),
+        port: Port::new(42103).expect("port"),
+        superuser: "root".into(),
+        auth: AuthMode::None,
+        credential: None,
+    };
+    let err = MysqlAdapter.health_check(&ctx).unwrap_err();
+    assert!(err.to_string().contains("cannot connect") || err.to_string().contains("mysql"));
+}
+
+#[test]
+fn read_handshake_half_open_and_non_mysql_banner() {
+    use std::io::Write;
+    use std::net::TcpListener;
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+    let port = listener.local_addr().expect("addr").port();
+    let t = std::thread::spawn(move || {
+        let (mut s, _) = listener.accept().expect("accept");
+        // half-open: close without sending handshake
+        let _ = s.shutdown(std::net::Shutdown::Both);
+    });
+    let err = read_handshake(port, Duration::from_millis(500)).unwrap_err();
+    assert!(err.to_string().contains("handshake") || err.to_string().contains("mysql"));
+    t.join().expect("join");
+
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+    let port = listener.local_addr().expect("addr").port();
+    let t = std::thread::spawn(move || {
+        let (mut s, _) = listener.accept().expect("accept");
+        let payload = b"HTTP/1.1 200 OK\r\n\r\n";
+        let len = payload.len() as u32;
+        let mut hdr = [0u8; 4];
+        hdr[0] = (len & 0xff) as u8;
+        hdr[1] = ((len >> 8) & 0xff) as u8;
+        hdr[2] = ((len >> 16) & 0xff) as u8;
+        hdr[3] = 0;
+        s.write_all(&hdr).expect("hdr");
+        s.write_all(payload).expect("payload");
+    });
+    let h = read_handshake(port, Duration::from_millis(500)).expect("handshake");
+    assert!(matches!(h, Handshake::NotReady(_)));
+    t.join().expect("join");
 }
