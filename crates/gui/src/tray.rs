@@ -167,6 +167,19 @@ pub fn aggregate_tray_status(views: &[InstanceView]) -> InstanceStatus {
     InstanceStatus::Stopped
 }
 
+/// Status indicated by a tray menu entry label (R8).
+pub fn status_from_tray_label(label: &str) -> InstanceStatus {
+    if label.starts_with('●') {
+        InstanceStatus::Running
+    } else if label.starts_with('▲') {
+        InstanceStatus::Failed
+    } else if label.starts_with('◐') {
+        InstanceStatus::Starting
+    } else {
+        InstanceStatus::Stopped
+    }
+}
+
 fn action_verb(status: InstanceStatus) -> Option<&'static str> {
     if format::can_start(status) {
         Some(strings::UI_START)
@@ -345,21 +358,7 @@ mod linux {
     }
 
     fn entry_icon_data(entry: &TrayMenuEntry, size: u32) -> Vec<u8> {
-        let status = entry_status(entry);
-        status_dot_argb(status, size)
-    }
-
-    fn entry_status(entry: &TrayMenuEntry) -> InstanceStatus {
-        let label = entry.label.as_str();
-        if label.starts_with('●') {
-            InstanceStatus::Running
-        } else if label.starts_with('▲') {
-            InstanceStatus::Failed
-        } else if label.starts_with('◐') {
-            InstanceStatus::Starting
-        } else {
-            InstanceStatus::Stopped
-        }
+        status_dot_argb(status_from_tray_label(&entry.label), size)
     }
 
     impl Tray for DblocalTray {
@@ -586,6 +585,48 @@ mod tests {
         let center = (8 * 16 + 8) * 4;
         let px = &data[center..center + 4];
         assert_eq!(px[0], 0xff); // alpha
-        assert_eq!(px[2], 0xa8); // green channel in ARGB [a,r,g,b]
+        assert_eq!(px[1], 0x59); // red
+        assert_eq!(px[2], 0xa8); // green
+        assert_eq!(px[3], 0x69); // blue
+    }
+
+    #[test]
+    fn aggregate_tray_status_prefers_failed_then_running_then_stopped() {
+        let running = view("pg-a", EngineKey::Postgresql, InstanceStatus::Running);
+        let failed = view("pg-b", EngineKey::Postgresql, InstanceStatus::Failed);
+        let stopped = view("pg-c", EngineKey::Postgresql, InstanceStatus::Stopped);
+        assert_eq!(aggregate_tray_status(&[]), InstanceStatus::Stopped);
+        assert_eq!(
+            aggregate_tray_status(&[stopped.clone(), running.clone()]),
+            InstanceStatus::Running
+        );
+        assert_eq!(
+            aggregate_tray_status(&[running.clone(), failed.clone()]),
+            InstanceStatus::Failed
+        );
+        assert_eq!(
+            aggregate_tray_status(&[stopped]),
+            InstanceStatus::Stopped
+        );
+    }
+
+    #[test]
+    fn tray_label_status_maps_to_icon_bytes() {
+        let views = vec![
+            view("pg-a", EngineKey::Postgresql, InstanceStatus::Running),
+            view("pg-b", EngineKey::Postgresql, InstanceStatus::Failed),
+            view("pg-c", EngineKey::Postgresql, InstanceStatus::Stopped),
+        ];
+        let model = TrayMenuModel::from_views(&views);
+        for entry in &model.instances {
+            let status = status_from_tray_label(&entry.label);
+            let bytes = status_dot_argb(status, 8);
+            let center = (4 * 8 + 4) * 4;
+            assert_eq!(bytes[center], 0xff);
+        }
+        let a = model.instances.iter().find(|e| e.label.contains("pg-a")).unwrap();
+        assert_eq!(status_from_tray_label(&a.label), InstanceStatus::Running);
+        let b = model.instances.iter().find(|e| e.label.contains("pg-b")).unwrap();
+        assert_eq!(status_from_tray_label(&b.label), InstanceStatus::Failed);
     }
 }

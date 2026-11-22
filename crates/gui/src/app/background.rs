@@ -7,6 +7,7 @@
 
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
+use std::time::{Duration, Instant};
 
 use dblocal_core::model::CatalogStatus;
 use dblocal_core::model::InstanceId;
@@ -126,13 +127,44 @@ impl Workspace {
         self.refresh_home_size_bg(cx);
     }
 
-    /// Recompute the total DBLocal home size in the background.
+    /// Recompute the total DBLocal home size in the background, coalesced (R7).
     pub(crate) fn refresh_home_size_bg(&mut self, cx: &mut Context<Self>) {
+        self.home_size_dirty = true;
+        self.schedule_home_size_bg(cx);
+    }
+
+    fn schedule_home_size_bg(&mut self, cx: &mut Context<Self>) {
+        if !self.home_size_dirty || self.home_size_in_flight {
+            return;
+        }
+        let now = Instant::now();
+        let min_interval = Duration::from_secs(5);
+        if let Some(last) = self.home_size_last {
+            let elapsed = now.saturating_duration_since(last);
+            if elapsed < min_interval {
+                let wait = min_interval - elapsed;
+                cx.spawn(async move |this, cx| {
+                    cx.background_executor().timer(wait).await;
+                    let _ = this.update(cx, |this, cx| {
+                        this.schedule_home_size_bg(cx);
+                    });
+                })
+                .detach();
+                return;
+            }
+        }
+        self.home_size_dirty = false;
+        self.home_size_in_flight = true;
+        self.home_size_last = Some(now);
         let root = self.home_root.clone();
         self.bg(cx, move || {
             let size = dir_size_bytes(&root);
             move |this: &mut Workspace, cx: &mut Context<Workspace>| {
                 this.home_size_bytes = Some(size);
+                this.home_size_in_flight = false;
+                if this.home_size_dirty {
+                    this.schedule_home_size_bg(cx);
+                }
                 cx.notify();
             }
         });
@@ -206,8 +238,8 @@ impl Workspace {
 
     /// Seeds the first frame from an `InstanceView` list (previews and tests).
     #[cfg(test)]
-    pub(crate) fn seed_state(&mut self, instances: Vec<InstanceView>) {
-        self.state = ShellState {
+    pub(crate) fn seed_state(&mut self, instances: Vec<dblocal_core::service::InstanceView>) {
+        self.state = super::ShellState {
             instances,
             downloads: Vec::new(),
             last_failure: None,

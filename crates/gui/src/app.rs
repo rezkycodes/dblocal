@@ -118,6 +118,9 @@ pub struct Workspace {
     home_size_bytes: Option<u64>,
     /// DBLocal home root for status bar display.
     home_root: std::path::PathBuf,
+    home_size_in_flight: bool,
+    home_size_dirty: bool,
+    home_size_last: Option<Instant>,
     create: Option<CreateForm>,
     delete_target: Option<InstanceId>,
     delete_name_input: Option<Entity<InputState>>,
@@ -271,6 +274,9 @@ impl Workspace {
             home_root: dblocal_core::paths::DblPaths::from_env()
                 .map(|p| p.root().to_path_buf())
                 .unwrap_or_else(|_| std::path::PathBuf::from("~/.dblocal")),
+            home_size_in_flight: false,
+            home_size_dirty: false,
+            home_size_last: None,
             create: None,
             delete_target: None,
             delete_name_input: None,
