@@ -79,9 +79,17 @@ async fn mark_failed(inner: &Arc<Inner>, instance: &Instance) {
     // The compare-and-set is the guard: if a stop (or anything else) moved the
     // row out of `Running` after the probe, this loses and the record and the
     // identity clear are skipped, so a clean stop is never relabelled a crash.
+    //
+    // The `Failed` status and the identity clear are one transaction: a row that
+    // says `Failed` must never be observable with the pid of the process that died,
+    // because the next start, `identity_of` and the GUI all read that identity.
     let id2 = id.clone();
     let won = db_async(inner, move |store| {
-        store.transition_status(&id2, InstanceStatus::Running, InstanceStatus::Failed)
+        store.transition_status_and_clear_identity(
+            &id2,
+            InstanceStatus::Running,
+            InstanceStatus::Failed,
+        )
     })
     .await
     .unwrap_or(false);
@@ -100,10 +108,5 @@ async fn mark_failed(inner: &Arc<Inner>, instance: &Instance) {
             ),
         );
     }
-    let id2 = id.clone();
-    let _ = db_async(inner, move |store| {
-        store.update_process_identity(&id2, None, None, None)
-    })
-    .await;
     emit_changed(inner, &id);
 }

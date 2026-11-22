@@ -6,7 +6,7 @@
 //! adapter builds, reproduced here so the test exercises the same engine layout
 //! (`runtimes/postgresql/<version>/<arch>/bin`) without touching `tests/support`.
 
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic, dead_code)]
 
 use std::fs;
 use std::path::{Path, PathBuf};

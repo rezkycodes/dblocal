@@ -226,7 +226,7 @@ fn health_check_maps_not_ready_banner() {
 #[test]
 fn read_log_tail_bounds_and_missing_file() {
     let dir = tempfile::tempdir().expect("tmp");
-    let p = dir.path().join("error.log");
+    let p = dir.path().join("mysql.log");
     assert_eq!(read_log_tail(&p, 5), "");
     fs::write(&p, "a\nb\nc\n").expect("write");
     assert_eq!(read_log_tail(&p, 2), "b\nc");

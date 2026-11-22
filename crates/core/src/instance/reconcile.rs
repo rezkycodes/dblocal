@@ -21,11 +21,23 @@ use super::service::Inner;
 #[cfg(test)]
 type ListHook = Box<dyn FnOnce(&Arc<Inner>) + Send>;
 
+/// Runs between the status write and the identity clear of a `mark`, so a test can
+/// observe a fresh connection at exactly that instant.
+#[cfg(test)]
+type AfterStatusHook = Box<dyn FnOnce(&Arc<Inner>, &InstanceId) + Send>;
+
+/// Runs in phase 3 while the instance guard is held (after the fresh read, before
+/// the probe), so a test can issue a user command into that window.
+#[cfg(test)]
+type GuardedHook = Box<dyn FnOnce(&Arc<Inner>, &InstanceId) + Send>;
+
 #[cfg(test)]
 #[derive(Default)]
 struct Hooks {
     before_list: Option<ListHook>,
     after_list: Option<ListHook>,
+    after_status: Option<AfterStatusHook>,
+    guarded: Option<GuardedHook>,
     done: Option<std::sync::mpsc::Sender<()>>,
 }
 
@@ -97,6 +109,52 @@ fn fire_done(inner: &Arc<Inner>) {
     }
 }
 
+/// Registers a hook that runs between `mark`'s status write and its identity clear.
+#[cfg(test)]
+pub(crate) fn on_after_status(
+    root: &std::path::Path,
+    hook: impl FnOnce(&Arc<Inner>, &InstanceId) + Send + 'static,
+) {
+    edit_hooks(&root.display().to_string(), |hooks| {
+        hooks.after_status = Some(Box::new(hook));
+    });
+}
+
+/// Registers a hook that runs in phase 3 while the instance guard is held.
+#[cfg(test)]
+pub(crate) fn on_guard_held(
+    root: &std::path::Path,
+    hook: impl FnOnce(&Arc<Inner>, &InstanceId) + Send + 'static,
+) {
+    edit_hooks(&root.display().to_string(), |hooks| {
+        hooks.guarded = Some(Box::new(hook));
+    });
+}
+
+#[cfg(test)]
+fn run_guarded(inner: &Arc<Inner>, id: &InstanceId) {
+    let root = inner.paths.root().display().to_string();
+    if let Some(hook) = edit_hooks_capture(&root, |hooks| hooks.guarded.take()) {
+        hook(inner, id);
+    }
+}
+
+#[cfg(not(test))]
+#[allow(dead_code)]
+fn run_guarded(_: &Arc<Inner>, _: &InstanceId) {}
+
+#[cfg(test)]
+fn run_after_status(inner: &Arc<Inner>, id: &InstanceId) -> bool {
+    let root = inner.paths.root().display().to_string();
+    match edit_hooks_capture(&root, |hooks| hooks.after_status.take()) {
+        Some(hook) => {
+            hook(inner, id);
+            true
+        }
+        None => false,
+    }
+}
+
 /// Runs `take` on the hooks for `root` and returns the value it removed.
 #[cfg(test)]
 fn edit_hooks_capture<T>(root: &str, take: impl FnOnce(&mut Hooks) -> Option<T>) -> Option<T> {
@@ -110,6 +168,12 @@ fn run_before_list(_: &Arc<Inner>) {}
 
 #[cfg(not(test))]
 fn run_after_list(_: &Arc<Inner>) {}
+
+#[cfg(not(test))]
+#[allow(dead_code)]
+fn run_after_status(_: &Arc<Inner>, _: &InstanceId) -> bool {
+    false
+}
 
 #[cfg(not(test))]
 fn fire_done(_: &Arc<Inner>) {}
@@ -216,6 +280,10 @@ pub(crate) async fn reconcile_on_startup(inner: Arc<Inner>) {
         if fresh.status() == InstanceStatus::Starting && identity_of(&fresh).is_none() {
             continue;
         }
+        // Test seam: run a hook here, with the guard held, to issue a user command
+        // into the window a one-shot CLI lands in.
+        #[cfg(test)]
+        run_guarded(&inner, instance.id());
         guarded.push((guard, fresh));
     }
     if guarded.is_empty() {
@@ -256,8 +324,12 @@ pub(crate) async fn reconcile_on_startup(inner: Arc<Inner>) {
 /// that releases on drop. It is the only in-process proof that a create/delete is
 /// not mid-flight, so every mutating reconciliation decision takes it before
 /// reading fresh state.
+///
+/// It takes the **reconciliation** guard, not an operation guard, so a user
+/// command that arrives while reconciliation is deciding waits for it bounded
+/// (`Ops::lock_instance`) instead of being refused as busy.
 fn lock_if_idle(inner: &Arc<Inner>, id: &InstanceId) -> Option<super::registry::InstanceLock> {
-    inner.ops.lock_instance(id).ok()
+    inner.ops.lock_instance_for_reconcile(id).ok()
 }
 
 /// Re-reads one instance from the store, so a decision never acts on a stale
@@ -457,14 +529,36 @@ async fn adopt(inner: &Arc<Inner>, instance: &Instance) {
 }
 
 async fn mark(inner: &Arc<Inner>, instance: &Instance, event: InstanceEvent) {
-    if let Ok(next) = instance.status().apply(event) {
-        persist(inner, instance.id(), next).await;
-    }
-    if matches!(
+    let clears_identity = matches!(
         event,
         InstanceEvent::ReconciledAbsent | InstanceEvent::Interrupted
-    ) {
-        clear_identity(inner, instance.id()).await;
+    );
+    let Ok(next) = instance.status().apply(event) else {
+        emit_changed(inner, instance.id());
+        return;
+    };
+    // A terminal status must never be observable while the identity of the process
+    // we just declared gone is still recorded: the next start, a stop, the
+    // supervisor and `identity_of` all read it. Both writes go in one store
+    // transaction, so no reader on any connection can see the half-updated row.
+    let id = instance.id().clone();
+    if clears_identity {
+        let from = instance.status();
+        let _ = db_async(inner, move |store| {
+            store.transition_status_and_clear_identity(&id, from, next)
+        })
+        .await;
+    } else {
+        let id_for_store = id.clone();
+        let _ = db_async(inner, move |store| store.update_status(&id_for_store, next)).await;
+    }
+    // A test observation point placed exactly where the old two-write code had its
+    // window (status written, identity not yet cleared). With both writes in one
+    // transaction there is nothing half-written to see; with the old order a fresh
+    // reader here catches `Stopped` with the identity still recorded.
+    #[cfg(test)]
+    if clears_identity {
+        run_after_status(inner, instance.id());
     }
     emit_changed(inner, instance.id());
 }
@@ -472,12 +566,4 @@ async fn mark(inner: &Arc<Inner>, instance: &Instance, event: InstanceEvent) {
 async fn persist(inner: &Arc<Inner>, id: &InstanceId, next: InstanceStatus) {
     let id = id.clone();
     let _ = db_async(inner, move |store| store.update_status(&id, next)).await;
-}
-
-async fn clear_identity(inner: &Arc<Inner>, id: &InstanceId) {
-    let id = id.clone();
-    let _ = db_async(inner, move |store| {
-        store.update_process_identity(&id, None, None, None)
-    })
-    .await;
 }

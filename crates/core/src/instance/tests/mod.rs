@@ -12,9 +12,11 @@ mod harness_assert;
 mod harness_fakes;
 mod lifecycle;
 mod mutations;
+mod port_sync;
 mod races;
 mod recovery;
 mod safety;
+mod service_admin;
 
 use crate::model::{EngineKey, InstanceStatus};
 use crate::service::DblService;

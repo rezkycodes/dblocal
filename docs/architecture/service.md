@@ -386,6 +386,208 @@ unless `force`, runs in the background, reports `Fresh`/`Stale`/`Offline` throug
   its own metadata and its resolved target, so `..`, absolute paths and symlinks
   cannot steer the removal outside the home.
 
+## W4-A — admin, update and open-in-client on the real service
+
+W4-A added the database/user administration (`F-DBU-01..03`), self-update
+(`F-PKG-05`) and open-in-external-client (`F-OPN-01..02`) surface to
+`DblService`, implemented it in `LocalService` and `MockService`, and exposed it
+through the CLI. Nothing under `crates/gui/**` is touched; the Database tab and
+the open menu are W4-B's.
+
+### Trait surface
+
+The new methods return `ServiceResult<T>` (`Result<T, UserFacingError>`) rather
+than `crate::error::Result<T>`, because the admin (`DBL-81xx`), update
+(`DBL-80xx`) and client (`DBL-83xx`) modules own their own code ranges and the
+CLI must print the code the module chose. Every method has a typed
+not-implemented default, so a front-end compiled against an older service still
+builds; both real implementors override all of them.
+
+```rust
+fn list_databases(&self, id: &InstanceId) -> ServiceResult<Vec<DatabaseInfo>>;
+fn create_database(&self, id: &InstanceId, name: &str) -> ServiceResult<()>;
+fn drop_database(&self, id: &InstanceId, name: &str, force: bool) -> ServiceResult<()>;
+fn list_users(&self, id: &InstanceId) -> ServiceResult<Vec<UserInfo>>;
+fn create_user(&self, id: &InstanceId, name: &str, db: &str, level: PrivilegeLevel)
+    -> ServiceResult<SecretString>;
+fn reset_superuser_password(&self, id: &InstanceId) -> ServiceResult<SecretString>;
+
+fn check_update(&self) -> ServiceResult<UpdateStatus>;
+fn apply_update(&self) -> ServiceResult<()>;
+
+fn detect_clients(&self, refresh: bool) -> ServiceResult<Vec<DetectedClient>>;
+fn open_in_client(&self, id: &InstanceId, client: ClientKind, dry_run: bool)
+    -> ServiceResult<LaunchPlan>;
+```
+
+`UpdateStatus` (`service::UpdateStatus`) is the renderable read model: the
+current version, an optional `AvailableUpdateView` (version, tag, bounded notes,
+asset name, size, whether this install may self-update), the
+`update::InstallKind`, and the package-manager hint for a managed install.
+
+**Long operations vs fast reads.** The task allowed either shape. Every new call
+here is a **fast read or a short RPC**, not a background operation: an admin
+statement or a client launch returns its result directly, and `check_update` is
+one bounded HTTPS round-trip the caller explicitly asked for. `apply_update`
+does the download + verify + apply synchronously (a self-update is a deliberate,
+blocking action and the CLI is the caller). None of them needs an `OperationId`,
+so no new stage was added to `OperationStage`.
+
+### New events (additive, `#[non_exhaustive]`-safe)
+
+W2-B/W4-B match on `ServiceEvent`; both new variants are additive and the GUI's
+existing `translate` already has a `_ => None` arm.
+
+- `AdminChanged { id }` — the list of databases or users for `id` is stale;
+  re-read through `list_databases`/`list_users`. It carries **no rows** and no
+  password, so the one-time create-user/reset-from-secret path can never ride an
+  event. Emitted after a create/drop database, a created user, and a successful
+  reset.
+- `UpdateChecked { version: Option<String>, can_self_update: bool }` — an update
+  check finished; `None` means the running version is current.
+
+### `LocalService`
+
+- **Admin (`instance/admin_ops.rs`).** Every call loads the instance, enforces
+  the engine gate (only PostgreSQL + a password instance is supported), reads
+  the superuser password from the secret store, and dials loopback through
+  `PgAdmin`. MySQL/MariaDB (awaiting `W4-A2`) and Valkey return the admin
+  module's typed `Unsupported` (`DBL-8111`) with its Indonesian message — never
+  an empty list or a `todo!()`. The engine calls sit behind an injectable
+  `AdminExecutor`; the production factory is `PgAdmin`, tests inject a fake.
+  - `create_user` drops the half-created role if the GRANT fails, so a failure
+    never leaves a login role with no privileges and no password anyone holds.
+  - `reset_superuser_password` writes the new password through a `StoreSink` over
+    the service's secret store, so the write prefers the keychain exactly like a
+    create. The credential pointer is re-recorded **only after** the reset
+    succeeded, so a failed reset leaves the pointer (and the keychain) untouched.
+  - Neither the password the reset sets nor the password `create_user` returns is
+    ever logged, put in an event, or in an error: the `AdminError` type has no
+    free-form string slot (W3-A), and the canary test greps the event stream.
+- **Update (`instance/update_ops.rs`).** `check_update` runs only when called (no
+  timer, no startup check) through the injected `UpdateFetcher`; production is
+  `ReqwestUpdateFetcher`. `apply_update` runs the same check, then refuses a
+  package-manager-owned install (`F-PKG-05` AC2) **before any byte is
+  downloaded**, returning the module's `UnsupportedInstallKind` (`DBL-8008`) with
+  the manager hint. The download/verify/apply tail is an injected
+  `UpdateInstaller`; production is `DownloadInstaller`, which stages under
+  `~/.dblocal/update` and reuses `update::plan_install`/`apply` (so a managed
+  install is double-refused). Tests inject a fake, so the whole path is offline.
+- **Clients (`instance/clients_ops.rs`).** `detect_clients` caches the result on
+  the first call and re-runs it when `refresh`; the cache is per-service (per
+  process). `open_in_client` builds the target from the instance row, finds the
+  detected client of that kind, resolves the terminal only for a CLI client (a
+  GUI plan never reads it, so a headless host opens a GUI client fine), reads the
+  password (for a CLI launcher only), and calls the existing `plan_open`. `run`
+  executes it unless `dry_run`. The password is only ever in the launcher script
+  `plan_open` builds; the plan's argv/URL/command string never carry it, and the
+  service never returns it.
+
+New `ServiceOptions` seams (defaults are the production values):
+`host_probe`, `spawner`, `update_fetcher`, `update_installer`, `install_kind`,
+`current_version`, `update_repo`, `admin_factory`.
+
+### `MockService`
+
+The mock implements every new method with deterministic data so a GUI built
+against it exercises each branch offline: PostgreSQL reports two seeded
+databases and the superuser role, create/drop/create-user mutate an in-memory
+list and emit `AdminChanged`, a reset rotates the map `connection_uri` reads (so
+the printed URI carries the new password), every other engine is typed
+unsupported, `check_update` reports a fixed `0.9.0` unless the seeded current
+version is already that, `apply_update` refuses a package-manager install set via
+`set_install_kind`, and detection returns a fixed `psql` + `TablePlus` cast.
+
+### Tests
+
+- `instance/tests/service_admin.rs` (24 unit tests) drives the real
+  `LocalService` through the public trait with an injected `AdminExecutor`,
+  `UpdateFetcher`, `UpdateInstaller`, `HostProbe` and `Spawner`: the engine gate
+  per engine, invalid-name rejection before any statement, the grant rollback,
+  the one-time password, the reset pointer update only on success, the
+  package-manager refusal before any download, the up-to-date and network-error
+  codes, cached detection, dry-run vs launch, and that no event or plan carries
+  the password.
+- `tests/service_admin_e2e.rs` (5 `#[ignore]`d tests, registered in `cargo xtask
+  e2e`) proves the wiring on a real PostgreSQL under the e2e lock:
+  UTF-8 create + list with a size, drop refusing a live session then succeeding,
+  read-only cannot write, read-write can, reset updates engine + stored
+  credential + URI, and a refused sink rolls the reset back while the old
+  password still works and the pointer never moves. Recorded: 5 passed in 12.97 s
+  at load 16.57.
+- `crates/cli/src/commands/tests/service_admin.rs` (19 tests) covers `db`, `user`,
+  `password`, `update` and `open` against the mock, including the typed-name
+  confirmation and the exit codes.
+
+### What W4-A does not prove
+
+- MySQL/MariaDB admin execution (the executor is `W4-A2`); Valkey has none by
+  design.
+- A live OS keychain: the e2e uses the production `0600` file backend, and the
+  refreshable detection cache is proven with a fake host.
+- A real GitHub release download/apply (tests inject the fetcher and installer).
+- Windows/macOS clients and terminals.
+
+### Mutation checks
+
+Each reversion was applied to the working tree, the red test pasted, and the file
+restored (`git status --short` empty afterwards).
+
+**1. Typed-name confirmation dropped** — `commands/db.rs`, the
+`if !yes && let Err(code) = confirm_name(…)` guard replaced by two `let _`:
+
+```text
+test commands::tests::service_admin::db_drop_without_confirmation_is_refused_non_interactively ... FAILED
+test commands::tests::service_admin::db_drop_rejects_a_mismatched_confirm ... FAILED
+test result: FAILED. 17 passed; 2 failed; 0 ignored; 0 measured; 96 filtered out
+```
+
+**2. Identifier validation bypassed** — `instance/admin_ops.rs`, `create_database`
+sends a fixed valid token instead of the caller's name:
+
+```text
+test instance::tests::service_admin::create_database_rejects_a_bad_name_before_calling_the_engine ... FAILED
+test instance::tests::service_admin::create_database_announces_the_admin_change ... FAILED
+test result: FAILED. 32 passed; 2 failed; 0 ignored; 0 measured; 1209 filtered out
+```
+
+**3. Password sent through an event** — `instance/admin_ops.rs`,
+`reset_superuser_password` emits a `LogLines` carrying the new password:
+
+```text
+test instance::tests::service_admin::the_admin_event_carries_no_secret ... FAILED
+an event leaked the password: LogLines { id: InstanceId("2c16b941-…"), lines: ["reset-once-pw"] }
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1242 filtered out
+```
+
+**4. Credential pointer written before the reset succeeds** — `instance/admin_ops.rs`,
+the pointer `set_credential` moved ahead of `reset_superuser_password`:
+
+```text
+test instance::tests::service_admin::a_failed_reset_leaves_the_credential_untouched ... FAILED
+assertion `left == right` failed: the pointer must not move on a failed reset
+  left: CredentialRef { … backend: File … }
+ right: CredentialRef { … backend: Keychain … }
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1242 filtered out
+```
+
+**5. `update apply` runs for a package-manager install** — `instance/update_ops.rs`,
+the `if !kind.can_self_update()` guard becomes `if false`:
+
+```text
+test instance::tests::service_admin::apply_update_refuses_a_package_manager_install_before_downloading ... FAILED
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1242 filtered out
+```
+
+### Recorded runs
+
+- `cargo test -p dblocal-core --features mock --lib service_admin` x40 at load
+  16.01: **40/40 passed**.
+- `DBLOCAL_E2E=1 flock … cargo test -p dblocal-core --test service_admin_e2e --
+  --ignored --test-threads=1`: **5 passed** in 14.15 s at load 16.31 (a second run
+  earlier passed 5 in 12.97 s at load 16.57).
+- `cargo xtask ci` under the heavy lock: **all gates passed** at load 16.19.
+
 ## Cross-process safety
 
 The GUI and a CLI share `~/.dblocal`. The compare-and-set

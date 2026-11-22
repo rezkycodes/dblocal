@@ -669,3 +669,198 @@ fn run_in_flight_reconcile_case(status: InstanceStatus) {
         super::harness::describe(&collected)
     );
 }
+
+/// Item 1: a row must never be observable as terminal (`Stopped`) while it still
+/// carries the identity of the process reconciliation just declared gone.
+///
+/// `mark(ReconciledAbsent)` used to write the status first and clear the identity
+/// second, two separate store writes. A reader on another connection (the GUI, the
+/// CLI, a second service, or this test's fresh `Store::open`) that lands between
+/// them sees `Stopped` with the old pid. The `on_after_status` hook pins that exact
+/// instant, so the assertion is deterministic rather than a race.
+#[test]
+fn a_terminal_status_is_never_observed_with_a_stale_identity() {
+    let h = Harness::paused(EngineKey::Postgresql);
+    let root = h.paths.root().to_path_buf();
+    let paths = h.paths.clone();
+    let id = crate::model::InstanceId::new();
+    let name = crate::model::InstanceName::new("stale-identity").expect("name");
+    let port = test_port();
+    let procs = Arc::clone(&h.procs);
+
+    // A `Running` row whose recorded process is dead: reconciliation decides
+    // `ReconciledAbsent`, which is the `mark` path under test.
+    let before_id = id.clone();
+    let before_name = name.clone();
+    let before_procs = Arc::clone(&procs);
+    super::super::reconcile::on_reconcile(
+        &root,
+        move |inner| {
+            // A dead identity: spawn then kill, so the probe reports it absent.
+            let identity = before_procs.spawn("/fake/engine/bin/postgres");
+            before_procs.kill(identity.pid());
+            let spec = crate::model::InstanceSpec::new(
+                before_name,
+                EngineKey::Postgresql,
+                "18.7",
+                Some(crate::model::Port::new(port).expect("port")),
+                crate::model::AuthMode::Password,
+            )
+            .expect("spec");
+            let row = crate::model::Instance::new(
+                &spec,
+                before_id,
+                InstanceStatus::Running,
+                std::time::SystemTime::now(),
+            )
+            .with_process(
+                identity.pid(),
+                identity.started_at(),
+                identity.exe().to_path_buf(),
+            );
+            inner
+                .db(|store| store.insert_instance(&row))
+                .expect("insert running row");
+        },
+        |_| {},
+    );
+
+    // Observe a FRESH connection at the instant the status has been written and the
+    // identity has not: this is the window a real reader can land in.
+    let observed = Arc::new(std::sync::Mutex::new(None::<(InstanceStatus, bool)>));
+    let observed_hook = Arc::clone(&observed);
+    let paths_hook = paths.clone();
+    super::super::reconcile::on_after_status(&root, move |_inner, id| {
+        let store = crate::store::Store::open(&paths_hook).expect("fresh store");
+        let row = store.get_instance(id).expect("read").expect("row present");
+        *observed_hook.lock().expect("observed") = Some((row.status(), row.pid().is_some()));
+    });
+
+    let done = super::super::reconcile::on_reconcile_done(&root);
+    h.service.start_background();
+    done.recv_timeout(std::time::Duration::from_secs(30))
+        .expect("reconciliation must finish");
+
+    let seen = (*observed.lock().expect("observed"))
+        .expect("the hook must have observed the row between the two writes");
+    assert_ne!(
+        seen,
+        (InstanceStatus::Stopped, true),
+        "no reader may see Stopped with a recorded identity; every write of a \
+         terminal status must clear the identity in the same transaction"
+    );
+
+    let row = h.instance(&id).expect("the row survives");
+    assert_eq!(row.status(), InstanceStatus::Stopped);
+    assert!(row.pid().is_none(), "the identity is cleared at the end");
+}
+
+/// Item 0: a user command that arrives while STARTUP RECONCILIATION owns the
+/// instance must wait for reconciliation, not be refused as busy.
+///
+/// The one-shot CLI (`dblocal stop x`) issues its command within milliseconds of
+/// `LocalService::new`, which spawned reconciliation; since round 5 reconciliation
+/// holds the instance guard across its probe and persist, so a plain
+/// `lock_instance` refused the stop with DBL-1004 ("busy") up to 15/20 times on
+/// the real binary.
+///
+/// `on_guard_held` parks reconciliation in phase 3 while it holds the guard of a
+/// live `Running` row. The test then issues the stop on another thread: it must
+/// block rather than refuse. Releasing the hook lets reconciliation finish and
+/// drop the guard, and the stop must then be accepted.
+#[test]
+fn a_stop_arriving_during_reconciliation_waits_instead_of_refusing() {
+    let h = Harness::paused(EngineKey::Postgresql);
+    let root = h.paths.root().to_path_buf();
+    let id = crate::model::InstanceId::new();
+    let name = crate::model::InstanceName::new("stop-during-reconcile").expect("name");
+    let port = test_port();
+    let procs = Arc::clone(&h.procs);
+    let service = h.service.clone();
+
+    // A `Running` row with a live identity: phase 3 takes its guard and probes it.
+    let before_id = id.clone();
+    let before_name = name.clone();
+    let before_procs = Arc::clone(&procs);
+    super::super::reconcile::on_reconcile(
+        &root,
+        move |inner| {
+            let identity = before_procs.spawn("/fake/engine/bin/postgres");
+            let spec = crate::model::InstanceSpec::new(
+                before_name,
+                EngineKey::Postgresql,
+                "18.7",
+                Some(crate::model::Port::new(port).expect("port")),
+                crate::model::AuthMode::Password,
+            )
+            .expect("spec");
+            let row = crate::model::Instance::new(
+                &spec,
+                before_id,
+                InstanceStatus::Running,
+                std::time::SystemTime::now(),
+            )
+            .with_process(
+                identity.pid(),
+                identity.started_at(),
+                identity.exe().to_path_buf(),
+            );
+            inner
+                .db(|store| store.insert_instance(&row))
+                .expect("insert running row");
+        },
+        |_| {},
+    );
+
+    // Park reconciliation in phase 3 while it holds the guard; the main thread
+    // releases it after the stop has been issued.
+    let (held_tx, held_rx) = std::sync::mpsc::channel::<()>();
+    let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+    let held_tx = std::sync::Mutex::new(held_tx);
+    let release_rx = std::sync::Mutex::new(release_rx);
+    super::super::reconcile::on_guard_held(&root, move |_inner, _id| {
+        let _ = held_tx.lock().expect("held").send(());
+        let _ = release_rx
+            .lock()
+            .expect("release")
+            .recv_timeout(std::time::Duration::from_secs(10));
+    });
+
+    h.service.start_background();
+    held_rx
+        .recv_timeout(std::time::Duration::from_secs(10))
+        .expect("reconciliation must reach the guarded window with the row present");
+
+    // The guard is held now, so the stop must wait on it. Spawn after `held`, so the
+    // row exists and the stop genuinely lands inside the guard window. Subscribe
+    // before the stop starts, so its terminal event is not missed.
+    let mut stop_receiver = h.receiver();
+    let stop_id = id.clone();
+    let stop_service = service.clone();
+    let stop = std::thread::spawn(move || stop_service.stop_instance(&stop_id));
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    assert!(
+        !stop.is_finished(),
+        "the stop must wait for reconciliation, not return while the guard is held"
+    );
+
+    // Release reconciliation; it finishes and drops the guard, and the waiting stop
+    // proceeds.
+    let _ = release_tx.send(());
+    let op = stop
+        .join()
+        .expect("stop thread")
+        .unwrap_or_else(|err| panic!("a stop during reconciliation must be accepted: {err:?}"));
+
+    let run = h.run_on(&mut stop_receiver, op);
+    assert!(
+        matches!(run.result(), Some(Ok(()))),
+        "the stop must finish cleanly: {:?}",
+        run.result()
+    );
+    assert_eq!(
+        h.wait_for_status(&id, InstanceStatus::Stopped).status(),
+        InstanceStatus::Stopped,
+        "the row ends Stopped after the stop waits for reconciliation"
+    );
+}

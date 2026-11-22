@@ -31,6 +31,10 @@ const TARGETS: &[Target] = &[
         test: "service_e2e",
     },
     Target {
+        package: "dblocal-core",
+        test: "service_admin_e2e",
+    },
+    Target {
         package: "dblocal-cli",
         test: "cli_e2e",
     },

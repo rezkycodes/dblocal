@@ -226,6 +226,43 @@ broadcast events; GUI reflection within 2s (F-CLI-02 AC2) therefore depends on
 GUI-side polling/refresh of store state or a future cross-process notification
 mechanism. This worker does not implement GUI behaviour.
 
+## W4-A commands: `db`, `user`, `password`, `update`, `open`
+
+W4-A put the admin, update and open-in-client surface behind `DblService` and
+added these subcommands (`crates/cli/src/commands/{db,user,password,update,open}.rs`).
+The I/O contract is unchanged: stdout is data, stderr the rest, module-local
+`DBL-8xxx` codes drive the exit code via `output::report_facing`.
+
+| Command | stdout | stderr |
+|---|---|---|
+| `db list <instance> [--json]` | the aligned NAME/OWNER/SIZE table, or one JSON array of `{name, owner, size_bytes}` | empty on success |
+| `db create <instance> <name>` | nothing | `Database dibuat.` |
+| `db drop <instance> <name> [--yes \| --confirm <name>]` | nothing | `Database dihapus.` |
+| `user create <instance> <name> --db <db> --level ro\|rw` | the generated password, once | `User dibuat. Simpan password ini…` |
+| `password reset <instance>` | the new connect URI, once | `Password superuser diganti…` |
+| `update check [--json]` | the available version or "up to date"; JSON with `--json` | the package-manager hint, when managed |
+| `update apply [--yes]` | nothing | `Pembaruan dipasang.` |
+| `open <instance> --client <kind> [--dry-run]` | the plan, only with `--dry-run` | the plan header / `Client dibuka.` |
+
+- **`db drop` typed-name confirmation (`F-DBU-01` AC3).** Without `--yes`, the
+  database name must be typed again: `--confirm <name>` must equal `<name>`, or,
+  in an interactive session, the prompt reads it. A mismatch is exit 2 with
+  `Penghapusan dibatalkan: nama database tidak cocok.`; a non-interactive session
+  with no `--yes`/`--confirm` is exit 2 too.
+- **`user create`** prints the password once to stdout and nothing else, like
+  `uri`; `--level` accepts only `ro`/`rw` (anything else is exit 2). A failed
+  GRANT drops the half-created role and reports the grant error's code.
+- **`password reset`** prints the new URI once (re-read from the service after
+  the reset), carrying the new password exactly as `F-DBU-03` AC1 requires.
+- **`update apply`** requires `--yes` on a non-interactive session (exit 2). A
+  package-manager-owned install is refused with `DBL-8008` and the hint line, exit 1.
+- **`open --dry-run`** prints the plan (`program:`, `args:`, maybe `url:` and
+  `launcher:`) and never a password; without `--dry-run` the client is launched
+  through the service.
+- **Exit codes.** A module-local `DBL-8101..8111` (admin validation/engine gate)
+  maps to exit 2, `DBL-8301` (a detected client vanished) to exit 3, `DBL-8300/8303`
+  to exit 2, everything else to exit 1.
+
 ## Tests
 
 - Unit: arg parsing, exit-code table, table/JSON formatters, delete confirmation

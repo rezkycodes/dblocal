@@ -100,6 +100,22 @@ pub fn archive_format(file_name: &str) -> Option<ArchiveFormat> {
     }
 }
 
+/// The single top-level directory an engine archive unpacks into.
+///
+/// Every PostgreSQL, MySQL and MariaDB build names its one root after the
+/// archive stem (`mysql-8.4.11-linux-glibc2.28-x86_64-minimal/`,
+/// `mariadb-11.8.10-winx64/`, ...). Using anything else as `strip_prefix`
+/// leaves `bin/` one level too deep and the extraction's expected-binary check
+/// fails after a real download, so the prefix is always derived from the name.
+pub fn archive_root(file_name: &str) -> Option<String> {
+    for suffix in [".tar.xz", ".tar.gz", ".zip"] {
+        if let Some(stem) = file_name.strip_suffix(suffix) {
+            return Some(stem.to_owned());
+        }
+    }
+    None
+}
+
 /// Assembles and sorts the final document deterministically.
 pub fn assemble(
     mut versions: Vec<CatalogVersion>,
