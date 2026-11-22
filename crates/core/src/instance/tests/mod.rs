@@ -46,7 +46,21 @@ fn created(h: &Harness, name: &str) -> crate::model::Instance {
         }
         assert!(
             std::time::Instant::now() < deadline,
-            "created instance {name} not listed after successful create; events={:?}",
+            "created instance {name} not listed after successful create; \
+             service_view={:?} fresh_view={:?} state_db={} exists={} len={} \
+             events={:?}",
+            h.service
+                .list_instances()
+                .map(|views| views.into_iter().map(|view| view.name).collect::<Vec<_>>()),
+            h.instances()
+                .into_iter()
+                .map(|instance| instance.name().as_str().to_owned())
+                .collect::<Vec<_>>(),
+            h.paths.state_db().display(),
+            h.paths.state_db().exists(),
+            std::fs::metadata(h.paths.state_db())
+                .map(|meta| meta.len())
+                .unwrap_or(0),
             harness::describe(&events)
         );
         std::thread::sleep(std::time::Duration::from_millis(20));

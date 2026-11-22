@@ -252,7 +252,13 @@ pub(crate) fn delete_instance(
     // the order is marker first, claim second; writing it after the compare-and-
     // set leaves a window in which another process's reconciliation sees a
     // `Deleting` row with no owner and mistakes it for a crash.
-    let nonce = format!("{}-{}", std::process::id(), id.as_str());
+    //
+    // The nonce must be unique per operation, not per (process, instance): two
+    // deletes of the same id in one process would otherwise share it, and the
+    // loser's `Drop` would delete the winner's marker. A unique operation id is
+    // what the marker contract ("a per-operation nonce") promises.
+    let op_id = inner.ops.next_id();
+    let nonce = format!("{}-{}", std::process::id(), op_id.as_str());
     let marker = InFlightMarker::create(inner, &inner.paths.instance_dir(instance.name()), &nonce);
 
     // Claim `Deleting` synchronously, like `start_instance` claims `Starting`.
@@ -294,7 +300,7 @@ pub(crate) fn delete_instance(
     // changes in between.
     emit_changed(inner, id);
 
-    let op = inner.ops.next_id();
+    let op = op_id;
     let op_id = op.clone();
     let inner = Arc::clone(inner);
     let id = id.clone();

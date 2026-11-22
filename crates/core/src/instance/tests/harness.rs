@@ -241,6 +241,34 @@ impl Harness {
                 describe(&run.events)
             );
         }
+        // Prove the row is durable before the caller looks it up: a create that
+        // reports success while the row is invisible to a fresh connection is a
+        // product defect, not a test artefact, and must be reported as such.
+        let deadline = std::time::Instant::now() + Duration::from_secs(30);
+        loop {
+            let service_view = self
+                .service
+                .list_instances()
+                .map(|views| views.into_iter().map(|view| view.id).collect::<Vec<_>>());
+            let fresh_view = self
+                .instances()
+                .into_iter()
+                .map(|instance| instance.id().clone())
+                .collect::<Vec<_>>();
+            if !fresh_view.is_empty() {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "create {op} reported success but no row is listed; \
+                 service_view={service_view:?} fresh_view={fresh_view:?} \
+                 state_db={} exists={} events={:?}",
+                self.paths.state_db().display(),
+                self.paths.state_db().exists(),
+                describe(&run.events)
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
         run.events
     }
 
@@ -764,7 +792,11 @@ fn wait_for_finished(
     }
 }
 
-fn row_gone_diagnostic(store: &Store, id: &InstanceId) -> String {
+fn row_gone_diagnostic(paths: &DblPaths, id: &InstanceId) -> String {
+    let store = match Store::open(paths) {
+        Ok(store) => store,
+        Err(err) => return format!("store open failed: {err}"),
+    };
     let row = match store.get_instance(id) {
         Ok(row) => row,
         Err(err) => return format!("store read failed: {err}"),
@@ -772,14 +804,30 @@ fn row_gone_diagnostic(store: &Store, id: &InstanceId) -> String {
     let Some(instance) = row else {
         return "row is gone".to_owned();
     };
-    let marker = super::super::delete::IN_FLIGHT_MARKER;
-    let marker_path = instance.name().as_str().to_owned();
+    let instance_dir = paths.instance_dir(instance.name());
+    let marker_path = instance_dir.join(super::super::delete::IN_FLIGHT_MARKER);
+    let marker = std::fs::read_to_string(&marker_path)
+        .map(|contents| contents.replace('\n', " | "))
+        .unwrap_or_else(|err| format!("<unreadable: {err}>"));
+    let dir_entries: Vec<String> = std::fs::read_dir(&instance_dir)
+        .map(|entries| {
+            entries
+                .flatten()
+                .map(|entry| entry.file_name().to_string_lossy().into_owned())
+                .collect()
+        })
+        .unwrap_or_default();
     format!(
-        "status={:?} pid={:?} started_at={:?} exe={:?} instance_name={marker_path} marker={marker}",
+        "status={:?} pid={:?} started_at={:?} exe={:?} instance={} instance_dir={} \
+         marker_path={} marker=[{marker}] dir={dir_entries:?} db={}",
         instance.status(),
         instance.pid(),
         instance.process_started_at(),
         instance.process_exe(),
+        instance.name().as_str(),
+        instance_dir.display(),
+        marker_path.display(),
+        paths.state_db().display(),
     )
 }
 
@@ -796,7 +844,7 @@ pub fn wait_until_row_gone(h: &Harness, id: &InstanceId, round: usize) {
         assert!(
             std::time::Instant::now() < deadline,
             "round {round}: the row was never removed; {}",
-            row_gone_diagnostic(&h.store(), id)
+            row_gone_diagnostic(&h.paths, id)
         );
         std::thread::sleep(Duration::from_millis(20));
     }
@@ -820,7 +868,7 @@ pub fn wait_for_row_gone(paths: &DblPaths, id: &InstanceId, round: usize) {
         assert!(
             std::time::Instant::now() < deadline,
             "round {round}: the row was never removed; {}",
-            row_gone_diagnostic(&store, id)
+            row_gone_diagnostic(paths, id)
         );
         std::thread::sleep(Duration::from_millis(20));
     }
