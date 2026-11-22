@@ -127,7 +127,11 @@ fn mk_instance(base: &Path, name: &str) -> (PathBuf, PathBuf, PathBuf, PathBuf) 
 }
 
 fn init_ctx(
-    runtime: &Path, data: &Path, port: u16, auth: AuthMode, password: Option<&str>,
+    runtime: &Path,
+    data: &Path,
+    port: u16,
+    auth: AuthMode,
+    password: Option<&str>,
 ) -> dblocal_core::engine::InitContext {
     dblocal_core::engine::InitContext {
         instance_name: "my-e2e".into(),
@@ -141,7 +145,13 @@ fn init_ctx(
 }
 
 fn run_ctx(
-    runtime: &Path, data: &Path, logs: &Path, run: &Path, port: u16, auth: AuthMode, password: Option<&str>,
+    runtime: &Path,
+    data: &Path,
+    logs: &Path,
+    run: &Path,
+    port: u16,
+    auth: AuthMode,
+    password: Option<&str>,
 ) -> dblocal_core::engine::RunContext {
     dblocal_core::engine::RunContext {
         instance_name: "my-e2e".into(),
@@ -152,28 +162,54 @@ fn run_ctx(
         port: Port::new(port).unwrap(),
         superuser: "root".into(),
         auth,
-        credential: password.map(|p| dblocal_core::engine::Credential::new("root", SecretString::from(p))),
+        credential: password
+            .map(|p| dblocal_core::engine::Credential::new("root", SecretString::from(p))),
     }
 }
 
 fn assert_no_password_in_args(cmd: &Command, secret: &str) {
     for arg in cmd.get_args() {
-        assert!(!arg.to_string_lossy().contains(secret), "password leaked in arg: {:?}", arg);
+        assert!(
+            !arg.to_string_lossy().contains(secret),
+            "password leaked in arg: {:?}",
+            arg
+        );
     }
     for (k, v) in cmd.get_envs() {
         if let Some(v) = v {
-            assert!(!v.to_string_lossy().contains(secret), "password leaked in env {:?}", k);
+            assert!(
+                !v.to_string_lossy().contains(secret),
+                "password leaked in env {:?}",
+                k
+            );
         }
     }
 }
 
-fn mysql_start(runtime: &Path, data: &Path, logs: &Path, run: &Path, port: u16, password: &str) -> KillOnDrop {
-    let ctx = run_ctx(runtime, data, logs, run, port, AuthMode::Password, Some(password));
+fn mysql_start(
+    runtime: &Path,
+    data: &Path,
+    logs: &Path,
+    run: &Path,
+    port: u16,
+    password: &str,
+) -> KillOnDrop {
+    let ctx = run_ctx(
+        runtime,
+        data,
+        logs,
+        run,
+        port,
+        AuthMode::Password,
+        Some(password),
+    );
     let cmd = MysqlAdapter.spawn_command(&ctx);
     assert_no_password_in_args(&cmd, password);
     let mut c = Command::new(cmd.get_program());
     c.args(cmd.get_args());
-    c.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+    c.stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
     let child = c.spawn().expect("spawn mysqld");
     KillOnDrop(Some(child), "mysqld")
 }
@@ -182,8 +218,16 @@ fn mysql_client(runtime: &Path, port: u16, password: &str, sql: &str) -> std::pr
     let mysql = runtime.join("bin/mysql");
     Command::new(mysql)
         .args([
-            "--no-defaults", "-h", "127.0.0.1", "-P", &port.to_string(),
-            "-u", "root", "--protocol=TCP", "-Nse", sql,
+            "--no-defaults",
+            "-h",
+            "127.0.0.1",
+            "-P",
+            &port.to_string(),
+            "-u",
+            "root",
+            "--protocol=TCP",
+            "-Nse",
+            sql,
         ])
         .env("MYSQL_PWD", password)
         .stdout(Stdio::piped())
@@ -214,9 +258,11 @@ fn assert_only_instance_loopback_port(pid: u32, expected_port: u16) {
         );
         found_expected = true;
     }
-    assert!(found_expected, "no ss listener found for mysqld pid {pid}; ss:\n{text}");
+    assert!(
+        found_expected,
+        "no ss listener found for mysqld pid {pid}; ss:\n{text}"
+    );
 }
-
 
 #[test]
 #[ignore = "e2e: requires cached MySQL tarball; run with DBLOCAL_E2E_MYSQL=1 under flock"]
@@ -245,7 +291,10 @@ fn mysql_84_full_cycle() {
     assert!(cnf.contains("bind-address=127.0.0.1"));
     assert!(cnf.contains("mysqlx=OFF"));
     assert!(cnf.contains(&format!("port={port}")));
-    assert!(!run.join("dblocal-init.sql").exists(), "init file must be removed");
+    assert!(
+        !run.join("dblocal-init.sql").exists(),
+        "init file must be removed"
+    );
 
     // start
     let mut guard = mysql_start(&rt, &data, &logs, &run, port, pw);
@@ -264,43 +313,91 @@ fn mysql_84_full_cycle() {
 
     // login with password
     let out = mysql_client(&rt, port, pw, "SELECT @@port, @@bind_address, @@version;");
-    assert!(out.status.success(), "login failed: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "login failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(stdout.contains(&port.to_string()));
     assert!(stdout.contains("127.0.0.1"));
     assert!(stdout.contains("8.4.11"));
 
     // create data that must survive restart
-    let out = mysql_client(&rt, port, pw, "CREATE DATABASE dblocal_e2e; CREATE TABLE dblocal_e2e.t(v INT); INSERT INTO dblocal_e2e.t VALUES (42);");
-    assert!(out.status.success(), "seed failed: {}", String::from_utf8_lossy(&out.stderr));
+    let out = mysql_client(
+        &rt,
+        port,
+        pw,
+        "CREATE DATABASE dblocal_e2e; CREATE TABLE dblocal_e2e.t(v INT); INSERT INTO dblocal_e2e.t VALUES (42);",
+    );
+    assert!(
+        out.status.success(),
+        "seed failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
 
     // wrong password rejected
     let bad = Command::new(rt.join("bin/mysql"))
-        .args(["--no-defaults", "-h", "127.0.0.1", "-P", &port.to_string(), "-u", "root", "--protocol=TCP", "-Nse", "SELECT 1"])
+        .args([
+            "--no-defaults",
+            "-h",
+            "127.0.0.1",
+            "-P",
+            &port.to_string(),
+            "-u",
+            "root",
+            "--protocol=TCP",
+            "-Nse",
+            "SELECT 1",
+        ])
         .env("MYSQL_PWD", "wrong-password")
-        .stdout(Stdio::piped()).stderr(Stdio::piped()).output().expect("mysql bad");
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .expect("mysql bad");
     assert!(!bad.status.success(), "wrong password must fail");
     let bad_err = String::from_utf8_lossy(&bad.stderr);
-    assert!(bad_err.contains("Access denied") || bad_err.contains("ERROR 1045"), "unexpected: {bad_err}");
+    assert!(
+        bad_err.contains("Access denied") || bad_err.contains("ERROR 1045"),
+        "unexpected: {bad_err}"
+    );
 
     // stop
     MysqlAdapter.shutdown(&ctx).expect("shutdown");
-    if let Some(mut c) = guard.0.take() { let _ = c.wait(); }
-    assert!(wait_tcp_gone(port, Duration::from_secs(30)), "port still listening");
+    if let Some(mut c) = guard.0.take() {
+        let _ = c.wait();
+    }
+    assert!(
+        wait_tcp_gone(port, Duration::from_secs(30)),
+        "port still listening"
+    );
     let log = read_log_tail(&logs.join("error.log"), 40);
-    assert!(log.contains("Shutdown complete"), "log missing Shutdown complete:\n{log}");
+    assert!(
+        log.contains("Shutdown complete"),
+        "log missing Shutdown complete:\n{log}"
+    );
 
     // restart, data survives
     let mut guard2 = mysql_start(&rt, &data, &logs, &run, port, pw);
-    assert!(wait_tcp(port, Duration::from_secs(30)), "restart did not listen: {}", read_log_tail(&logs.join("error.log"), 80));
+    assert!(
+        wait_tcp(port, Duration::from_secs(30)),
+        "restart did not listen: {}",
+        read_log_tail(&logs.join("error.log"), 80)
+    );
     let h2 = MysqlAdapter.health_check(&ctx).expect("health restart");
     assert!(matches!(h2, dblocal_core::engine::Health::Ready));
     let out = mysql_client(&rt, port, pw, "SELECT v FROM dblocal_e2e.t;");
-    assert!(out.status.success(), "select after restart failed: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "select after restart failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "42");
 
     MysqlAdapter.shutdown(&ctx).expect("shutdown restart");
-    if let Some(mut c) = guard2.0.take() { let _ = c.wait(); }
+    if let Some(mut c) = guard2.0.take() {
+        let _ = c.wait();
+    }
     assert!(wait_tcp_gone(port, Duration::from_secs(30)));
 }
 
@@ -324,30 +421,58 @@ fn mysql_84_two_instances_side_by_side() {
     let pwa = "e2e-mysql-a-pw";
     let pwb = "e2e-mysql-b-pw";
 
-    MysqlAdapter.initialize(&init_ctx(&rt, &da, port_a, AuthMode::Password, Some(pwa))).expect("init a");
-    MysqlAdapter.initialize(&init_ctx(&rt, &db, port_b, AuthMode::Password, Some(pwb))).expect("init b");
+    MysqlAdapter
+        .initialize(&init_ctx(&rt, &da, port_a, AuthMode::Password, Some(pwa)))
+        .expect("init a");
+    MysqlAdapter
+        .initialize(&init_ctx(&rt, &db, port_b, AuthMode::Password, Some(pwb)))
+        .expect("init b");
 
     let mut ga = mysql_start(&rt, &da, &la, &ra, port_a, pwa);
     let mut gb = mysql_start(&rt, &db, &lb, &rb, port_b, pwb);
-    assert!(wait_tcp(port_a, Duration::from_secs(30)), "a not listening: {}", read_log_tail(&la.join("error.log"), 80));
-    assert!(wait_tcp(port_b, Duration::from_secs(30)), "b not listening: {}", read_log_tail(&lb.join("error.log"), 80));
+    assert!(
+        wait_tcp(port_a, Duration::from_secs(30)),
+        "a not listening: {}",
+        read_log_tail(&la.join("error.log"), 80)
+    );
+    assert!(
+        wait_tcp(port_b, Duration::from_secs(30)),
+        "b not listening: {}",
+        read_log_tail(&lb.join("error.log"), 80)
+    );
     assert_only_instance_loopback_port(ga.0.as_ref().unwrap().id(), port_a);
     assert_only_instance_loopback_port(gb.0.as_ref().unwrap().id(), port_b);
 
     let ca = run_ctx(&rt, &da, &la, &ra, port_a, AuthMode::Password, Some(pwa));
     let cb = run_ctx(&rt, &db, &lb, &rb, port_b, AuthMode::Password, Some(pwb));
-    assert!(matches!(MysqlAdapter.health_check(&ca).unwrap(), dblocal_core::engine::Health::Ready));
-    assert!(matches!(MysqlAdapter.health_check(&cb).unwrap(), dblocal_core::engine::Health::Ready));
+    assert!(matches!(
+        MysqlAdapter.health_check(&ca).unwrap(),
+        dblocal_core::engine::Health::Ready
+    ));
+    assert!(matches!(
+        MysqlAdapter.health_check(&cb).unwrap(),
+        dblocal_core::engine::Health::Ready
+    ));
 
     let oa = mysql_client(&rt, port_a, pwa, "SELECT @@port;");
     let ob = mysql_client(&rt, port_b, pwb, "SELECT @@port;");
-    assert_eq!(String::from_utf8_lossy(&oa.stdout).trim(), port_a.to_string());
-    assert_eq!(String::from_utf8_lossy(&ob.stdout).trim(), port_b.to_string());
+    assert_eq!(
+        String::from_utf8_lossy(&oa.stdout).trim(),
+        port_a.to_string()
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&ob.stdout).trim(),
+        port_b.to_string()
+    );
 
     MysqlAdapter.shutdown(&ca).expect("stop a");
     MysqlAdapter.shutdown(&cb).expect("stop b");
-    if let Some(mut c) = ga.0.take() { let _ = c.wait(); }
-    if let Some(mut c) = gb.0.take() { let _ = c.wait(); }
+    if let Some(mut c) = ga.0.take() {
+        let _ = c.wait();
+    }
+    if let Some(mut c) = gb.0.take() {
+        let _ = c.wait();
+    }
     assert!(wait_tcp_gone(port_a, Duration::from_secs(30)));
     assert!(wait_tcp_gone(port_b, Duration::from_secs(30)));
 }
@@ -366,16 +491,27 @@ fn mysql_84_spawn_argv_has_no_password_canary() {
     require_port_free(port);
     let (_, data, logs, run) = mk_instance(tmp.path(), "canary");
     let pw = "canary-secret-mysql-pw";
-    MysqlAdapter.initialize(&init_ctx(&rt, &data, port, AuthMode::Password, Some(pw))).expect("init");
+    MysqlAdapter
+        .initialize(&init_ctx(&rt, &data, port, AuthMode::Password, Some(pw)))
+        .expect("init");
     let mut guard = mysql_start(&rt, &data, &logs, &run, port, pw);
-    assert!(wait_tcp(port, Duration::from_secs(30)), "listen: {}", read_log_tail(&logs.join("error.log"), 80));
+    assert!(
+        wait_tcp(port, Duration::from_secs(30)),
+        "listen: {}",
+        read_log_tail(&logs.join("error.log"), 80)
+    );
     // argv check is done in mysql_start; also check /proc/cmdline of the process.
     let pid = guard.0.as_ref().unwrap().id();
     let cmdline = fs::read(format!("/proc/{pid}/cmdline")).unwrap_or_default();
     let cmdline_s = String::from_utf8_lossy(&cmdline);
-    assert!(!cmdline_s.contains(pw), "password leaked in /proc/cmdline: {cmdline_s:?}");
+    assert!(
+        !cmdline_s.contains(pw),
+        "password leaked in /proc/cmdline: {cmdline_s:?}"
+    );
     let ctx = run_ctx(&rt, &data, &logs, &run, port, AuthMode::Password, Some(pw));
     MysqlAdapter.shutdown(&ctx).expect("shutdown");
-    if let Some(mut c) = guard.0.take() { let _ = c.wait(); }
+    if let Some(mut c) = guard.0.take() {
+        let _ = c.wait();
+    }
     assert!(wait_tcp_gone(port, Duration::from_secs(30)));
 }

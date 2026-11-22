@@ -100,10 +100,10 @@ impl EngineAdapter for MysqlAdapter {
         cmd.stdin(Stdio::null());
         cmd.stdout(Stdio::piped());
         cmd.stderr(Stdio::piped());
-        if ctx.auth == AuthMode::Password {
-            if let Some(cred) = ctx.credential.as_ref() {
-                cmd.env("MYSQL_PWD", cred.password.expose());
-            }
+        if ctx.auth == AuthMode::Password
+            && let Some(cred) = ctx.credential.as_ref()
+        {
+            cmd.env("MYSQL_PWD", cred.password.expose());
         }
         strip_password_env_keep_mysql_pwd(&mut cmd);
         let out = cmd.output().map_err(|e| DblError::Engine {
@@ -482,11 +482,10 @@ fn combined_output(stdout: Vec<u8>, stderr: Vec<u8>) -> String {
 }
 
 fn tcp_connects(port: u16) -> bool {
-    TcpStream::connect_timeout(
-        &format!("{BIND}:{port}").parse().expect("loopback addr"),
-        Duration::from_millis(250),
-    )
-    .is_ok()
+    let Ok(addr) = format!("{BIND}:{port}").parse() else {
+        return false;
+    };
+    TcpStream::connect_timeout(&addr, Duration::from_millis(250)).is_ok()
 }
 
 fn read_log_tail(path: &Path, max_lines: usize) -> String {
@@ -508,10 +507,12 @@ pub enum Handshake {
 /// Reads the first MySQL server packet (greeting or ERR) over TCP loopback.
 pub fn read_handshake(port: u16, timeout: Duration) -> Result<Handshake> {
     let addr = format!("{BIND}:{port}");
-    let mut stream = TcpStream::connect_timeout(&addr.parse().expect("loopback"), timeout)
-        .map_err(|e| DblError::Engine {
-            reason: format!("cannot connect to mysql on {addr}: {e}"),
-        })?;
+    let socket_addr = addr.parse().map_err(|e| DblError::Engine {
+        reason: format!("invalid mysql address {addr}: {e}"),
+    })?;
+    let mut stream = TcpStream::connect_timeout(&socket_addr, timeout).map_err(|e| DblError::Engine {
+        reason: format!("cannot connect to mysql on {addr}: {e}"),
+    })?;
     let _ = stream.set_read_timeout(Some(timeout));
     let mut hdr = [0u8; 4];
     stream.read_exact(&mut hdr).map_err(|e| DblError::Engine {
@@ -694,8 +695,11 @@ mod tests {
     #[test]
     fn render_my_cnf_contains_required_security_settings() {
         let cnf = render_my_cnf(&MyCnfParams {
-            port: 42345, data_dir: Path::new("/i/data"), run_dir: Path::new("/i/run"),
-            logs_dir: Path::new("/i/logs"), runtime_dir: Path::new("/rt/mysql"),
+            port: 42345,
+            data_dir: Path::new("/i/data"),
+            run_dir: Path::new("/i/run"),
+            logs_dir: Path::new("/i/logs"),
+            runtime_dir: Path::new("/rt/mysql"),
         });
         assert!(cnf.contains("bind-address=127.0.0.1\n"));
         assert!(cnf.contains("port=42345\n"));
@@ -713,7 +717,10 @@ mod tests {
     fn spawn_command_uses_defaults_file_and_no_password() {
         let ctx = run_ctx(42345, AuthMode::Password, Some(SECRET));
         let cmd = MysqlAdapter.spawn_command(&ctx);
-        let args: Vec<String> = cmd.get_args().map(|a| a.to_string_lossy().into_owned()).collect();
+        let args: Vec<String> = cmd
+            .get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
         assert_eq!(args.len(), 1);
         assert!(args[0].starts_with("--defaults-file="));
         assert!(args[0].contains("/run/my.cnf"));
@@ -743,7 +750,9 @@ mod tests {
     fn init_sql_password_mode_sets_both_hosts_and_flushes() {
         let ctx = init_ctx(42345, AuthMode::Password, Some(SECRET));
         let s = render_init_sql(&ctx).expect("sql").expose().to_owned();
-        assert!(s.contains("ALTER USER 'root'@'localhost' IDENTIFIED BY 'S3cret-Canary-Pw-MySql!9x';"));
+        assert!(
+            s.contains("ALTER USER 'root'@'localhost' IDENTIFIED BY 'S3cret-Canary-Pw-MySql!9x';")
+        );
         assert!(s.contains("CREATE USER IF NOT EXISTS 'root'@'127.0.0.1' IDENTIFIED BY 'S3cret-Canary-Pw-MySql!9x';"));
         assert!(s.contains("GRANT ALL PRIVILEGES ON *.* TO 'root'@'127.0.0.1' WITH GRANT OPTION;"));
         assert!(s.contains("FLUSH PRIVILEGES;"));
@@ -777,7 +786,13 @@ mod tests {
     fn validate_socket_path_len_rejects_long_path() {
         let long = PathBuf::from(format!("/tmp/{}/mysqld-3306.sock", "x".repeat(120)));
         let err = validate_socket_path_len(&long).unwrap_err();
-        assert!(matches!(err, DblError::InvalidInput { field: "socket", .. }));
+        assert!(matches!(
+            err,
+            DblError::InvalidInput {
+                field: "socket",
+                ..
+            }
+        ));
     }
 
     #[test]
@@ -792,7 +807,9 @@ mod tests {
     fn parse_handshake_real_greeting_packet_fixture() {
         // Captured from mysqld 8.4.11 minimal, 127.0.0.1:41108, 2026-11-22.
         // Full packet: 4-byte header + 74-byte payload (protocol 10, 8.4.11, caching_sha2_password).
-        let pkt = hex_to_bytes("4a0000000a382e342e3131000a0000002b452a0f663f0b7e00ffffff0200ffdf15000000000000000000002f793f2347727f7a046f1b720063616368696e675f736861325f70617373776f726400");
+        let pkt = hex_to_bytes(
+            "4a0000000a382e342e3131000a0000002b452a0f663f0b7e00ffffff0200ffdf15000000000000000000002f793f2347727f7a046f1b720063616368696e675f736861325f70617373776f726400",
+        );
         let payload = &pkt[4..];
         assert_eq!(payload[0], 10);
         assert_eq!(parse_handshake_payload(payload).unwrap(), Handshake::Ready);
@@ -801,7 +818,9 @@ mod tests {
     #[test]
     fn parse_handshake_real_err_1130_host_not_allowed_is_ready() {
         // Captured from mysqld 8.4.11 minimal before root@127.0.0.1 existed.
-        let pkt = hex_to_bytes("42000000ff6a04486f737420273132372e302e302e3127206973206e6f7420616c6c6f77656420746f20636f6e6e65637420746f2074686973204d7953514c20736572766572");
+        let pkt = hex_to_bytes(
+            "42000000ff6a04486f737420273132372e302e302e3127206973206e6f7420616c6c6f77656420746f20636f6e6e65637420746f2074686973204d7953514c20736572766572",
+        );
         let payload = &pkt[4..];
         assert_eq!(payload[0], 0xFF);
         assert_eq!(parse_handshake_payload(payload).unwrap(), Handshake::Ready);
@@ -816,33 +835,74 @@ mod tests {
 
     #[test]
     fn parse_handshake_auth_challenges_are_ready() {
-        let mut p1045 = vec![0xFF, 0x15, 0x04, b'#']; p1045.extend_from_slice(b"28000Access denied for user 'root'@'127.0.0.1'");
+        let mut p1045 = vec![0xFF, 0x15, 0x04, b'#'];
+        p1045.extend_from_slice(b"28000Access denied for user 'root'@'127.0.0.1'");
         assert_eq!(parse_handshake_payload(&p1045).unwrap(), Handshake::Ready);
-        let mut p1130 = vec![0xFF, 0x6A, 0x04, b'#']; p1130.extend_from_slice(b"HY000Host '127.0.0.1' is not allowed to connect to this MySQL server");
+        let mut p1130 = vec![0xFF, 0x6A, 0x04, b'#'];
+        p1130.extend_from_slice(
+            b"HY000Host '127.0.0.1' is not allowed to connect to this MySQL server",
+        );
         assert_eq!(parse_handshake_payload(&p1130).unwrap(), Handshake::Ready);
     }
 
     #[test]
     fn parse_handshake_other_err_empty_unknown_no_panic() {
-        let mut other = vec![0xFF, 0x10, 0x04, b'#']; other.extend_from_slice(b"HY000Too many connections");
-        assert!(matches!(parse_handshake_payload(&other).unwrap(), Handshake::NotReady(_)));
-        assert!(matches!(parse_handshake_payload(&[]).unwrap(), Handshake::NotReady(_)));
-        assert!(matches!(parse_handshake_payload(&[0xFE, 0, 0]).unwrap(), Handshake::NotReady(_)));
-        assert!(matches!(parse_handshake_payload(&[0xFF]).unwrap(), Handshake::NotReady(_) | Handshake::Ready));
+        let mut other = vec![0xFF, 0x10, 0x04, b'#'];
+        other.extend_from_slice(b"HY000Too many connections");
+        assert!(matches!(
+            parse_handshake_payload(&other).unwrap(),
+            Handshake::NotReady(_)
+        ));
+        assert!(matches!(
+            parse_handshake_payload(&[]).unwrap(),
+            Handshake::NotReady(_)
+        ));
+        assert!(matches!(
+            parse_handshake_payload(&[0xFE, 0, 0]).unwrap(),
+            Handshake::NotReady(_)
+        ));
+        assert!(matches!(
+            parse_handshake_payload(&[0xFF]).unwrap(),
+            Handshake::NotReady(_) | Handshake::Ready
+        ));
         let big = vec![10u8; 1024 * 1024];
         assert_eq!(parse_handshake_payload(&big).unwrap(), Handshake::Ready);
     }
 
     fn diag_cases() -> Vec<(&'static str, StartFailure)> {
         vec![
-            ("2026-11-21T23:56:30.686109Z 0 [ERROR] [MY-010262] [Server] Can't start server: Bind on TCP/IP port: Address already in use\n2026-11-21T23:56:30.686124Z 0 [ERROR] [MY-010257] [Server] Do you already have another mysqld server running on port: 41102 ?\n", StartFailure::PortInUse),
-            ("Can't create test file /tmp/x/ro/mysqld_tmp_file_case_insensitive_test.lower-test\nmysqld: File './binlog.index' not found (OS errno 13 - Permission denied)\n", StartFailure::PermissionDenied),
-            ("2026-11-21T23:56:34.517296Z 0 [ERROR] [MY-010267] [Server] The socket file path is too long (> 107): /tmp/very/long/path/mysqld.sock\n", StartFailure::Unknown),
-            ("2026-11-21T23:56:33.765723Z 0 [ERROR] [MY-000058] [Server] Unknown suffix 'n' used for variable 'port' (value 'not-a-number').\n", StartFailure::Unknown),
-            ("2026-11-21T23:56:32.516055Z 1 [ERROR] [MY-012646] [InnoDB] File ./ibdata1: 'open' returned OS error 71. Cannot continue operation\n2026-11-21T23:56:32.516068Z 1 [ERROR] [MY-012981] [InnoDB] Cannot continue operation.\n", StartFailure::Unknown),
-            ("2026-11-21T23:56:32.767385Z 1 [ERROR] [MY-012263] [InnoDB] The Auto-extending innodb_system data file './ibdata1' is of a different size 0 pages\n2026-11-21T23:56:33.268000Z 0 [ERROR] [MY-010020] [Server] Data Dictionary initialization failed.\n", StartFailure::Unknown),
-            ("mysqld: error while loading shared libraries: libfoo.so.1: cannot open shared object file: No such file or directory\n", StartFailure::BinaryMissing),
-            ("bash: /opt/mysql/bin/mysqld: No such file or directory\n", StartFailure::BinaryMissing),
+            (
+                "2026-11-21T23:56:30.686109Z 0 [ERROR] [MY-010262] [Server] Can't start server: Bind on TCP/IP port: Address already in use\n2026-11-21T23:56:30.686124Z 0 [ERROR] [MY-010257] [Server] Do you already have another mysqld server running on port: 41102 ?\n",
+                StartFailure::PortInUse,
+            ),
+            (
+                "Can't create test file /tmp/x/ro/mysqld_tmp_file_case_insensitive_test.lower-test\nmysqld: File './binlog.index' not found (OS errno 13 - Permission denied)\n",
+                StartFailure::PermissionDenied,
+            ),
+            (
+                "2026-11-21T23:56:34.517296Z 0 [ERROR] [MY-010267] [Server] The socket file path is too long (> 107): /tmp/very/long/path/mysqld.sock\n",
+                StartFailure::Unknown,
+            ),
+            (
+                "2026-11-21T23:56:33.765723Z 0 [ERROR] [MY-000058] [Server] Unknown suffix 'n' used for variable 'port' (value 'not-a-number').\n",
+                StartFailure::Unknown,
+            ),
+            (
+                "2026-11-21T23:56:32.516055Z 1 [ERROR] [MY-012646] [InnoDB] File ./ibdata1: 'open' returned OS error 71. Cannot continue operation\n2026-11-21T23:56:32.516068Z 1 [ERROR] [MY-012981] [InnoDB] Cannot continue operation.\n",
+                StartFailure::Unknown,
+            ),
+            (
+                "2026-11-21T23:56:32.767385Z 1 [ERROR] [MY-012263] [InnoDB] The Auto-extending innodb_system data file './ibdata1' is of a different size 0 pages\n2026-11-21T23:56:33.268000Z 0 [ERROR] [MY-010020] [Server] Data Dictionary initialization failed.\n",
+                StartFailure::Unknown,
+            ),
+            (
+                "mysqld: error while loading shared libraries: libfoo.so.1: cannot open shared object file: No such file or directory\n",
+                StartFailure::BinaryMissing,
+            ),
+            (
+                "bash: /opt/mysql/bin/mysqld: No such file or directory\n",
+                StartFailure::BinaryMissing,
+            ),
         ]
     }
 
@@ -855,13 +915,22 @@ mod tests {
 
     #[test]
     fn diagnose_unknown_for_unrelated_text() {
-        assert_eq!(diagnose_failure_text("2026-11-21T00:00:00Z 0 [Note] [MY-000000] [Server] some note\n"), StartFailure::Unknown);
+        assert_eq!(
+            diagnose_failure_text("2026-11-21T00:00:00Z 0 [Note] [MY-000000] [Server] some note\n"),
+            StartFailure::Unknown
+        );
     }
 
     #[test]
     fn init_sql_requires_password_when_auth_password() {
         let ctx = init_ctx(3306, AuthMode::Password, None);
         let err = render_init_sql(&ctx).unwrap_err();
-        assert!(matches!(err, DblError::InvalidInput { field: "password", .. }));
+        assert!(matches!(
+            err,
+            DblError::InvalidInput {
+                field: "password",
+                ..
+            }
+        ));
     }
 }
