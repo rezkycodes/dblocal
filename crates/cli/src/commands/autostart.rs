@@ -109,17 +109,56 @@ fn print_status(
 /// back to a service-only pass that starts the flagged instances and exits with
 /// a clear message when there is nothing to keep alive.
 pub fn run_login_mode(_headless: bool) -> u8 {
-    if dblocal_gui::gui_unavailable_reason().is_none() {
-        return match dblocal_gui::run_autostart() {
+    let mut stderr = std::io::stderr().lock();
+    let service = build_login_service().map_err(|e| e.to_string());
+    run_login_mode_with(
+        &mut stderr,
+        dblocal_gui::gui_unavailable_reason().is_none(),
+        &|err| {
+            let service = service.as_ref().map_err(|e: &String| e.clone())?;
+            report_pass(service, err)
+        },
+        &|| match dblocal_gui::run_autostart() {
             Ok(()) => EXIT_OK,
             Err(err) => {
                 eprintln!("{}", err.diagnostic());
                 EXIT_GENERAL
             }
-        };
+        },
+    )
+}
+
+/// Builds the production service for a headless login pass.
+pub fn build_login_service() -> dblocal_core::Result<Arc<dyn dblocal_core::service::DblService>> {
+    build_service_for_paths(dblocal_core::paths::DblPaths::from_env()?)
+}
+
+/// Builds a service over explicit paths; testable with a temp root.
+pub fn build_service_for_paths(
+    paths: dblocal_core::paths::DblPaths,
+) -> dblocal_core::Result<Arc<dyn dblocal_core::service::DblService>> {
+    let service = dblocal_core::service::LocalService::new(
+        paths,
+        dblocal_core::service::ServiceOptions::default(),
+    )?;
+    Ok(Arc::new(service))
+}
+
+/// Decides and runs the login mode with injectable seams.
+///
+/// `gui_available` is true when a display and the main thread are usable;
+/// `headless` runs the service-only pass into the writer; `gui` runs the
+/// tray-only GUI path. The decision itself is what the tests pin.
+pub fn run_login_mode_with(
+    err: &mut dyn Write,
+    gui_available: bool,
+    headless: &dyn Fn(&mut dyn Write) -> Result<u8, String>,
+    gui: &dyn Fn() -> u8,
+) -> u8 {
+    if gui_available {
+        return gui();
     }
-    let mut err = std::io::stderr().lock();
-    match run_login_mode_headless(&mut err) {
+    match headless(err) {
         Ok(code) => code,
         Err(message) => {
             let _ = writeln!(err, "{message}");
@@ -128,24 +167,24 @@ pub fn run_login_mode(_headless: bool) -> u8 {
     }
 }
 
-fn run_login_mode_headless<W: Write>(err: &mut W) -> Result<u8, String> {
-    let paths = dblocal_core::paths::DblPaths::from_env().map_err(|e| e.to_string())?;
-    let service = dblocal_core::service::LocalService::new(
-        paths,
-        dblocal_core::service::ServiceOptions::default(),
-    )
-    .map_err(|e| e.to_string())?;
-    let service: Arc<dyn dblocal_core::service::DblService> = Arc::new(service);
-    let pass = autostart::run_pass(&service, false).map_err(|e| e.to_string())?;
-    match pass.mode {
+/// Starts flagged instances and writes the presentation message.
+fn report_pass(
+    service: &Arc<dyn dblocal_core::service::DblService>,
+    err: &mut dyn Write,
+) -> Result<u8, String> {
+    let pass = autostart::run_pass(service, false).map_err(|e| e.to_string())?;
+    let (code, message) = headless_outcome(pass.mode);
+    let _ = writeln!(err, "{message}");
+    Ok(code)
+}
+
+/// The exit code and message for a decided mode, pure so it can be tested.
+pub fn headless_outcome(mode: AutostartMode) -> (u8, &'static str) {
+    match mode {
         AutostartMode::TrayOnly | AutostartMode::HeadlessKeepAlive => {
-            let _ = writeln!(err, "{}", autostart::messages::MODE_HEADLESS_KEEP);
-            Ok(EXIT_OK)
+            (EXIT_OK, autostart::messages::MODE_HEADLESS_KEEP)
         }
-        AutostartMode::HeadlessExit => {
-            let _ = writeln!(err, "{}", autostart::messages::MODE_EXIT_NO_INSTANCES);
-            Ok(EXIT_OK)
-        }
+        AutostartMode::HeadlessExit => (EXIT_OK, autostart::messages::MODE_EXIT_NO_INSTANCES),
     }
 }
 
@@ -309,5 +348,120 @@ mod tests {
                 | dblocal_core::platform::Os::Macos
                 | dblocal_core::platform::Os::Windows
         ));
+    }
+
+    #[test]
+    fn a_gui_available_run_takes_the_gui_path() {
+        let mut err = Vec::new();
+        let headless_called = std::cell::Cell::new(false);
+        let code = run_login_mode_with(
+            &mut err,
+            true,
+            &|_w: &mut dyn Write| {
+                headless_called.set(true);
+                Ok(EXIT_OK)
+            },
+            &|| EXIT_OK,
+        );
+        assert_eq!(code, EXIT_OK);
+        assert!(
+            !headless_called.get(),
+            "the GUI path must not run the headless pass"
+        );
+    }
+
+    #[test]
+    fn a_headless_run_reports_the_pass_and_never_the_gui() {
+        let mut err = Vec::new();
+        let code = run_login_mode_with(
+            &mut err,
+            false,
+            &|w: &mut dyn Write| {
+                let _ = writeln!(w, "{}", autostart::messages::MODE_HEADLESS_KEEP);
+                Ok(EXIT_OK)
+            },
+            &|| panic!("the GUI path must not run headless"),
+        );
+        assert_eq!(code, EXIT_OK);
+        assert!(
+            String::from_utf8_lossy(&err).contains("Autostart: tray tidak tersedia")
+                || String::from_utf8_lossy(&err).contains("Autostart")
+        );
+    }
+
+    #[test]
+    fn a_headless_error_is_printed_and_exits_one() {
+        let mut err = Vec::new();
+        let code = run_login_mode_with(
+            &mut err,
+            false,
+            &|_: &mut dyn Write| Err("DBL-8500 tidak didukung".to_owned()),
+            &|| EXIT_OK,
+        );
+        assert_eq!(code, EXIT_GENERAL);
+        assert!(String::from_utf8_lossy(&err).contains("DBL-8500"));
+    }
+
+    #[test]
+    fn headless_outcome_covers_every_mode() {
+        assert_eq!(
+            headless_outcome(AutostartMode::TrayOnly).1,
+            autostart::messages::MODE_HEADLESS_KEEP
+        );
+        assert_eq!(
+            headless_outcome(AutostartMode::HeadlessKeepAlive).1,
+            autostart::messages::MODE_HEADLESS_KEEP
+        );
+        assert_eq!(
+            headless_outcome(AutostartMode::HeadlessExit).1,
+            autostart::messages::MODE_EXIT_NO_INSTANCES
+        );
+    }
+
+    #[test]
+    fn status_through_the_real_host_backend_is_read_only_and_returns_a_status() {
+        // `status` only reads the host login-item state (no enable/disable), so
+        // it is safe to run against the real config root and covers the host
+        // backend construction path.
+        let mut out: Vec<u8> = Vec::new();
+        let mut err: Vec<u8> = Vec::new();
+        let code = run_action(&mut out, &mut err, "status", true);
+        // Either a status line or a typed backend error, never a panic.
+        assert!(code == EXIT_OK || code == EXIT_GENERAL);
+        if code == EXIT_OK {
+            let value: serde_json::Value =
+                serde_json::from_str(String::from_utf8_lossy(&out).trim()).expect("json status");
+            assert!(value.get("enabled").is_some());
+        } else {
+            assert!(!err.is_empty(), "a failure must explain itself on stderr");
+        }
+    }
+
+    #[test]
+    fn a_pass_over_a_temp_service_writes_a_presentation_message() {
+        let home = tempfile::tempdir().expect("tempdir");
+        let paths = dblocal_core::paths::DblPaths::with_root(home.path());
+        let service: Arc<dyn dblocal_core::service::DblService> = Arc::new(
+            dblocal_core::service::LocalService::new(
+                paths,
+                dblocal_core::service::ServiceOptions::default(),
+            )
+            .expect("service"),
+        );
+        let mut err: Vec<u8> = Vec::new();
+        let code = report_pass(&service, &mut err).expect("pass");
+        assert_eq!(code, EXIT_OK);
+        assert!(
+            String::from_utf8_lossy(&err).contains("Autostart"),
+            "a presentation message must be written"
+        );
+    }
+
+    #[test]
+    fn build_service_for_paths_opens_over_a_temp_root() {
+        let home = tempfile::tempdir().expect("tempdir");
+        let paths = dblocal_core::paths::DblPaths::with_root(home.path());
+        let service = build_service_for_paths(paths).expect("service over a temp root");
+        assert!(service.list_instances().is_ok());
     }
 }
