@@ -4,8 +4,9 @@ use std::time::SystemTime;
 use dblocal_core::catalog::{CatalogArtifact, CatalogDocument, CatalogVersion, validate_document};
 
 use super::sources::{
-    self, CATALOG_SOURCE_URL, HttpSource, MysqlBuild, Source, WAVE_ONE_POSTGRESQL, WAVE_ONE_VALKEY,
-    WAVE_ONE_VARIANTS, assemble,
+    self, CATALOG_SOURCE_URL, HttpSource, MysqlBuild, Source, WAVE_ONE_MARIADB, WAVE_ONE_MYSQL,
+    WAVE_ONE_POSTGRESQL, WAVE_ONE_VALKEY, WAVE_ONE_VARIANTS, assemble, mariadb_api_url,
+    mysql_wave_one_builds,
 };
 
 /// Which engines to fetch from upstream.
@@ -20,12 +21,12 @@ pub struct BuildSelection {
     /// MySQL builds to download and hash, as `(build, version)`.
     ///
     /// Upstream publishes no SHA-256 for MySQL, so the builder downloads each
-    /// archive once and records the computed hash. Wave 1 leaves this empty.
+    /// archive once and records the computed hash.
     pub mysql: Vec<(MysqlBuild, String)>,
 }
 
 impl BuildSelection {
-    /// The scope published in Wave 1: PostgreSQL and Valkey only.
+    /// The scope this wave publishes: all four engines.
     pub fn wave_one() -> Self {
         Self {
             postgresql: WAVE_ONE_POSTGRESQL
@@ -33,8 +34,14 @@ impl BuildSelection {
                 .map(|tag| (*tag).to_owned())
                 .collect(),
             valkey: Some(WAVE_ONE_VALKEY.to_owned()),
-            mariadb: Vec::new(),
-            mysql: Vec::new(),
+            mariadb: WAVE_ONE_MARIADB
+                .iter()
+                .map(|version| (mariadb_api_url(version), (*version).to_owned()))
+                .collect(),
+            mysql: mysql_wave_one_builds()
+                .into_iter()
+                .map(|build| (build, WAVE_ONE_MYSQL.to_owned()))
+                .collect(),
         }
     }
 }
@@ -160,9 +167,8 @@ pub fn build(
     }
 
     for (api_url, version) in &selection.mariadb {
-        let text = source.get_text(api_url).map_err(|err| err.to_string())?;
-        let release: sources::MariadbRelease =
-            serde_json::from_str(&text).map_err(|err| format!("MariaDB release JSON: {err}"))?;
+        let release = sources::mariadb_release_from_api(source, api_url, version)
+            .map_err(|err| err.to_string())?;
         let (v, a) = sources::mariadb_from_api(&release, version).map_err(|err| err.to_string())?;
         versions.extend(v);
         artifacts.extend(a);
@@ -294,10 +300,53 @@ mod tests {
                     sizes.insert((url.clone(), enc), size);
                 }
             }
+
+            // MariaDB: the fixture returns a null size for the server tarballs,
+            // so the builder's HEAD lookup is served from here. Each published
+            // version gets its own release body.
+            for (fixture, version) in [
+                ("mariadb-release.json", "11.8.10"),
+                ("mariadb-release-11.4.json", "11.4.14"),
+            ] {
+                let body = std::fs::read_to_string(format!("{base}/{fixture}"))
+                    .expect("mariadb release fixture");
+                text.insert(sources::mariadb_api_url(version), body);
+            }
+            for name in [
+                "mariadb-11.8.10-linux-systemd-x86_64.tar.gz",
+                "mariadb-11.8.10-winx64.zip",
+                "mariadb-11.4.14-linux-systemd-x86_64.tar.gz",
+                "mariadb-11.4.14-winx64.zip",
+            ] {
+                sizes.insert(
+                    (
+                        format!("https://example.test/mariadb/{name}"),
+                        sources::ENCODING_IDENTITY.to_owned(),
+                    ),
+                    1024,
+                );
+            }
+
+            // MySQL: every published build shares the tiny fixture archive; the
+            // .md5 sidecar is computed from those exact bytes so the cross-check
+            // the builder performs is genuinely exercised.
+            let mysql_bytes =
+                std::fs::read(format!("{base}/mysql-archive.bin")).expect("mysql archive fixture");
+            let mysql_md5 = sources::mysql_md5_hex(&mysql_bytes);
+            let mut mysql_bytes_map = BTreeMap::new();
+            for build in sources::mysql_wave_one_builds() {
+                let url = format!("{}/{}", build.base_url, build.file_name);
+                text.insert(
+                    format!("{url}.md5"),
+                    format!("{mysql_md5}  {}\n", build.file_name),
+                );
+                mysql_bytes_map.insert(url, mysql_bytes.clone());
+            }
+
             Self {
                 text,
                 text_by_encoding,
-                bytes: BTreeMap::new(),
+                bytes: mysql_bytes_map,
                 sizes,
             }
         }
@@ -451,9 +500,11 @@ mod tests {
         )
         .expect("build wave one");
         dblocal_core::catalog::validate_document(&document).expect("valid");
-        assert_eq!(document.versions.len(), 4);
-        // Wave 1 publishes Valkey jammy only: 18 PostgreSQL + 2 Valkey.
-        assert_eq!(document.artifacts.len(), 20);
+        // 3 PostgreSQL lines + Valkey + 2 MariaDB + MySQL (one version, four
+        // builds across OS/arch).
+        assert_eq!(document.versions.len(), 7);
+        // 18 PostgreSQL + 2 Valkey + (2 MariaDB versions x 2 targets) + 4 MySQL.
+        assert_eq!(document.artifacts.len(), 28);
 
         let json = serde_json::to_string_pretty(&document).expect("encode");
         let again = build(
@@ -489,6 +540,9 @@ mod tests {
             "postgresql\t17.12.0\t6\t",
             "postgresql\t16.16.0\t6\t",
             "valkey\t9.2.0\t2\t",
+            "mariadb\t11.8.10\t2\t",
+            "mariadb\t11.4.14\t2\t",
+            "mysql\t8.4.11\t4\t",
         ] {
             assert!(summary.contains(needle), "missing {needle} in {summary}");
         }
@@ -496,7 +550,24 @@ mod tests {
 
     #[test]
     fn mariadb_and_mysql_selections_reach_the_assembled_document() {
-        let mariadb_url = "https://example.test/mariadb/11.8.10";
+        // `wave_one()` already serves the MariaDB fixtures and every MySQL build
+        // from `mysql-archive.bin` with a matching `.md5`, so this proves the two
+        // adapters reach the assembled document without hand-built URLs.
+        let source = FixtureSource::wave_one();
+        let selection = BuildSelection {
+            postgresql: Vec::new(),
+            valkey: None,
+            mariadb: vec![(sources::mariadb_api_url("11.8.10"), "11.8.10".to_owned())],
+            mysql: sources::mysql_wave_one_builds()
+                .into_iter()
+                .map(|build| (build, sources::WAVE_ONE_MYSQL.to_owned()))
+                .collect(),
+        };
+        let document = build(&source, &selection, None).expect("build");
+        dblocal_core::catalog::validate_document(&document).expect("valid");
+        assert!(document.versions.iter().any(|v| v.engine == "mariadb"));
+        assert!(document.versions.iter().any(|v| v.engine == "mysql"));
+
         let meta: Value = serde_json::from_str(
             &std::fs::read_to_string(format!(
                 "{}/tests/fixtures/mysql-sidecar.json",
@@ -505,43 +576,24 @@ mod tests {
             .expect("meta"),
         )
         .expect("parse meta");
-        let file_name = meta["file_name"].as_str().expect("file_name").to_owned();
-        let archive_url = format!("https://example.test/mysql/{file_name}");
-        let md5_url = format!("{archive_url}.md5");
-
-        let mut source = FixtureSource::wave_one()
-            .with_fixture("mariadb-release.json", mariadb_url)
-            .with_text(&md5_url, meta["md5_text"].as_str().expect("md5"));
-        source = source.with_binary("mysql-archive.bin", &archive_url);
-
-        let selection = BuildSelection {
-            postgresql: Vec::new(),
-            valkey: None,
-            mariadb: vec![(mariadb_url.to_owned(), "11.8.10".to_owned())],
-            mysql: vec![(
-                MysqlBuild {
-                    file_name: file_name.clone(),
-                    os: dblocal_core::platform::Os::Linux,
-                    arch: dblocal_core::platform::Arch::X86_64,
-                    format: dblocal_core::model::ArchiveFormat::TarXz,
-                    base_url: "https://example.test/mysql".to_owned(),
-                },
-                "8.4.11".to_owned(),
-            )],
-        };
-        let document = build(&source, &selection, None).expect("build");
-        dblocal_core::catalog::validate_document(&document).expect("valid");
-        assert!(document.versions.iter().any(|v| v.engine == "mariadb"));
-        assert!(document.versions.iter().any(|v| v.engine == "mysql"));
-        assert_eq!(
-            document
-                .artifacts
-                .iter()
-                .find(|a| a.engine == "mysql")
-                .expect("mysql artifact")
-                .sha256,
-            meta["sha256"].as_str().expect("sha256")
-        );
+        let mysql: Vec<_> = document
+            .artifacts
+            .iter()
+            .filter(|a| a.engine == "mysql")
+            .collect();
+        assert_eq!(mysql.len(), 4, "one artifact per published build");
+        for artifact in &mysql {
+            // Each build carries the computed hash of the shared fixture bytes.
+            assert_eq!(artifact.sha256, meta["sha256"].as_str().expect("sha256"));
+            assert!(
+                artifact
+                    .strip_prefix
+                    .as_deref()
+                    .is_some_and(|p| p.starts_with("mysql-8.4.11-")),
+                "strip prefix must be the real archive root: {:?}",
+                artifact.strip_prefix
+            );
+        }
     }
 
     impl FixtureSource {

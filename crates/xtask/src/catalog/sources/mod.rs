@@ -12,8 +12,8 @@ mod postgresql;
 mod valkey;
 
 pub use helpers::{assemble, require_https};
-pub use mariadb::{MariadbRelease, mariadb_from_api};
-pub use mysql::{MysqlBuild, mysql_artifact};
+pub use mariadb::{mariadb_from_api, mariadb_release_from_api};
+pub use mysql::{MysqlBuild, md5_hex as mysql_md5_hex, mysql_artifact};
 pub use postgresql::{GithubRelease, postgresql_from_releases};
 pub use valkey::{WAVE_ONE_VARIANTS, valkey_from_sidecars};
 
@@ -27,6 +27,66 @@ pub use dblocal_core::platform::{Arch, Os};
 pub const WAVE_ONE_POSTGRESQL: [&str; 3] = ["18.7.0", "17.12.0", "16.16.0"];
 /// Valkey version this wave publishes.
 pub const WAVE_ONE_VALKEY: &str = "9.2.0";
+
+/// MySQL build the adapter e2e used (W3-B1), the 8.4 LTS line.
+pub const WAVE_ONE_MYSQL: &str = "8.4.11";
+/// Base URL of MySQL's 8.4 CDN directory.
+pub const MYSQL_BASE_URL: &str = "https://cdn.mysql.com/Downloads/MySQL-8.4";
+
+/// The MySQL 8.4.11 builds this wave publishes.
+///
+/// Taken from the adapter author's evidence (W3-B1: 8.4.11 minimal Linux x64)
+/// and from what Oracle actually publishes for the target: the minimal Linux
+/// tarball exists only for `x86_64` (there is no arm64 minimal), and both macOS
+/// builds are `macos15` only. The archives are symlink-only (no hard links), so
+/// the extractor accepts them. No arm64 Linux minimal build exists, so that
+/// target is listed as unavailable rather than faked with a full tarball.
+pub fn mysql_wave_one_builds() -> Vec<MysqlBuild> {
+    use dblocal_core::model::ArchiveFormat;
+    let file = |name: &str, os: Os, arch: Arch, format: ArchiveFormat| MysqlBuild {
+        file_name: name.to_owned(),
+        os,
+        arch,
+        format,
+        base_url: MYSQL_BASE_URL.to_owned(),
+    };
+    vec![
+        file(
+            "mysql-8.4.11-linux-glibc2.28-x86_64-minimal.tar.xz",
+            Os::Linux,
+            Arch::X86_64,
+            ArchiveFormat::TarXz,
+        ),
+        // macOS: the arm64 full tarball the adapter can also run.
+        file(
+            "mysql-8.4.11-macos15-x86_64.tar.gz",
+            Os::Macos,
+            Arch::X86_64,
+            ArchiveFormat::TarGz,
+        ),
+        file(
+            "mysql-8.4.11-macos15-arm64.tar.gz",
+            Os::Macos,
+            Arch::Aarch64,
+            ArchiveFormat::TarGz,
+        ),
+        file(
+            "mysql-8.4.11-winx64.zip",
+            Os::Windows,
+            Arch::X86_64,
+            ArchiveFormat::Zip,
+        ),
+    ]
+}
+
+/// MariaDB versions this wave publishes: the ones the adapter e2e used (W3-B2:
+/// 11.8.10 and 11.4.14). The REST API is fetched per version.
+pub const WAVE_ONE_MARIADB: [&str; 2] = ["11.8.10", "11.4.14"];
+
+/// Builds the MariaDB REST API URL for one version.
+pub fn mariadb_api_url(version: &str) -> String {
+    format!("https://downloads.mariadb.org/rest-api/mariadb/{version}/")
+}
 
 /// Where the runtime refreshes the catalog from.
 pub const CATALOG_SOURCE_URL: &str =
