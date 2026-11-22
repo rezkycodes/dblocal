@@ -271,6 +271,8 @@ impl Workspace {
             dotenv_cache: HashMap::new(),
             port_suggestions: HashMap::new(),
             home_size_bytes: None,
+            // Documented fallback only: `from_env` resolves the real root, so the
+            // literal never reaches a user-facing path.
             home_root: dblocal_core::paths::DblPaths::from_env()
                 .map(|p| p.root().to_path_buf())
                 .unwrap_or_else(|_| std::path::PathBuf::from("~/.dblocal")),
