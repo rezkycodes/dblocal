@@ -178,9 +178,27 @@ panicked at crates/core/src/autostart/runner.rs:182:58: run: PlanFailed { .. }
 
 - **macOS:** cannot be built or run here; the LaunchAgent code is compile-checked
   logic only and is exercised on Linux against a temp home and a fake runner.
-- **Windows:** the `Run` value path is compile-checked with
-  `--target x86_64-pc-windows-gnu` and unit-tested through `reg.exe` quoting;
-  a real registry round trip is listed in `docs/dev/windows-verification.md`.
+- **Windows:** the `Run` value path is unit-tested through `reg.exe` quoting on
+  Linux. The real Windows backend compiles for `--target x86_64-pc-windows-gnu`:
+  a minimal probe crate that includes the unchanged `backend.rs`, `windows.rs`
+  and `macos.rs` builds for that target (the full workspace `cargo check
+  --target x86_64-pc-windows-gnu` cannot run because `aws-lc-sys` needs a mingw C
+  compiler this host does not have — the same pre-existing limitation as
+  `docs/architecture/process.md`). A real registry round trip is listed in
+  `docs/dev/windows-verification.md`.
 - **Real `systemctl --user enable`:** the reviewer performs one real
   enable/disable round trip and `systemd-analyze verify` on a generated unit; the
   worker never runs it during development (task rule).
+
+## Recorded e2e run (2026-11-22, Fedora, Linux x86_64)
+
+```text
+% flock -w 3600 "$HOME/.cache/dblocal-e2e.lock" DBLOCAL_E2E=1 \
+    cargo test -p dblocal-core --test service_e2e -- --ignored --test-threads=1 \
+    --nocapture autostart_two_flagged_one_blocked
+auto-blocked failed with [DBL-1005] Port itu sedang dipakai proses lain. (PortInUse)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 15 filtered out; finished in 2.13s
+```
+
+Exit code 0; no `postgres` process from the temp home survived.
+
