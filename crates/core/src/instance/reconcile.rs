@@ -15,6 +15,43 @@ use crate::process::reconcile::{ReconcileRecord, reconcile};
 use super::helpers::{db_async, emit_changed, identity_of};
 use super::service::Inner;
 
+/// Test-only trace of the decisions reconciliation makes, keyed by state root,
+/// so a harness can explain why a row disappeared.
+#[cfg(test)]
+fn decisions() -> &'static std::sync::Mutex<Vec<(String, Vec<String>)>> {
+    static DECISIONS: std::sync::OnceLock<std::sync::Mutex<Vec<(String, Vec<String>)>>> =
+        std::sync::OnceLock::new();
+    DECISIONS.get_or_init(|| std::sync::Mutex::new(Vec::new()))
+}
+
+#[cfg(test)]
+fn record_decision(inner: &Inner, line: &str) {
+    let root = inner.paths.root().display().to_string();
+    if let Ok(mut decisions) = decisions().lock() {
+        if let Some((_, lines)) = decisions.iter_mut().find(|(seen, _)| seen == &root) {
+            lines.push(line.to_owned());
+        } else {
+            decisions.push((root, vec![line.to_owned()]));
+        }
+    }
+}
+
+/// Reconciliation decisions recorded for `root`.
+#[cfg(test)]
+pub(crate) fn take_decisions(root: &std::path::Path) -> Vec<String> {
+    let root = root.display().to_string();
+    decisions()
+        .lock()
+        .map(|mut decisions| {
+            decisions
+                .iter()
+                .find(|(seen, _)| seen == &root)
+                .map(|(_, lines)| lines.clone())
+                .unwrap_or_default()
+        })
+        .unwrap_or_default()
+}
+
 pub(crate) async fn reconcile_on_startup(inner: Arc<Inner>) {
     let instances = match db_async(&inner, |store| store.list_instances()).await {
         Ok(instances) => instances,
@@ -23,6 +60,23 @@ pub(crate) async fn reconcile_on_startup(inner: Arc<Inner>) {
             return;
         }
     };
+    #[cfg(test)]
+    record_decision(
+        &inner,
+        &format!(
+            "listed={:?}",
+            instances
+                .iter()
+                .map(|instance| {
+                    (
+                        instance.id().as_str(),
+                        instance.status().as_str(),
+                        inner.ops.is_busy(instance.id()),
+                    )
+                })
+                .collect::<Vec<_>>(),
+        ),
+    );
 
     // Work from a snapshot, but never act on stale state: a create can finish
     // between the list and the cleanup (it drops its instance lock only after the
@@ -44,6 +98,8 @@ pub(crate) async fn reconcile_on_startup(inner: Arc<Inner>) {
         if instance.status() == InstanceStatus::Deleting
             && !super::delete::delete_in_flight(&inner, instance)
         {
+            #[cfg(test)]
+            record_decision(&inner, &format!("finish_delete id={} status={:?}", instance.id().as_str(), instance.status()));
             finish_delete(&inner, instance).await;
         }
     }
@@ -57,6 +113,8 @@ pub(crate) async fn reconcile_on_startup(inner: Arc<Inner>) {
             InstanceStatus::Provisioning | InstanceStatus::Initializing
         ) && !inner.ops.is_busy(instance.id())
         {
+            #[cfg(test)]
+            record_decision(&inner, &format!("clean_interrupted id={} status={:?}", instance.id().as_str(), instance.status()));
             clean_interrupted_create(&inner, instance).await;
         }
     }

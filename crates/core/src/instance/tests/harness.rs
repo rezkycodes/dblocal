@@ -275,12 +275,13 @@ impl Harness {
             let wal_len = std::fs::metadata(&wal).map(|m| m.len()).unwrap_or(0);
             let shm_len = std::fs::metadata(&shm).map(|m| m.len()).unwrap_or(0);
             let deletes = crate::store::take_deletes_for_ids(&db);
+            let decisions = super::super::reconcile::take_decisions(&self.paths.root());
             assert!(
                 std::time::Instant::now() < deadline,
                 "create {op} reported success but no row is listed; \
                  service_view={service_view:?} fresh_view={fresh_view:?} \
                  state_db={} exists={} db_len={db_len} wal_len={wal_len} shm_len={shm_len} \
-                 raw=[{raw_rows}] deletes={deletes:#?} events={:?}",
+                 raw=[{raw_rows}] deletes={deletes:#?} decisions={decisions:#?} events={:?}",
                 db.display(),
                 db.exists(),
                 describe(&run.events)
