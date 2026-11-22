@@ -296,6 +296,27 @@ the command did not return within 5s; a timeout was ignored
 test result: FAILED. 89 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.01s
 ```
 
+**6. No-password URI gains a colon** — `uri.rs`, the handler replaces
+`redis://127.0.0.1:` with `redis://:@127.0.0.1:` for a no-password Valkey
+shape. Both the mock-driven unit test and the real-binary e2e catch it:
+
+```text
+% cargo test -p dblocal-cli --lib uri_of_a_no_password_instance_is_the_no_password_shape
+test commands::tests::inspect::uri_of_a_no_password_instance_is_the_no_password_shape ... FAILED
+  left: "redis://:@127.0.0.1:6379/0\n"
+ right: "redis://127.0.0.1:6379/0\n"
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 95 filtered out
+
+% flock -w 3600 "$HOME/.cache/dblocal-e2e.lock" bash -lc \
+    'DBLOCAL_E2E=1 cargo test -p dblocal-cli --test cli_e2e \
+     no_password_instance_end_to_end -- --ignored --nocapture'
+test no_password_instance_end_to_end ... FAILED
+assertion `left == right` failed: uri stdout
+  left: "redis://:@127.0.0.1:24850/0\n"
+ right: "redis://127.0.0.1:24850/0\n"
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1 filtered out
+```
+
 ## Start race — what the loser really sees
 
 `shared_store_race.rs` runs 20 rounds of two `LocalService` instances over one
