@@ -87,8 +87,27 @@ fn require_port_free(port: u16) {
 fn wait_pid_gone(pid: u32, timeout: Duration) -> bool {
     let deadline = Instant::now() + timeout;
     while Instant::now() < deadline {
-        if !Path::new(&format!("/proc/{pid}")).exists() {
-            return true;
+        #[cfg(target_os = "linux")]
+        {
+            let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok();
+            let alive = stat
+                .as_deref()
+                .map(|s| {
+                    let close = s.rfind(')').unwrap_or(0);
+                    let rest = &s[close + 1..];
+                    !matches!(rest.split_whitespace().next(), Some("Z"))
+                })
+                .unwrap_or(false);
+            if !alive {
+                return true;
+            }
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            let status = Command::new("kill").args(["-0", &pid.to_string()]).status();
+            if !status.map(|s| s.success()).unwrap_or(false) {
+                return true;
+            }
         }
         thread::sleep(Duration::from_millis(100));
     }
@@ -194,19 +213,14 @@ fn start_mariadb(
     logs: &Path,
     run: &Path,
     port: u16,
-    password: &str,
+    auth: AuthMode,
+    password: Option<&str>,
 ) -> KillOnDrop {
-    let ctx = run_ctx(
-        runtime,
-        data,
-        logs,
-        run,
-        port,
-        AuthMode::Password,
-        Some(password),
-    );
+    let ctx = run_ctx(runtime, data, logs, run, port, auth, password);
     let cmd = MariaDbAdapter.spawn_command(&ctx);
-    assert_no_password_in_args(&cmd, password);
+    if let Some(pw) = password {
+        assert_no_password_in_args(&cmd, pw);
+    }
     let mut c = Command::new(cmd.get_program());
     c.args(cmd.get_args());
     c.stdin(Stdio::null())
@@ -235,7 +249,7 @@ fn mariadb_client(runtime: &Path) -> PathBuf {
     }
 }
 
-fn sql_query(runtime: &Path, port: u16, user: &str, password: &str, sql: &str) -> String {
+fn sql_query(runtime: &Path, port: u16, user: &str, password: Option<&str>, sql: &str) -> String {
     let client = mariadb_client(runtime);
     let mut cmd = Command::new(client);
     cmd.args([
@@ -251,7 +265,11 @@ fn sql_query(runtime: &Path, port: u16, user: &str, password: &str, sql: &str) -
         "-e",
         sql,
     ]);
-    cmd.env("MYSQL_PWD", password);
+    if let Some(pw) = password {
+        cmd.env("MYSQL_PWD", pw);
+    } else {
+        cmd.env_remove("MYSQL_PWD");
+    }
     let out = cmd.output().expect("mariadb client");
     assert!(
         out.status.success(),
@@ -260,6 +278,36 @@ fn sql_query(runtime: &Path, port: u16, user: &str, password: &str, sql: &str) -
         String::from_utf8_lossy(&out.stderr)
     );
     String::from_utf8_lossy(&out.stdout).trim().to_string()
+}
+
+fn sql_try(
+    runtime: &Path,
+    port: u16,
+    user: &str,
+    password: Option<&str>,
+    sql: &str,
+) -> std::process::Output {
+    let client = mariadb_client(runtime);
+    let mut cmd = Command::new(client);
+    cmd.args([
+        "-h",
+        "127.0.0.1",
+        "-P",
+        &port.to_string(),
+        "-u",
+        user,
+        "--protocol=tcp",
+        "-N",
+        "-B",
+        "-e",
+        sql,
+    ]);
+    if let Some(pw) = password {
+        cmd.env("MYSQL_PWD", pw);
+    } else {
+        cmd.env_remove("MYSQL_PWD");
+    }
+    cmd.output().expect("mariadb client")
 }
 
 fn assert_no_ss_outside(port: u16) {
@@ -285,7 +333,6 @@ fn assert_no_ss_outside(port: u16) {
 }
 
 fn ensure_libcrypt_shim(base: &Path) -> Option<PathBuf> {
-    // Fedora 44 ships libcrypt.so.2 but MariaDB 11.8/11.4 tarballs link libcrypt.so.1.
     let probe = Command::new("ldconfig").arg("-p").output().ok();
     let has_so1 = probe
         .as_ref()
@@ -306,9 +353,443 @@ fn ensure_libcrypt_shim(base: &Path) -> Option<PathBuf> {
     None
 }
 
+fn setup_runtime(tmp: &Path) -> PathBuf {
+    if let Some(shim) = ensure_libcrypt_shim(tmp) {
+        let prev = std::env::var("LD_LIBRARY_PATH").unwrap_or_default();
+        let val = if prev.is_empty() {
+            shim.display().to_string()
+        } else {
+            format!("{}:{prev}", shim.display())
+        };
+        #[allow(unsafe_code)]
+        unsafe {
+            std::env::set_var("LD_LIBRARY_PATH", val)
+        };
+    }
+    let cache = cache_dir();
+    let a118 = cache.join(MDB118_ARCHIVE);
+    assert!(a118.is_file(), "missing {}", a118.display());
+    extract_tar_gz(&a118, tmp);
+    runtime_dir(tmp, "11.8.10")
+}
+
+fn scan_dir_for_secrets(root: &Path, needles: &[&str]) -> Vec<(PathBuf, String)> {
+    let mut hits = Vec::new();
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let Ok(entries) = fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let Ok(ft) = entry.file_type() else {
+                continue;
+            };
+            if ft.is_dir() {
+                stack.push(path);
+                continue;
+            }
+            if !ft.is_file() {
+                continue;
+            }
+            let Ok(bytes) = fs::read(&path) else {
+                continue;
+            };
+            for needle in needles {
+                if bytes.windows(needle.len()).any(|w| w == needle.as_bytes()) {
+                    hits.push((path.clone(), (*needle).to_owned()));
+                }
+            }
+        }
+    }
+    hits
+}
+
 #[test]
-#[ignore = "e2e: requires cached MariaDB tarballs; run with DBLOCAL_E2E=1 under flock $HOME/.cache/dblocal-e2e.lock"]
-fn mariadb_11_8_full_cycle_and_two_instances() {
+#[ignore = "e2e: requires cached MariaDB 11.8 tarball; run with DBLOCAL_E2E=1 under flock $HOME/.cache/dblocal-e2e.lock"]
+fn mariadb_118_password_cycle() {
+    require_e2e();
+    let tmp = tempfile::tempdir().expect("tmp");
+    let rt = setup_runtime(tmp.path());
+    let port = 43100u16;
+    require_port_free(port);
+    let (_i, data, logs, run) = mk_instance(tmp.path(), "pw");
+    let pw = "e2e-mdb-secret-123";
+
+    MariaDbAdapter
+        .initialize(&init_ctx(&rt, &data, port, AuthMode::Password, Some(pw)))
+        .expect("init");
+
+    let mut g = start_mariadb(&rt, &data, &logs, &run, port, AuthMode::Password, Some(pw));
+    assert!(
+        wait_tcp(port, Duration::from_secs(30)),
+        "listen failed; log:\n{}",
+        fs::read_to_string(logs.join("mariadb.err")).unwrap_or_default()
+    );
+    let pid = read_pid(&data.join("mariadbd.pid"));
+
+    let h = MariaDbAdapter
+        .health_check(&run_ctx(
+            &rt,
+            &data,
+            &logs,
+            &run,
+            port,
+            AuthMode::Password,
+            Some(pw),
+        ))
+        .expect("health");
+    assert!(matches!(h, dblocal_core::engine::Health::Ready));
+
+    let ver = sql_query(&rt, port, "root", Some(pw), "SELECT VERSION();");
+    assert!(ver.contains("11.8.10-MariaDB"), "version: {ver}");
+
+    let bad = sql_try(&rt, port, "root", Some("wrong"), "SELECT 1;");
+    assert!(!bad.status.success(), "wrong password should fail");
+
+    sql_query(
+        &rt,
+        port,
+        "root",
+        Some(pw),
+        "CREATE DATABASE e2e; CREATE TABLE e2e.t (id INT); INSERT INTO e2e.t VALUES (42);",
+    );
+    assert_no_ss_outside(port);
+
+    MariaDbAdapter
+        .shutdown(&run_ctx(
+            &rt,
+            &data,
+            &logs,
+            &run,
+            port,
+            AuthMode::Password,
+            Some(pw),
+        ))
+        .expect("shutdown");
+    let _ = g.0.take().map(|mut c| c.wait());
+    assert!(wait_tcp_gone(port, Duration::from_secs(30)));
+    assert!(wait_pid_gone(pid, Duration::from_secs(30)));
+    assert!(!data.join("mariadbd.pid").exists() || wait_pid_gone(pid, Duration::from_secs(1)));
+
+    // restart, data survives
+    let mut g2 = start_mariadb(&rt, &data, &logs, &run, port, AuthMode::Password, Some(pw));
+    assert!(wait_tcp(port, Duration::from_secs(30)), "restart listen");
+    let got = sql_query(&rt, port, "root", Some(pw), "SELECT id FROM e2e.t;");
+    assert_eq!(got, "42");
+    MariaDbAdapter
+        .shutdown(&run_ctx(
+            &rt,
+            &data,
+            &logs,
+            &run,
+            port,
+            AuthMode::Password,
+            Some(pw),
+        ))
+        .expect("shutdown2");
+    let _ = g2.0.take().map(|mut c| c.wait());
+    assert!(wait_tcp_gone(port, Duration::from_secs(30)));
+    eprintln!("mariadb password cycle OK");
+}
+
+#[test]
+#[ignore = "e2e: requires cached MariaDB 11.8 tarball; run with DBLOCAL_E2E=1 under flock $HOME/.cache/dblocal-e2e.lock"]
+fn mariadb_118_no_password_cycle() {
+    require_e2e();
+    let tmp = tempfile::tempdir().expect("tmp");
+    let rt = setup_runtime(tmp.path());
+    let port = 43103u16;
+    require_port_free(port);
+    let (inst, data, logs, run) = mk_instance(tmp.path(), "nopw");
+
+    MariaDbAdapter
+        .initialize(&init_ctx(&rt, &data, port, AuthMode::None, None))
+        .expect("init");
+
+    let mut g = start_mariadb(&rt, &data, &logs, &run, port, AuthMode::None, None);
+    assert!(
+        wait_tcp(port, Duration::from_secs(30)),
+        "listen failed; log:\n{}",
+        fs::read_to_string(logs.join("mariadb.err")).unwrap_or_default()
+    );
+
+    let h = MariaDbAdapter
+        .health_check(&run_ctx(
+            &rt,
+            &data,
+            &logs,
+            &run,
+            port,
+            AuthMode::None,
+            None,
+        ))
+        .expect("health");
+    assert!(matches!(h, dblocal_core::engine::Health::Ready));
+
+    let who = sql_query(&rt, port, "root", None, "SELECT CURRENT_USER();");
+    assert!(
+        who == "root@127.0.0.1" || who == "root@localhost" || who.starts_with("root@"),
+        "unexpected current_user: {who}"
+    );
+    // Verify 127.0.0.1 TCP account exists and is usable
+    let accounts = sql_query(
+        &rt,
+        port,
+        "root",
+        None,
+        "SELECT CONCAT(User,'@',Host) FROM mysql.user WHERE User='root' ORDER BY Host;",
+    );
+    eprintln!("root accounts: {accounts}");
+    assert!(
+        accounts.contains("root@127.0.0.1"),
+        "missing root@127.0.0.1: {accounts}"
+    );
+
+    let uri = MariaDbAdapter.connection_uri_no_password(
+        &run_ctx(&rt, &data, &logs, &run, port, AuthMode::None, None),
+        dblocal_core::service::UriFormat::Uri,
+    );
+    assert_eq!(uri.expose(), format!("mysql://root@127.0.0.1:{port}/"));
+    let env = MariaDbAdapter.connection_uri_no_password(
+        &run_ctx(&rt, &data, &logs, &run, port, AuthMode::None, None),
+        dblocal_core::service::UriFormat::DotEnv,
+    );
+    assert!(
+        !env.expose().contains("DB_PASSWORD"),
+        "no-password env must not have DB_PASSWORD"
+    );
+
+    MariaDbAdapter
+        .shutdown(&run_ctx(
+            &rt,
+            &data,
+            &logs,
+            &run,
+            port,
+            AuthMode::None,
+            None,
+        ))
+        .expect("shutdown");
+    let _ = g.0.take().map(|mut c| c.wait());
+    assert!(wait_tcp_gone(port, Duration::from_secs(30)));
+    let sock = run.join(format!("mariadb-{port}.sock"));
+    assert!(
+        !sock.exists(),
+        "socket should be gone after shutdown: {}",
+        sock.display()
+    );
+    let _ = inst;
+    eprintln!("mariadb no-password cycle OK");
+}
+
+#[test]
+#[ignore = "e2e: requires cached MariaDB 11.8 tarball; run with DBLOCAL_E2E=1 under flock $HOME/.cache/dblocal-e2e.lock"]
+fn mariadb_118_hostile_password_and_no_file_leak() {
+    require_e2e();
+    let tmp = tempfile::tempdir().expect("tmp");
+    let rt = setup_runtime(tmp.path());
+    let port = 43104u16;
+    require_port_free(port);
+    let (_inst, data, logs, run) = mk_instance(tmp.path(), "hostile");
+    let pw = "Cx9!it's\"q\\z$HOME`id`;&&%*-é";
+
+    MariaDbAdapter
+        .initialize(&init_ctx(&rt, &data, port, AuthMode::Password, Some(pw)))
+        .expect("init");
+
+    let mut g = start_mariadb(&rt, &data, &logs, &run, port, AuthMode::Password, Some(pw));
+    assert!(
+        wait_tcp(port, Duration::from_secs(30)),
+        "listen failed; log:\n{}",
+        fs::read_to_string(logs.join("mariadb.err")).unwrap_or_default()
+    );
+
+    let who = sql_query(&rt, port, "root", Some(pw), "SELECT CURRENT_USER();");
+    assert!(
+        who == "root@127.0.0.1" || who.starts_with("root@"),
+        "unexpected user: {who}"
+    );
+
+    // unix-socket login
+    let sock = resolve_socket_path(&data, port);
+    let client = mariadb_client(&rt);
+    let sock_out = Command::new(&client)
+        .args([
+            "-S",
+            sock.to_str().expect("sock utf8"),
+            "-u",
+            "root",
+            "-N",
+            "-B",
+            "-e",
+            "SELECT CURRENT_USER();",
+        ])
+        .env("MYSQL_PWD", pw)
+        .output()
+        .expect("socket login");
+    assert!(
+        sock_out.status.success(),
+        "socket login failed: {} {}",
+        String::from_utf8_lossy(&sock_out.stdout),
+        String::from_utf8_lossy(&sock_out.stderr)
+    );
+    let sock_user = String::from_utf8_lossy(&sock_out.stdout).trim().to_string();
+    assert!(sock_user.starts_with("root@"), "socket user: {sock_user}");
+
+    // empty password must be refused over socket
+    let bad_sock = Command::new(&client)
+        .args([
+            "-S",
+            sock.to_str().expect("sock utf8"),
+            "-u",
+            "root",
+            "-N",
+            "-B",
+            "-e",
+            "SELECT 1;",
+        ])
+        .env_remove("MYSQL_PWD")
+        .output()
+        .expect("bad socket");
+    assert!(
+        !bad_sock.status.success(),
+        "empty password on socket should fail"
+    );
+
+    MariaDbAdapter
+        .shutdown(&run_ctx(
+            &rt,
+            &data,
+            &logs,
+            &run,
+            port,
+            AuthMode::Password,
+            Some(pw),
+        ))
+        .expect("shutdown");
+    let _ = g.0.take().map(|mut c| c.wait());
+    assert!(wait_tcp_gone(port, Duration::from_secs(30)));
+
+    let needles = [pw, "it's\"q"];
+    let inst_dir = data.parent().expect("inst dir");
+    let hits = scan_dir_for_secrets(inst_dir, &needles);
+    assert!(
+        hits.is_empty(),
+        "password leaked in files: {:?}",
+        hits.iter().take(10).collect::<Vec<_>>()
+    );
+    eprintln!("mariadb hostile password OK");
+}
+
+fn resolve_socket_path(data_dir: &Path, port: u16) -> PathBuf {
+    // Read socket path from my.cnf to be correct with fallback.
+    let conf = data_dir.join("my.cnf");
+    let text = fs::read_to_string(conf).expect("my.cnf");
+    for line in text.lines() {
+        let t = line.trim();
+        if let Some(v) = t.strip_prefix("socket=") {
+            return PathBuf::from(v.trim());
+        }
+    }
+    // fallback to natural
+    data_dir
+        .parent()
+        .unwrap_or(data_dir)
+        .join("run")
+        .join(format!("mariadb-{port}.sock"))
+}
+
+#[test]
+#[ignore = "e2e: requires cached MariaDB 11.8 tarball; run with DBLOCAL_E2E=1 under flock $HOME/.cache/dblocal-e2e.lock"]
+fn mariadb_118_long_socket_path_fallback() {
+    require_e2e();
+    let tmp = tempfile::tempdir().expect("tmp");
+    let rt = setup_runtime(tmp.path());
+    let port = 43105u16;
+    require_port_free(port);
+
+    // Build a deliberately deep instance dir so natural socket path exceeds 120 bytes.
+    let mut deep = tmp.path().join("deep");
+    for _ in 0..8 {
+        deep = deep.join("very_long_directory_name_for_socket_path_test");
+    }
+    let inst = deep.join("inst");
+    let data = inst.join("data");
+    let logs = inst.join("logs");
+    let run = inst.join("run");
+    fs::create_dir_all(&logs).unwrap();
+    fs::create_dir_all(&run).unwrap();
+    fs::create_dir_all(&data).unwrap();
+
+    let natural = run.join(format!("mariadb-{port}.sock"));
+    assert!(
+        natural.as_os_str().as_encoded_bytes().len() > 120,
+        "test setup: natural socket path must be > 120 bytes, got {}: {}",
+        natural.as_os_str().as_encoded_bytes().len(),
+        natural.display()
+    );
+
+    let pw = "e2e-long-sock";
+    MariaDbAdapter
+        .initialize(&init_ctx(&rt, &data, port, AuthMode::Password, Some(pw)))
+        .expect("init with long socket path should succeed via fallback");
+
+    let actual_sock = resolve_socket_path(&data, port);
+    assert_ne!(
+        actual_sock,
+        natural,
+        "should have used fallback socket, not natural: {}",
+        actual_sock.display()
+    );
+    assert!(
+        actual_sock.as_os_str().as_encoded_bytes().len() <= 107,
+        "fallback socket too long: {} ({})",
+        actual_sock.display(),
+        actual_sock.as_os_str().as_encoded_bytes().len()
+    );
+
+    let mut g = start_mariadb(&rt, &data, &logs, &run, port, AuthMode::Password, Some(pw));
+    assert!(
+        wait_tcp(port, Duration::from_secs(30)),
+        "listen failed; log:\n{}",
+        fs::read_to_string(logs.join("mariadb.err")).unwrap_or_default()
+    );
+
+    let who = sql_query(&rt, port, "root", Some(pw), "SELECT CURRENT_USER();");
+    assert!(who.starts_with("root@"), "who: {who}");
+    assert_no_ss_outside(port);
+
+    MariaDbAdapter
+        .shutdown(&run_ctx(
+            &rt,
+            &data,
+            &logs,
+            &run,
+            port,
+            AuthMode::Password,
+            Some(pw),
+        ))
+        .expect("shutdown");
+    let _ = g.0.take().map(|mut c| c.wait());
+    assert!(wait_tcp_gone(port, Duration::from_secs(30)));
+
+    // fallback socket should be gone after shutdown
+    if actual_sock.exists() {
+        // give it a moment
+        thread::sleep(Duration::from_millis(500));
+    }
+    assert!(
+        !actual_sock.exists(),
+        "fallback socket should be removed after shutdown: {}",
+        actual_sock.display()
+    );
+    eprintln!("mariadb long socket fallback OK: {}", actual_sock.display());
+}
+
+#[test]
+#[ignore = "e2e: requires cached MariaDB 11.8 and 11.4 tarballs; run with DBLOCAL_E2E=1 under flock $HOME/.cache/dblocal-e2e.lock"]
+fn mariadb_two_instances_side_by_side() {
     require_e2e();
     let cache = cache_dir();
     let a118 = cache.join(MDB118_ARCHIVE);
@@ -316,33 +797,17 @@ fn mariadb_11_8_full_cycle_and_two_instances() {
     assert!(a118.is_file(), "missing {}", a118.display());
 
     let tmp = tempfile::tempdir().expect("tmp");
-    if let Some(shim) = ensure_libcrypt_shim(tmp.path()) {
-        let prev = std::env::var("LD_LIBRARY_PATH").unwrap_or_default();
-        let val = if prev.is_empty() {
-            shim.display().to_string()
-        } else {
-            format!("{}:{prev}", shim.display())
-        };
-        // Safety: e2e test process sets env before spawning engine children.
-        #[allow(unsafe_code)]
-        unsafe {
-            std::env::set_var("LD_LIBRARY_PATH", val)
-        };
-    }
+    let rt118 = setup_runtime(tmp.path());
 
-    extract_tar_gz(&a118, tmp.path());
-    let rt118 = runtime_dir(tmp.path(), "11.8.10");
-
-    let port1 = 43100u16;
-    let port2 = 43101u16;
+    let port1 = 43106u16;
+    let port2 = 43107u16;
     require_port_free(port1);
     require_port_free(port2);
 
-    let (_i1, d1, l1, r1) = mk_instance(tmp.path(), "m118a");
-    let (_i2, d2, l2, r2) = mk_instance(tmp.path(), "m118b");
-    let pw = "e2e-mdb-secret-123";
+    let (_i1, d1, l1, r1) = mk_instance(tmp.path(), "s1");
+    let (_i2, d2, l2, r2) = mk_instance(tmp.path(), "s2");
+    let pw = "e2e-side";
 
-    // init
     MariaDbAdapter
         .initialize(&init_ctx(&rt118, &d1, port1, AuthMode::Password, Some(pw)))
         .expect("init 1");
@@ -350,94 +815,18 @@ fn mariadb_11_8_full_cycle_and_two_instances() {
         .initialize(&init_ctx(&rt118, &d2, port2, AuthMode::Password, Some(pw)))
         .expect("init 2");
 
-    // start 1
-    let mut g1 = start_mariadb(&rt118, &d1, &l1, &r1, port1, pw);
-    assert!(
-        wait_tcp(port1, Duration::from_secs(30)),
-        "mdb1 did not listen; log:\n{}",
-        fs::read_to_string(l1.join("mariadb.err")).unwrap_or_default()
-    );
-    let pid1 = read_pid(&d1.join("mariadbd.pid"));
-    assert!(Path::new(&format!("/proc/{pid1}")).exists());
+    let mut g1 = start_mariadb(&rt118, &d1, &l1, &r1, port1, AuthMode::Password, Some(pw));
+    let mut g2 = start_mariadb(&rt118, &d2, &l2, &r2, port2, AuthMode::Password, Some(pw));
+    assert!(wait_tcp(port1, Duration::from_secs(30)), "p1 listen");
+    assert!(wait_tcp(port2, Duration::from_secs(30)), "p2 listen");
 
-    let h = MariaDbAdapter
-        .health_check(&run_ctx(
-            &rt118,
-            &d1,
-            &l1,
-            &r1,
-            port1,
-            AuthMode::Password,
-            Some(pw),
-        ))
-        .expect("health");
-    assert!(matches!(h, dblocal_core::engine::Health::Ready));
-
-    // login with password
-    let ver = sql_query(&rt118, port1, "root", pw, "SELECT VERSION();");
-    assert!(ver.contains("11.8.10-MariaDB"), "version: {ver}");
-    eprintln!("mariadb version: {ver}");
-
-    // wrong password rejected
-    let client = mariadb_client(&rt118);
-    let bad = Command::new(&client)
-        .args([
-            "-h",
-            "127.0.0.1",
-            "-P",
-            "43100",
-            "-u",
-            "root",
-            "--protocol=tcp",
-            "-N",
-            "-B",
-            "-e",
-            "SELECT 1;",
-        ])
-        .env("MYSQL_PWD", "wrong")
-        .output()
-        .expect("bad pw");
-    assert!(!bad.status.success(), "wrong password should fail");
-
-    // create data
-    sql_query(
-        &rt118,
-        port1,
-        "root",
-        pw,
-        "CREATE DATABASE e2e; CREATE TABLE e2e.t (id INT); INSERT INTO e2e.t VALUES (42);",
-    );
-
-    // start second instance (same major, different port)
-    let mut g2 = start_mariadb(&rt118, &d2, &l2, &r2, port2, pw);
-    assert!(
-        wait_tcp(port2, Duration::from_secs(30)),
-        "mdb2 did not listen; log:\n{}",
-        fs::read_to_string(l2.join("mariadb.err")).unwrap_or_default()
-    );
-    let _pid2 = read_pid(&d2.join("mariadbd.pid"));
-    let ver2 = sql_query(&rt118, port2, "root", pw, "SELECT VERSION();");
-    assert!(ver2.contains("11.8.10-MariaDB"));
-
+    let v1 = sql_query(&rt118, port1, "root", Some(pw), "SELECT VERSION();");
+    let v2 = sql_query(&rt118, port2, "root", Some(pw), "SELECT VERSION();");
+    assert!(v1.contains("11.8.10-MariaDB"));
+    assert!(v2.contains("11.8.10-MariaDB"));
     assert_no_ss_outside(port1);
     assert_no_ss_outside(port2);
 
-    // stop 2
-    MariaDbAdapter
-        .shutdown(&run_ctx(
-            &rt118,
-            &d2,
-            &l2,
-            &r2,
-            port2,
-            AuthMode::Password,
-            Some(pw),
-        ))
-        .expect("shutdown 2");
-    let _ = g2.0.take().map(|mut c| c.wait());
-    assert!(wait_tcp_gone(port2, Duration::from_secs(30)));
-
-    // stop 1
     MariaDbAdapter
         .shutdown(&run_ctx(
             &rt118,
@@ -449,42 +838,34 @@ fn mariadb_11_8_full_cycle_and_two_instances() {
             Some(pw),
         ))
         .expect("shutdown 1");
-    let _ = g1.0.take().map(|mut c| c.wait());
-    assert!(wait_tcp_gone(port1, Duration::from_secs(30)));
-    assert!(wait_pid_gone(pid1, Duration::from_secs(30)));
-
-    // restart 1, data survives
-    let mut g1b = start_mariadb(&rt118, &d1, &l1, &r1, port1, pw);
-    assert!(wait_tcp(port1, Duration::from_secs(30)), "restart listen");
-    let got = sql_query(&rt118, port1, "root", pw, "SELECT id FROM e2e.t;");
-    assert_eq!(got, "42");
     MariaDbAdapter
         .shutdown(&run_ctx(
             &rt118,
-            &d1,
-            &l1,
-            &r1,
-            port1,
+            &d2,
+            &l2,
+            &r2,
+            port2,
             AuthMode::Password,
             Some(pw),
         ))
-        .expect("shutdown 1b");
-    let _ = g1b.0.take().map(|mut c| c.wait());
+        .expect("shutdown 2");
+    let _ = g1.0.take().map(|mut c| c.wait());
+    let _ = g2.0.take().map(|mut c| c.wait());
     assert!(wait_tcp_gone(port1, Duration::from_secs(30)));
+    assert!(wait_tcp_gone(port2, Duration::from_secs(30)));
 
-    // side-by-side with 11.4.14 if cached
     if a114.is_file() {
         extract_tar_gz(&a114, tmp.path());
         let rt114 = runtime_dir(tmp.path(), "11.4.14");
-        let port3 = 43102u16;
+        let port3 = 43108u16;
         require_port_free(port3);
-        let (_i3, d3, l3, r3) = mk_instance(tmp.path(), "m114");
+        let (_i3, d3, l3, r3) = mk_instance(tmp.path(), "s114");
         MariaDbAdapter
             .initialize(&init_ctx(&rt114, &d3, port3, AuthMode::Password, Some(pw)))
             .expect("init 114");
-        let mut g3 = start_mariadb(&rt114, &d3, &l3, &r3, port3, pw);
+        let mut g3 = start_mariadb(&rt114, &d3, &l3, &r3, port3, AuthMode::Password, Some(pw));
         assert!(wait_tcp(port3, Duration::from_secs(30)), "114 listen");
-        let v3 = sql_query(&rt114, port3, "root", pw, "SELECT VERSION();");
+        let v3 = sql_query(&rt114, port3, "root", Some(pw), "SELECT VERSION();");
         assert!(v3.contains("11.4.14-MariaDB"), "v3: {v3}");
         MariaDbAdapter
             .shutdown(&run_ctx(
@@ -499,10 +880,9 @@ fn mariadb_11_8_full_cycle_and_two_instances() {
             .expect("shutdown 114");
         let _ = g3.0.take().map(|mut c| c.wait());
         assert!(wait_tcp_gone(port3, Duration::from_secs(30)));
-        eprintln!("mariadb 11.4 side-by-side OK: {v3}");
+        eprintln!("side-by-side 11.4 OK: {v3}");
     } else {
         eprintln!("skip 11.4 side-by-side: archive not cached");
     }
-
-    eprintln!("mariadb e2e OK");
+    eprintln!("mariadb side-by-side OK");
 }

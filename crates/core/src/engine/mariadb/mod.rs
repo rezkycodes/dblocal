@@ -4,6 +4,8 @@
 //! probes readiness with a MariaDB/MySQL protocol greeting, shuts down via
 //! SIGTERM (graceful, bounded), and diagnoses start failures from real log text.
 
+mod identity;
+pub mod socket;
 #[cfg(test)]
 mod tests;
 
@@ -22,8 +24,11 @@ use crate::model::{AuthMode, EngineKey, StartFailure};
 use crate::secret::SecretString;
 use crate::service::UriFormat;
 
-/// AF_UNIX socket path limit on Linux.
-const UNIX_SOCKET_PATH_LIMIT: usize = 107;
+#[cfg(test)]
+pub(super) use identity::{
+    ExpectedIdentity, PidIdentity, cmdline_targets_instance, is_zombie_stat, parse_cmdline,
+    verify_pid_identity,
+};
 /// MariaDB protocol version byte for the server greeting.
 const PROTOCOL_VERSION_10: u8 = 10;
 /// Max greeting bytes we read before considering the packet hostile.
@@ -40,8 +45,8 @@ impl EngineAdapter for MariaDbAdapter {
 
     fn initialize(&self, ctx: &InitContext) -> Result<()> {
         prepare_dirs(ctx)?;
-        let sock = socket_path(&ctx.data_dir, ctx.port.get());
-        validate_socket_path_len(&sock)?;
+        let sock = socket::choose_socket_path(&ctx.data_dir, ctx.port.get())?;
+        socket::validate_socket_path_len(&sock)?;
         let conf = config_path(&ctx.data_dir);
         let rendered = render_config(&config_params(ctx, &sock)?);
         write_private_config(&conf, rendered.expose())?;
@@ -49,7 +54,11 @@ impl EngineAdapter for MariaDbAdapter {
         if ctx.auth == AuthMode::Password {
             bootstrap_password(ctx)?;
         }
-        tracing::debug!(instance = %ctx.instance_name, "mariadb initialized");
+        tracing::debug!(
+            instance = %ctx.instance_name,
+            socket = %sock.display(),
+            "mariadb initialized"
+        );
         Ok(())
     }
 
@@ -72,7 +81,7 @@ impl EngineAdapter for MariaDbAdapter {
     }
 
     fn shutdown(&self, ctx: &RunContext) -> Result<()> {
-        shutdown_by_sigterm(ctx)
+        identity::shutdown_by_sigterm(ctx)
     }
 
     fn connection_uri(
@@ -126,8 +135,9 @@ fn log_error_path(data_dir: &Path) -> PathBuf {
     sibling_dir(data_dir, consts::DIR_LOGS).join("mariadb.err")
 }
 
+#[cfg(test)]
 fn socket_path(data_dir: &Path, port: u16) -> PathBuf {
-    sibling_dir(data_dir, consts::DIR_RUN).join(format!("mariadb-{port}.sock"))
+    socket::natural_socket_path(data_dir, port)
 }
 
 fn sibling_dir(data_dir: &Path, leaf: &str) -> PathBuf {
@@ -150,22 +160,6 @@ fn render_config(p: &ConfigParams) -> SecretString {
     let _ = writeln!(out, "skip-name-resolve");
     // Never 0.0.0.0; never a password in config.
     SecretString::new(out)
-}
-
-fn validate_socket_path_len(sock: &Path) -> Result<()> {
-    let len = sock.as_os_str().as_encoded_bytes().len();
-    if len > UNIX_SOCKET_PATH_LIMIT {
-        return Err(DblError::InvalidInput {
-            field: "socket",
-            reason: format!(
-                "socket path {} is {} bytes, maximum is {}",
-                sock.display(),
-                len,
-                UNIX_SOCKET_PATH_LIMIT
-            ),
-        });
-    }
-    Ok(())
 }
 
 fn prepare_dirs(ctx: &InitContext) -> Result<()> {
@@ -463,81 +457,6 @@ fn parse_greeting(payload: &[u8]) -> std::result::Result<Greeting, GreetingError
     })
 }
 
-fn shutdown_by_sigterm(ctx: &RunContext) -> Result<()> {
-    let pid_path = pidfile_path(&ctx.data_dir);
-    let pid = read_pidfile(&pid_path)?;
-    let start = Instant::now();
-    let grace = Duration::from_secs(consts::STOP_GRACE_SECS);
-
-    // SIGTERM is graceful for mariadbd (spike: log shows "Normal shutdown" and
-    // "Shutdown complete"). We verify exit by waiting for PID disappearance.
-    send_term(pid)?;
-
-    while start.elapsed() < grace {
-        if !pid_alive(pid) {
-            return Ok(());
-        }
-        std::thread::sleep(Duration::from_millis(200));
-    }
-
-    if !pid_alive(pid) {
-        return Ok(());
-    }
-    Err(DblError::Engine {
-        reason: format!(
-            "mariadbd pid {pid} did not exit within {}s after SIGTERM",
-            consts::STOP_GRACE_SECS
-        ),
-    })
-}
-
-fn read_pidfile(path: &Path) -> Result<u32> {
-    let contents = fs::read_to_string(path).map_err(|e| DblError::Engine {
-        reason: format!("cannot read pidfile {}: {e}", path.display()),
-    })?;
-    let pid = contents
-        .lines()
-        .map(str::trim)
-        .find(|l| !l.is_empty())
-        .ok_or_else(|| DblError::Engine {
-            reason: format!("pidfile {} is empty", path.display()),
-        })?
-        .parse::<u32>()
-        .map_err(|_| DblError::Engine {
-            reason: format!("pidfile {} does not contain a pid", path.display()),
-        })?;
-    Ok(pid)
-}
-
-#[cfg(unix)]
-fn send_term(pid: u32) -> Result<()> {
-    use nix::sys::signal::{Signal, kill};
-    use nix::unistd::Pid;
-    kill(Pid::from_raw(pid as i32), Signal::SIGTERM).map_err(|e| DblError::Engine {
-        reason: format!("failed to send SIGTERM to mariadbd pid {pid}: {e}"),
-    })
-}
-
-#[cfg(not(unix))]
-fn send_term(pid: u32) -> Result<()> {
-    let _ = pid;
-    Err(DblError::Unsupported {
-        capability: "mariadb SIGTERM shutdown",
-        reason: "not implemented on this platform".to_owned(),
-    })
-}
-
-#[cfg(unix)]
-fn pid_alive(pid: u32) -> bool {
-    Path::new(&format!("/proc/{pid}")).exists()
-}
-
-#[cfg(not(unix))]
-fn pid_alive(pid: u32) -> bool {
-    let _ = pid;
-    false
-}
-
 /// Rewrites managed port/socket directives in `my.cnf`.
 ///
 /// Atomic. Idempotent. Fails if the config is missing or has no `port`.
@@ -548,8 +467,8 @@ pub fn sync_port(data_dir: &Path, port: u16) -> Result<()> {
     })?;
     let mut replaced_port = false;
     let mut out = String::with_capacity(contents.len() + 32);
-    let sock = socket_path(data_dir, port);
-    validate_socket_path_len(&sock)?;
+    let sock = socket::choose_socket_path(data_dir, port)?;
+    socket::validate_socket_path_len(&sock)?;
     for line in contents.lines() {
         let trimmed = line.trim_start();
         if trimmed.starts_with("port=") || trimmed.starts_with("port =") {

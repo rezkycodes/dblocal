@@ -77,9 +77,9 @@ fn config_paths_are_derived_from_instance_layout() {
 #[test]
 fn socket_path_length_is_checked() {
     let short = Path::new("/tmp/m.sock");
-    assert!(validate_socket_path_len(short).is_ok());
+    assert!(socket::validate_socket_path_len(short).is_ok());
     let long = PathBuf::from(format!("/tmp/{}", "a".repeat(120)));
-    let err = validate_socket_path_len(&long).expect_err("too long");
+    let err = socket::validate_socket_path_len(&long).expect_err("too long");
     assert!(matches!(
         err,
         DblError::InvalidInput {
@@ -416,4 +416,222 @@ fn mutation_handshake_rejects_non_protocol_10() {
         "0a31312e382e31302d4d6172696144420004000000673d3c536b444f4300feff2d0200ff81150000000000003d00000040567155364c5a615a7c2335006d7973716c5f6e61746976655f70617373776f726400",
     );
     assert_eq!(parse_greeting(&payload).expect("real").protocol_version, 10);
+}
+
+#[test]
+fn cmdline_parsing_and_instance_targeting() {
+    let args =
+        parse_cmdline(b"/usr/bin/mariadbd\0--defaults-file=/tmp/a/my.cnf\0--datadir=/tmp/a/data\0");
+    assert_eq!(args.len(), 3);
+    let expected = ExpectedIdentity {
+        exe: PathBuf::from("/usr/bin/mariadbd"),
+        data_dir: PathBuf::from("/tmp/a/data"),
+        config_path: PathBuf::from("/tmp/a/my.cnf"),
+    };
+    assert!(cmdline_targets_instance(&args, &expected));
+    let other = ExpectedIdentity {
+        exe: PathBuf::from("/usr/bin/mariadbd"),
+        data_dir: PathBuf::from("/tmp/b/data"),
+        config_path: PathBuf::from("/tmp/b/my.cnf"),
+    };
+    assert!(!cmdline_targets_instance(&args, &other));
+    let conf_only = parse_cmdline(b"mariadbd\0--defaults-file=/tmp/a/my.cnf\0");
+    assert!(cmdline_targets_instance(&conf_only, &expected));
+}
+
+#[test]
+fn zombie_stat_is_detected() {
+    // Format: pid (comm) state ...
+    assert!(is_zombie_stat(
+        "12345 (mariadbd) Z 1 1 1 0 -1 0 0 0 0 0 0 0 0 0 20 0 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0"
+    ));
+    assert!(!is_zombie_stat(
+        "12345 (mariadbd) S 1 1 1 0 -1 0 0 0 0 0 0 0 0 0 20 0 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0"
+    ));
+    assert!(!is_zombie_stat("garbage"));
+}
+
+#[cfg(unix)]
+#[test]
+fn shutdown_refuses_to_signal_unrelated_pid() {
+    let dir = tempdir().expect("tmp");
+    let root = dir.path();
+    let data = root.join("data");
+    let logs = root.join("logs");
+    let run = root.join("run");
+    fs::create_dir_all(&data).expect("data");
+    fs::create_dir_all(&logs).expect("logs");
+    fs::create_dir_all(&run).expect("run");
+
+    // Spawn an unrelated long-lived process.
+    let mut sleeper = Command::new("sleep")
+        .arg("60")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn sleep");
+    let pid = sleeper.id();
+
+    // Write pidfile pointing at the sleeper.
+    fs::write(data.join("mariadbd.pid"), format!("{pid}\n")).expect("pidfile");
+    // Write minimal config so config_path exists if read (not required).
+    let ctx = RunContext {
+        instance_name: "m".into(),
+        runtime_dir: PathBuf::from("/opt/mariadb"),
+        data_dir: data.clone(),
+        logs_dir: logs,
+        run_dir: run,
+        port: Port::new(3307).expect("port"),
+        superuser: "root".into(),
+        auth: AuthMode::None,
+        credential: None,
+    };
+
+    // shutdown should refuse to signal and return Ok.
+    let result = MariaDbAdapter.shutdown(&ctx);
+    assert!(
+        result.is_ok(),
+        "shutdown must not fail on unrelated pid: {result:?}"
+    );
+
+    // Sleeper must still be alive.
+    std::thread::sleep(Duration::from_millis(200));
+    let still_alive = Command::new("kill")
+        .args(["-0", &pid.to_string()])
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+    assert!(still_alive, "unrelated process must not be signalled");
+
+    let _ = sleeper.kill();
+    let _ = sleeper.wait();
+}
+
+#[test]
+fn identity_rejects_wrong_exe_and_wrong_cmdline() {
+    let expected = ExpectedIdentity {
+        exe: PathBuf::from("/opt/mariadb/bin/mariadbd"),
+        data_dir: PathBuf::from("/tmp/inst/data"),
+        config_path: PathBuf::from("/tmp/inst/data/my.cnf"),
+    };
+    let args = parse_cmdline(b"/usr/bin/sleep\060\0");
+    assert!(!cmdline_targets_instance(&args, &expected));
+    let wrong_data = parse_cmdline(
+        b"/opt/mariadb/bin/mariadbd\0--defaults-file=/tmp/other/data/my.cnf\0--datadir=/tmp/other/data\0",
+    );
+    assert!(!cmdline_targets_instance(&wrong_data, &expected));
+    let right = parse_cmdline(
+        b"/opt/mariadb/bin/mariadbd\0--defaults-file=/tmp/inst/data/my.cnf\0--datadir=/tmp/inst/data\0",
+    );
+    assert!(cmdline_targets_instance(&right, &expected));
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn verify_pid_identity_linux_matches_real_process() {
+    let dir = tempdir().expect("tmp");
+    let root = dir.path();
+    let bindir = root.join("bin");
+    fs::create_dir_all(&bindir).expect("bin");
+    let fake = bindir.join("mariadbd");
+    // Build a tiny helper that ignores args and sleeps.
+    let src = root.join("fake.rs");
+    fs::write(
+        &src,
+        "fn main(){ std::thread::sleep(std::time::Duration::from_secs(60)); }",
+    )
+    .expect("write src");
+    let status = Command::new("rustc")
+        .arg("-O")
+        .arg("-o")
+        .arg(&fake)
+        .arg(&src)
+        .status()
+        .expect("rustc");
+    assert!(status.success(), "rustc failed");
+    let data = root.join("inst/data");
+    let conf = data.join("my.cnf");
+    fs::create_dir_all(&data).expect("data");
+    fs::write(&conf, "[mysqld]\n").expect("conf");
+
+    let mut child = Command::new(&fake)
+        .arg(format!("--defaults-file={}", conf.display()))
+        .arg(format!("--datadir={}", data.display()))
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn fake mariadbd");
+    let pid = child.id();
+    std::thread::sleep(Duration::from_millis(100));
+
+    let expected = ExpectedIdentity {
+        exe: fake.clone(),
+        data_dir: data.clone(),
+        config_path: conf.clone(),
+    };
+    let id = verify_pid_identity(pid, &expected);
+    assert_eq!(
+        id,
+        PidIdentity::Match,
+        "expected match for our fake mariadbd"
+    );
+
+    let wrong = ExpectedIdentity {
+        exe: fake.clone(),
+        data_dir: root.join("other/data"),
+        config_path: root.join("other/data/my.cnf"),
+    };
+    let id = verify_pid_identity(pid, &wrong);
+    assert!(
+        matches!(id, PidIdentity::NotOurs(_)),
+        "wrong instance should be NotOurs: {id:?}"
+    );
+
+    let wrong_exe = ExpectedIdentity {
+        exe: PathBuf::from("/usr/bin/sleep"),
+        data_dir: data.clone(),
+        config_path: conf.clone(),
+    };
+    let id = verify_pid_identity(pid, &wrong_exe);
+    assert!(
+        matches!(id, PidIdentity::NotOurs(_)),
+        "wrong exe should be NotOurs: {id:?}"
+    );
+
+    let _ = child.kill();
+    let _ = child.wait();
+    std::thread::sleep(Duration::from_millis(50));
+    let dead = verify_pid_identity(pid, &expected);
+    assert!(
+        !matches!(dead, PidIdentity::Match),
+        "dead pid must not match: {dead:?}"
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn verify_pid_identity_rejects_unrelated_live_process() {
+    let mut sleeper = Command::new("sleep")
+        .arg("60")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn sleep");
+    let pid = sleeper.id();
+    std::thread::sleep(Duration::from_millis(30));
+    let expected = ExpectedIdentity {
+        exe: PathBuf::from("/opt/mariadb/bin/mariadbd"),
+        data_dir: PathBuf::from("/tmp/inst/data"),
+        config_path: PathBuf::from("/tmp/inst/data/my.cnf"),
+    };
+    let id = verify_pid_identity(pid, &expected);
+    assert!(
+        matches!(id, PidIdentity::NotOurs(_) | PidIdentity::Unverifiable(_)),
+        "sleep must not be identified as mariadbd: {id:?}"
+    );
+    let _ = sleeper.kill();
+    let _ = sleeper.wait();
 }
