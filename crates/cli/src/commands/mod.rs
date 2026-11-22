@@ -2,13 +2,18 @@
 //! with injected writers, so tests can drive them without a real terminal.
 
 pub mod create;
+pub mod db;
 pub mod delete;
 pub mod list;
 pub mod logs;
+pub mod open;
+pub mod password;
 pub mod start;
 pub mod status;
 pub mod stop;
+pub mod update;
 pub mod uri;
+pub mod user;
 
 use std::io::Write;
 
@@ -56,6 +61,15 @@ pub fn dispatch(ctx: &mut Ctx<'_>, command: &Command) -> u8 {
             follow,
             lines,
         } => logs::run(ctx, name, *follow, *lines),
+        Command::Db { command } => db::dispatch(ctx, command),
+        Command::User { command } => user::dispatch(ctx, command),
+        Command::Password { command } => password::dispatch(ctx, command),
+        Command::Update { command } => update::dispatch(ctx, command),
+        Command::Open {
+            instance,
+            client,
+            dry_run,
+        } => open::run(ctx, instance, client, *dry_run),
     }
 }
 

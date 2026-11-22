@@ -94,3 +94,14 @@ pub const FAILURE_LOG_TAIL_LINES: usize = LOG_TAIL_ON_FAILURE;
 
 /// Poll interval for readiness probes while starting an engine.
 pub const HEALTH_CHECK_POLL_MS: u64 = 250;
+
+/// GitHub repository the self-update check queries (`F-PKG-05`).
+pub const UPDATE_REPO: &str = "dblocal-org/dblocal";
+/// Sub-directory of the home where a downloaded update is staged before apply.
+pub const DIR_UPDATE_STAGING: &str = "update";
+/// Timeout for the update check request, in seconds.
+pub const UPDATE_CHECK_TIMEOUT_SECS: u64 = 15;
+/// Connect timeout for admin operations against a running instance, in seconds.
+pub const ADMIN_CONNECT_TIMEOUT_SECS: u64 = 5;
+/// Statement timeout for admin operations, in seconds.
+pub const ADMIN_STATEMENT_TIMEOUT_SECS: u64 = 30;
