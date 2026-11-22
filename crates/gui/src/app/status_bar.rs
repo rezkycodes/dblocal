@@ -10,7 +10,7 @@ use gpui_kit::component::label::Label;
 use gpui_kit::component::progress::Progress;
 use gpui_kit::component::{ActiveTheme, Sizable, Theme, h_flex, popover::Popover};
 use gpui_kit::prelude::*;
-use gpui_kit::{AnyElement, Context, IntoElement, ParentElement, Styled, div, px};
+use gpui_kit::{AnyElement, Context, IntoElement, ParentElement, SharedString, Styled, div, px};
 
 use crate::format;
 
@@ -114,6 +114,10 @@ pub(super) fn render(workspace: &Workspace, cx: &mut Context<Workspace>) -> impl
 }
 
 /// One status-bar count: glyph plus the number and word.
+///
+/// A11y: `Label::new` takes its element id from the call site, so rendering
+/// this helper three times (running, stopped, failed) made three siblings share
+/// one id and gpui's duplicate-node assertion fired. The id is per count.
 fn count_pill(count: usize, label: &str, theme: &Theme, danger: bool) -> impl IntoElement {
     let colour = if danger {
         theme.danger
@@ -131,7 +135,9 @@ fn count_pill(count: usize, label: &str, theme: &Theme, danger: bool) -> impl In
         .gap_1p5()
         .text_color(colour)
         .child(status_glyph(status, 8.0, theme))
-        .child(Label::new(format!("{count} {label}")))
+        .child(Label::new(format!("{count} {label}")).id(SharedString::from(format!(
+            "status-count-{label}"
+        ))))
 }
 
 /// Which credential backend the bar reports: the file fallback wins if any
@@ -212,13 +218,19 @@ fn downloads_popover(
                         .text_color(theme.muted_foreground),
                 );
             }
-            for (title, percent, detail, eta) in rows {
+            // One row per in-flight download: every label and the bar need an
+            // id unique to the row, or N downloads collide under one parent.
+            for (index, (title, percent, detail, eta)) in rows.into_iter().enumerate() {
                 column = column.child(
                     gpui_kit::component::v_flex()
                         .gap_1()
-                        .child(Label::new(title).text_xs())
                         .child(
-                            Progress::new("download-row")
+                            Label::new(title)
+                                .id(SharedString::from(format!("download-{index}-title")))
+                                .text_xs(),
+                        )
+                        .child(
+                            Progress::new(SharedString::from(format!("download-{index}-bar")))
                                 .value(percent as f32)
                                 .color(theme.progress_bar)
                                 .h(px(6.)),
@@ -228,6 +240,7 @@ fn downloads_popover(
                                 Some(eta) => format!("{detail}  ·  {eta}"),
                                 None => detail,
                             })
+                            .id(SharedString::from(format!("download-{index}-detail")))
                             .text_xs()
                             .text_color(theme.muted_foreground),
                         ),

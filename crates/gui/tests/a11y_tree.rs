@@ -30,28 +30,6 @@ use a11y_platform::A11yPlatform;
 
 type Build = fn(Arc<dyn DblService>, &mut Window, &mut Context<Workspace>) -> Workspace;
 
-/// Every overlay/screen we own, as a `Workspace` constructor.
-const CASES: &[(&str, Build)] = &[
-    ("shell", Workspace::preview),
-    ("quit dialog", Workspace::preview_quit),
-    ("quit stop failed", Workspace::preview_quit_stop_failed),
-    ("new instance dialog", Workspace::preview_create),
-    ("create unavailable", Workspace::preview_create_unavailable),
-    ("delete confirmation", Workspace::preview_delete),
-    ("command palette", Workspace::preview_palette),
-    ("status bar downloads", Workspace::preview_pending),
-    ("logs", Workspace::preview_logs),
-    ("logs long", Workspace::preview_logs_long),
-    ("failure", Workspace::preview_failure),
-    ("failed overview", Workspace::preview_failed_overview),
-    ("databases", Workspace::preview_databases),
-    ("databases product", Workspace::preview_product_databases),
-    ("config product", Workspace::preview_product_config),
-    ("filtered dock", Workspace::preview_filtered),
-    ("stale banner", Workspace::preview_stale_banner),
-    ("revealed uris", Workspace::preview_revealed),
-    ("no tray", Workspace::preview_no_tray),
-];
 
 /// The colliding `accesskit` node ids in one tree, sorted for a stable message.
 fn duplicates(tree: &TreeUpdate) -> Vec<(String, usize)> {
@@ -96,13 +74,14 @@ fn duplicates_for(name: &str, build: Build) -> (usize, Vec<(String, usize)>) {
             )
             .expect("open the a11y window");
         // Two frames: the first builds the tree once a11y is active, the second
-        // proves the tree stays consistent across a redraw.
+        // proves the tree stays consistent across a redraw. Draw through the app
+        // (`AppContext::update_window`), not `WindowHandle::update`, which would
+        // borrow the Root entity and re-enter it.
         for _ in 0..2 {
-            handle
-                .update(cx, |_, window, cx| {
-                    window.draw(cx).clear(cx);
-                })
-                .expect("draw a frame with a11y active");
+            cx.update_window(handle.into(), |_, window, cx| {
+                window.draw(cx).clear(cx);
+            })
+            .expect("draw a frame with a11y active");
         }
     });
 
@@ -123,26 +102,49 @@ fn duplicates_for(name: &str, build: Build) -> (usize, Vec<(String, usize)>) {
     (captured.len(), worst)
 }
 
-#[test]
-fn every_workspace_screen_and_overlay_has_a_unique_a11y_tree() {
-    let mut failures: Vec<String> = Vec::new();
-    for (name, build) in CASES {
-        let (trees, dups) = duplicates_for(name, *build);
-        if !dups.is_empty() {
-            let detail: Vec<String> = dups
-                .iter()
-                .map(|(id, n)| format!("{id} x{n}"))
-                .collect();
-            failures.push(format!(
-                "{name}: {} duplicate a11y node id(s) across {trees} tree(s): {}",
-                dups.len(),
-                detail.join(", ")
-            ));
-        }
-    }
-    assert!(
-        failures.is_empty(),
-        "duplicate a11y node ids (a release build would silently drop these nodes):\n{}",
-        failures.join("\n")
-    );
+/// One `#[test]` per case: gpui's `debug_assert` panics inside the frame, so a
+/// single all-cases test would stop at the first collision. Split, libtest
+/// reports every colliding screen in one run.
+macro_rules! case_tests {
+    ($( $fn_name:ident => $name:literal, $build:path; )*) => {
+        $(
+            #[test]
+            fn $fn_name() {
+                let (trees, dups) = duplicates_for($name, $build);
+                let detail: Vec<String> = dups
+                    .iter()
+                    .map(|(id, n)| format!("{id} x{n}"))
+                    .collect();
+                assert!(
+                    dups.is_empty(),
+                    "{}: {} duplicate a11y node id(s) across {trees} tree(s): {}",
+                    $name,
+                    dups.len(),
+                    detail.join(", ")
+                );
+            }
+        )*
+    };
+}
+
+case_tests! {
+    shell_is_unique => "shell", Workspace::preview;
+    quit_dialog_is_unique => "quit dialog", Workspace::preview_quit;
+    quit_stop_failed_is_unique => "quit stop failed", Workspace::preview_quit_stop_failed;
+    new_instance_dialog_is_unique => "new instance dialog", Workspace::preview_create;
+    create_unavailable_is_unique => "create unavailable", Workspace::preview_create_unavailable;
+    delete_confirmation_is_unique => "delete confirmation", Workspace::preview_delete;
+    command_palette_is_unique => "command palette", Workspace::preview_palette;
+    status_bar_downloads_is_unique => "status bar downloads", Workspace::preview_pending;
+    logs_are_unique => "logs", Workspace::preview_logs;
+    logs_long_is_unique => "logs long", Workspace::preview_logs_long;
+    failure_is_unique => "failure", Workspace::preview_failure;
+    failed_overview_is_unique => "failed overview", Workspace::preview_failed_overview;
+    databases_is_unique => "databases", Workspace::preview_databases;
+    databases_product_is_unique => "databases product", Workspace::preview_product_databases;
+    config_product_is_unique => "config product", Workspace::preview_product_config;
+    filtered_dock_is_unique => "filtered dock", Workspace::preview_filtered;
+    stale_banner_is_unique => "stale banner", Workspace::preview_stale_banner;
+    revealed_uris_is_unique => "revealed uris", Workspace::preview_revealed;
+    no_tray_is_unique => "no tray", Workspace::preview_no_tray;
 }

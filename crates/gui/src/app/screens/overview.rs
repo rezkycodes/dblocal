@@ -13,7 +13,7 @@ use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::label::Label;
 use gpui_kit::component::{ActiveTheme, Sizable, Theme, h_flex, v_flex};
 use gpui_kit::prelude::*;
-use gpui_kit::{Context, IntoElement, ParentElement, Styled, div, px};
+use gpui_kit::{Context, IntoElement, ParentElement, SharedString, Styled, div, px};
 
 use crate::format;
 
@@ -148,12 +148,25 @@ impl Workspace {
             .font_family(mono_font)
             .text_xs()
             .child(Label::new(strings::UI_OVERVIEW_DOTENV).text_color(theme.muted_foreground));
-        for row in self.dotenv_rows(&view.id) {
+        for (index, row) in self.dotenv_rows(&view.id).into_iter().enumerate() {
             env_block = env_block.child(match row.key {
                 Some(key) => h_flex()
-                    .child(Label::new(key).text_color(theme.primary))
-                    .child(Label::new(format!("={}", row.value))),
-                None => h_flex().child(Label::new(row.value)),
+                    .id(SharedString::from(format!("env-row-{index}")))
+                    .child(
+                        Label::new(key)
+                            .id(SharedString::from(format!("env-key-{index}")))
+                            .text_color(theme.primary),
+                    )
+                    .child(
+                        Label::new(format!("={}", row.value))
+                            .id(SharedString::from(format!("env-value-{index}"))),
+                    ),
+                None => h_flex()
+                    .id(SharedString::from(format!("env-line-{index}")))
+                    .child(
+                        Label::new(row.value)
+                            .id(SharedString::from(format!("env-line-text-{index}"))),
+                    ),
             });
         }
 
@@ -383,6 +396,7 @@ impl Workspace {
             if let Some(line) = buffer.line(index) {
                 lines = lines.child(
                     Label::new(line.clone())
+                        .id(SharedString::from(format!("recent-log-{index}")))
                         .py_0p5()
                         .text_color(theme.foreground),
                 );
