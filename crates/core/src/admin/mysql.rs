@@ -446,3 +446,154 @@ impl super::executor::AdminExecutor for MysqlAdmin {
 fn _conn_timeout_defaults() -> Duration {
     Duration::from_secs(consts::ADMIN_CONNECT_TIMEOUT_SECS)
 }
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+    use super::*;
+
+    fn target() -> MysqlTarget {
+        // A non-existent socket: calls fail at connect, never at a live server.
+        MysqlTarget::new(
+            "/nonexistent/dblocal-test.sock",
+            "root",
+            SecretString::from("secret-canary-pw"),
+        )
+    }
+
+    #[test]
+    fn debug_and_display_never_leak_the_password() {
+        let target = target().with_timeouts(Duration::from_secs(1), Duration::from_secs(2));
+        let rendered = format!("{target:?}");
+        assert!(!rendered.contains("secret-canary-pw"), "{rendered}");
+        assert!(rendered.contains("[REDACTED]"));
+        assert_eq!(target.superuser(), "root");
+        assert_eq!(target.connect_timeout(), Duration::from_secs(1));
+        assert_eq!(target.statement_timeout(), Duration::from_secs(2));
+        assert_eq!(
+            target.socket(),
+            std::path::Path::new("/nonexistent/dblocal-test.sock")
+        );
+    }
+
+    #[test]
+    fn opts_use_the_socket_and_never_tcp() {
+        let opts = target().opts(Some("appdb"));
+        assert_eq!(opts.socket(), Some("/nonexistent/dblocal-test.sock"));
+        assert!(opts.prefer_socket());
+        assert_eq!(opts.db_name(), Some("appdb"));
+        // A named db for the statement, none for the admin connection.
+        assert_eq!(target().opts(None).db_name(), Some(""));
+    }
+
+    #[test]
+    fn a_system_schema_is_refused_before_connecting() {
+        let admin = MysqlAdmin::new(target());
+        for name in ["mysql", "sys", "information_schema", "performance_schema"] {
+            let db = Identifier::new(name).expect("valid identifier");
+            // These names pass the allowlist (`mysql`, `sys` are not reserved by
+            // `Identifier::new`), so the guard is what must reject them.
+            let err = MysqlAdmin::create_database(&admin, &db).expect_err(name);
+            assert!(matches!(err, AdminError::SystemSchema), "{name}: {err:?}");
+            let err = MysqlAdmin::drop_database(&admin, &db, true).expect_err(name);
+            assert!(matches!(err, AdminError::SystemSchema), "{name}: {err:?}");
+        }
+    }
+
+    #[test]
+    fn connection_to_a_missing_socket_is_a_typed_connect_error() {
+        let admin = MysqlAdmin::new(target());
+        // No live server: the call must not panic and must map to Connect.
+        let err = MysqlAdmin::list_databases(&admin).expect_err("no socket");
+        assert_eq!(err, AdminError::Connect);
+    }
+
+    #[test]
+    fn server_error_codes_map_without_leaking_text() {
+        let make = |code: u16, message: &str| {
+            mysql_async::Error::Server(ServerError {
+                code,
+                message: message.to_owned(),
+                state: "HY000".to_owned(),
+            })
+        };
+        assert_eq!(
+            map_connect_error(make(1045, "Access denied")),
+            AdminError::AuthFailed
+        );
+        assert_eq!(
+            map_connect_error(make(1049, "Unknown database")),
+            AdminError::DatabaseNotFound
+        );
+        assert_eq!(
+            map_connect_error(make(2003, "can't connect")),
+            AdminError::Connect
+        );
+        assert_eq!(
+            map_query_error(make(1007, "exists")),
+            AdminError::DatabaseExists
+        );
+        assert_eq!(
+            map_query_error(make(1008, "no db")),
+            AdminError::DatabaseNotFound
+        );
+        assert_eq!(
+            map_query_error(make(1142, "denied")),
+            AdminError::InsufficientPrivilege
+        );
+        assert_eq!(
+            map_query_error(make(9999, "weird")),
+            AdminError::QueryFailed(None)
+        );
+        // A non-server error is a payload-free query failure, and the driver text
+        // (which could be a leaked statement) is dropped.
+        let driver = mysql_async::Error::Driver(mysql_async::DriverError::UnexpectedPacket {
+            payload: b"secret-canary-pw".to_vec(),
+        });
+        let mapped = map_query_error(driver);
+        assert_eq!(mapped, AdminError::QueryFailed(None));
+        let surfaces = format!("{mapped:?} {mapped} {}", mapped.user_message());
+        assert!(!surfaces.contains("secret-canary-pw"), "{surfaces}");
+    }
+
+    #[test]
+    fn role_error_distinguishes_missing_from_duplicate() {
+        let make = |message: &str| {
+            mysql_async::Error::Server(ServerError {
+                code: 1396,
+                message: message.to_owned(),
+                state: "HY000".to_owned(),
+            })
+        };
+        assert_eq!(
+            map_user_error(make("Operation CREATE USER failed for 'u'@'localhost'")),
+            AdminError::UserExists
+        );
+        assert_eq!(
+            map_user_error(make(
+                "Operation DROP USER failed for 'u'@'localhost'; user doesn't exist"
+            )),
+            AdminError::UserNotFound
+        );
+    }
+
+    #[test]
+    fn reset_machinery_is_wired_through_the_shared_state_machine() {
+        // A reset against a missing socket fails at the first apply (connect), and
+        // nothing reaches the sink.
+        let admin = MysqlAdmin::new(target());
+        struct RecordingSink(std::sync::atomic::AtomicUsize);
+        impl CredentialSink for RecordingSink {
+            fn store(&self, _password: &SecretString) -> crate::error::Result<()> {
+                self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Ok(())
+            }
+        }
+        let sink = RecordingSink(std::sync::atomic::AtomicUsize::new(0));
+        let err = admin
+            .reset_superuser_password(&sink)
+            .expect_err("no socket");
+        assert_eq!(err, AdminError::Connect);
+        assert_eq!(sink.0.load(std::sync::atomic::Ordering::SeqCst), 0);
+    }
+}

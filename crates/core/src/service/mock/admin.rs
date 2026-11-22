@@ -1,8 +1,8 @@
 //! Deterministic in-memory admin operations for [`super::MockService`].
 //!
-//! The mock mirrors the real service's rules without an engine: PostgreSQL is
-//! supported, and every other engine returns the same typed "not supported"
-//! error the real implementation does. An instance seeded without a credential
+//! The mock mirrors the real service's rules without an engine: PostgreSQL,
+//! MySQL and MariaDB are supported, Valkey is a typed "not supported" (no named
+//! databases or login roles), and an instance seeded without a credential
 //! behaves like a no-password instance and is unsupported for the same reason.
 //!
 //! Nothing here stores a role password or the superuser password; a create-user
@@ -19,11 +19,16 @@ use crate::service::{ServiceEvent, ServiceResult, UserFacingError};
 
 use super::{Inner, lock, not_found};
 
-/// The rule both the real and mock services share: only PostgreSQL, and only
-/// for a password instance, has a database/user model right now.
+/// The rule the real and mock services share: Valkey has no database/user model
+/// (typed "not supported"), and a no-password instance has no credential to
+/// authenticate an admin session with. PostgreSQL, MySQL and MariaDB are all
+/// supported.
 fn unsupported(instance: &Instance) -> Option<UserFacingError> {
-    if instance.engine() != EngineKey::Postgresql || instance.auth() != AuthMode::Password {
+    if instance.engine() == EngineKey::Valkey {
         return Some(UserFacingError::from(crate::admin::AdminError::Unsupported));
+    }
+    if instance.auth() != AuthMode::Password {
+        return Some(UserFacingError::from(crate::admin::AdminError::NoPassword));
     }
     None
 }

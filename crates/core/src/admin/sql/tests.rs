@@ -674,3 +674,98 @@ fn a_name_that_would_break_out_is_quoted_into_a_single_identifier() {
         }
     }
 }
+
+// --- W4-A2: MySQL/MariaDB execution builders --------------------------------
+
+#[test]
+fn mysql_account_quotes_user_and_host() {
+    let user = Identifier::role("app_user").expect("valid");
+    assert_eq!(mysql_account(&user, "localhost"), "`app_user`@'localhost'");
+    assert_eq!(
+        mysql_account(&user, MYSQL_ADMIN_HOST),
+        "`app_user`@'127.0.0.1'"
+    );
+}
+
+#[test]
+fn create_and_alter_user_mysql_at_one_host() {
+    let user = Identifier::role("app").expect("valid");
+    let created = create_user_mysql_at(&user, "localhost", "p@ss'w0rd");
+    assert_eq!(
+        created.sql(),
+        "CREATE USER `app`@'localhost' IDENTIFIED BY 'p@ss''w0rd'"
+    );
+    // The password is a single literal, so a hostile value cannot escape it.
+    assert_eq!(one_statement(created.sql()).last(), Some(&lit("p@ss'w0rd")));
+    let altered = alter_password_mysql_at(&user, "127.0.0.1", "n3w'pw");
+    assert_eq!(
+        altered.sql(),
+        "ALTER USER `app`@'127.0.0.1' IDENTIFIED BY 'n3w''pw'"
+    );
+    let dropped = drop_user_mysql_at(&user, "localhost");
+    assert_eq!(dropped.sql(), "DROP USER `app`@'localhost'");
+}
+
+#[test]
+fn grant_mysql_at_host_never_grants_globally_or_with_grant_option() {
+    let user = Identifier::role("app").expect("valid");
+    let db = Identifier::new("appdb").expect("valid");
+    for level in [PrivilegeLevel::ReadOnly, PrivilegeLevel::ReadWrite] {
+        let stmts = grant_privileges_mysql_at(&user, &db, level, "localhost");
+        assert_eq!(stmts.len(), 1);
+        let sql = stmts[0].sql();
+        assert!(sql.contains("ON `appdb`.*"), "{sql}");
+        assert!(!sql.contains("*.*"), "must never grant globally: {sql}");
+        assert!(!sql.to_ascii_uppercase().contains("GRANT OPTION"), "{sql}");
+        assert!(
+            !sql.contains("ALL"),
+            "must list privileges explicitly: {sql}"
+        );
+        assert_eq!(one_statement(sql).last(), Some(&lit("localhost")));
+    }
+}
+
+#[test]
+fn system_schema_guard_is_case_insensitive() {
+    for name in ["mysql", "sys", "information_schema", "performance_schema"] {
+        assert!(is_mysql_system_schema(name), "{name}");
+    }
+    assert!(is_mysql_system_schema("MYSQL"));
+    assert!(is_mysql_system_schema("Sys"));
+    for name in ["appdb", "app_development", "mysqldata"] {
+        assert!(!is_mysql_system_schema(name), "{name}");
+    }
+}
+
+#[test]
+fn mysql_read_queries_bind_their_names() {
+    let db = Identifier::new("appdb").expect("valid");
+    let exists = database_exists_mysql(&db);
+    assert!(exists.sql().contains("SCHEMA_NAME = ?"));
+    assert_eq!(exists.params(), &[SqlParam::Text("appdb".to_owned())]);
+    let count = database_connection_count_mysql(&db);
+    assert!(count.sql().contains("PROCESSLIST"));
+    assert_eq!(count.params(), &[SqlParam::Text("appdb".to_owned())]);
+}
+
+#[test]
+fn mysql_list_queries_exclude_system_schemas() {
+    let list = list_databases_mysql();
+    assert!(list.sql().contains("information_schema.SCHEMATA"));
+    assert!(
+        list.sql()
+            .contains("NOT IN ('mysql','sys','information_schema','performance_schema')")
+    );
+    assert!(list.params().is_empty());
+    let users = list_users_mysql();
+    assert!(users.sql().contains("FROM mysql.user"));
+}
+
+#[test]
+fn create_database_mysql_is_utf8mb4() {
+    let db = Identifier::new("appdb").expect("valid");
+    assert_eq!(
+        create_database_mysql(&db).sql(),
+        "CREATE DATABASE `appdb` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci"
+    );
+}
