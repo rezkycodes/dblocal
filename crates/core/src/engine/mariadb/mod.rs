@@ -568,6 +568,8 @@ fn diagnose_failure_text(output: &str) -> StartFailure {
 
     // Binary/loader missing.
     if output.contains("Exec format error")
+        || output.contains("error while loading shared libraries")
+        || (output.contains("not found (required by") && output.contains("mariadbd"))
         || (output.contains("No such file or directory")
             && (output.contains("mariadbd") || output.contains("mariadb-install-db")))
     {

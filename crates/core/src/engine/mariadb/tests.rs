@@ -260,6 +260,21 @@ fn diagnose_binary_missing() {
         diagnose_failure_text("Exec format error"),
         StartFailure::BinaryMissing
     );
+    // Verbatim from real W3-B2 e2e on this host (11.4.14 install-db failed
+    // because libcrypt.so.1 shim lacked GLIBC_2.2.5 symbol; the loader message
+    // itself is the stable diagnosis marker).
+    assert_eq!(
+        diagnose_failure_text(
+            "/home/rezkycodes/.cache/dblocal-e2e-tmp/.tmphJmyQV/mariadb-11.4.14-linux-systemd-x86_64/bin/mariadbd: /home/rezkycodes/.cache/dblocal-e2e-tmp/.tmphJmyQV/libshim/libcrypt.so.1: version `GLIBC_2.2.5' not found (required by /home/rezkycodes/.cache/dblocal-e2e-tmp/.tmphJmyQV/mariadb-11.4.14-linux-systemd-x86_64/bin/mariadbd)"
+        ),
+        StartFailure::BinaryMissing
+    );
+    assert_eq!(
+        diagnose_failure_text(
+            "/opt/mariadb/bin/mariadbd: error while loading shared libraries: libcrypt.so.1: cannot open shared object file: No such file or directory"
+        ),
+        StartFailure::BinaryMissing
+    );
 }
 
 #[test]

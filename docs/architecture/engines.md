@@ -193,9 +193,11 @@ REST API `checksum.sha256sum`.
 - **Host deps.** `mariadbd` needs glibc >= 2.28 and links `libcrypt.so.1` on the
   probed build. Fedora 44 provides `libcrypt.so.2` (XCRYPT_2.0) which satisfies
   the required symbol, but the soname differs; a host without `libcrypt.so.1`
-  will fail to exec. The adapter reports loader/exec failures as
-  `BinaryMissing`/engine error through the normal start-failure path; packaging
-  should preflight this.
+  will fail to exec with `error while loading shared libraries: libcrypt.so.1: ...`.
+  The adapter diagnoses loader errors as `BinaryMissing` (raw text kept by caller).
+  Packaging should preflight and document the host package: `libxcrypt-compat` on
+  Fedora, `libcrypt1`/`libxcrypt-compat` as appropriate on Debian/Arch. Do not
+  install packages automatically.
 
 - **Initialize (`mariadb-install-db`):** runs
   `scripts/mariadb-install-db --datadir=<dir> --basedir=<runtime>
