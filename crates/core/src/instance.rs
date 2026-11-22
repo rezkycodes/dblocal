@@ -12,6 +12,7 @@ mod log_watch;
 mod read_ops;
 mod reconcile;
 mod registry;
+mod retry;
 mod runtime_mgmt;
 mod service;
 mod start;

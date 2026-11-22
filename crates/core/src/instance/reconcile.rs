@@ -15,7 +15,107 @@ use crate::process::reconcile::{ReconcileRecord, reconcile};
 use super::helpers::{db_async, emit_changed, identity_of};
 use super::service::Inner;
 
+/// Test-only hooks around one reconciliation pass, keyed by state root, so the
+/// "the create finished while we were listing" interleaving is forced
+/// deterministically instead of waiting for it under load.
+#[cfg(test)]
+type ListHook = Box<dyn FnOnce(&Arc<Inner>) + Send>;
+
+#[cfg(test)]
+#[derive(Default)]
+struct Hooks {
+    before_list: Option<ListHook>,
+    after_list: Option<ListHook>,
+    done: Option<std::sync::mpsc::Sender<()>>,
+}
+
+#[cfg(test)]
+fn hook_table() -> &'static std::sync::Mutex<Vec<(String, Hooks)>> {
+    static HOOKS: std::sync::OnceLock<std::sync::Mutex<Vec<(String, Hooks)>>> =
+        std::sync::OnceLock::new();
+    HOOKS.get_or_init(|| std::sync::Mutex::new(Vec::new()))
+}
+
+/// Runs `edit` on the hooks registered for `root`, creating the entry if needed.
+#[cfg(test)]
+fn edit_hooks(root: &str, edit: impl FnOnce(&mut Hooks)) {
+    let mut table = hook_table().lock().expect("hooks");
+    if !table.iter().any(|(seen, _)| seen == root) {
+        table.push((root.to_owned(), Hooks::default()));
+    }
+    if let Some((_, hooks)) = table.iter_mut().find(|(seen, _)| seen == root) {
+        edit(hooks);
+    }
+}
+
+/// Registers `before` to run just before reconciliation lists the rows and
+/// `after` to run just after, for the service rooted at `root`.
+#[cfg(test)]
+pub(crate) fn on_reconcile(
+    root: &std::path::Path,
+    before: impl FnOnce(&Arc<Inner>) + Send + 'static,
+    after: impl FnOnce(&Arc<Inner>) + Send + 'static,
+) {
+    edit_hooks(&root.display().to_string(), |hooks| {
+        hooks.before_list = Some(Box::new(before));
+        hooks.after_list = Some(Box::new(after));
+    });
+}
+
+/// Asks to be told when reconciliation for `root` finishes.
+#[cfg(test)]
+pub(crate) fn on_reconcile_done(root: &std::path::Path) -> std::sync::mpsc::Receiver<()> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    edit_hooks(&root.display().to_string(), |hooks| hooks.done = Some(tx));
+    rx
+}
+
+#[cfg(test)]
+fn run_before_list(inner: &Arc<Inner>) {
+    let root = inner.paths.root().display().to_string();
+    let hook = edit_hooks_capture(&root, |hooks| hooks.before_list.take());
+    if let Some(hook) = hook {
+        hook(inner);
+    }
+}
+
+#[cfg(test)]
+fn run_after_list(inner: &Arc<Inner>) {
+    let root = inner.paths.root().display().to_string();
+    let hook = edit_hooks_capture(&root, |hooks| hooks.after_list.take());
+    if let Some(hook) = hook {
+        hook(inner);
+    }
+}
+
+#[cfg(test)]
+fn fire_done(inner: &Arc<Inner>) {
+    let root = inner.paths.root().display().to_string();
+    let sender = edit_hooks_capture(&root, |hooks| hooks.done.take());
+    if let Some(sender) = sender {
+        let _ = sender.send(());
+    }
+}
+
+/// Runs `take` on the hooks for `root` and returns the value it removed.
+#[cfg(test)]
+fn edit_hooks_capture<T>(root: &str, take: impl FnOnce(&mut Hooks) -> Option<T>) -> Option<T> {
+    let mut table = hook_table().lock().ok()?;
+    let (_, hooks) = table.iter_mut().find(|(seen, _)| seen == root)?;
+    take(hooks)
+}
+
+#[cfg(not(test))]
+fn run_before_list(_: &Arc<Inner>) {}
+
+#[cfg(not(test))]
+fn run_after_list(_: &Arc<Inner>) {}
+
+#[cfg(not(test))]
+fn fire_done(_: &Arc<Inner>) {}
+
 pub(crate) async fn reconcile_on_startup(inner: Arc<Inner>) {
+    run_before_list(&inner);
     let instances = match db_async(&inner, |store| store.list_instances()).await {
         Ok(instances) => instances,
         Err(err) => {
@@ -23,28 +123,38 @@ pub(crate) async fn reconcile_on_startup(inner: Arc<Inner>) {
             return;
         }
     };
+    run_after_list(&inner);
 
-    // An instance with an operation running in this process is not interrupted;
-    // it is still being created. Skipping it keeps reconciliation from racing a
-    // create that started at the same instant as the app.
-    let instances: Vec<Instance> = instances
-        .into_iter()
-        .filter(|instance| !inner.ops.is_busy(instance.id()))
-        .collect();
-
-    // A `Deleting` row is terminal and must be finished — but only when the
-    // delete is genuinely interrupted. The GUI and a CLI share this home, so a
-    // live delete in another process has written `Deleting` and is between its
-    // filesystem steps; a service starting in that window must not mistake it
-    // for a crash and revert it to `Stopped` (which would let a second delete
-    // run). The owner records its PID in a marker file while it works, and the
-    // row counts as in-flight only while that PID is still alive. A crashed
-    // owner leaves the same file, but its PID is gone, so recovery proceeds.
+    // Act on a **freshly read** row under the in-process instance lock, never on
+    // the startup snapshot alone. Listing the rows is an `await` point: a create
+    // can insert `Initializing`, finish and release its lock before
+    // reconciliation acts. Treating the stale `Initializing` snapshot row as an
+    // interrupted create then ran the failed-create rollback and deleted a
+    // successfully created instance. The instance lock is what closes the race:
+    // a create (or a delete) holds it for its whole life, so acquiring it proves
+    // no such operation is running here, and the fresh read proves the row is
+    // still mid-create rather than already settled.
     for instance in &instances {
-        if instance.status() == InstanceStatus::Deleting
-            && !super::delete::delete_in_flight(&inner, instance)
-        {
-            finish_delete(&inner, instance).await;
+        // A `Deleting` row is terminal and must be finished — but only when the
+        // delete is genuinely interrupted. The GUI and a CLI share this home, so a
+        // live delete in another process has written `Deleting` and is between its
+        // filesystem steps; a service starting in that window must not mistake it
+        // for a crash and revert it to `Stopped` (which would let a second delete
+        // run). The owner records its PID in a marker file while it works, and the
+        // row counts as in-flight only while that PID is still alive. A crashed
+        // owner leaves the same file, but its PID is gone, so recovery proceeds.
+        if instance.status() == InstanceStatus::Deleting {
+            let Some(_guard) = lock_if_idle(&inner, instance.id()) else {
+                continue;
+            };
+            let Some(fresh) = fresh_instance(&inner, instance.id()) else {
+                continue;
+            };
+            if fresh.status() == InstanceStatus::Deleting
+                && !super::delete::delete_in_flight(&inner, &fresh)
+            {
+                finish_delete(&inner, &fresh).await;
+            }
         }
     }
 
@@ -52,39 +162,74 @@ pub(crate) async fn reconcile_on_startup(inner: Arc<Inner>) {
     // runs: a half-initialised data directory and a possible credential must not
     // survive as a "failed" zombie (`F-INS-01`: nothing half-created, ever).
     for instance in &instances {
-        if matches!(
+        if !matches!(
             instance.status(),
             InstanceStatus::Provisioning | InstanceStatus::Initializing
         ) {
-            clean_interrupted_create(&inner, instance).await;
+            continue;
+        }
+        let Some(_guard) = lock_if_idle(&inner, instance.id()) else {
+            continue;
+        };
+        let Some(fresh) = fresh_instance(&inner, instance.id()) else {
+            continue;
+        };
+        if matches!(
+            fresh.status(),
+            InstanceStatus::Provisioning | InstanceStatus::Initializing
+        ) {
+            clean_interrupted_create(&inner, &fresh).await;
         }
     }
 
-    let pending: Vec<Instance> = instances
-        .iter()
-        .filter(|instance| instance.status().holds_process())
+    // Third phase: rows that hold a process. Like the other two phases, take the
+    // instance lock and act on a **fresh** row, never on the snapshot: an
+    // in-process start or stop can own the row while it is still `Starting` or
+    // `Stopping`, and adopting or marking the stale snapshot would overwrite that
+    // operation's claim (a `Stopping` row adopted as `Running` lets a second stop
+    // be accepted; a `Starting` row adopted as `Running` claims readiness the start
+    // has not reached, and one marked absent is written `Stopped` under a live
+    // start). The guards are held across the probe and the persist: an operation
+    // arriving meanwhile is refused as busy, which is the right answer while
+    // reconciliation is deciding.
+    let mut guarded: Vec<(super::registry::InstanceLock, Instance)> = Vec::new();
+    for instance in &instances {
+        if !instance.status().holds_process() {
+            continue;
+        }
+        let Some(guard) = lock_if_idle(&inner, instance.id()) else {
+            // An operation owns this row in this process; it settles it itself.
+            continue;
+        };
+        let Some(fresh) = fresh_instance(&inner, instance.id()) else {
+            continue;
+        };
+        if !fresh.status().holds_process() {
+            continue;
+        }
         // A `Starting` row with no recorded identity is a spawn in flight, not
         // an orphan: no PID has been persisted yet, and the process that is
         // starting it (possibly the other service sharing this home) has not
         // finished. Writing it `Stopped` here is what let a second service
         // clobber a live start. The owner finishes it, and a crashed one is
         // retaken by the next `start_instance`.
-        .filter(|instance| {
-            !(instance.status() == InstanceStatus::Starting && identity_of(instance).is_none())
-        })
-        .cloned()
-        .collect();
-    if pending.is_empty() {
+        if fresh.status() == InstanceStatus::Starting && identity_of(&fresh).is_none() {
+            continue;
+        }
+        guarded.push((guard, fresh));
+    }
+    if guarded.is_empty() {
+        fire_done(&inner);
         return;
     }
 
-    let records: Vec<ReconcileRecord> = pending
+    let records: Vec<ReconcileRecord> = guarded
         .iter()
-        .map(|instance| ReconcileRecord::new(instance.id().clone(), identity_of(instance)))
+        .map(|(_, instance)| ReconcileRecord::new(instance.id().clone(), identity_of(instance)))
         .collect();
 
     // Probe outside the store lock: `reconcile` walks the process table and must
-    // never hold the mutex while a probe can block.
+    // never hold the mutex while a probe can block. The instance guards stay held.
     let probe = Arc::clone(&inner.probe);
     let outcomes = super::helpers::blocking(move || Ok(reconcile(&records, probe.as_ref()))).await;
     let Ok(outcomes) = outcomes else {
@@ -92,7 +237,7 @@ pub(crate) async fn reconcile_on_startup(inner: Arc<Inner>) {
     };
 
     for outcome in outcomes {
-        let Some(instance) = pending.iter().find(|i| i.id() == outcome.id()) else {
+        let Some((_, instance)) = guarded.iter().find(|(_, i)| i.id() == outcome.id()) else {
             continue;
         };
         if outcome.is_adopted() {
@@ -101,6 +246,24 @@ pub(crate) async fn reconcile_on_startup(inner: Arc<Inner>) {
             mark(&inner, instance, InstanceEvent::ReconciledAbsent).await;
         }
     }
+    drop(guarded);
+    fire_done(&inner);
+}
+
+/// Acquires the per-instance lock when no in-process operation owns it.
+///
+/// `Err` means busy (an operation holds it in this process); `Ok` gives a guard
+/// that releases on drop. It is the only in-process proof that a create/delete is
+/// not mid-flight, so every mutating reconciliation decision takes it before
+/// reading fresh state.
+fn lock_if_idle(inner: &Arc<Inner>, id: &InstanceId) -> Option<super::registry::InstanceLock> {
+    inner.ops.lock_instance(id).ok()
+}
+
+/// Re-reads one instance from the store, so a decision never acts on a stale
+/// snapshot row whose operation already finished.
+fn fresh_instance(inner: &Arc<Inner>, id: &InstanceId) -> Option<Instance> {
+    inner.db(|store| store.get_instance(id)).ok().flatten()
 }
 
 /// Reconciles every row that was mid-operation when the app died.
@@ -255,7 +418,19 @@ fn short_id(id: &InstanceId) -> String {
 /// The same cleanup a failed create runs (`helpers::rollback_create`): data and
 /// instance directories, both credential backends and the row. The verified
 /// runtime is kept because it is reusable.
+///
+/// The caller holds the instance lock and passes a row it just re-read, so this
+/// only ever removes a row that is genuinely still mid-create; it re-checks the
+/// status anyway, because the row could have been settled by a writer in another
+/// process in the meantime.
 async fn clean_interrupted_create(inner: &Arc<Inner>, instance: &Instance) {
+    if !matches!(
+        instance.status(),
+        InstanceStatus::Provisioning | InstanceStatus::Initializing
+    ) {
+        return;
+    }
+
     let removed = super::helpers::rollback_create(inner, instance.id(), instance.name()).await;
     if removed {
         super::helpers::emit_removed(inner, instance.id());

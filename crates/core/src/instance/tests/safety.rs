@@ -6,7 +6,7 @@ use std::sync::Arc;
 use crate::model::{DeleteMode, EngineKey, InstanceName, InstanceStatus};
 use crate::service::DblService;
 
-use super::harness::{Harness, test_port, wait_for_row_gone};
+use super::harness::{Harness, test_port};
 
 #[test]
 fn two_services_on_one_home_spawn_exactly_once() {
@@ -126,11 +126,32 @@ fn two_concurrent_deletes_remove_the_instance_once() {
             (Err(_), Ok(op)) => (false, op.clone()),
             _ => panic!("round {round}: exactly one delete must be accepted, got {a:?} / {b:?}"),
         };
-        let _ = (winner_first, winner_op);
         // Poll the end state rather than the winner's event stream: the winner may
         // be the second service (its own channel) and may finish before this
-        // thread subscribes.
-        wait_for_row_gone(&h.paths, &id, round);
+        // thread subscribes. On a timeout, report the winner's durable operation
+        // outcome and each service's liveness so a hang can be told apart from a
+        // lost broadcast or a test artefact.
+        let winner: &super::harness::Harness = if winner_first { &h } else { &second };
+        let loser: &super::harness::Harness = if winner_first { &second } else { &h };
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        loop {
+            if h.instance(&id).is_none() {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "round {round}: the row was never removed; winner_first={winner_first} \
+                 winner_result={:?} winner_busy={} loser_result={:?} loser_busy={} \
+                 winner_supervisor_alive={} loser_supervisor_alive={}",
+                winner.operation_result(&winner_op),
+                winner.service.is_operation_finished(&winner_op),
+                loser.operation_result(&winner_op),
+                loser.service.is_operation_finished(&winner_op),
+                winner.supervisor_alive(),
+                loser.supervisor_alive(),
+            );
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
 
         // The row is gone exactly once and at most one archive exists.
         assert!(
@@ -319,8 +340,8 @@ fn the_supervisor_notices_a_killed_process() {
     h.create(spec);
     let instance = h.instances().into_iter().next().expect("instance");
     let id = instance.id().clone();
-    let op = h.service.start_instance(&id).expect("start");
-    h.run(op);
+    let (_op, run) = h.run_call(|| h.service.start_instance(&id));
+    assert!(matches!(run.result(), Some(Ok(()))));
     h.wait_for_status(&id, InstanceStatus::Running);
 
     let running = h.instance(&id).expect("running");

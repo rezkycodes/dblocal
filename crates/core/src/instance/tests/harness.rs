@@ -3,7 +3,6 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic, dead_code)]
 
-use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -24,6 +23,29 @@ pub use super::harness_fakes::{
     FailAt, FakeProcs, FakeSecrets, FakeTerminator, GatedProbe, ScriptedAdapter,
 };
 
+/// Terminal result of one operation, paired with the events the receiver saw.
+///
+/// `result` comes from the durable operation registry when the broadcast event
+/// was missed under load, so callers never need to treat a missing
+/// `OperationFinished` event as "maybe still running" when the registry says done.
+#[derive(Clone, Debug)]
+pub struct OperationRun {
+    pub events: Vec<ServiceEvent>,
+    pub result: Option<std::result::Result<(), crate::service::UserFacingError>>,
+}
+
+impl OperationRun {
+    /// The durable terminal result.
+    pub fn result(&self) -> Option<std::result::Result<(), crate::service::UserFacingError>> {
+        self.result.clone()
+    }
+
+    /// Whether this run ended with a terminal error.
+    pub fn is_err(&self) -> bool {
+        matches!(self.result, Some(Err(_)))
+    }
+}
+
 /// A fully wired service over a temp home plus every fake it uses.
 pub struct Harness {
     pub dir: TempDir,
@@ -42,6 +64,22 @@ impl Harness {
     /// Builds a harness whose adapter is `engine`, with every port free.
     pub fn new(engine: EngineKey) -> Self {
         Self::with_adapter(Arc::new(ScriptedAdapter::new(engine)), engine)
+    }
+
+    /// A fresh empty home whose background work has **not** started.
+    ///
+    /// The caller registers what it needs to observe (a reconciliation hook, a
+    /// first-subscribed receiver) and then calls
+    /// [`crate::service::LocalService::start_background`]. Because nothing else
+    /// runs over the home, the interleaving cannot be consumed by a second
+    /// service's own reconciliation.
+    pub fn paused(engine: EngineKey) -> Self {
+        let _ = engine;
+        let dir = tempfile::tempdir().expect("tempdir");
+        let paths = DblPaths::with_root(dir.path());
+        let procs = Arc::new(FakeProcs::new());
+        let (harness, _startup) = build_no_start(dir, paths, procs);
+        harness
     }
 
     /// Builds a harness that injects `adapter`.
@@ -127,39 +165,47 @@ impl Harness {
     }
 
     /// Subscribes, calls `start` (which returns an `OperationId`), then waits
-    /// for that operation's events.
+    /// for that operation's terminal result.
     ///
     /// This is the safe way to observe an operation that may finish before the
     /// caller could subscribe: the receiver exists before the call, so no event
-    /// is missed.
+    /// is missed, and the durable registry result covers broadcast lag under load.
     pub fn run_call(
         &self,
         start: impl FnOnce() -> crate::Result<crate::service::OperationId>,
-    ) -> (crate::service::OperationId, Vec<ServiceEvent>) {
+    ) -> (crate::service::OperationId, OperationRun) {
         let mut receiver = self.receiver();
         let op = start().expect("operation start");
-        let events = self.run_on(&mut receiver, op.clone());
-        (op, events)
+        let run = self.run_on(&mut receiver, op.clone());
+        (op, run)
     }
 
-    /// Waits for one operation to finish, returning every event it produced.
-    pub fn run(&self, op: crate::service::OperationId) -> Vec<ServiceEvent> {
-        let mut receiver = self.receiver();
-        wait_for_finished(&mut receiver, &op, || {
-            self.service.is_operation_finished(&op)
-        })
-    }
-
-    /// Waits for `op` on an existing receiver, returning every event it produced.
+    /// Waits for `op` on an existing receiver, returning collected events and the
+    /// durable terminal result.
+    ///
+    /// There is intentionally no `run(op)` that subscribes after the fact: that
+    /// shape drops the `OperationFinished` broadcast when the operation wins the
+    /// race, which made tests weaken their assertions under load. Use
+    /// [`Self::run_call`] when starting an operation, or create a receiver before
+    /// the operation starts and pass it here.
     pub fn run_on(
         &self,
         receiver: &mut tokio::sync::broadcast::Receiver<ServiceEvent>,
         op: crate::service::OperationId,
-    ) -> Vec<ServiceEvent> {
-        let finished = self.service.is_operation_finished(&op);
-        wait_for_finished(receiver, &op, || {
-            finished || self.service.is_operation_finished(&op)
-        })
+    ) -> OperationRun {
+        let events = wait_for_finished(receiver, &op, || self.service.is_operation_finished(&op));
+        let result = self
+            .operation_result(&op)
+            .or_else(|| finished_result(&events, &op));
+        OperationRun { events, result }
+    }
+
+    /// Durable terminal result of `op`, when it finished inside the retained window.
+    pub fn operation_result(
+        &self,
+        op: &crate::service::OperationId,
+    ) -> Option<std::result::Result<(), crate::service::UserFacingError>> {
+        self.service.operation_result(op)
     }
 
     /// Waits until `predicate` holds for the stored instance.
@@ -203,7 +249,49 @@ impl Harness {
         // opened afterwards misses every event.
         let mut receiver = self.receiver();
         let op = self.service.create_instance(spec).expect("create");
-        self.run_on(&mut receiver, op)
+        let run = self.run_on(&mut receiver, op.clone());
+        if let Some(Err(err)) = run.result() {
+            panic!(
+                "create {op} failed: {err:?}; events={:?}",
+                describe(&run.events)
+            );
+        }
+        // Prove the row is durable before the caller looks it up: a create that
+        // reports success while the row is invisible to a fresh connection is a
+        // product defect, not a test artefact, and must be reported as such.
+        let deadline = std::time::Instant::now() + Duration::from_secs(30);
+        loop {
+            let service_view = self
+                .service
+                .list_instances()
+                .map(|views| views.into_iter().map(|view| view.id).collect::<Vec<_>>());
+            let fresh_view = self
+                .instances()
+                .into_iter()
+                .map(|instance| instance.id().clone())
+                .collect::<Vec<_>>();
+            if !fresh_view.is_empty() {
+                break;
+            }
+            let db = self.paths.state_db();
+            let wal = db.with_extension("db-wal");
+            let shm = db.with_extension("db-shm");
+            let db_len = std::fs::metadata(&db).map(|m| m.len()).unwrap_or(0);
+            let wal_len = std::fs::metadata(&wal).map(|m| m.len()).unwrap_or(0);
+            let shm_len = std::fs::metadata(&shm).map(|m| m.len()).unwrap_or(0);
+            assert!(
+                std::time::Instant::now() < deadline,
+                "create {op} reported success but no row is listed; \
+                 service_view={service_view:?} fresh_view={fresh_view:?} \
+                 state_db={} exists={} db_len={db_len} wal_len={wal_len} shm_len={shm_len} \
+                 events={:?}",
+                db.display(),
+                db.exists(),
+                describe(&run.events)
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        run.events
     }
 
     /// Number of instances currently watched for live logs.
@@ -297,6 +385,7 @@ impl Harness {
             os: Some(crate::platform::Os::Linux),
             arch: Some(crate::platform::Arch::X86_64),
             host_glibc: Some((2, 39)),
+            auto_start: Some(false),
             ..ServiceOptions::default()
         };
         tweak(&mut options);
@@ -307,6 +396,9 @@ impl Harness {
         std::fs::create_dir_all(runtime_dir.join("bin")).expect("runtime bin");
 
         let service = LocalService::new(paths.clone(), options).expect("service");
+        let startup_receiver = service.subscribe();
+        service.start_background();
+        drop(startup_receiver);
         Harness {
             dir,
             paths,
@@ -344,13 +436,15 @@ pub fn second_service(
     // would make a start fail on a credential it "cannot find", which is a
     // harness artefact, not a defect.
     let terminator = Arc::new(FakeTerminator::new(Arc::clone(&procs)));
-    build_over_shared(paths, procs, terminator, secrets)
+    let (harness, _startup) = build_over_shared(paths, procs, terminator, secrets);
+    harness
 }
 
 /// A fresh service over an existing home, sharing the process table so a live
 /// engine recorded before the "restart" is still visible afterwards.
 pub fn restart(paths: &DblPaths, procs: Arc<FakeProcs>) -> Harness {
-    build_over(paths, procs)
+    let (harness, _startup) = build_over(paths, procs);
+    harness
 }
 
 /// Restarts over the same home, **consuming** the old harness.
@@ -388,7 +482,7 @@ pub fn restart_owned_with(old: Harness, prepare: impl FnOnce(&DblPaths)) -> Harn
     // aborts the parked task, so after this the old service is provably inert.
     std::thread::sleep(Duration::from_millis(120));
     prepare(&paths);
-    build(
+    let (harness, _startup) = build(
         dir,
         paths,
         procs,
@@ -396,18 +490,48 @@ pub fn restart_owned_with(old: Harness, prepare: impl FnOnce(&DblPaths)) -> Harn
         secrets,
         Duration::from_millis(60),
         None,
-    )
+    );
+    harness
+}
+
+/// A fresh service over an existing home whose background work (startup
+/// reconciliation and the supervisor) has **not** started yet.
+///
+/// The test registers whatever it needs to observe, then calls
+/// [`crate::service::LocalService::start_background`] itself. That makes the
+/// "reconciliation lists before X, acts after X" interleavings deterministic
+/// instead of a race: nothing runs until the caller starts it.
+pub fn restart_paused(paths: &DblPaths, procs: Arc<FakeProcs>) -> Harness {
+    let terminator = Arc::new(FakeTerminator::new(Arc::clone(&procs)));
+    let secrets = Arc::new(FakeSecrets::new());
+    let (harness, _startup) = build_inner(
+        tempfile::tempdir().expect("tempdir"),
+        paths.clone(),
+        BuiltFakes {
+            procs,
+            terminator,
+            secrets,
+        },
+        Duration::from_millis(60),
+        None,
+        false,
+    );
+    harness
 }
 
 /// A fresh service over an existing home that also shares the terminator and
 /// secret backends of the original, so a test can inspect or script them after
 /// the restart.
+///
+/// Subscribes **before** reconciliation starts, so startup events (notably
+/// `InstanceRemoved` from an interrupted create) are observable. The receiver is
+/// returned alongside the harness; callers that do not care can drop it.
 pub fn restart_with(
     paths: &DblPaths,
     procs: Arc<FakeProcs>,
     terminator: Arc<FakeTerminator>,
     secrets: Arc<FakeSecrets>,
-) -> Harness {
+) -> (Harness, tokio::sync::broadcast::Receiver<ServiceEvent>) {
     build_over_shared(paths, procs, terminator, secrets)
 }
 
@@ -419,7 +543,8 @@ pub fn fast_supervisor(poll: Duration) -> Harness {
     let procs = Arc::new(FakeProcs::new());
     let terminator = Arc::new(FakeTerminator::new(Arc::clone(&procs)));
     let secrets = Arc::new(FakeSecrets::new());
-    build(dir, paths, procs, terminator, secrets, poll, None)
+    let (harness, _startup) = build(dir, paths, procs, terminator, secrets, poll, None);
+    harness
 }
 
 /// A harness whose reconciliation and supervisor use `gated` as the probe, while
@@ -439,7 +564,7 @@ pub fn with_gated_probe(
     let terminator = Arc::new(FakeTerminator::new(Arc::clone(&procs)));
     let secrets = Arc::new(FakeSecrets::new());
     let _ = engine;
-    build(
+    let (harness, _startup) = build(
         dir,
         paths,
         procs,
@@ -447,12 +572,16 @@ pub fn with_gated_probe(
         secrets,
         poll,
         Some(gated as Arc<dyn ProcessProbe + Send + Sync>),
-    )
+    );
+    harness
 }
 
 /// Builds a harness whose state tree is `paths` and whose process table is
 /// `procs`.
-fn build_over(paths: &DblPaths, procs: Arc<FakeProcs>) -> Harness {
+fn build_over(
+    paths: &DblPaths,
+    procs: Arc<FakeProcs>,
+) -> (Harness, tokio::sync::broadcast::Receiver<ServiceEvent>) {
     let terminator = Arc::new(FakeTerminator::new(Arc::clone(&procs)));
     let secrets = Arc::new(FakeSecrets::new());
     build_over_shared(paths, procs, terminator, secrets)
@@ -463,7 +592,7 @@ fn build_over_shared(
     procs: Arc<FakeProcs>,
     terminator: Arc<FakeTerminator>,
     secrets: Arc<FakeSecrets>,
-) -> Harness {
+) -> (Harness, tokio::sync::broadcast::Receiver<ServiceEvent>) {
     build(
         tempfile::tempdir().expect("tempdir"),
         paths.clone(),
@@ -480,6 +609,9 @@ fn build_over_shared(
 /// `probe` overrides the process probe for the reconciliation and supervisor
 /// paths (a gated probe, for a deterministic race); the fake spawn still uses
 /// `procs` so identities and spawns stay in one table.
+///
+/// The one constructor every harness variant funnels through, starting
+/// background work.
 fn build(
     dir: TempDir,
     paths: DblPaths,
@@ -488,7 +620,69 @@ fn build(
     secrets: Arc<FakeSecrets>,
     status_poll: Duration,
     probe: Option<Arc<dyn ProcessProbe + Send + Sync>>,
-) -> Harness {
+) -> (Harness, tokio::sync::broadcast::Receiver<ServiceEvent>) {
+    build_inner(
+        dir,
+        paths,
+        BuiltFakes {
+            procs,
+            terminator,
+            secrets,
+        },
+        status_poll,
+        probe,
+        true,
+    )
+}
+
+/// A fresh empty home with no background work started, for a test that must
+/// control exactly when reconciliation runs.
+fn build_no_start(
+    dir: TempDir,
+    paths: DblPaths,
+    procs: Arc<FakeProcs>,
+) -> (Harness, tokio::sync::broadcast::Receiver<ServiceEvent>) {
+    let terminator = Arc::new(FakeTerminator::new(Arc::clone(&procs)));
+    let secrets = Arc::new(FakeSecrets::new());
+    build_inner(
+        dir,
+        paths,
+        BuiltFakes {
+            procs,
+            terminator,
+            secrets,
+        },
+        Duration::from_millis(60),
+        None,
+        false,
+    )
+}
+
+/// The fakes one built harness owns, bundled so the constructor stays short.
+struct BuiltFakes {
+    procs: Arc<FakeProcs>,
+    terminator: Arc<FakeTerminator>,
+    secrets: Arc<FakeSecrets>,
+}
+
+/// One constructor variant; `start` decides whether background work runs now.
+///
+/// A receiver is subscribed **before** `start_background()` (when it starts) so
+/// startup reconciliation events are observable. Every harness variant returns
+/// it; most tests ignore it and subscribe their own receiver when they need one.
+fn build_inner(
+    dir: TempDir,
+    paths: DblPaths,
+    fakes: BuiltFakes,
+    status_poll: Duration,
+    probe: Option<Arc<dyn ProcessProbe + Send + Sync>>,
+    start: bool,
+) -> (Harness, tokio::sync::broadcast::Receiver<ServiceEvent>) {
+    let BuiltFakes {
+        procs,
+        terminator,
+        secrets,
+    } = fakes;
     let adapter = Arc::new(ScriptedAdapter::new(EngineKey::Postgresql));
     let busy_ports = Arc::new(Mutex::new(Vec::new()));
 
@@ -514,6 +708,7 @@ fn build(
         os: Some(crate::platform::Os::Linux),
         arch: Some(crate::platform::Arch::X86_64),
         host_glibc: Some((2, 39)),
+        auto_start: Some(false),
         ..ServiceOptions::default()
     };
 
@@ -524,7 +719,11 @@ fn build(
     std::fs::create_dir_all(runtime_dir.join("bin")).expect("runtime bin");
 
     let service = LocalService::new(paths.clone(), options).expect("service");
-    Harness {
+    let startup_receiver = service.subscribe();
+    if start {
+        service.start_background();
+    }
+    let harness = Harness {
         dir,
         paths,
         adapter,
@@ -534,7 +733,8 @@ fn build(
         service,
         events: Mutex::new(Vec::new()),
         busy_ports,
-    }
+    };
+    (harness, startup_receiver)
 }
 
 /// Clone wrapper so the factory can hand out the same scripted adapter behind a
@@ -570,175 +770,12 @@ impl EngineAdapter for ScriptedAdapterClone {
     }
 }
 
-/// Filename of the archived data directory, for assertions.
-pub fn archive_entries(paths: &DblPaths) -> Vec<PathBuf> {
-    let dir = paths.archive_dir();
-    let mut out: Vec<PathBuf> = std::fs::read_dir(&dir)
-        .map(|entries| entries.flatten().map(|e| e.path()).collect())
-        .unwrap_or_default();
-    out.sort();
-    out
-}
+// The event and end-state assertions live in `harness_assert` so each support
+// file stays under the size limit; re-export them so `harness::` call sites are
+// unchanged.
+pub use super::harness_assert::{
+    describe, finished_count, finished_result, removed_for, stages, stop_forced_for, test_port,
+    wait_for_removed, wait_until_row_gone,
+};
 
-/// Reserves a test port in 20000-29999.
-pub fn test_port() -> u16 {
-    crate::ports::test_support::reserve_test_port().get()
-}
-
-/// Reads the last `n` events of a finished operation of a kind.
-pub fn stages(events: &[ServiceEvent]) -> Vec<&'static str> {
-    events
-        .iter()
-        .filter_map(|event| match event {
-            ServiceEvent::OperationProgress { stage, .. } => Some(stage.as_str()),
-            _ => None,
-        })
-        .collect()
-}
-
-pub fn finished_result(
-    events: &[ServiceEvent],
-    op: &crate::service::OperationId,
-) -> Option<std::result::Result<(), crate::service::UserFacingError>> {
-    events.iter().find_map(|event| match event {
-        ServiceEvent::OperationFinished { id, result } if id == op => Some(result.clone()),
-        _ => None,
-    })
-}
-
-/// Whether a `InstanceRemoved` for `id` appears in `events`.
-pub fn removed_for(events: &[ServiceEvent], id: &InstanceId) -> bool {
-    events
-        .iter()
-        .any(|event| matches!(event, ServiceEvent::InstanceRemoved { id: got } if got == id))
-}
-
-/// Whether a `StopForced` for `id` appears in `events`.
-pub fn stop_forced_for(events: &[ServiceEvent], id: &InstanceId) -> bool {
-    events
-        .iter()
-        .any(|event| matches!(event, ServiceEvent::StopForced { id: got } if got == id))
-}
-
-/// Counts `OperationFinished` events in `events`.
-pub fn finished_count(events: &[ServiceEvent]) -> usize {
-    events
-        .iter()
-        .filter(|event| matches!(event, ServiceEvent::OperationFinished { .. }))
-        .count()
-}
-
-/// Compact rendering used in an assertion message when an event order is wrong.
-pub fn describe(events: &[ServiceEvent]) -> Vec<String> {
-    events
-        .iter()
-        .map(|event| match event {
-            ServiceEvent::OperationProgress { stage, .. } => {
-                format!("Progress({})", stage.as_str())
-            }
-            ServiceEvent::InstanceChanged { view } => format!("Changed({})", view.status.as_str()),
-            ServiceEvent::OperationFinished { result, .. } => match result {
-                Ok(()) => "Finished(ok)".to_owned(),
-                Err(err) => format!("Finished({})", err.code),
-            },
-            ServiceEvent::DownloadProgress { .. } => "Download".to_owned(),
-            ServiceEvent::InstanceRemoved { .. } => "Removed".to_owned(),
-            ServiceEvent::StopForced { .. } => "StopForced".to_owned(),
-            _ => "Other".to_owned(),
-        })
-        .collect()
-}
-
-#[allow(dead_code)]
-fn _p(_: &Path) {}
-
-/// Collects events until `op` reports `OperationFinished`, with a hard deadline.
-///
-/// Uses `try_recv` plus a short sleep instead of `blocking_recv`: an operation
-/// can finish before the receiver subscribes (the receiver is created after the
-/// call in the two-service races), and `blocking_recv` would then wait forever
-/// because the missed event is never re-delivered. Polling keeps the deadline
-/// honest.
-fn wait_for_finished(
-    receiver: &mut tokio::sync::broadcast::Receiver<ServiceEvent>,
-    op: &crate::service::OperationId,
-    is_finished: impl Fn() -> bool,
-) -> Vec<ServiceEvent> {
-    // Generous: the whole instance suite runs many services (each with a
-    // two-worker runtime) in parallel, and a busy machine can delay a task's
-    // first poll by seconds. The deadline only has to catch a genuine hang.
-    let deadline = std::time::Instant::now() + Duration::from_secs(60);
-    let mut collected = Vec::new();
-    loop {
-        loop {
-            match receiver.try_recv() {
-                Ok(event) => {
-                    let finished =
-                        matches!(&event, ServiceEvent::OperationFinished { id, .. } if id == op);
-                    collected.push(event);
-                    if finished {
-                        return collected;
-                    }
-                }
-                Err(tokio::sync::broadcast::error::TryRecvError::Empty) => break,
-                Err(tokio::sync::broadcast::error::TryRecvError::Lagged(_)) => continue,
-                Err(tokio::sync::broadcast::error::TryRecvError::Closed) => {
-                    panic!("event channel closed before {op} finished")
-                }
-            }
-        }
-        // The operation may have finished before this receiver subscribed; its
-        // `OperationFinished` is then lost to the broadcast. Completion is still
-        // observable through the registry, so stop waiting once it reports done.
-        if is_finished() {
-            return collected;
-        }
-        assert!(
-            std::time::Instant::now() < deadline,
-            "operation {op} did not finish in time; saw: {:?}",
-            describe(&collected)
-        );
-        std::thread::sleep(Duration::from_millis(5));
-    }
-}
-
-/// Waits until `id` is gone, with a deadline. Shared by recovery tests.
-pub fn wait_until_row_gone(h: &Harness, id: &InstanceId, round: usize) {
-    // Generous: the whole instance suite runs many services (each with a
-    // two-worker runtime) in parallel, and a busy machine can delay a task's
-    // first poll by seconds. The deadline only has to catch a genuine hang.
-    let deadline = std::time::Instant::now() + Duration::from_secs(60);
-    loop {
-        if h.instance(id).is_none() {
-            return;
-        }
-        assert!(
-            std::time::Instant::now() < deadline,
-            "round {round}: the row was never removed"
-        );
-        std::thread::sleep(Duration::from_millis(20));
-    }
-}
-
-/// Waits until `id` is gone from the store, with a deadline.
-///
-/// Shared by the race tests: the winning operation may run on either service and
-/// finish before the test can subscribe, so the observable end state (the row is
-/// gone) is what the test waits for.
-pub fn wait_for_row_gone(paths: &DblPaths, id: &InstanceId, round: usize) {
-    let store = Store::open(paths).expect("store");
-    // Generous: the whole instance suite runs many services (each with a
-    // two-worker runtime) in parallel, and a busy machine can delay a task's
-    // first poll by seconds. The deadline only has to catch a genuine hang.
-    let deadline = std::time::Instant::now() + Duration::from_secs(60);
-    loop {
-        if store.get_instance(id).expect("get").is_none() {
-            return;
-        }
-        assert!(
-            std::time::Instant::now() < deadline,
-            "round {round}: the row was never removed"
-        );
-        std::thread::sleep(Duration::from_millis(20));
-    }
-}
+use super::harness_assert::wait_for_finished;

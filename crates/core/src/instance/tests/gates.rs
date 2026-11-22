@@ -39,8 +39,8 @@ fn a_stale_supervisor_decision_never_overwrites_a_finished_stop() {
     let instance = h.instances().into_iter().next().expect("instance");
     let id = instance.id().clone();
 
-    let ops = h.service.start_instance(&id).expect("start");
-    h.run(ops);
+    let (_ops, start_run) = h.run_call(|| h.service.start_instance(&id));
+    assert!(matches!(start_run.result(), Some(Ok(()))));
     h.wait_for_status(&id, InstanceStatus::Running);
 
     // Arm the gate and wait for the supervisor to be parked inside `validate`
@@ -56,14 +56,12 @@ fn a_stale_supervisor_decision_never_overwrites_a_finished_stop() {
     // operation but the supervisor holds no lock on the row, exactly as in a real
     // race.
     let stop_op = h.service.stop_instance(&id).expect("stop");
-    let stop_events = h.run_on(&mut receiver, stop_op.clone());
+    let stop_run = h.run_on(&mut receiver, stop_op.clone());
+    let stop_events = &stop_run.events;
     assert!(
-        matches!(
-            super::harness::finished_result(&stop_events, &stop_op),
-            Some(Ok(()))
-        ),
+        matches!(stop_run.result(), Some(Ok(()))),
         "the stop must succeed: {:#?}",
-        super::harness::describe(&stop_events)
+        super::harness::describe(stop_events)
     );
     assert_eq!(
         h.instance(&id).expect("row").status(),
@@ -115,8 +113,8 @@ fn a_claim_from_a_stale_status_is_refused_and_changes_nothing() {
     let id = instance.id().clone();
 
     // Another service "wins" the start: the row is now Starting.
-    let ops = h.service.start_instance(&id).expect("start");
-    h.run(ops);
+    let (_ops, start_run) = h.run_call(|| h.service.start_instance(&id));
+    assert!(matches!(start_run.result(), Some(Ok(()))));
     h.wait_for_status(&id, InstanceStatus::Running);
     // Reset to a non-winning shape to claim from a stale expectation: the row is
     // Running, but our stale observation says Stopped.
@@ -365,8 +363,8 @@ fn the_supervisor_skips_a_running_row_while_an_operation_holds_it() {
     let instance = h.instances().into_iter().next().expect("instance");
     let id = instance.id().clone();
 
-    let ops = h.service.start_instance(&id).expect("start");
-    h.run(ops);
+    let (_ops, start_run) = h.run_call(|| h.service.start_instance(&id));
+    assert!(matches!(start_run.result(), Some(Ok(()))));
     h.wait_for_status(&id, InstanceStatus::Running);
 
     // Phase 1: hold the instance lock and arm the gate. The supervisor must not

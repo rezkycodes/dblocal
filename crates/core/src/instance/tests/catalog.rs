@@ -63,16 +63,10 @@ fn a_failed_refresh_keeps_the_working_catalog() {
     // receiver opened afterwards sees its events.
     let mut receiver = h.receiver();
     let op = h.service.refresh_catalog(true).expect("refresh");
-    let events = h.run_on(&mut receiver, op);
-    let finished = events
-        .iter()
-        .find_map(|event| match event {
-            crate::service::ServiceEvent::OperationFinished { result, .. } => Some(result.clone()),
-            _ => None,
-        })
-        .expect("an operation finished");
+    let run = h.run_on(&mut receiver, op);
+    let finished = run.result();
     assert!(
-        finished.is_ok(),
+        matches!(finished, Some(Ok(()))),
         "a failed refresh is silent, not an error: {finished:?}"
     );
     assert!(calls.load(Ordering::SeqCst) >= 1, "the fetcher ran");
@@ -98,13 +92,21 @@ fn a_catalog_inside_the_ttl_is_not_refreshed_without_force() {
     // the TTL even though its status says "stale": a non-forced refresh must
     // therefore do nothing, which is the `F-CAT-01` AC2 rule (refresh at most
     // once per TTL).
-    let op = h.service.refresh_catalog(false).expect("refresh");
-    let _ = h.run(op);
+    let (_op, run) = h.run_call(|| h.service.refresh_catalog(false));
+    assert!(
+        matches!(run.result(), Some(Ok(()))),
+        "refresh: {:?}",
+        run.result()
+    );
     assert_eq!(calls.load(Ordering::SeqCst), 0, "no refresh inside the TTL");
 
     // With `force`, the same call does reach out exactly once.
-    let op = h.service.refresh_catalog(true).expect("forced refresh");
-    let _ = h.run(op);
+    let (_op, run) = h.run_call(|| h.service.refresh_catalog(true));
+    assert!(
+        matches!(run.result(), Some(Ok(()))),
+        "forced refresh: {:?}",
+        run.result()
+    );
     assert_eq!(
         calls.load(Ordering::SeqCst),
         1,
@@ -131,7 +133,8 @@ fn catalog_status_tracks_freshness_after_a_successful_refresh() {
     });
     let mut receiver = h.receiver();
     let op = h.service.refresh_catalog(true).expect("refresh");
-    let events = h.run_on(&mut receiver, op);
+    let run = h.run_on(&mut receiver, op);
+    let events = &run.events;
     let updated = events.iter().any(|event| {
         matches!(
             event,

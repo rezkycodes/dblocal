@@ -129,6 +129,15 @@ pub(crate) fn emit_stage(inner: &Inner, op: &OperationId, stage: OperationStage)
 }
 
 /// Emits `Failed`/`Done` and then exactly one `OperationFinished`.
+///
+/// The broadcast is sent **before** the outcome is recorded in the operation
+/// registry. That order is what makes the two completion signals consistent for a
+/// consumer: a subscriber that polls the registry and stops as soon as it sees
+/// "finished" must still be able to drain `OperationFinished` from its channel, so
+/// the event has to be in the channel by the time the registry says done. (The
+/// registry is still the durable path for a consumer that genuinely missed the
+/// broadcast — a late subscriber or a lagged channel — because presence there means
+/// the operation completed regardless of the channel.)
 pub(crate) fn finish_operation(inner: &Inner, op: &OperationId, result: OpResult<()>) {
     let rendered = match &result {
         Ok(()) => {
@@ -146,9 +155,9 @@ pub(crate) fn finish_operation(inner: &Inner, op: &OperationId, result: OpResult
     };
     inner.emit(ServiceEvent::OperationFinished {
         id: op.clone(),
-        result: rendered,
+        result: rendered.clone(),
     });
-    inner.ops.finish(op);
+    inner.ops.finish(op, rendered);
 }
 
 /// Loads an instance or reports a typed `NotFound`.

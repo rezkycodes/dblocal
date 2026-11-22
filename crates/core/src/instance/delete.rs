@@ -10,8 +10,9 @@ use crate::service::{OperationId, OperationStage};
 
 use super::helpers::{
     OpResult, blocking, db_async, dir_size, emit_changed, emit_removed, emit_stage,
-    finish_operation, identity_of, load, remove_tree, safe_within,
+    finish_operation, identity_of, load, safe_within,
 };
+use super::retry::remove_tree_retrying;
 use super::service::Inner;
 
 /// How many times a delete re-reads the status before giving up, which absorbs
@@ -252,7 +253,13 @@ pub(crate) fn delete_instance(
     // the order is marker first, claim second; writing it after the compare-and-
     // set leaves a window in which another process's reconciliation sees a
     // `Deleting` row with no owner and mistakes it for a crash.
-    let nonce = format!("{}-{}", std::process::id(), id.as_str());
+    //
+    // The nonce must be unique per operation, not per (process, instance): two
+    // deletes of the same id in one process would otherwise share it, and the
+    // loser's `Drop` would delete the winner's marker. A unique operation id is
+    // what the marker contract ("a per-operation nonce") promises.
+    let op_id = inner.ops.next_id();
+    let nonce = format!("{}-{}", std::process::id(), op_id.as_str());
     let marker = InFlightMarker::create(inner, &inner.paths.instance_dir(instance.name()), &nonce);
 
     // Claim `Deleting` synchronously, like `start_instance` claims `Starting`.
@@ -294,7 +301,7 @@ pub(crate) fn delete_instance(
     // changes in between.
     emit_changed(inner, id);
 
-    let op = inner.ops.next_id();
+    let op = op_id;
     let op_id = op.clone();
     let inner = Arc::clone(inner);
     let id = id.clone();
@@ -408,7 +415,7 @@ async fn purge_data(inner: &Arc<Inner>, instance: &Instance) -> Result<()> {
     let instance_dir = inner.paths.instance_dir(instance.name());
     // Re-validate before removing: a corrupt row must not delete outside home.
     safe_within(&inner.paths, &instance_dir)?;
-    blocking(move || remove_tree(&instance_dir)).await
+    blocking(move || remove_tree_retrying(&instance_dir)).await
 }
 
 async fn archive_data(inner: &Arc<Inner>, instance: &Instance) -> OpResult<ArchivedData> {
@@ -458,7 +465,7 @@ async fn archive_data(inner: &Arc<Inner>, instance: &Instance) -> OpResult<Archi
             super::helpers::ensure_private_dir(&target_for_move)?;
         }
         // The instance shell (logs, run) is gone once its data is archived.
-        remove_tree(&instance_dir)
+        remove_tree_retrying(&instance_dir)
     })
     .await?;
 
