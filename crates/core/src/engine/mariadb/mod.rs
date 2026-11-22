@@ -139,8 +139,11 @@ fn pidfile_path(data_dir: &Path) -> PathBuf {
     data_dir.join("mariadbd.pid")
 }
 
-fn log_error_path(data_dir: &Path) -> PathBuf {
-    sibling_dir(data_dir, consts::DIR_LOGS).join("mariadb.err")
+pub fn log_error_path(data_dir: &Path) -> PathBuf {
+    // Must equal `instance::helpers::log_file_for`: the service's log viewer and
+    // `failure_tail` read `logs/mariadb.log`, and a server started with
+    // `log-error` writes there, not to stderr (finding 7).
+    sibling_dir(data_dir, consts::DIR_LOGS).join("mariadb.log")
 }
 
 fn tmpdir_path(data_dir: &Path) -> PathBuf {

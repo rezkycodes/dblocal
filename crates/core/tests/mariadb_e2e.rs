@@ -466,7 +466,7 @@ fn wait_ready(
          pidfile_exists={}; log:\n{}",
         timeout.as_secs(),
         pidfile.is_file(),
-        fs::read_to_string(logs.join("mariadb.err")).unwrap_or_default()
+        fs::read_to_string(logs.join("mariadb.log")).unwrap_or_default()
     );
 }
 

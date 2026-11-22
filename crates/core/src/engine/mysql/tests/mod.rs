@@ -3,6 +3,7 @@ use crate::engine::Credential;
 use crate::model::Port;
 
 mod core;
+mod port_sync;
 mod process;
 
 pub(crate) const SECRET: &str = "S3cret-Canary-Pw-MySql!9x";

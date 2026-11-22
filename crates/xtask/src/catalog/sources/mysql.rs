@@ -66,10 +66,35 @@ pub fn mysql_artifact(
         sha256,
         size_bytes: bytes.len() as u64,
         format: build.format.as_str().to_owned(),
-        strip_prefix: Some(format!("mysql-{version}-minimal")),
+        // Every MySQL archive has exactly one top-level directory named after
+        // the archive stem (`mysql-8.4.11-linux-glibc2.28-x86_64-minimal/`,
+        // `mysql-8.4.11-macos15-arm64/`, `mysql-8.4.11-winx64/`), not
+        // `mysql-{version}-minimal`: the old constant matched no real archive,
+        // so `bin/` would land one level too deep and `expected_binaries` would
+        // fail after a real download.
+        strip_prefix: Some(archive_root(&build.file_name)?),
         min_glibc: None,
         variant: None,
     })
+}
+
+/// The single top-level directory a MySQL archive unpacks into.
+///
+/// Derived from the archive name by dropping its extension; MySQL 8.4 archives
+/// are `.tar.xz`, `.tar.gz` or `.zip` and every one names its root after the
+/// stem, so the strip prefix must too.
+pub fn archive_root(file_name: &str) -> Result<String, SourceError> {
+    super::helpers::archive_root(file_name)
+        .ok_or_else(|| SourceError::new(format!("MySQL archive {file_name} has no known format")))
+}
+
+/// The `.md5` of `bytes`, as the sidecar would publish it.
+///
+/// Used by the offline builder tests to serve a genuine `.md5` sidecar for the
+/// tiny fixture archive.
+#[cfg(test)]
+pub fn md5_hex(bytes: &[u8]) -> String {
+    hex(&md5_compute(bytes))
 }
 
 /// Small, dependency-free MD5 used only to cross-check MySQL's `.md5` sidecar.

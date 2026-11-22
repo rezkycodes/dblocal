@@ -32,7 +32,18 @@ Each document records:
   that uses it is `select_artifact`). Every artifact carries an absolute
   HTTPS `url`, a 64-character lowercase `sha256`, a non-zero `size_bytes`,
   an archive `format`, and optional `strip_prefix`, `min_glibc` and `variant`.
-  Wave 1 publishes Valkey `jammy` only; see `catalog/README.md` for why.
+  Valkey publishes `jammy` only; see `catalog/README.md` for why.
+
+The bundled snapshot covers all four engines. On Linux `x86_64` every engine has
+at least one installable version; the per-platform gaps are real and come from
+upstream, not from the catalog hiding them:
+
+- MariaDB publishes no macOS build and no arm64 Linux tarball.
+- MySQL publishes no arm64 Linux `minimal` tarball (only `x86_64`), and its macOS
+  builds are `macos15`.
+
+A combination with no artifact is shown by the read model as "tidak tersedia di
+platform ini" (F-CAT-02 AC2), never as an error and never with an invented URL.
 
 Combinations with no artifact are reported as unavailable on that platform.
 They are never hidden and never treated as an error.
@@ -70,3 +81,20 @@ Trust boundaries:
 
 Offline fixture tests exercise the PostgreSQL, Valkey, MariaDB and MySQL
 source paths without touching the network or downloading large archives.
+
+Three defects surfaced the first time the builder produced real MySQL and MariaDB
+entries, all now fixed and covered by those fixture tests:
+
+- Both adapters set `strip_prefix` to a name no archive contains
+  (`mysql-{version}-minimal`, and `None` for MariaDB), so `bin/` extracted one
+  level too deep and the runtime's expected-binary check would fail. It is now
+  always the archive's real root (`archive_root`), which also keeps the MariaDB
+  Windows zip correct.
+- MariaDB's REST API reports `size: null` for the server tarballs, so the old
+  code refused every real release; the builder now resolves the size with a
+  `HEAD`, upgrades the API's `http://` URL to `https://`, and drops the plugin and
+  debug-symbol tarballs that share the `(os, arch)` target.
+
+The one MySQL artifact proved end to end on this host (Linux `x86_64`) is
+recorded with its exact URL, size and SHA-256, plus a second independent
+download that reproduces the hash, in `catalog/README.md`.

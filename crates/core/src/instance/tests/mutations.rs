@@ -11,8 +11,12 @@ use super::harness::{FailAt, FakeProcs, Harness, test_port};
 use crate::process::probe::ProcessProbe;
 
 fn start_and_wait(h: &Harness, id: &crate::model::InstanceId) {
-    let op = h.service.start_instance(id).expect("start");
-    let _ = h.run(op);
+    let (_op, run) = h.run_call(|| h.service.start_instance(id));
+    assert!(
+        matches!(run.result(), Some(Ok(()))),
+        "start: {:?}",
+        run.result()
+    );
     h.wait_for_status(id, InstanceStatus::Running);
 }
 
@@ -41,8 +45,8 @@ fn an_engine_that_exits_immediately_is_diagnosed_and_failed() {
     let instance = h.instances().into_iter().next().expect("instance");
     let id = instance.id().clone();
 
-    let (op, events) = h.run_call(|| h.service.start_instance(&id));
-    let finished = super::harness::finished_result(&events, &op);
+    let (_op, run) = h.run_call(|| h.service.start_instance(&id));
+    let finished = run.result();
     assert!(
         matches!(finished, Some(Err(_))),
         "an immediate exit must fail: {finished:?}"
@@ -66,8 +70,9 @@ fn create_start_stop_delete_emit_the_expected_instance_changes() {
     let spec = h.spec("sequences", EngineKey::Postgresql, port);
     let mut receiver = h.service.subscribe();
     let op = h.service.create_instance(spec).expect("create");
-    let create_events = h.run_on(&mut receiver, op);
-    let created_changes = statuses(&create_events);
+    let create_run = h.run_on(&mut receiver, op);
+    let create_events = &create_run.events;
+    let created_changes = statuses(create_events);
     assert!(
         created_changes.contains(&InstanceStatus::Initializing)
             && created_changes.contains(&InstanceStatus::Stopped),
@@ -82,7 +87,8 @@ fn create_start_stop_delete_emit_the_expected_instance_changes() {
         .id()
         .clone();
     let op = h.service.start_instance(&id).expect("start");
-    let start_changes = statuses(&h.run_on(&mut receiver, op));
+    let start_run = h.run_on(&mut receiver, op);
+    let start_changes = statuses(&start_run.events);
     assert_eq!(
         start_changes.first().copied(),
         Some(InstanceStatus::Starting),
@@ -91,7 +97,8 @@ fn create_start_stop_delete_emit_the_expected_instance_changes() {
     assert_eq!(start_changes.last().copied(), Some(InstanceStatus::Running));
 
     let op = h.service.stop_instance(&id).expect("stop");
-    let stop_changes = statuses(&h.run_on(&mut receiver, op));
+    let stop_run = h.run_on(&mut receiver, op);
+    let stop_changes = statuses(&stop_run.events);
     assert_eq!(
         stop_changes.first().copied(),
         Some(InstanceStatus::Stopping),
@@ -103,7 +110,8 @@ fn create_start_stop_delete_emit_the_expected_instance_changes() {
         .service
         .delete_instance(&id, DeleteMode::PurgeData)
         .expect("delete");
-    let delete_changes = statuses(&h.run_on(&mut receiver, op));
+    let delete_run = h.run_on(&mut receiver, op);
+    let delete_changes = statuses(&delete_run.events);
     assert!(
         delete_changes.contains(&InstanceStatus::Deleting),
         "Deleting is persisted before the removal: {delete_changes:?}"
@@ -434,11 +442,12 @@ fn a_stop_whose_kill_is_refused_keeps_the_row_running_and_the_identity() {
         .refuse
         .store(true, std::sync::atomic::Ordering::SeqCst);
 
-    let (op, events) = h.run_call(|| h.service.stop_instance(&id));
+    let (op, run) = h.run_call(|| h.service.stop_instance(&id));
+    let events = &run.events;
     assert!(
-        matches!(super::harness::finished_result(&events, &op), Some(Err(_))),
-        "a refused kill surfaces as a failure: {:#?}",
-        super::harness::describe(&events)
+        matches!(run.result(), Some(Err(_))),
+        "a refused kill surfaces as a failure op {op}: {:#?}",
+        super::harness::describe(events)
     );
 
     let settled = h.instance(&id).expect("row");
@@ -472,18 +481,19 @@ fn a_stop_still_runs_when_the_credential_cannot_be_read() {
     h.create(spec);
     let instance = h.instances().into_iter().next().expect("instance");
     let id = instance.id().clone();
-    let ops = h.service.start_instance(&id).expect("start");
-    h.run(ops);
+    let (_op, start_run) = h.run_call(|| h.service.start_instance(&id));
+    assert!(matches!(start_run.result(), Some(Ok(()))));
     h.wait_for_status(&id, InstanceStatus::Running);
 
     h.secrets
         .unreadable
         .store(true, std::sync::atomic::Ordering::SeqCst);
-    let (op, events) = h.run_call(|| h.service.stop_instance(&id));
+    let (op, run) = h.run_call(|| h.service.stop_instance(&id));
+    let events = &run.events;
     assert!(
-        matches!(super::harness::finished_result(&events, &op), Some(Ok(()))),
-        "an unreadable credential must not block a stop: {:#?}",
-        super::harness::describe(&events)
+        matches!(run.result(), Some(Ok(()))),
+        "an unreadable credential must not block a stop op {op}: {:#?}",
+        super::harness::describe(events)
     );
     let stopped = h.wait_for_status(&id, InstanceStatus::Stopped);
     assert!(stopped.pid().is_none());

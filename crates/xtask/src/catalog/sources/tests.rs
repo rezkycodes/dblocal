@@ -1,11 +1,13 @@
 use super::helpers::{hex, is_sha256_hex, parse_md5_sidecar, parse_sha256_sidecar};
-use super::mariadb::{MariadbChecksum, MariadbFile};
+use super::mariadb::{
+    MariadbChecksum, MariadbFile, MariadbRelease, mariadb_https_url, mariadb_release_from_api,
+};
 
 use super::*;
 use std::collections::BTreeMap;
 use std::io::{Read, Write};
 
-struct MapSource {
+pub(super) struct MapSource {
     text: BTreeMap<String, String>,
     text_by_encoding: BTreeMap<(String, String), String>,
     bytes: BTreeMap<String, Vec<u8>>,
@@ -13,7 +15,7 @@ struct MapSource {
 }
 
 impl MapSource {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         Self {
             text: BTreeMap::new(),
             text_by_encoding: BTreeMap::new(),
@@ -22,23 +24,28 @@ impl MapSource {
         }
     }
 
-    fn with_text(mut self, url: &str, body: impl Into<String>) -> Self {
+    pub(super) fn with_text(mut self, url: &str, body: impl Into<String>) -> Self {
         self.text.insert(url.to_owned(), body.into());
         self
     }
 
-    fn with_text_enc(mut self, url: &str, accept_encoding: &str, body: impl Into<String>) -> Self {
+    pub(super) fn with_text_enc(
+        mut self,
+        url: &str,
+        accept_encoding: &str,
+        body: impl Into<String>,
+    ) -> Self {
         self.text_by_encoding
             .insert((url.to_owned(), accept_encoding.to_owned()), body.into());
         self
     }
 
-    fn with_bytes(mut self, url: &str, body: Vec<u8>) -> Self {
+    pub(super) fn with_bytes(mut self, url: &str, body: Vec<u8>) -> Self {
         self.bytes.insert(url.to_owned(), body);
         self
     }
 
-    fn with_size(mut self, url: &str, accept_encoding: &str, size: u64) -> Self {
+    pub(super) fn with_size(mut self, url: &str, accept_encoding: &str, size: u64) -> Self {
         self.sizes
             .insert((url.to_owned(), accept_encoding.to_owned()), size);
         self
@@ -76,11 +83,11 @@ impl Source for MapSource {
     }
 }
 
-fn fixtures() -> String {
+pub(super) fn fixtures() -> String {
     format!("{}/tests/fixtures", env!("CARGO_MANIFEST_DIR"))
 }
 
-fn read_fixture(name: &str) -> String {
+pub(super) fn read_fixture(name: &str) -> String {
     std::fs::read_to_string(format!("{}/{name}", fixtures())).expect("fixture")
 }
 
@@ -223,39 +230,6 @@ fn valkey_fails_when_identity_and_gzip_objects_differ() {
             .contains("inconsistent across Accept-Encoding")
     );
     assert!(err.to_string().contains("valkey-9.2.0-linux-x86_64-noble"));
-}
-
-#[test]
-fn mariadb_reads_sha256_from_the_rest_api() {
-    let release: MariadbRelease =
-        serde_json::from_str(&read_fixture("mariadb-release.json")).expect("mariadb");
-    let (versions, artifacts) = mariadb_from_api(&release, "11.8.10").expect("mariadb");
-    assert_eq!(versions.len(), 1);
-    assert_eq!(artifacts.len(), 2);
-    for artifact in &artifacts {
-        assert!(artifact.url.starts_with("https://"));
-        assert_eq!(artifact.sha256.len(), 64);
-        assert!(artifact.size_bytes > 0);
-    }
-}
-
-#[test]
-fn mariadb_rejects_missing_checksum_or_size() {
-    let mut release: MariadbRelease =
-        serde_json::from_str(&read_fixture("mariadb-release.json")).expect("mariadb");
-    release
-        .files
-        .retain(|file| file.file_name.ends_with(".tar.gz"));
-    release.files[0].checksum.sha256sum = None;
-    assert!(mariadb_from_api(&release, "11.8.10").is_err());
-
-    let mut release: MariadbRelease =
-        serde_json::from_str(&read_fixture("mariadb-release.json")).expect("mariadb");
-    release
-        .files
-        .retain(|file| file.file_name.ends_with(".tar.gz"));
-    release.files[0].size = None;
-    assert!(mariadb_from_api(&release, "11.8.10").is_err());
 }
 
 #[test]
@@ -409,7 +383,9 @@ fn mariadb_target_filters() {
     assert!(super::mariadb::mariadb_target("OSX", "x86_64", "mariadb.tar.gz").is_none());
     assert!(super::mariadb::mariadb_target("Linux", "ppc64le", "mariadb.tar.gz").is_none());
     assert!(super::mariadb::mariadb_target("Linux", "x86_64", "mariadb.msi").is_none());
-    assert!(super::mariadb::mariadb_target("Linux", "arm64", "mariadb.tar.gz").is_some());
+    // MariaDB publishes no arm64 Linux tarball (W0-B, and the REST API shows
+    // none for 11.4/11.8), so the target must not be accepted.
+    assert!(super::mariadb::mariadb_target("Linux", "arm64", "mariadb.tar.gz").is_none());
 }
 
 #[test]
@@ -459,6 +435,7 @@ fn postgres_rejects_asset_without_sidecar() {
 fn mariadb_rejects_empty_release_and_malformed_sha() {
     let release = MariadbRelease {
         release_id: "11.8.10".to_owned(),
+        date_of_release: "2026-11-17".to_owned(),
         files: vec![MariadbFile {
             file_name: "mariadb-11.8.10-linux-systemd-x86_64.tar.gz".to_owned(),
             os: "Linux".to_owned(),
@@ -474,12 +451,14 @@ fn mariadb_rejects_empty_release_and_malformed_sha() {
 
     let release = MariadbRelease {
         release_id: "11.8.10".to_owned(),
+        date_of_release: "2026-11-17".to_owned(),
         files: vec![],
     };
     assert!(mariadb_from_api(&release, "11.8.10").is_err());
 
     let release = MariadbRelease {
         release_id: "11.8.10".to_owned(),
+        date_of_release: "2026-11-17".to_owned(),
         files: vec![MariadbFile {
             file_name: "mariadb-11.8.10-linux-systemd-x86_64.tar.gz".to_owned(),
             os: "Linux".to_owned(),
@@ -747,3 +726,6 @@ fn http_source_rejects_non_https_and_handles_local_responses() {
     );
     let _ = handle.join();
 }
+
+#[path = "tests_mysql_family.rs"]
+mod mysql_family;

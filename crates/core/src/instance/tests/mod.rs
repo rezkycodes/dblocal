@@ -8,9 +8,11 @@ mod coverage;
 mod download;
 mod gates;
 mod harness;
+mod harness_assert;
 mod harness_fakes;
 mod lifecycle;
 mod mutations;
+mod port_sync;
 mod races;
 mod recovery;
 mod safety;
@@ -35,10 +37,36 @@ fn created(h: &Harness, name: &str) -> crate::model::Instance {
         })
         .collect();
     assert!(failed.is_empty(), "create failed: {failed:?}");
-    h.instances()
-        .into_iter()
-        .find(|i| i.name().as_str() == name)
-        .expect("created instance")
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    loop {
+        if let Some(instance) = h
+            .instances()
+            .into_iter()
+            .find(|i| i.name().as_str() == name)
+        {
+            return instance;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "created instance {name} not listed after successful create; \
+             service_view={:?} fresh_view={:?} state_db={} exists={} len={} \
+             events={:?}",
+            h.service
+                .list_instances()
+                .map(|views| views.into_iter().map(|view| view.name).collect::<Vec<_>>()),
+            h.instances()
+                .into_iter()
+                .map(|instance| instance.name().as_str().to_owned())
+                .collect::<Vec<_>>(),
+            h.paths.state_db().display(),
+            h.paths.state_db().exists(),
+            std::fs::metadata(h.paths.state_db())
+                .map(|meta| meta.len())
+                .unwrap_or(0),
+            harness::describe(&events)
+        );
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
 }
 
 #[test]

@@ -1,5 +1,3 @@
-use std::fs;
-
 use crate::clients::{LaunchPlan, SystemSpawner, run};
 
 use super::resilient::spawn_resilient;
@@ -9,12 +7,11 @@ fn real_spawn_runs_harmless_fake_program() {
     let dir = tempfile::tempdir().expect("tempdir");
     let script = dir.path().join("fake-client.sh");
     let out = dir.path().join("out.txt");
-    fs::write(&script, format!("#!/bin/sh\necho ok > {}\n", out.display())).expect("write");
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).expect("chmod");
-    }
+    crate::fsutil::write_executable_file_atomic(
+        &script,
+        format!("#!/bin/sh\necho ok > {}\n", out.display()).as_bytes(),
+    )
+    .expect("write");
     let plan = LaunchPlan::new(script.clone(), vec![], vec![], None, None, None);
     spawn_resilient(&plan, &SystemSpawner::default()).expect("spawn");
     super::resilient::wait_for_contents(&out, "ok\n");

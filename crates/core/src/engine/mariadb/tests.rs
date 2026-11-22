@@ -68,7 +68,7 @@ fn config_paths_are_derived_from_instance_layout() {
     );
     assert_eq!(
         log_error_path(data),
-        PathBuf::from("/home/u/.dblocal/instances/app/logs/mariadb.err")
+        PathBuf::from("/home/u/.dblocal/instances/app/logs/mariadb.log")
     );
     assert_eq!(
         config_path(data),
@@ -1024,7 +1024,7 @@ fn diagnose_via_adapter_maps_port_in_use() {
 #[test]
 fn read_log_tail_returns_last_lines_and_empty_for_missing() {
     let dir = tempdir().expect("tmp");
-    let log = dir.path().join("mariadb.err");
+    let log = dir.path().join("mariadb.log");
     let body: String = (1..=50).map(|n| format!("line-{n}\n")).collect();
     fs::write(&log, body).expect("write");
     let tail = read_log_tail(&log, 5);
