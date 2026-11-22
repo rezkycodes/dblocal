@@ -659,14 +659,16 @@ fn shutdown_refuses_to_signal_unrelated_pid() {
     fs::create_dir_all(&logs).expect("logs");
     fs::create_dir_all(&run).expect("run");
 
-    // Spawn an unrelated long-lived process.
-    let mut sleeper = Command::new("sleep")
-        .arg("60")
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .expect("spawn sleep");
+    // Spawn an unrelated long-lived process, reaped on every exit path.
+    let mut sleeper = super::testutil::ChildGuard::new(
+        Command::new("sleep")
+            .arg("60")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn sleep"),
+    );
     let pid = sleeper.id();
 
     // Write pidfile pointing at the sleeper.
@@ -700,8 +702,7 @@ fn shutdown_refuses_to_signal_unrelated_pid() {
         .unwrap_or(false);
     assert!(still_alive, "unrelated process must not be signalled");
 
-    let _ = sleeper.kill();
-    let _ = sleeper.wait();
+    sleeper.reap();
 }
 
 #[test]
@@ -751,16 +752,18 @@ fn verify_pid_identity_linux_matches_real_process() {
     fs::create_dir_all(&data).expect("data");
     fs::write(&conf, "[mysqld]\n").expect("conf");
 
-    let mut child = retry_etxtbsy(|| {
-        Command::new(&fake)
-            .arg(format!("--defaults-file={}", conf.display()))
-            .arg(format!("--datadir={}", data.display()))
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-    })
-    .expect("spawn fake mariadbd");
+    let mut child = super::testutil::ChildGuard::new(
+        retry_etxtbsy(|| {
+            Command::new(&fake)
+                .arg(format!("--defaults-file={}", conf.display()))
+                .arg(format!("--datadir={}", data.display()))
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+        })
+        .expect("spawn fake mariadbd"),
+    );
     let pid = child.id();
     std::thread::sleep(Duration::from_millis(100));
 
@@ -798,8 +801,7 @@ fn verify_pid_identity_linux_matches_real_process() {
         "wrong exe should be NotOurs: {id:?}"
     );
 
-    let _ = child.kill();
-    let _ = child.wait();
+    child.reap();
     std::thread::sleep(Duration::from_millis(50));
     let dead = verify_pid_identity(pid, &expected);
     assert!(
@@ -811,13 +813,15 @@ fn verify_pid_identity_linux_matches_real_process() {
 #[cfg(target_os = "linux")]
 #[test]
 fn verify_pid_identity_rejects_unrelated_live_process() {
-    let mut sleeper = Command::new("sleep")
-        .arg("60")
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .expect("spawn sleep");
+    let mut sleeper = super::testutil::ChildGuard::new(
+        Command::new("sleep")
+            .arg("60")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn sleep"),
+    );
     let pid = sleeper.id();
     std::thread::sleep(Duration::from_millis(30));
     let expected = ExpectedIdentity {
@@ -830,8 +834,7 @@ fn verify_pid_identity_rejects_unrelated_live_process() {
         matches!(id, PidIdentity::NotOurs(_) | PidIdentity::Unverifiable(_)),
         "sleep must not be identified as mariadbd: {id:?}"
     );
-    let _ = sleeper.kill();
-    let _ = sleeper.wait();
+    sleeper.reap();
 }
 
 #[test]

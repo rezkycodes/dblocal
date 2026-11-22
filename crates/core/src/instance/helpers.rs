@@ -158,7 +158,56 @@ pub(crate) fn finish_operation(inner: &Inner, op: &OperationId, result: OpResult
         result: rendered.clone(),
     });
     inner.ops.finish(op, rendered);
+    // Test seam, deliberately placed immediately after the registry write: in this
+    // (fixed) order the broadcast above has already happened, so a hook that drains
+    // its channel here finds `OperationFinished`. If the order is swapped back to
+    // "registry, then broadcast", the hook runs before the broadcast and finds
+    // nothing — which is exactly the contract a consumer relies on.
+    #[cfg(test)]
+    run_finish_hook(inner, op);
 }
+
+/// Test-only hook that runs immediately after `finish_operation` records the
+/// durable result, keyed by state root so parallel tests do not collide.
+#[cfg(test)]
+type FinishHook = Box<dyn FnOnce(&Inner, &OperationId) + Send>;
+
+#[cfg(test)]
+fn finish_hook_table() -> &'static std::sync::Mutex<Vec<(String, FinishHook)>> {
+    static HOOKS: std::sync::OnceLock<std::sync::Mutex<Vec<(String, FinishHook)>>> =
+        std::sync::OnceLock::new();
+    HOOKS.get_or_init(|| std::sync::Mutex::new(Vec::new()))
+}
+
+/// Registers the one-shot `finish_operation` hook for the service rooted at `root`.
+#[cfg(test)]
+pub(crate) fn on_finish_recorded(
+    root: &std::path::Path,
+    hook: impl FnOnce(&Inner, &OperationId) + Send + 'static,
+) {
+    finish_hook_table()
+        .lock()
+        .expect("finish hooks")
+        .push((root.display().to_string(), Box::new(hook)));
+}
+
+#[cfg(test)]
+fn run_finish_hook(inner: &Inner, op: &OperationId) {
+    let root = inner.paths.root().display().to_string();
+    let hook = finish_hook_table().lock().ok().and_then(|mut hooks| {
+        hooks
+            .iter()
+            .position(|(seen, _)| seen == &root)
+            .map(|index| hooks.remove(index).1)
+    });
+    if let Some(hook) = hook {
+        hook(inner, op);
+    }
+}
+
+#[cfg(not(test))]
+#[allow(dead_code)]
+fn run_finish_hook(_: &Inner, _: &OperationId) {}
 
 /// Loads an instance or reports a typed `NotFound`.
 pub(crate) fn load(inner: &Inner, id: &crate::model::InstanceId) -> Result<Instance> {
