@@ -43,9 +43,7 @@ use std::sync::atomic::AtomicUsize;
 use std::time::{Duration, Instant};
 
 use dblocal_core::model::{AuthMode, DeleteMode, EngineKey, InstanceId, Port, Runtime};
-use dblocal_core::service::{
-    CatalogView, DblService, InstanceView, OperationId, UriFormat, UserFacingError,
-};
+use dblocal_core::service::{CatalogView, DblService, InstanceView, UriFormat, UserFacingError};
 use dblocal_core::strings;
 use gpui_kit::component::{ActiveTheme, command::CommandState, h_flex, input::InputState};
 use gpui_kit::{
@@ -138,11 +136,8 @@ pub struct Workspace {
     tray_note_shown: bool,
     tray_note: Option<SharedString>,
     quit: QuitMachine,
-    /// Stop operations issued by the quit flow: operation id -> instance id.
-    /// A stop is finished only when `OperationFinished` arrives for it.
-    quit_stops: HashMap<OperationId, InstanceId>,
-    /// Outcomes that arrived before the stop was registered (R2).
-    quit_stop_buffer: HashMap<OperationId, bool>,
+    /// Quit-issued stop operations and their outcomes, ordering-safe (R2).
+    quit_stops: crate::quit::StopLedger,
     /// Wall-clock bound for quit-stop completion; injectable for tests.
     quit_stop_timeout: Duration,
     /// Task that fires the quit timeout.
@@ -290,8 +285,7 @@ impl Workspace {
             last_failure_mirror: None,
             toast: None,
             quit: QuitMachine::new(),
-            quit_stops: HashMap::new(),
-            quit_stop_buffer: HashMap::new(),
+            quit_stops: crate::quit::StopLedger::new(),
             quit_stop_timeout: crate::quit::QUIT_STOP_TIMEOUT,
             quit_timeout_task: None,
             version: env!("CARGO_PKG_VERSION"),

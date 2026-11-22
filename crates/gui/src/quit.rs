@@ -7,7 +7,7 @@
 use std::time::Duration;
 
 use dblocal_core::model::InstanceId;
-use dblocal_core::service::InstanceView;
+use dblocal_core::service::{InstanceView, OperationId};
 
 use crate::format;
 
@@ -181,6 +181,79 @@ impl Default for QuitMachine {
     }
 }
 
+/// Ordering-safe ledger of quit-issued stop operations (R2).
+///
+/// `stop_instance` returns its operation id on the background executor, while
+/// `OperationFinished` travels bridge thread -> flume -> event pump. Nothing
+/// orders the two, so a fast stop can finish before it is registered. The
+/// ledger remembers such an outcome (`early`) and hands it back when the
+/// registration arrives. `early` is bounded by the number of stops the quit
+/// flow issues and is cleared whenever the flow leaves `StoppingAll`.
+#[derive(Debug, Default)]
+pub struct StopLedger {
+    pending: std::collections::HashMap<OperationId, InstanceId>,
+    early: std::collections::HashMap<OperationId, bool>,
+}
+
+impl StopLedger {
+    /// An empty ledger.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Clears both maps (the flow left `StoppingAll`).
+    pub fn clear(&mut self) {
+        self.pending.clear();
+        self.early.clear();
+    }
+
+    /// Registers a stop. Returns the outcome when it already arrived.
+    pub fn register(&mut self, op: OperationId, id: InstanceId) -> Option<(InstanceId, bool)> {
+        match self.early.remove(&op) {
+            Some(ok) => {
+                self.pending.remove(&op);
+                Some((id, ok))
+            }
+            None => {
+                self.pending.insert(op, id);
+                None
+            }
+        }
+    }
+
+    /// Records an outcome. Returns the instance id when the stop was already
+    /// registered; otherwise the outcome is kept for a later registration.
+    pub fn finished(&mut self, op: &OperationId, ok: bool) -> Option<(InstanceId, bool)> {
+        match self.pending.remove(op) {
+            Some(id) => Some((id, ok)),
+            None => {
+                self.early.insert(op.clone(), ok);
+                None
+            }
+        }
+    }
+
+    /// Stops still waiting for their `OperationFinished`.
+    pub fn pending_len(&self) -> usize {
+        self.pending.len()
+    }
+
+    /// Pending operation ids.
+    pub fn pending_ops(&self) -> Vec<OperationId> {
+        self.pending.keys().cloned().collect()
+    }
+
+    /// Outcomes kept for a registration that has not arrived yet.
+    pub fn early_len(&self) -> usize {
+        self.early.len()
+    }
+
+    /// Whether nothing is in flight.
+    pub fn is_empty(&self) -> bool {
+        self.pending.is_empty() && self.early.is_empty()
+    }
+}
+
 /// Collects ids of instances that are currently running (or starting/stopping
 /// in a way that means an engine process may still be alive).
 pub fn running_instance_ids(views: &[InstanceView]) -> Vec<InstanceId> {
@@ -292,6 +365,53 @@ mod tests {
         m3.apply(QuitEvent::StopAll);
         m3.apply(QuitEvent::StopFinished { id: a, ok: false });
         assert_eq!(m3.apply(QuitEvent::ForceExit), QuitAction::Exit);
+    }
+
+    fn op(name: &str) -> OperationId {
+        OperationId::new(name)
+    }
+
+    #[test]
+    fn stop_ledger_keeps_an_early_outcome_for_its_registration() {
+        let mut ledger = StopLedger::new();
+        let a = id(1);
+        // The event arrives before the request continuation registered the stop.
+        assert_eq!(ledger.finished(&op("op-1"), true), None);
+        assert_eq!(ledger.early_len(), 1);
+        assert_eq!(ledger.pending_len(), 0);
+        assert_eq!(
+            ledger.register(op("op-1"), a.clone()),
+            Some((a.clone(), true)),
+            "the buffered outcome must be consumed by the registration"
+        );
+        assert!(ledger.is_empty());
+    }
+
+    #[test]
+    fn stop_ledger_hands_back_an_outcome_for_a_registered_stop() {
+        let mut ledger = StopLedger::new();
+        let b = id(2);
+        assert_eq!(ledger.register(op("op-2"), b.clone()), None);
+        assert_eq!(ledger.pending_len(), 1);
+        assert_eq!(
+            ledger.finished(&op("op-2"), false),
+            Some((b, false)),
+            "a registered stop reports its error outcome"
+        );
+        assert!(ledger.is_empty());
+    }
+
+    #[test]
+    fn stop_ledger_clear_drops_both_sides() {
+        let mut ledger = StopLedger::new();
+        let a = id(1);
+        ledger.register(op("pending"), a);
+        let _ = ledger.finished(&op("early"), true);
+        assert!(!ledger.is_empty());
+        ledger.clear();
+        assert!(ledger.is_empty());
+        assert_eq!(ledger.pending_len(), 0);
+        assert_eq!(ledger.early_len(), 0);
     }
 
     #[test]

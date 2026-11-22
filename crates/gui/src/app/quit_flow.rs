@@ -69,7 +69,6 @@ impl Workspace {
             }
             QuitAction::StopInstances(ids) => {
                 self.quit_stops.clear();
-                self.quit_stop_buffer.clear();
                 self.arm_quit_timeout(cx);
                 for id in ids {
                     let service = self.service.clone();
@@ -78,16 +77,7 @@ impl Workspace {
                         let result = service.stop_instance(&iid);
                         move |this: &mut Workspace, cx: &mut Context<Workspace>| {
                             match result {
-                                Ok(op) => {
-                                    if let Some(ok) = this.quit_stop_buffer.remove(&op) {
-                                        let action = this
-                                            .quit
-                                            .apply(QuitEvent::StopFinished { id: iid, ok });
-                                        this.handle_quit_action(action, cx);
-                                    } else {
-                                        this.quit_stops.insert(op, iid);
-                                    }
-                                }
+                                Ok(op) => this.register_quit_stop(op, iid, cx),
                                 Err(err) => {
                                     this.report_error(&err);
                                     let action = this
@@ -104,7 +94,6 @@ impl Workspace {
             }
             QuitAction::Exit => {
                 self.quit_stops.clear();
-                self.quit_stop_buffer.clear();
                 self.quit_timeout_task = None;
                 crate::app::bootstrap::request_app_quit(cx);
             }
@@ -125,10 +114,23 @@ impl Workspace {
         }));
     }
 
+    /// Registers a quit-issued stop, honouring an outcome that arrived first
+    /// (`OperationFinished` is not ordered against the request continuation).
+    pub(crate) fn register_quit_stop(
+        &mut self,
+        op: OperationId,
+        id: InstanceId,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some((id, ok)) = self.quit_stops.register(op, id) {
+            let action = self.quit.apply(QuitEvent::StopFinished { id, ok });
+            self.handle_quit_action(action, cx);
+        }
+    }
+
     fn maybe_clear_quit_stops(&mut self) {
         if !matches!(self.quit.state(), QuitState::StoppingAll { .. }) {
             self.quit_stops.clear();
-            self.quit_stop_buffer.clear();
             self.quit_timeout_task = None;
         }
     }
@@ -141,10 +143,7 @@ impl Workspace {
         ok: bool,
         cx: &mut Context<Self>,
     ) {
-        let Some(id) = self.quit_stops.remove(op) else {
-            if matches!(self.quit.state(), QuitState::StoppingAll { .. }) {
-                self.quit_stop_buffer.insert(op.clone(), ok);
-            }
+        let Some((id, ok)) = self.quit_stops.finished(op, ok) else {
             return;
         };
         if !matches!(self.quit.state(), QuitState::StoppingAll { .. }) {
@@ -164,18 +163,18 @@ impl Workspace {
     /// Number of quit-stop operations still waiting for `OperationFinished`.
     #[cfg(test)]
     pub(crate) fn quit_stop_pending_count(&self) -> usize {
-        self.quit_stops.len()
+        self.quit_stops.pending_len()
     }
 
     /// Quit-stop operation ids still pending completion (tests only).
     #[cfg(test)]
     pub(crate) fn quit_stop_pending_ops(&self) -> Vec<OperationId> {
-        self.quit_stops.keys().cloned().collect()
+        self.quit_stops.pending_ops()
     }
 
     #[cfg(test)]
     pub(crate) fn quit_stop_buffer_len(&self) -> usize {
-        self.quit_stop_buffer.len()
+        self.quit_stops.early_len()
     }
 
     pub(crate) fn quit_keep_running(&mut self, cx: &mut Context<Self>) {
@@ -499,9 +498,10 @@ mod glue_tests {
         ));
     }
 
-    /// R2: an OperationFinished that arrives before stop registration is buffered.
+    /// R2: a stop that finishes before its registration is not lost; quit
+    /// completes immediately instead of waiting for `STOP_GRACE_SECS + 10`.
     #[gpui_kit::test]
-    fn quit_stop_finished_before_registration_is_buffered(cx: &mut TestAppContext) {
+    fn early_stop_finish_completes_quit_without_the_timeout(cx: &mut TestAppContext) {
         let (view, _service, cx) = fixture(cx);
         view.update(cx, |this, cx| this.request_quit(cx));
         cx.run_until_parked();
@@ -515,10 +515,10 @@ mod glue_tests {
         }
         let ops = view.read_with(cx, |this, _| this.quit_stop_pending_ops());
         let op = ops[0].clone();
-        // Simulate finish arriving before registration.
-        view.update(cx, |this, _| {
-            this.quit_stops.clear();
-        });
+        let instance = view.read_with(cx, |this, _| this.instances()[0].id.clone());
+
+        // Simulate the event landing before the continuation registers the stop.
+        view.update(cx, |this, _| this.quit_stops.clear());
         view.update(cx, |this, cx| {
             this.apply_event_with_cx(
                 crate::service_bridge::UiEvent::OperationFinished {
@@ -530,18 +530,56 @@ mod glue_tests {
         });
         cx.run_until_parked();
         assert_eq!(view.read_with(cx, |this, _| this.quit_stop_buffer_len()), 1);
-        // Late registration should consume the buffered outcome.
-        view.update(cx, |this, cx| {
-            let id = this.instances()[0].id.clone();
-            if let Some(ok) = this.quit_stop_buffer.remove(&op) {
-                let action = this
-                    .quit
-                    .apply(crate::quit::QuitEvent::StopFinished { id, ok });
-                this.handle_quit_action(action, cx);
+
+        // Now the registration arrives.
+        view.update(cx, |this, cx| this.register_quit_stop(op, instance, cx));
+        cx.run_until_parked();
+        assert_eq!(
+            view.read_with(cx, |this, _| this.quit_machine().state().clone()),
+            QuitState::Done,
+            "R2: a buffered success must complete quit, not wait for the timeout"
+        );
+    }
+
+    /// R2: a buffered error lands as `StopFailed`.
+    #[gpui_kit::test]
+    fn early_stop_error_becomes_stop_failed(cx: &mut TestAppContext) {
+        let (view, _service, cx) = fixture(cx);
+        view.update(cx, |this, cx| this.request_quit(cx));
+        cx.run_until_parked();
+        view.update(cx, |this, cx| this.quit_stop_all(cx));
+        for _ in 0..40 {
+            cx.run_until_parked();
+            if view.read_with(cx, |this, _| this.quit_stop_pending_count()) > 0 {
+                break;
             }
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        let ops = view.read_with(cx, |this, _| this.quit_stop_pending_ops());
+        let op = ops[0].clone();
+        let instance = view.read_with(cx, |this, _| this.instances()[0].id.clone());
+        view.update(cx, |this, _| this.quit_stops.clear());
+        view.update(cx, |this, cx| {
+            this.apply_event_with_cx(
+                crate::service_bridge::UiEvent::OperationFinished {
+                    id: op.clone(),
+                    result: Err(dblocal_core::service::UserFacingError::new(
+                        "DBL-9999", "boom",
+                    )),
+                },
+                cx,
+            );
         });
         cx.run_until_parked();
-        assert_eq!(view.read_with(cx, |this, _| this.quit_stop_buffer_len()), 0);
+        view.update(cx, |this, cx| this.register_quit_stop(op, instance, cx));
+        cx.run_until_parked();
+        assert!(
+            matches!(
+                view.read_with(cx, |this, _| this.quit_machine().state().clone()),
+                QuitState::StopFailed { .. }
+            ),
+            "R2: a buffered error must surface as StopFailed"
+        );
     }
 
     /// Q1: if an operation never finishes, the bounded wait moves to StopFailed.
