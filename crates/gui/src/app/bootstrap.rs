@@ -195,7 +195,7 @@ fn handle_login_autostart(service: Arc<dyn DblService>, tray_available: bool, cx
                     "{}",
                     dblocal_core::autostart::messages::MODE_EXIT_NO_INSTANCES
                 );
-                cx.update(|cx| request_app_quit(cx));
+                cx.update(request_app_quit);
             }
             _ => {
                 tracing::info!("{}", dblocal_core::autostart::messages::MODE_HEADLESS_KEEP);

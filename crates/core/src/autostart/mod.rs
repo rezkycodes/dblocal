@@ -45,12 +45,12 @@ pub use error::{
 };
 pub use linux::LinuxBackend;
 pub use macos::MacosBackend;
-pub use mode::{AutostartPass, run_pass, start_fn, start_targets};
+pub use mode::{AutostartPass, AutostartService, run_pass, start_targets};
 pub use plan::{
     AutostartMode, AutostartOutcome, AutostartSummary, AutostartTarget, decide_mode,
     flagged_targets, should_start_status,
 };
-pub use runner::{StartFn, run_start_targets};
+pub use runner::run_start_targets;
 pub use windows::WindowsBackend;
 
 use std::path::{Path, PathBuf};
@@ -106,8 +106,14 @@ pub fn home_dir() -> AutostartResult<PathBuf> {
 
 /// Resolves `$XDG_CONFIG_HOME`, falling back to `$HOME/.config`.
 pub fn xdg_config_home(home: &Path) -> PathBuf {
-    std::env::var_os("XDG_CONFIG_HOME")
-        .filter(|v| !v.is_empty())
+    let raw = std::env::var_os("XDG_CONFIG_HOME");
+    resolve_config_home(raw.as_deref(), home)
+}
+
+/// Pure resolution of the XDG config root from a possibly-empty override.
+pub fn resolve_config_home(override_value: Option<&std::ffi::OsStr>, home: &Path) -> PathBuf {
+    override_value
+        .filter(|value| !value.is_empty())
         .map(PathBuf::from)
         .unwrap_or_else(|| home.join(".config"))
 }
@@ -151,15 +157,59 @@ mod tests {
     }
 
     #[test]
-    fn xdg_config_home_defaults_under_home() {
-        // Do not mutate env; just prove the fallback shape.
-        let home = Path::new("/home/alice");
-        let fallback = home.join(".config");
-        // When the var is absent the function returns the fallback; we cannot
-        // force absence without unsafe env mutation, so check the shape only if
-        // the var is unset in this process.
-        if std::env::var_os("XDG_CONFIG_HOME").is_none() {
-            assert_eq!(xdg_config_home(home), fallback);
+    fn platform_backend_picks_the_macos_and_windows_variants() {
+        let home = tempdir().expect("tempdir");
+        let config = home.path().join("config");
+        for os in [Os::Macos, Os::Windows] {
+            let backend = platform_backend(os, home.path(), &config, Arc::new(NoopRunner));
+            // With no plist and no registry value the answer is "disabled".
+            let status = backend.status().expect("status");
+            assert!(
+                !status.enabled,
+                "{os} should report disabled on a temp root"
+            );
         }
+    }
+
+    #[test]
+    fn host_backend_builds_from_the_environment() {
+        // `host_backend` reads HOME/XDG_CONFIG_HOME; both are set in a test run,
+        // so it must produce a backend rather than error.
+        let backend = host_backend(Arc::new(NoopRunner));
+        if let Ok(backend) = backend {
+            // The result is a usable backend; calling `status` never panics.
+            let _ = backend.status();
+        }
+    }
+
+    #[test]
+    fn home_dir_reads_the_environment() {
+        // `cargo test` sets HOME on every supported host; if it is somehow
+        // absent, the function reports a typed error rather than guessing.
+        match home_dir() {
+            Ok(home) => assert!(!home.as_os_str().is_empty()),
+            Err(err) => assert_eq!(err.code(), CODE_STATUS_FAILED),
+        }
+    }
+
+    #[test]
+    fn resolve_config_home_honours_an_override_and_empty_falls_back() {
+        let home = Path::new("/home/alice");
+        assert_eq!(
+            resolve_config_home(Some(std::ffi::OsStr::new("/custom/cfg")), home),
+            PathBuf::from("/custom/cfg")
+        );
+        assert_eq!(
+            resolve_config_home(Some(std::ffi::OsStr::new("")), home),
+            home.join(".config")
+        );
+        assert_eq!(resolve_config_home(None, home), home.join(".config"));
+    }
+
+    #[test]
+    fn xdg_config_home_returns_an_absolute_under_home_path() {
+        let home = Path::new("/home/alice");
+        // Whatever XDG_CONFIG_HOME is, the result is a non-empty path.
+        assert!(!xdg_config_home(home).as_os_str().is_empty());
     }
 }

@@ -419,12 +419,16 @@ mod tests {
         assert!(body.contains("[Desktop Entry]"));
         assert!(body.contains("X-GNOME-Autostart-enabled=true"));
         assert!(body.contains("--autostart"));
+        let systemctl_calls: Vec<_> = runner
+            .calls()
+            .into_iter()
+            .filter(|(program, _)| program == "systemctl")
+            .collect();
         assert!(
-            runner
-                .calls()
+            systemctl_calls
                 .iter()
-                .all(|(program, _)| program != "systemctl" || true),
-            "only the probe may call systemctl"
+                .all(|(_, args)| args.first().map(String::as_str) == Some("--user")),
+            "without a manager only the --user probe may run: {systemctl_calls:?}"
         );
     }
 
