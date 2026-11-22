@@ -1,6 +1,7 @@
 //! Command handlers. Each handler is a library function over `&dyn DblService`
 //! with injected writers, so tests can drive them without a real terminal.
 
+pub mod autostart;
 pub mod create;
 pub mod db;
 pub mod delete;
@@ -61,6 +62,21 @@ pub fn dispatch(ctx: &mut Ctx<'_>, command: &Command) -> u8 {
             follow,
             lines,
         } => logs::run(ctx, name, *follow, *lines),
+        Command::Autostart { action, json } => {
+            autostart::run_action(ctx.out, ctx.err, action, *json)
+        }
+        Command::AutostartRun { .. } => {
+            // Handled by `cli::run` before the service is built; reaching here
+            // means a caller wired the service path by mistake.
+            output::stderr_line(
+                ctx.err,
+                &crate::messages::code_line(
+                    dblocal_core::error::CODE_INVALID_INPUT,
+                    "autostart-run tidak tersedia di mode ini",
+                ),
+            );
+            crate::cli::EXIT_BAD_ARGS
+        }
         Command::Db { command } => db::dispatch(ctx, command),
         Command::User { command } => user::dispatch(ctx, command),
         Command::Password { command } => password::dispatch(ctx, command),

@@ -63,6 +63,31 @@ pub fn run() -> Result<()> {
     app::run_with_service(service)
 }
 
+/// Launches the DBLocal GUI as a login item (F-AUT-01 AC3).
+///
+/// Opens straight to the tray with no window when a tray host is present; with
+/// no tray it runs headless only while flagged instances need starting, and
+/// otherwise exits with a clear message. The presentation decision lives in
+/// `app::bootstrap`.
+pub fn run_autostart() -> Result<()> {
+    if let Some(reason) = gui_unavailable_reason() {
+        tracing::warn!("dblocal-gui: not starting the window in autostart mode: {reason}");
+        return Ok(());
+    }
+    if let Err(report) = vulkan::preflight() {
+        eprintln!("{report}");
+        std::process::exit(vulkan::EXIT_VULKAN as i32);
+    }
+    #[cfg(feature = "demo")]
+    if std::env::var_os("DBLOCAL_DEMO").is_some() {
+        return app::run_autostart_with_service(std::sync::Arc::new(
+            dblocal_core::service::mock::MockService::demo(),
+        ));
+    }
+    let service = build_real_service()?;
+    app::run_autostart_with_service(service)
+}
+
 /// Builds the production service. On failure it shows a small error window and
 /// exits with a non-zero code; it never panics and never leaves a black window.
 fn build_real_service() -> Result<Arc<dyn DblService>> {
