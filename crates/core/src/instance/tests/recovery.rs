@@ -569,3 +569,107 @@ fn an_unverifiable_marker_identity_is_treated_as_interrupted_and_never_purges() 
         "no archive is invented for a delete that never moved the data"
     );
 }
+
+/// R1: a row that holds a process and is owned by an in-flight operation must be
+/// left alone by reconciliation's third phase.
+///
+/// The third phase (`pending`: `Starting`/`Running`/`Stopping`) acts on the
+/// startup snapshot. When an in-process stop (or start) owns the instance, the
+/// snapshot row is a claim the operation is still working on:
+///
+/// - `Stopping` adopted as `Running` lets a second stop be accepted while the
+///   first is in flight, or leaves a `Running` row over a dead process if the
+///   stop already finished;
+/// - a `Starting` row adopted as `Running` claims readiness the start has not
+///   reached, and one marked absent is written `Stopped` with its identity
+///   cleared under a live start.
+///
+/// The test is deterministic: the instance lock is held before reconciliation
+/// runs, and `on_reconcile` inserts the owned row just before the snapshot is
+/// taken, so the interleaving does not depend on timing.
+#[test]
+fn reconciliation_leaves_a_row_owned_by_an_in_flight_operation_alone() {
+    for status in [InstanceStatus::Stopping, InstanceStatus::Starting] {
+        run_in_flight_reconcile_case(status);
+    }
+}
+
+fn run_in_flight_reconcile_case(status: InstanceStatus) {
+    let h = Harness::paused(EngineKey::Postgresql);
+    let root = h.paths.root().to_path_buf();
+    let id = crate::model::InstanceId::new();
+    let name = crate::model::InstanceName::new("in-flight").expect("name");
+    let port = test_port();
+    let procs = Arc::clone(&h.procs);
+
+    // The operation owns the instance before reconciliation starts. The guard is
+    // held for the whole pass and dropped only after it finishes.
+    let guard = h.lock_instance(&id);
+
+    let before_id = id.clone();
+    let before_name = name.clone();
+    let before_procs = Arc::clone(&procs);
+    super::super::reconcile::on_reconcile(
+        &root,
+        move |inner| {
+            let identity = before_procs.spawn("/fake/engine/bin/postgres");
+            let spec = crate::model::InstanceSpec::new(
+                before_name,
+                EngineKey::Postgresql,
+                "18.7",
+                Some(crate::model::Port::new(port).expect("port")),
+                crate::model::AuthMode::Password,
+            )
+            .expect("spec");
+            let row = crate::model::Instance::new(
+                &spec,
+                before_id,
+                status,
+                std::time::SystemTime::now(),
+            )
+            .with_process(
+                identity.pid(),
+                identity.started_at(),
+                identity.exe().to_path_buf(),
+            );
+            inner
+                .db(|store| store.insert_instance(&row))
+                .expect("insert the operation-owned row");
+        },
+        |_| {},
+    );
+
+    let mut events = h.receiver();
+    let done = super::super::reconcile::on_reconcile_done(&root);
+    h.service.start_background();
+    done.recv_timeout(std::time::Duration::from_secs(30))
+        .expect("reconciliation must finish");
+    drop(guard);
+
+    let row = h.instance(&id).expect("the operation-owned row survives");
+    assert_eq!(
+        row.status(),
+        status,
+        "reconciliation must not overwrite the {status:?} claim of an in-flight operation"
+    );
+    assert!(
+        row.pid().is_some(),
+        "the {status:?} row keeps the identity the operation recorded"
+    );
+
+    let mut collected = Vec::new();
+    while let Ok(event) = events.try_recv() {
+        collected.push(event);
+    }
+    let announced = collected.iter().any(|event| {
+        matches!(
+            event,
+            crate::service::ServiceEvent::InstanceChanged { view } if view.id == id
+        )
+    });
+    assert!(
+        !announced,
+        "reconciliation must not announce a change for a row an operation owns; events={:?}",
+        super::harness::describe(&collected)
+    );
+}
