@@ -1,8 +1,28 @@
 {
   "schema_version": 1,
-  "generated_at": "2026-11-20T00:00:00Z",
+  "generated_at": "2026-11-22T00:00:00Z",
   "source_url": "https://raw.githubusercontent.com/rezkycodes/dblocal/main/catalog/engines.json",
   "versions": [
+    {
+      "engine": "mariadb",
+      "version": "11.8.10",
+      "major_line": "11",
+      "release_date": "2026-11-17",
+      "eol": false
+    },
+    {
+      "engine": "mariadb",
+      "version": "11.4.14",
+      "major_line": "11",
+      "release_date": "2026-11-17",
+      "eol": false
+    },
+    {
+      "engine": "mysql",
+      "version": "8.4.11",
+      "major_line": "8",
+      "eol": false
+    },
     {
       "engine": "postgresql",
       "version": "18.7.0",
@@ -32,6 +52,102 @@
     }
   ],
   "artifacts": [
+    {
+      "id": "mariadb-11.8.10-linux-x86_64",
+      "engine": "mariadb",
+      "version": "11.8.10",
+      "os": "linux",
+      "arch": "x86_64",
+      "url": "https://downloads.mariadb.org/rest-api/mariadb/11.8.10/mariadb-11.8.10-linux-systemd-x86_64.tar.gz",
+      "sha256": "15ca40274597af84fa8f89f8248b37740c5a712c003df80b4c7b32a4486e2027",
+      "size_bytes": 413068258,
+      "format": "tar.gz",
+      "strip_prefix": "mariadb-11.8.10-linux-systemd-x86_64"
+    },
+    {
+      "id": "mariadb-11.8.10-windows-x86_64",
+      "engine": "mariadb",
+      "version": "11.8.10",
+      "os": "windows",
+      "arch": "x86_64",
+      "url": "https://downloads.mariadb.org/rest-api/mariadb/11.8.10/mariadb-11.8.10-winx64.zip",
+      "sha256": "05d04b46763ea3dc9111bfc82dc061e0a158c682a73d31ba34b13f2653c88d17",
+      "size_bytes": 99027722,
+      "format": "zip",
+      "strip_prefix": "mariadb-11.8.10-winx64"
+    },
+    {
+      "id": "mariadb-11.4.14-linux-x86_64",
+      "engine": "mariadb",
+      "version": "11.4.14",
+      "os": "linux",
+      "arch": "x86_64",
+      "url": "https://downloads.mariadb.org/rest-api/mariadb/11.4.14/mariadb-11.4.14-linux-systemd-x86_64.tar.gz",
+      "sha256": "6fa13ea11d07a53ae4795c8c3736dc5aa99c2ef22ece754cff07363dc1faba0d",
+      "size_bytes": 359741460,
+      "format": "tar.gz",
+      "strip_prefix": "mariadb-11.4.14-linux-systemd-x86_64"
+    },
+    {
+      "id": "mariadb-11.4.14-windows-x86_64",
+      "engine": "mariadb",
+      "version": "11.4.14",
+      "os": "windows",
+      "arch": "x86_64",
+      "url": "https://downloads.mariadb.org/rest-api/mariadb/11.4.14/mariadb-11.4.14-winx64.zip",
+      "sha256": "9d9b410eb7b65f6616f29d933d76ee90cf7af4ba179a2d437e0f09f5bf6650df",
+      "size_bytes": 97165882,
+      "format": "zip",
+      "strip_prefix": "mariadb-11.4.14-winx64"
+    },
+    {
+      "id": "mysql-8.4.11-linux-x86_64",
+      "engine": "mysql",
+      "version": "8.4.11",
+      "os": "linux",
+      "arch": "x86_64",
+      "url": "https://cdn.mysql.com/Downloads/MySQL-8.4/mysql-8.4.11-linux-glibc2.28-x86_64-minimal.tar.xz",
+      "sha256": "383f54e124d5f325d67f0c6912a8f96814eedc761a17ea30112e52fa4cc6b143",
+      "size_bytes": 79777440,
+      "format": "tar.xz",
+      "strip_prefix": "mysql-8.4.11-linux-glibc2.28-x86_64-minimal"
+    },
+    {
+      "id": "mysql-8.4.11-macos-aarch64",
+      "engine": "mysql",
+      "version": "8.4.11",
+      "os": "macos",
+      "arch": "aarch64",
+      "url": "https://cdn.mysql.com/Downloads/MySQL-8.4/mysql-8.4.11-macos15-arm64.tar.gz",
+      "sha256": "b96e00493bc3499b9ffd7f08d65c5d64933af0383a8287d9873b64f94c2d6009",
+      "size_bytes": 167977240,
+      "format": "tar.gz",
+      "strip_prefix": "mysql-8.4.11-macos15-arm64"
+    },
+    {
+      "id": "mysql-8.4.11-macos-x86_64",
+      "engine": "mysql",
+      "version": "8.4.11",
+      "os": "macos",
+      "arch": "x86_64",
+      "url": "https://cdn.mysql.com/Downloads/MySQL-8.4/mysql-8.4.11-macos15-x86_64.tar.gz",
+      "sha256": "90e8aea10698d01b978f0179e72e8d5e2cbe9f9bd5771e88b0b75d7c82244d3f",
+      "size_bytes": 171974960,
+      "format": "tar.gz",
+      "strip_prefix": "mysql-8.4.11-macos15-x86_64"
+    },
+    {
+      "id": "mysql-8.4.11-windows-x86_64",
+      "engine": "mysql",
+      "version": "8.4.11",
+      "os": "windows",
+      "arch": "x86_64",
+      "url": "https://cdn.mysql.com/Downloads/MySQL-8.4/mysql-8.4.11-winx64.zip",
+      "sha256": "a492371d687d2bab088b0062581144a0044b8964baefdf4faa579292b423d25c",
+      "size_bytes": 281191914,
+      "format": "zip",
+      "strip_prefix": "mysql-8.4.11-winx64"
+    },
     {
       "id": "postgresql-18.7.0-linux-aarch64",
       "engine": "postgresql",

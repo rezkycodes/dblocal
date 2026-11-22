@@ -2,7 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::helpers::{archive_format, is_sha256_hex};
+use super::helpers::{archive_format, archive_root, is_sha256_hex};
 use super::{Arch, CatalogArtifact, CatalogVersion, Os, Source, SourceError};
 
 /// One file entry of the MariaDB REST API.
@@ -216,9 +216,11 @@ pub fn mariadb_from_api(
             sha256,
             size_bytes,
             format: format.as_str().to_owned(),
-            // The tarball has exactly one top-level directory named after the
+            // The archive has exactly one top-level directory named after the
             // file stem; it must be stripped or `bin/` lands one level too deep.
-            strip_prefix: Some(file.file_name.trim_end_matches(".tar.gz").to_owned()),
+            // Deriving it from every format (not just `.tar.gz`) keeps the
+            // Windows zip correct too.
+            strip_prefix: archive_root(&file.file_name),
             min_glibc: None,
             variant: None,
         });

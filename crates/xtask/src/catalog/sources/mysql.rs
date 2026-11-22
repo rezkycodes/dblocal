@@ -84,17 +84,15 @@ pub fn mysql_artifact(
 /// are `.tar.xz`, `.tar.gz` or `.zip` and every one names its root after the
 /// stem, so the strip prefix must too.
 pub fn archive_root(file_name: &str) -> Result<String, SourceError> {
-    for suffix in [".tar.xz", ".tar.gz", ".zip"] {
-        if let Some(stem) = file_name.strip_suffix(suffix) {
-            return Ok(stem.to_owned());
-        }
-    }
-    Err(SourceError::new(format!(
-        "MySQL archive {file_name} has an unknown format"
-    )))
+    super::helpers::archive_root(file_name)
+        .ok_or_else(|| SourceError::new(format!("MySQL archive {file_name} has no known format")))
 }
 
 /// The `.md5` of `bytes`, as the sidecar would publish it.
+///
+/// Used by the offline builder tests to serve a genuine `.md5` sidecar for the
+/// tiny fixture archive.
+#[cfg(test)]
 pub fn md5_hex(bytes: &[u8]) -> String {
     hex(&md5_compute(bytes))
 }
