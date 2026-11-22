@@ -134,8 +134,7 @@ impl AdminTarget {
             .password(self.password.expose().as_bytes())
             .connect_timeout(self.connect_timeout)
             .application_name("dblocal-admin");
-        let suppress = std::env::var_os("DBLOCAL_ADMIN_SUPPRESS_LOG_OPTIONS")
-            .as_deref()
+        let suppress = std::env::var_os("DBLOCAL_ADMIN_SUPPRESS_LOG_OPTIONS").as_deref()
             != Some(std::ffi::OsStr::new("0"));
         let log_opts = if suppress {
             " -c log_min_error_statement=panic -c log_statement=none \
@@ -418,7 +417,12 @@ impl PgAdmin {
     /// Drops a role.
     pub fn drop_user(&self, user: &Identifier) -> AdminResult<()> {
         let stmt = drop_user_postgres(user);
-        self.execute_mapped(&self.target, consts::DEFAULT_DATABASE, stmt.sql(), map_role_error)
+        self.execute_mapped(
+            &self.target,
+            consts::DEFAULT_DATABASE,
+            stmt.sql(),
+            map_role_error,
+        )
     }
 
     /// Grants `level` to `user` on `db`, running the schema-level statements
@@ -499,7 +503,10 @@ impl PgAdmin {
     ) -> AdminResult<()> {
         let statement = statement.to_owned();
         self.with_client(target, dbname, move |client, _| async move {
-            client.batch_execute(&statement).await.map_err(|err| map(&err))
+            client
+                .batch_execute(&statement)
+                .await
+                .map_err(|err| map(&err))
         })
     }
 
@@ -554,14 +561,9 @@ impl PgAdmin {
             // Inside a runtime: move the blocking + block_on work to a fresh
             // OS thread so we never call block_on on a worker thread.
             match handle.runtime_flavor() {
-                tokio::runtime::RuntimeFlavor::MultiThread => {
-                    tokio::task::block_in_place(run)
-                }
+                tokio::runtime::RuntimeFlavor::MultiThread => tokio::task::block_in_place(run),
                 _ => std::thread::scope(|scope| {
-                    scope
-                        .spawn(run)
-                        .join()
-                        .unwrap_or(Err(AdminError::Connect))
+                    scope.spawn(run).join().unwrap_or(Err(AdminError::Connect))
                 }),
             }
         } else {

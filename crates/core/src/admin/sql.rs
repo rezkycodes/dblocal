@@ -441,9 +441,7 @@ pub fn alter_role_password_postgres(user: &Identifier, credential: &str) -> SqlS
 pub fn alter_password_mysql(user: &Identifier, password: &str) -> SqlStatement {
     let name = quote_identifier(Dialect::MySql, user);
     let pw = quote_mysql_literal(password);
-    SqlStatement::new(format!(
-        "ALTER USER {name}@'127.0.0.1' IDENTIFIED BY {pw}"
-    ))
+    SqlStatement::new(format!("ALTER USER {name}@'127.0.0.1' IDENTIFIED BY {pw}"))
 }
 
 /// Builds `DROP ROLE` for PostgreSQL.

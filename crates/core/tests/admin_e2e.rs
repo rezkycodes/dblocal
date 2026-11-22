@@ -574,7 +574,9 @@ fn f1_password_never_reaches_engine_log_on_failures() {
     require_e2e();
     // Allow server-side logging to be observable: SCRAM must be the reason the
     // canary is absent, not connection-level suppression. (Spec F1 mutation note.)
-    unsafe { std::env::set_var("DBLOCAL_ADMIN_SUPPRESS_LOG_OPTIONS", "0"); }
+    unsafe {
+        std::env::set_var("DBLOCAL_ADMIN_SUPPRESS_LOG_OPTIONS", "0");
+    }
     let fixture = Fixture::new("dblocal-admin-f1-");
     fixture
         .cluster
@@ -623,20 +625,17 @@ fn f1_password_never_reaches_engine_log_on_failures() {
     assert_log_has_no_canary(&fixture.cluster, &[canary_pw, PASSWORD]);
 
     // The created role can still authenticate with the cleartext password.
-    let ok = Sql::connect(
-        fixture.cluster.port(),
-        "leaky_role",
-        canary_pw,
-        "postgres",
-    )
-    .expect("role must authenticate with its cleartext password");
+    let ok = Sql::connect(fixture.cluster.port(), "leaky_role", canary_pw, "postgres")
+        .expect("role must authenticate with its cleartext password");
     assert_eq!(ok.count("SELECT 1::bigint"), Ok(1));
 
     // Old superuser password still works after rolled-back reset.
     let su = Sql::connect(fixture.cluster.port(), SUPERUSER, PASSWORD, "postgres")
         .expect("superuser password must survive rollback");
     assert_eq!(su.count("SELECT 1::bigint"), Ok(1));
-    unsafe { std::env::remove_var("DBLOCAL_ADMIN_SUPPRESS_LOG_OPTIONS"); }
+    unsafe {
+        std::env::remove_var("DBLOCAL_ADMIN_SUPPRESS_LOG_OPTIONS");
+    }
 }
 
 #[test]
@@ -724,10 +723,9 @@ fn f6_hostile_names_never_reach_server_statement_log() {
         .append_conf_and_reload("log_statement = 'all'\n");
     std::thread::sleep(Duration::from_millis(300));
     let marker = "F6_BOUNDARY_MARKER";
-    let marker_sql = fixture.cluster.psql(
-        &SecretString::from(PASSWORD),
-        &format!("SELECT '{marker}'"),
-    );
+    let marker_sql = fixture
+        .cluster
+        .psql(&SecretString::from(PASSWORD), &format!("SELECT '{marker}'"));
     assert!(marker_sql.status.success());
 
     let hostile = [
@@ -745,7 +743,10 @@ fn f6_hostile_names_never_reach_server_statement_log() {
         "a;b",
     ];
     let valid_db = Identifier::new("f6db").expect("valid");
-    fixture.admin.create_database(&valid_db).expect("create f6db");
+    fixture
+        .admin
+        .create_database(&valid_db)
+        .expect("create f6db");
 
     let sql = fixture.superuser();
     let xact_before: i64 = sql
