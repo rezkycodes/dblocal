@@ -878,7 +878,15 @@ fn mariadb_two_instances_side_by_side() {
                     "listen r{round} i{idx}"
                 );
                 MariaDbAdapter
-                    .shutdown(&run_ctx(&rt, &d, &l, &r, port, AuthMode::Password, Some(pw)))
+                    .shutdown(&run_ctx(
+                        &rt,
+                        &d,
+                        &l,
+                        &r,
+                        port,
+                        AuthMode::Password,
+                        Some(pw),
+                    ))
                     .expect("shutdown");
                 let _ = g.0.take().map(|mut c| c.wait());
                 assert!(wait_tcp_gone(port, Duration::from_secs(30)));
