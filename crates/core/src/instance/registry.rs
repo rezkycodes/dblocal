@@ -73,8 +73,11 @@ impl Ops {
 
     /// Whether an operation currently owns `id` in this process.
     ///
-    /// Reconciliation uses this so it never mistakes a create that is still
-    /// running for one interrupted by a crash.
+    /// The supervisor uses this to skip a row an operation holds. Reconciliation
+    /// does **not** use it: it takes the instance lock itself (`lock_instance`) and
+    /// re-reads the row, which both excludes an in-flight operation and proves the
+    /// row it acts on is fresh, so a snapshot it took earlier cannot be overwritten.
+    /// A caller that needs the exclusion *and* a fresh row must lock, not read this.
     pub fn is_busy(&self, id: &InstanceId) -> bool {
         self.inner
             .locked

@@ -621,17 +621,13 @@ fn run_in_flight_reconcile_case(status: InstanceStatus) {
                 crate::model::AuthMode::Password,
             )
             .expect("spec");
-            let row = crate::model::Instance::new(
-                &spec,
-                before_id,
-                status,
-                std::time::SystemTime::now(),
-            )
-            .with_process(
-                identity.pid(),
-                identity.started_at(),
-                identity.exe().to_path_buf(),
-            );
+            let row =
+                crate::model::Instance::new(&spec, before_id, status, std::time::SystemTime::now())
+                    .with_process(
+                        identity.pid(),
+                        identity.started_at(),
+                        identity.exe().to_path_buf(),
+                    );
             inner
                 .db(|store| store.insert_instance(&row))
                 .expect("insert the operation-owned row");

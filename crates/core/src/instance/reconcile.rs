@@ -182,32 +182,54 @@ pub(crate) async fn reconcile_on_startup(inner: Arc<Inner>) {
         }
     }
 
-    let pending: Vec<Instance> = instances
-        .iter()
-        .filter(|instance| instance.status().holds_process())
+    // Third phase: rows that hold a process. Like the other two phases, take the
+    // instance lock and act on a **fresh** row, never on the snapshot: an
+    // in-process start or stop can own the row while it is still `Starting` or
+    // `Stopping`, and adopting or marking the stale snapshot would overwrite that
+    // operation's claim (a `Stopping` row adopted as `Running` lets a second stop
+    // be accepted; a `Starting` row adopted as `Running` claims readiness the start
+    // has not reached, and one marked absent is written `Stopped` under a live
+    // start). The guards are held across the probe and the persist: an operation
+    // arriving meanwhile is refused as busy, which is the right answer while
+    // reconciliation is deciding.
+    let mut guarded: Vec<(super::registry::InstanceLock, Instance)> = Vec::new();
+    for instance in &instances {
+        if !instance.status().holds_process() {
+            continue;
+        }
+        let Some(guard) = lock_if_idle(&inner, instance.id()) else {
+            // An operation owns this row in this process; it settles it itself.
+            continue;
+        };
+        let Some(fresh) = fresh_instance(&inner, instance.id()) else {
+            continue;
+        };
+        if !fresh.status().holds_process() {
+            continue;
+        }
         // A `Starting` row with no recorded identity is a spawn in flight, not
         // an orphan: no PID has been persisted yet, and the process that is
         // starting it (possibly the other service sharing this home) has not
         // finished. Writing it `Stopped` here is what let a second service
         // clobber a live start. The owner finishes it, and a crashed one is
         // retaken by the next `start_instance`.
-        .filter(|instance| {
-            !(instance.status() == InstanceStatus::Starting && identity_of(instance).is_none())
-        })
-        .cloned()
-        .collect();
-    if pending.is_empty() {
+        if fresh.status() == InstanceStatus::Starting && identity_of(&fresh).is_none() {
+            continue;
+        }
+        guarded.push((guard, fresh));
+    }
+    if guarded.is_empty() {
         fire_done(&inner);
         return;
     }
 
-    let records: Vec<ReconcileRecord> = pending
+    let records: Vec<ReconcileRecord> = guarded
         .iter()
-        .map(|instance| ReconcileRecord::new(instance.id().clone(), identity_of(instance)))
+        .map(|(_, instance)| ReconcileRecord::new(instance.id().clone(), identity_of(instance)))
         .collect();
 
     // Probe outside the store lock: `reconcile` walks the process table and must
-    // never hold the mutex while a probe can block.
+    // never hold the mutex while a probe can block. The instance guards stay held.
     let probe = Arc::clone(&inner.probe);
     let outcomes = super::helpers::blocking(move || Ok(reconcile(&records, probe.as_ref()))).await;
     let Ok(outcomes) = outcomes else {
@@ -215,7 +237,7 @@ pub(crate) async fn reconcile_on_startup(inner: Arc<Inner>) {
     };
 
     for outcome in outcomes {
-        let Some(instance) = pending.iter().find(|i| i.id() == outcome.id()) else {
+        let Some((_, instance)) = guarded.iter().find(|(_, i)| i.id() == outcome.id()) else {
             continue;
         };
         if outcome.is_adopted() {
@@ -224,6 +246,7 @@ pub(crate) async fn reconcile_on_startup(inner: Arc<Inner>) {
             mark(&inner, instance, InstanceEvent::ReconciledAbsent).await;
         }
     }
+    drop(guarded);
     fire_done(&inner);
 }
 
