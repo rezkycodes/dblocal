@@ -758,6 +758,69 @@ fn resolve_socket_path(data_dir: &Path, port: u16) -> PathBuf {
 
 #[test]
 #[ignore = "e2e: requires cached MariaDB 11.8 tarball; run with DBLOCAL_E2E=1 under flock $HOME/.cache/dblocal-e2e.lock"]
+fn mariadb_118_shared_tmpdir_isolated() {
+    require_e2e();
+    let rt = setup_runtime(Path::new("."));
+    let shared_tmp = tempfile::tempdir().expect("shared tmpdir");
+    #[allow(unsafe_code)]
+    unsafe {
+        std::env::set_var("TMPDIR", shared_tmp.path());
+    }
+    let decoy = shared_tmp.path().join("#sql-temptable-decoy");
+    fs::write(&decoy, b"foreign").expect("decoy");
+
+    let port1 = 43120u16;
+    let port2 = 43121u16;
+    require_port_free(port1);
+    require_port_free(port2);
+    let pw = "e2e-tmpdir";
+
+    for round in 0..5 {
+        let mut handles = Vec::new();
+        for idx in 0..2 {
+            let rt = rt.clone();
+            let port = if idx == 0 { port1 } else { port2 };
+            handles.push(thread::spawn(move || {
+                let tmp = tempfile::tempdir().expect("tmp");
+                let base = tmp.path().join(format!("r{round}-i{idx}"));
+                fs::create_dir_all(&base).expect("base");
+                let (_i, d, l, r) = mk_instance(&base, "s");
+                MariaDbAdapter
+                    .initialize(&init_ctx(&rt, &d, port, AuthMode::Password, Some(pw)))
+                    .expect("init");
+                let mut g = start_mariadb(&rt, &d, &l, &r, port, AuthMode::Password, Some(pw));
+                assert!(wait_tcp(port, Duration::from_secs(30)), "listen");
+                let who = sql_query(&rt, port, "root", Some(pw), "SELECT 1;");
+                assert_eq!(who, "1");
+                MariaDbAdapter
+                    .shutdown(&run_ctx(
+                        &rt,
+                        &d,
+                        &l,
+                        &r,
+                        port,
+                        AuthMode::Password,
+                        Some(pw),
+                    ))
+                    .expect("shutdown");
+                let _ = g.0.take().map(|mut c| c.wait());
+                assert!(wait_tcp_gone(port, Duration::from_secs(30)));
+            }));
+        }
+        for h in handles {
+            h.join().expect("round thread");
+        }
+    }
+
+    assert!(
+        decoy.exists(),
+        "foreign #sql-temptable decoy in process TMPDIR must survive"
+    );
+    eprintln!("mariadb shared TMPDIR isolation OK");
+}
+
+#[test]
+#[ignore = "e2e: requires cached MariaDB 11.8 tarball; run with DBLOCAL_E2E=1 under flock $HOME/.cache/dblocal-e2e.lock"]
 fn mariadb_118_long_socket_path_fallback() {
     require_e2e();
     let tmp = tempfile::tempdir().expect("tmp");
