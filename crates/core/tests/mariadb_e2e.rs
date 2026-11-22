@@ -765,21 +765,32 @@ fn mariadb_118_restart_after_volatile_dirs_removed() {
     let port = 43122u16;
     require_port_free(port);
 
-    let inst = tmp.path().join("volatile");
+    let mut base = tmp.path().join("deep");
+    base = base.join("x".repeat(70));
+    let inst = base.join("volatile");
     let data = inst.join("data");
     let logs = inst.join("logs");
-    let mut run = inst.join("run");
-    for _ in 0..8 {
-        run = run.join("very_long_directory_name_for_socket_path_test");
-    }
+    let run = inst.join("run");
+    fs::create_dir_all(&data).unwrap();
     fs::create_dir_all(&logs).unwrap();
     fs::create_dir_all(&run).unwrap();
-    fs::create_dir_all(&data).unwrap();
     let pw = "e2e-volatile";
 
     MariaDbAdapter
         .initialize(&init_ctx(&rt, &data, port, AuthMode::Password, Some(pw)))
         .expect("init");
+    let sock = resolve_socket_path(&data, port);
+    assert!(
+        !sock.starts_with(&run),
+        "test must exercise fallback socket: {} vs {}",
+        sock.display(),
+        run.display()
+    );
+    let fallback_dir = sock.parent().expect("socket dir").to_path_buf();
+    let tmpdir = run.join("tmp");
+    assert!(fallback_dir.is_dir(), "fallback dir created by init");
+    assert!(tmpdir.is_dir(), "tmpdir created by init");
+
     let mut g = start_mariadb(&rt, &data, &logs, &run, port, AuthMode::Password, Some(pw));
     assert!(wait_tcp(port, Duration::from_secs(30)), "listen");
     MariaDbAdapter
@@ -796,19 +807,16 @@ fn mariadb_118_restart_after_volatile_dirs_removed() {
     let _ = g.0.take().map(|mut c| c.wait());
     assert!(wait_tcp_gone(port, Duration::from_secs(30)));
 
-    let sock = resolve_socket_path(&data, port);
-    let fallback_dir = sock.parent().expect("socket dir");
-    let natural_dir = data.parent().expect("inst").join("run");
-    assert_ne!(
-        fallback_dir, natural_dir,
-        "test must exercise fallback socket dir"
-    );
-    fs::remove_dir_all(fallback_dir).expect("remove fallback dir");
-    let tmpdir = natural_dir.join("tmp");
+    fs::remove_dir_all(&fallback_dir).expect("remove fallback dir");
     fs::remove_dir_all(&tmpdir).expect("remove tmpdir");
+    assert!(!fallback_dir.exists());
+    assert!(!tmpdir.exists());
 
     let run_ctx_v = run_ctx(&rt, &data, &logs, &run, port, AuthMode::Password, Some(pw));
     dblocal_core::engine::prepare_mariadb_run(&run_ctx_v).expect("prepare_run");
+    assert!(fallback_dir.is_dir(), "prepare_run recreates fallback dir");
+    assert!(tmpdir.is_dir(), "prepare_run recreates tmpdir");
+
     let mut g2 = start_mariadb(&rt, &data, &logs, &run, port, AuthMode::Password, Some(pw));
     assert!(wait_tcp(port, Duration::from_secs(30)), "restart listen");
     let who = sql_query(&rt, port, "root", Some(pw), "SELECT 1;");

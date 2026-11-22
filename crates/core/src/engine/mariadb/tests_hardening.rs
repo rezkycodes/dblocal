@@ -411,3 +411,172 @@ fn shutdown_timeout_names_pid() {
     let _ = child.kill();
     let _ = child.wait();
 }
+
+#[cfg(unix)]
+fn write_config_with_socket(data_dir: &Path, socket: &Path) {
+    let conf = format!(
+        "[mysqld]\nsocket={}\ntmpdir={}\n",
+        socket.display(),
+        data_dir.parent().unwrap().join("run/tmp").display()
+    );
+    crate::fsutil::write_private_file_atomic(&config_path(data_dir), conf.as_bytes())
+        .expect("write conf");
+}
+
+#[test]
+fn prepare_run_recreates_missing_tmpdir_and_socket_dir() {
+    let dir = tempdir().expect("tmp");
+    let root = dir.path();
+    let data = root.join("inst/data");
+    let run = root.join("inst/run");
+    fs::create_dir_all(&data).expect("data");
+    let fallback = root.join("fallback-sockets");
+    let sock = fallback.join("mariadb-3307-aabb.sock");
+    write_config_with_socket(&data, &sock);
+    let ctx = RunContext {
+        instance_name: "m".into(),
+        runtime_dir: root.join("rt"),
+        data_dir: data.clone(),
+        logs_dir: root.join("inst/logs"),
+        run_dir: run.clone(),
+        port: Port::new(3307).expect("port"),
+        superuser: "root".into(),
+        auth: AuthMode::None,
+        credential: None,
+    };
+    prepare_run(&ctx).expect("prepare");
+    assert!(fallback.is_dir(), "fallback dir recreated");
+    assert!(run.join("tmp").is_dir(), "tmpdir recreated");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let meta = fs::symlink_metadata(&fallback).expect("meta");
+        assert_eq!(meta.mode() & 0o777, 0o700);
+        assert_eq!(meta.uid(), nix::unistd::geteuid().as_raw());
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn prepare_run_refuses_symlinked_fallback_dir() {
+    use std::os::unix::fs::symlink;
+    let dir = tempdir().expect("tmp");
+    let root = dir.path();
+    let data = root.join("inst/data");
+    let run = root.join("inst/run");
+    fs::create_dir_all(&data).expect("data");
+    fs::create_dir_all(&run).expect("run");
+    let target = root.join("outside");
+    fs::create_dir_all(&target).expect("outside");
+    let fallback = root.join("fallback-sockets");
+    symlink(&target, &fallback).expect("symlink");
+    let sock = fallback.join("mariadb-3307-aabb.sock");
+    write_config_with_socket(&data, &sock);
+    let ctx = RunContext {
+        instance_name: "m".into(),
+        runtime_dir: root.join("rt"),
+        data_dir: data.clone(),
+        logs_dir: root.join("inst/logs"),
+        run_dir: run,
+        port: Port::new(3307).expect("port"),
+        superuser: "root".into(),
+        auth: AuthMode::None,
+        credential: None,
+    };
+    let err = prepare_run(&ctx).expect_err("symlink refused");
+    assert!(matches!(err, DblError::Engine { .. }));
+}
+
+#[test]
+fn prepare_run_refuses_wrong_mode_fallback_dir() {
+    let dir = tempdir().expect("tmp");
+    let root = dir.path();
+    let data = root.join("inst/data");
+    let run = root.join("inst/run");
+    fs::create_dir_all(&data).expect("data");
+    fs::create_dir_all(&run).expect("run");
+    let fallback = root.join("fallback-sockets");
+    fs::create_dir_all(&fallback).expect("fallback");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&fallback, fs::Permissions::from_mode(0o755)).expect("chmod");
+    }
+    let sock = fallback.join("mariadb-3307-aabb.sock");
+    write_config_with_socket(&data, &sock);
+    let ctx = RunContext {
+        instance_name: "m".into(),
+        runtime_dir: root.join("rt"),
+        data_dir: data.clone(),
+        logs_dir: root.join("inst/logs"),
+        run_dir: run,
+        port: Port::new(3307).expect("port"),
+        superuser: "root".into(),
+        auth: AuthMode::None,
+        credential: None,
+    };
+    let err = prepare_run(&ctx).expect_err("bad mode refused");
+    assert!(matches!(err, DblError::Engine { .. }));
+}
+
+#[cfg(unix)]
+#[test]
+fn prepare_run_removes_stale_socket_but_keeps_regular_file() {
+    use std::os::unix::net::UnixListener;
+    let dir = tempdir().expect("tmp");
+    let root = dir.path();
+    let data = root.join("inst/data");
+    let run = root.join("inst/run");
+    fs::create_dir_all(&data).expect("data");
+    let fallback = root.join("fallback-sockets");
+    fs::create_dir_all(&fallback).expect("fallback");
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&fallback, fs::Permissions::from_mode(0o700)).expect("chmod");
+    }
+    let sock = fallback.join("mariadb-3307-aabb.sock");
+    let listener = UnixListener::bind(&sock).expect("bind socket");
+    drop(listener);
+    let _ = fs::symlink_metadata(&sock).expect("socket exists");
+    let regular = fallback.join("keep.txt");
+    fs::write(&regular, b"keep").expect("regular");
+    write_config_with_socket(&data, &sock);
+    let ctx = RunContext {
+        instance_name: "m".into(),
+        runtime_dir: root.join("rt"),
+        data_dir: data,
+        logs_dir: root.join("inst/logs"),
+        run_dir: run,
+        port: Port::new(3307).expect("port"),
+        superuser: "root".into(),
+        auth: AuthMode::None,
+        credential: None,
+    };
+    prepare_run(&ctx).expect("prepare");
+    assert!(!sock.exists(), "stale socket removed");
+    assert!(regular.exists(), "regular file stays");
+}
+
+#[test]
+fn prepare_run_errors_when_config_has_no_socket() {
+    let dir = tempdir().expect("tmp");
+    let root = dir.path();
+    let data = root.join("inst/data");
+    let run = root.join("inst/run");
+    fs::create_dir_all(&data).expect("data");
+    fs::create_dir_all(&run).expect("run");
+    write_private_config(&config_path(&data), "[mysqld]\nport=3307\n").expect("conf");
+    let ctx = RunContext {
+        instance_name: "m".into(),
+        runtime_dir: root.join("rt"),
+        data_dir: data,
+        logs_dir: root.join("inst/logs"),
+        run_dir: run,
+        port: Port::new(3307).expect("port"),
+        superuser: "root".into(),
+        auth: AuthMode::None,
+        credential: None,
+    };
+    let err = prepare_run(&ctx).expect_err("no socket directive");
+    assert!(matches!(err, DblError::Engine { .. }));
+}
