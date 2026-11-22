@@ -47,7 +47,7 @@ fn created(h: &Harness, name: &str) -> crate::model::Instance {
         assert!(
             std::time::Instant::now() < deadline,
             "created instance {name} not listed after successful create; events={:?}",
-            super::harness::describe(&events)
+            harness::describe(&events)
         );
         std::thread::sleep(std::time::Duration::from_millis(20));
     }
