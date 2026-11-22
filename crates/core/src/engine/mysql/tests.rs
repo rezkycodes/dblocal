@@ -1296,3 +1296,187 @@ fn prepare_run_refuses_symlink_and_wrong_mode_fallback_dir() {
             || err.to_string().contains("not a real directory")
     );
 }
+
+#[test]
+fn health_check_maps_not_ready_banner() {
+    use std::io::Write;
+    use std::net::TcpListener;
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+    let port = listener.local_addr().expect("addr").port();
+    let t = std::thread::spawn(move || {
+        let (mut s, _) = listener.accept().expect("accept");
+        let payload = b"garbage";
+        let mut hdr = [0u8; 4];
+        hdr[0] = payload.len() as u8;
+        s.write_all(&hdr).expect("hdr");
+        s.write_all(payload).expect("payload");
+    });
+    let ctx = run_ctx(port, AuthMode::None, None);
+    let health = MysqlAdapter.health_check(&ctx).expect("health");
+    assert!(matches!(health, Health::NotReady(_)), "got {health:?}");
+    t.join().expect("join");
+}
+
+#[test]
+fn read_log_tail_bounds_and_missing_file() {
+    let dir = tempfile::tempdir().expect("tmp");
+    let p = dir.path().join("error.log");
+    assert_eq!(read_log_tail(&p, 5), "");
+    fs::write(&p, "a\nb\nc\n").expect("write");
+    assert_eq!(read_log_tail(&p, 2), "b\nc");
+    assert_eq!(read_log_tail(&p, 10).lines().count(), 3);
+}
+
+#[test]
+fn shutdown_bootstrap_reports_spawn_and_exit_failure() {
+    let dir = tempfile::tempdir().expect("tmp");
+    let missing = dir.path().join("rt");
+    fs::create_dir_all(&missing).expect("rt");
+    let err = shutdown_bootstrap(&missing, 42200, "root", AuthMode::None, None).unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("failed to shutdown bootstrap mysqld"),
+        "{err}"
+    );
+
+    let bin = missing.join("bin");
+    fs::create_dir_all(&bin).expect("bin");
+    let admin = bin.join("mysqladmin");
+    fs::write(&admin, "#!/bin/sh\necho 'boot shutdown bad' >&2\nexit 5\n").expect("script");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&admin, fs::Permissions::from_mode(0o755)).expect("chmod");
+    }
+    let err = shutdown_bootstrap(&missing, 42201, "root", AuthMode::None, None).unwrap_err();
+    let msg = err.to_string();
+    assert!(msg.contains("bootstrap shutdown failed"), "{msg}");
+    assert!(msg.contains("boot shutdown bad"), "{msg}");
+    assert!(msg.contains("code Some(5)"), "{msg}");
+}
+
+#[test]
+fn run_initialize_insecure_missing_binary_and_early_exit() {
+    let dir = tempfile::tempdir().expect("tmp");
+    let logs = dir.path().join("logs");
+    fs::create_dir_all(&logs).expect("logs");
+    let runtime = dir.path().join("rt");
+    fs::create_dir_all(&runtime).expect("rt");
+    let mut ctx = init_ctx(42202, AuthMode::None, None);
+    ctx.runtime_dir = runtime.clone();
+    ctx.data_dir = dir.path().join("data");
+    let err = run_initialize_insecure(&ctx, &logs).unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("failed to execute mysqld --initialize-insecure"),
+        "{err}"
+    );
+
+    let bin = runtime.join("bin");
+    fs::create_dir_all(&bin).expect("bin");
+    let mysqld = bin.join("mysqld");
+    fs::write(&mysqld, "#!/bin/sh\necho 'init failed hard' >&2\nexit 4\n").expect("script");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&mysqld, fs::Permissions::from_mode(0o755)).expect("chmod");
+    }
+    let err = run_initialize_insecure(&ctx, &logs).unwrap_err();
+    let msg = err.to_string();
+    assert!(msg.contains("--initialize-insecure failed"), "{msg}");
+    assert!(msg.contains("init failed hard"), "{msg}");
+}
+
+#[test]
+fn bootstrap_credentials_reports_unwritable_init_file_and_early_exit() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().expect("tmp");
+    let logs = dir.path().join("logs");
+    fs::create_dir_all(&logs).expect("logs");
+    let run_dir = dir.path().join("run");
+    fs::create_dir_all(&run_dir).expect("run");
+    let runtime = dir.path().join("rt");
+    let bin = runtime.join("bin");
+    fs::create_dir_all(&bin).expect("bin");
+    let mysqld = bin.join("mysqld");
+    fs::write(
+        &mysqld,
+        "#!/bin/sh\necho 'bootstrap early' >&2\necho 'logline' >/dev/null\nexit 2\n",
+    )
+    .expect("script");
+    fs::set_permissions(&mysqld, fs::Permissions::from_mode(0o755)).expect("chmod");
+
+    let mut ctx = init_ctx(42203, AuthMode::Password, Some(SECRET));
+    ctx.runtime_dir = runtime;
+    ctx.data_dir = dir.path().join("inst/data");
+    fs::create_dir_all(ctx.data_dir.parent().expect("parent")).expect("inst");
+
+    let before = fs::symlink_metadata(&run_dir).expect("meta");
+    fs::set_permissions(&run_dir, fs::Permissions::from_mode(0o500)).expect("chmod");
+    let err = bootstrap_credentials(&ctx, &run_dir, &logs).unwrap_err();
+    assert!(err.to_string().contains("cannot write init SQL"), "{err}");
+    fs::set_permissions(
+        &run_dir,
+        fs::Permissions::from_mode(before.permissions().mode()),
+    )
+    .expect("restore");
+
+    let err = bootstrap_credentials(&ctx, &run_dir, &logs).unwrap_err();
+    let msg = err.to_string();
+    assert!(msg.contains("mysqld bootstrap exited early"), "{msg}");
+    assert!(msg.contains("bootstrap early"), "{msg}");
+}
+
+#[test]
+fn resolve_socket_path_with_single_fallback_reports_too_long() {
+    let dir = tempfile::tempdir().expect("tmp");
+    let long_run = dir.path().join("r".repeat(140)).join("run");
+    let long_fb = dir.path().join("f".repeat(140));
+    crate::fsutil::ensure_private_dir(&long_fb).expect("fb");
+    let instance = dir.path().join("instance");
+    let err =
+        resolve_socket_path_with_fallback_dir(&long_run, 42204, &instance, &long_fb).unwrap_err();
+    match err {
+        DblError::InvalidInput { field, reason } => {
+            assert_eq!(field, "socket");
+            assert!(reason.contains("bytes, maximum is"), "{reason}");
+            assert!(
+                reason.contains(&socket_path_limit().to_string()),
+                "{reason}"
+            );
+        }
+        other => panic!("unexpected: {other:?}"),
+    }
+}
+
+#[test]
+fn socket_name_validation_rejects_short_hash_and_wrong_suffix() {
+    assert!(!is_fallback_socket_name_for_port("m42205-abc.sock", 42205));
+    assert!(!is_fallback_socket_name_for_port(
+        "m42205-abcdef012345.sockx",
+        42205
+    ));
+    assert!(!is_fallback_socket_name_for_port("", 42205));
+    assert!(is_fallback_socket_name_for_port(
+        "m42205-abcdef012345.sock",
+        42205
+    ));
+}
+
+#[test]
+fn cleanup_refuses_socket_outside_allowed_dirs() {
+    let dir = tempfile::tempdir().expect("tmp");
+    let run_dir = dir.path().join("run");
+    fs::create_dir_all(&run_dir).expect("run");
+    let uid = nix::unistd::geteuid().as_raw();
+    let stray = dir.path().join("elsewhere");
+    crate::fsutil::ensure_private_dir(&stray).expect("stray");
+    let sock = stray.join("m42206-abc123def456.sock");
+    let l = std::os::unix::net::UnixListener::bind(&sock).expect("bind");
+    drop(l);
+    cleanup_fallback_socket_with_candidates(&sock, &run_dir, 42206, None, uid);
+    assert!(
+        sock.exists(),
+        "socket outside the candidate dirs must be left alone"
+    );
+}
