@@ -508,8 +508,8 @@ pub(in crate::engine::mysql) use socket::{
 pub(in crate::engine::mysql) use socket::{
     cleanup_fallback_socket_with_candidates, ensure_fallback_socket_dir_for,
     ensure_verified_private_dir_for_test, fallback_socket_dir_candidates,
-    is_fallback_socket_name_for_port, is_safe_fallback_socket_for_port_with_candidates,
-    resolve_socket_path_for, resolve_socket_path_with_fallback_dir, socket_path_from_my_cnf,
+    is_fallback_socket_name_for_port, resolve_socket_path_with_fallback_dir,
+    socket_path_from_my_cnf,
     verify_secure_dir_for_test,
 };
 pub use socket::{resolve_socket_path, socket_path, socket_path_limit, validate_socket_path_len};

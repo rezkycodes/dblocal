@@ -465,7 +465,7 @@ fn resolve_socket_path_for_chooses_first_candidate_whose_socket_fits() {
     )
     .expect("chosen");
     assert!(
-        chosen.starts_with(&second.join("dblocal")) || chosen.starts_with(&second),
+        chosen.starts_with(second.join("dblocal")) || chosen.starts_with(&second),
         "should pick second short candidate: {chosen:?}"
     );
 }
@@ -1113,7 +1113,7 @@ fn read_handshake_half_open_and_non_mysql_banner() {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
     let port = listener.local_addr().expect("addr").port();
     let t = std::thread::spawn(move || {
-        let (mut s, _) = listener.accept().expect("accept");
+        let (s, _) = listener.accept().expect("accept");
         // half-open: close without sending handshake
         let _ = s.shutdown(std::net::Shutdown::Both);
     });
@@ -1140,20 +1140,32 @@ fn read_handshake_half_open_and_non_mysql_banner() {
     t.join().expect("join");
 }
 
-
 #[test]
 fn command_builders_set_tmpdir_env() {
     let ctx_i = init_ctx(42345, AuthMode::Password, Some(SECRET));
     let init_cmd = initialize_insecure_command(&ctx_i, Path::new("/logs/init.err"));
-    let tmp = init_cmd.get_envs().find(|(k, _)| *k == "TMPDIR").and_then(|(_, v)| v).expect("TMPDIR");
+    let tmp = init_cmd
+        .get_envs()
+        .find(|(k, _)| *k == "TMPDIR")
+        .and_then(|(_, v)| v)
+        .expect("TMPDIR");
     assert_eq!(tmp.to_string_lossy(), "/run/tmp");
 
-    let boot = bootstrap_mysqld_command(&ctx_i, Path::new("/run/my.cnf"), Path::new("/run/init.sql"));
-    let tmp = boot.get_envs().find(|(k, _)| *k == "TMPDIR").and_then(|(_, v)| v).expect("TMPDIR");
+    let boot =
+        bootstrap_mysqld_command(&ctx_i, Path::new("/run/my.cnf"), Path::new("/run/init.sql"));
+    let tmp = boot
+        .get_envs()
+        .find(|(k, _)| *k == "TMPDIR")
+        .and_then(|(_, v)| v)
+        .expect("TMPDIR");
     assert_eq!(tmp.to_string_lossy(), "/run/tmp");
 
     let ctx_r = run_ctx(42345, AuthMode::Password, Some(SECRET));
     let spawn = MysqlAdapter.spawn_command(&ctx_r);
-    let tmp = spawn.get_envs().find(|(k, _)| *k == "TMPDIR").and_then(|(_, v)| v).expect("TMPDIR");
+    let tmp = spawn
+        .get_envs()
+        .find(|(k, _)| *k == "TMPDIR")
+        .and_then(|(_, v)| v)
+        .expect("TMPDIR");
     assert_eq!(tmp.to_string_lossy(), "/run/tmp");
 }
