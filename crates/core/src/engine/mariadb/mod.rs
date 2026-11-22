@@ -10,6 +10,8 @@ pub mod socket;
 mod tests;
 #[cfg(test)]
 mod tests_hardening;
+#[cfg(test)]
+mod testutil;
 
 use std::fmt::Write as _;
 use std::fs;
@@ -28,8 +30,9 @@ use crate::service::UriFormat;
 
 #[cfg(test)]
 pub(super) use identity::{
-    ExpectedIdentity, PidIdentity, cmdline_targets_instance, is_zombie_stat, parse_cmdline,
-    pid_alive, read_pidfile, shutdown_verified_pid, verify_pid_identity, verify_ps_command_output,
+    ExpectedIdentity, PidIdentity, cmdline_targets_instance, contains_arg_token, is_zombie_stat,
+    parse_cmdline, path_arg_matches, pid_alive, read_pidfile, same_executable,
+    shutdown_verified_pid, strip_deleted, verify_pid_identity, verify_ps_command_output,
 };
 /// MariaDB protocol version byte for the server greeting.
 const PROTOCOL_VERSION_10: u8 = 10;
@@ -406,6 +409,11 @@ fn build_bootstrap_command(ctx: &InitContext, init_file: &Path) -> Command {
         config_path(&ctx.data_dir).display()
     ));
     cmd.arg(format!("--init-file={}", init_file.display()));
+    // The bootstrap server only needs the local socket for the init-file SQL
+    // (including SHUTDOWN). Binding the TCP instance port would expose an empty
+    // root account to any local user for the duration of bootstrap and would
+    // fail if anything else holds the port.
+    cmd.arg("--skip-networking");
     cmd.stdin(Stdio::null());
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
@@ -512,16 +520,9 @@ fn probe_greeting(port: u16) -> Result<Health> {
     let _ = stream.set_write_timeout(Some(Duration::from_secs(5)));
 
     match read_greeting_packet(&stream) {
-        Ok(greeting) => {
-            if greeting.protocol_version == PROTOCOL_VERSION_10 {
-                Ok(Health::Ready)
-            } else {
-                Ok(Health::NotReady(format!(
-                    "unexpected protocol version {}",
-                    greeting.protocol_version
-                )))
-            }
-        }
+        // `parse_greeting` only yields `Ok` for protocol version 10, so a
+        // parsed greeting is always a ready server.
+        Ok(_greeting) => Ok(Health::Ready),
         Err(GreetingError::Io(e)) => Err(DblError::Engine {
             reason: format!("mariadb greeting read failed: {e}"),
         }),

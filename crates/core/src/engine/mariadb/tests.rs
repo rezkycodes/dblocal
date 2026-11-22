@@ -1,5 +1,6 @@
 //! Unit tests for the MariaDB adapter.
 
+use super::testutil::{retry_etxtbsy, write_fake_script};
 use super::*;
 use crate::engine::{Credential, InitContext, RunContext};
 use crate::model::{AuthMode, Port};
@@ -356,7 +357,7 @@ fn bootstrap_init_file_is_0600_and_removed_after_success() {
     let conf = render_config(&config_params(&ctx, &sock).expect("params"));
     write_private_config(&config_path(&data), conf.expose()).expect("conf");
 
-    bootstrap_password(&ctx).expect("bootstrap");
+    retry_etxtbsy(|| bootstrap_password(&ctx)).expect("bootstrap");
     let init_file = run.join(".mariadb-init.sql");
     assert!(
         !init_file.exists(),
@@ -392,24 +393,13 @@ fn bootstrap_init_file_is_removed_on_failure() {
     let conf = render_config(&config_params(&ctx, &sock).expect("params"));
     write_private_config(&config_path(&data), conf.expose()).expect("conf");
 
-    let err = bootstrap_password(&ctx).expect_err("should fail");
+    let err = retry_etxtbsy(|| bootstrap_password(&ctx)).expect_err("should fail");
     assert!(matches!(err, DblError::Engine { .. }));
     let init_file = run.join(".mariadb-init.sql");
     assert!(
         !init_file.exists(),
         "init-file must be deleted on failure too"
     );
-}
-
-#[cfg(unix)]
-fn write_fake_script(path: &Path, body: &str) {
-    use std::os::unix::fs::PermissionsExt;
-    fs::write(path, body).expect("write script");
-    fs::set_permissions(path, fs::Permissions::from_mode(0o755)).expect("chmod");
-}
-#[cfg(not(unix))]
-fn write_fake_script(path: &Path, body: &str) {
-    fs::write(path, body).expect("write script");
 }
 
 #[test]
@@ -435,6 +425,31 @@ fn mutation_auth_root_normal_required_in_install_db() {
 }
 
 #[test]
+fn bootstrap_command_skips_networking() {
+    // The bootstrap server runs before the password exists; binding the
+    // instance TCP port would expose `root` with an empty password to any local
+    // user and would fail when another process holds the port.
+    let ctx = init_ctx(AuthMode::Password, Some("pw"));
+    let init_file = PathBuf::from("/tmp/dblocal/instances/mdb/run/.mariadb-init.sql");
+    let args: Vec<String> = build_bootstrap_command(&ctx, &init_file)
+        .get_args()
+        .map(|a| a.to_string_lossy().into_owned())
+        .collect();
+    assert!(
+        args.iter().any(|a| a == "--skip-networking"),
+        "bootstrap must not listen on TCP: {args:?}"
+    );
+    assert!(
+        args.iter().any(|a| a.starts_with("--defaults-file=")),
+        "bootstrap still reads my.cnf for the socket and datadir: {args:?}"
+    );
+    assert!(
+        args.iter().any(|a| a.starts_with("--init-file=")),
+        "bootstrap still runs the init file: {args:?}"
+    );
+}
+
+#[test]
 fn mutation_handshake_rejects_non_protocol_10() {
     assert!(parse_greeting(&[0x09, b'1', 0]).is_err());
     assert!(parse_greeting(&[0x00, b'1', 0]).is_err());
@@ -442,6 +457,113 @@ fn mutation_handshake_rejects_non_protocol_10() {
         "0a31312e382e31302d4d6172696144420004000000673d3c536b444f4300feff2d0200ff81150000000000003d00000040567155364c5a615a7c2335006d7973716c5f6e61746976655f70617373776f726400",
     );
     assert_eq!(parse_greeting(&payload).expect("real").protocol_version, 10);
+}
+
+#[test]
+fn cmdline_datadir_equals_token_is_accepted() {
+    let expected = ExpectedIdentity {
+        exe: PathBuf::from("/opt/mariadb/bin/mariadbd"),
+        data_dir: PathBuf::from("/tmp/a/data"),
+        config_path: PathBuf::from("/tmp/a/data/my.cnf"),
+    };
+    // `--datadir=/tmp/a/data --datadir /tmp/a/data` must not count twice-safely;
+    // the second occurrence of a token pair still marks the instance.
+    let args = vec![
+        "--defaults-file=/tmp/a/data/my.cnf".to_owned(),
+        "--datadir=/tmp/a/data".to_owned(),
+    ];
+    assert!(cmdline_targets_instance(&args, &expected));
+}
+
+#[test]
+fn cmdline_targets_instance_with_separate_datadir_token() {
+    let expected = ExpectedIdentity {
+        exe: PathBuf::from("/opt/mariadb/bin/mariadbd"),
+        data_dir: PathBuf::from("/tmp/a/data"),
+        config_path: PathBuf::from("/tmp/a/data/my.cnf"),
+    };
+    let args = vec![
+        "--defaults-file".to_owned(),
+        "/tmp/a/data/my.cnf".to_owned(),
+        "--datadir".to_owned(),
+        "/tmp/a/data".to_owned(),
+    ];
+    assert!(cmdline_targets_instance(&args, &expected));
+}
+
+#[test]
+fn cmdline_rejects_datadir_with_suffix_collision() {
+    let expected = ExpectedIdentity {
+        exe: PathBuf::from("/opt/mariadb/bin/mariadbd"),
+        data_dir: PathBuf::from("/tmp/a/data"),
+        config_path: PathBuf::from("/tmp/a/data/my.cnf"),
+    };
+    // Both args point at a different instance whose path is a prefix-collision
+    // of the real one; the token matcher must not accept it.
+    let args = vec![
+        "--datadir=/tmp/a/data2".to_owned(),
+        "--defaults-file=/tmp/a/data2/my.cnf".to_owned(),
+    ];
+    assert!(!cmdline_targets_instance(&args, &expected));
+}
+
+#[test]
+fn same_executable_strips_deleted_suffix() {
+    let expected = PathBuf::from("/opt/mariadb/bin/mariadbd");
+    let observed = PathBuf::from("/opt/mariadb/bin/mariadbd (deleted)");
+    assert!(same_executable(&observed, &expected));
+}
+
+#[test]
+fn strip_deleted_is_a_noop_without_the_suffix() {
+    let path = Path::new("/opt/mariadb/bin/mariadbd");
+    assert_eq!(strip_deleted(path).as_ref(), path);
+}
+
+#[test]
+fn contains_arg_token_finds_a_later_occurrence() {
+    // The first hit is glued to a prefix (`x--flag=v`), the second is a token.
+    let haystack = "prefix--flag=value --flag=value tail";
+    assert!(contains_arg_token(haystack, "--flag=value"));
+    assert!(!contains_arg_token(haystack, "--flag=nope"));
+    // A token that never stands alone is not matched.
+    assert!(!contains_arg_token("a--flag=value", "--flag=value"));
+}
+
+#[test]
+fn path_arg_matches_via_canonicalize() {
+    let dir = tempdir().expect("tmp");
+    let real = dir.path().join("inst/data");
+    fs::create_dir_all(&real).expect("data");
+    assert!(path_arg_matches(
+        real.to_str().expect("utf8"),
+        real.to_str().expect("utf8")
+    ));
+    assert!(!path_arg_matches(
+        real.to_str().expect("utf8"),
+        "/definitely/not/this/path"
+    ));
+    #[cfg(unix)]
+    {
+        let link = dir.path().join("link-to-data");
+        std::os::unix::fs::symlink(&real, &link).expect("symlink");
+        assert!(path_arg_matches(
+            link.to_str().expect("utf8"),
+            real.to_str().expect("utf8")
+        ));
+    }
+}
+
+#[test]
+fn same_executable_rejects_different_name() {
+    let expected = PathBuf::from("/no/such/dblocal/bin/mariadbd");
+    let other = PathBuf::from("/no/such/dblocal/bin/mysqld");
+    assert!(!same_executable(&other, &expected));
+}
+
+#[test]
+fn path_arg_matches_rejects_unequal_missing_paths() {
+    assert!(!path_arg_matches("/no/such/one/data", "/no/such/two/data"));
 }
 
 #[test]

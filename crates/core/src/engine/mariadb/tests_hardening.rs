@@ -1,5 +1,6 @@
 //! Hardening and S1-S4 regression tests for MariaDB adapter.
 
+use super::testutil::{retry_etxtbsy, write_fake_script};
 use super::*;
 use crate::engine::{InitContext, RunContext};
 use crate::model::{AuthMode, Port};
@@ -308,12 +309,7 @@ fn install_db_failure_removes_data_dir() {
     let runtime = root.join("rt/scripts");
     fs::create_dir_all(&runtime).expect("scripts");
     let prog = runtime.join("mariadb-install-db");
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::write(&prog, "#!/bin/sh\necho boom >&2\nexit 7\n").expect("write");
-        fs::set_permissions(&prog, fs::Permissions::from_mode(0o755)).expect("chmod");
-    }
+    write_fake_script(&prog, "#!/bin/sh\necho boom >&2\nexit 7\n");
     let data = root.join("inst/data");
     fs::create_dir_all(&data).expect("data");
     let ctx = InitContext {
@@ -325,7 +321,7 @@ fn install_db_failure_removes_data_dir() {
         auth: AuthMode::None,
         password: None,
     };
-    let err = run_install_db(&ctx).expect_err("should fail");
+    let err = retry_etxtbsy(|| run_install_db(&ctx)).expect_err("should fail");
     let msg = format!("{err:?}");
     assert!(msg.contains("mariadb-install-db failed"));
     assert!(msg.contains("boom"));
@@ -342,12 +338,7 @@ fn bootstrap_failure_carries_output_tail() {
     let runtime = root.join("rt/bin");
     fs::create_dir_all(&runtime).expect("bin");
     let server = runtime.join(exe_name("mariadbd"));
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::write(&server, "#!/bin/sh\necho bootstrap-tail >&2\nexit 3\n").expect("write");
-        fs::set_permissions(&server, fs::Permissions::from_mode(0o755)).expect("chmod");
-    }
+    write_fake_script(&server, "#!/bin/sh\necho bootstrap-tail >&2\nexit 3\n");
     let data = root.join("inst/data");
     let logs = root.join("inst/logs");
     let run = root.join("inst/run");
@@ -368,7 +359,7 @@ fn bootstrap_failure_carries_output_tail() {
     write_private_config(&config_path(&data), conf.expose()).expect("conf");
     let init_file = run.join(".mariadb-init.sql");
     fs::write(&init_file, "SELECT 1;").expect("init");
-    let err = run_bootstrap_server(&ctx, &init_file).expect_err("should fail");
+    let err = retry_etxtbsy(|| run_bootstrap_server(&ctx, &init_file)).expect_err("should fail");
     let msg = format!("{err:?}");
     assert!(msg.contains("bootstrap-tail") || msg.contains("bootstrap failed"));
     assert!(!data.exists(), "data dir removed on bootstrap failure");
@@ -377,18 +368,15 @@ fn bootstrap_failure_carries_output_tail() {
 #[cfg(unix)]
 #[test]
 fn shutdown_timeout_names_pid() {
-    use std::os::unix::fs::PermissionsExt;
     let dir = tempdir().expect("tmp");
     let root = dir.path();
     let bin = root.join("bin");
     fs::create_dir_all(&bin).expect("bin");
     let fake = bin.join("mariadbd");
-    fs::write(
+    write_fake_script(
         &fake,
         "#!/bin/sh\ntrap '' TERM\nwhile true; do sleep 1; done\n",
-    )
-    .expect("write");
-    fs::set_permissions(&fake, fs::Permissions::from_mode(0o755)).expect("chmod");
+    );
     let data = root.join("inst/data");
     let conf = data.join("my.cnf");
     fs::create_dir_all(&data).expect("data");

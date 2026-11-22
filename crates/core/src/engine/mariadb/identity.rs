@@ -217,7 +217,7 @@ fn ps_command_targets_instance(args_tail: &str, expected: &ExpectedIdentity) -> 
 }
 
 #[cfg(any(test, not(target_os = "linux")))]
-fn contains_arg_token(haystack: &str, token: &str) -> bool {
+pub(crate) fn contains_arg_token(haystack: &str, token: &str) -> bool {
     let mut offset = 0;
     while let Some(pos) = haystack[offset..].find(token) {
         let start = offset + pos;
@@ -235,7 +235,7 @@ fn contains_arg_token(haystack: &str, token: &str) -> bool {
     false
 }
 
-pub(super) fn same_executable(observed: &Path, expected: &Path) -> bool {
+pub(crate) fn same_executable(observed: &Path, expected: &Path) -> bool {
     let observed = strip_deleted(observed);
     let expected = strip_deleted(expected);
     if observed == expected {
@@ -254,7 +254,7 @@ pub(super) fn same_executable(observed: &Path, expected: &Path) -> bool {
     }
 }
 
-fn strip_deleted(path: &Path) -> std::borrow::Cow<'_, Path> {
+pub(crate) fn strip_deleted(path: &Path) -> std::borrow::Cow<'_, Path> {
     #[cfg(unix)]
     {
         use std::ffi::OsStr;
@@ -302,7 +302,7 @@ pub(crate) fn cmdline_targets_instance(args: &[String], expected: &ExpectedIdent
     saw_datadir || saw_conf
 }
 
-fn path_arg_matches(arg: &str, expected: &str) -> bool {
+pub(crate) fn path_arg_matches(arg: &str, expected: &str) -> bool {
     if arg == expected {
         return true;
     }
