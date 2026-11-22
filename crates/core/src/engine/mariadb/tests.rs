@@ -661,3 +661,256 @@ fn verify_pid_identity_rejects_unrelated_live_process() {
     let _ = sleeper.kill();
     let _ = sleeper.wait();
 }
+
+#[test]
+fn sync_port_rewrites_port_and_socket() {
+    let dir = tempdir().expect("tmp");
+    let data = dir.path().join("data");
+    fs::create_dir_all(&data).expect("data");
+    let sock = socket_path(&data, 3307);
+    let ctx = init_ctx(AuthMode::None, None);
+    let conf = render_config(&config_params(&ctx, &sock).expect("params"));
+    write_private_config(&config_path(&data), conf.expose()).expect("write");
+    sync_port(&data, 43110).expect("sync");
+    let updated = fs::read_to_string(config_path(&data)).expect("read");
+    assert!(updated.contains("port=43110"));
+    assert!(!updated.contains("port=3307"));
+    assert!(updated.contains("43110"));
+}
+
+#[test]
+fn sync_port_errors_without_port_directive() {
+    let dir = tempdir().expect("tmp");
+    let data = dir.path().join("data");
+    fs::create_dir_all(&data).expect("data");
+    write_private_config(&config_path(&data), "[mysqld]\ndatadir=/tmp\n").expect("write");
+    let err = sync_port(&data, 43111).expect_err("missing port");
+    assert!(matches!(err, DblError::Engine { .. }));
+}
+
+#[test]
+fn sync_port_errors_on_missing_config() {
+    let dir = tempdir().expect("tmp");
+    let data = dir.path().join("data");
+    fs::create_dir_all(&data).expect("data");
+    let err = sync_port(&data, 43111).expect_err("missing config");
+    assert!(matches!(err, DblError::Engine { .. }));
+}
+
+#[test]
+fn probe_greeting_fails_on_closed_port() {
+    let health = probe_greeting(1);
+    assert!(health.is_err());
+}
+
+#[test]
+fn bootstrap_password_errors_without_password() {
+    let ctx = init_ctx(AuthMode::Password, None);
+    let err = bootstrap_password(&ctx).expect_err("no password");
+    assert!(matches!(
+        err,
+        DblError::InvalidInput {
+            field: "password",
+            ..
+        }
+    ));
+}
+
+#[test]
+fn read_config_socket_path_errors_on_missing_directive() {
+    let dir = tempdir().expect("tmp");
+    let data = dir.path().join("data");
+    fs::create_dir_all(&data).expect("data");
+    write_private_config(&config_path(&data), "[mysqld]\nport=3307\n").expect("conf");
+    let err = read_config_socket_path(&data).expect_err("no socket");
+    assert!(matches!(err, DblError::Engine { .. }));
+}
+
+#[test]
+fn combined_output_joins_stdout_and_stderr() {
+    assert_eq!(combined_output(b"out", b"err"), "out\nerr");
+    assert_eq!(combined_output(b"", b"err"), "err");
+    assert_eq!(combined_output(b"out\n", b"err"), "out\nerr");
+    assert_eq!(combined_output(b"", b""), "");
+}
+
+#[test]
+fn escape_sql_handles_control_chars() {
+    let s = escape_sql_single_quoted("a\u{1a}b");
+    assert!(s.contains("\\Z"), "got {s}");
+    let s2 = escape_sql_single_quoted("x\0y");
+    assert!(s2.contains("\\0"), "got {s2}");
+    let s3 = escape_sql_single_quoted("l\nr\r");
+    assert!(s3.contains("\\n") && s3.contains("\\r"), "got {s3}");
+}
+
+#[cfg(unix)]
+#[test]
+fn prepare_run_keeps_regular_file_named_like_socket_dir_and_ignores_regular_socket() {
+    // A regular file at the socket path must be left alone (only real sockets are removed).
+    let dir = tempdir().expect("tmp");
+    let root = dir.path();
+    let data = root.join("inst/data");
+    let run = root.join("inst/run");
+    fs::create_dir_all(&data).expect("data");
+    fs::create_dir_all(&run).expect("run");
+    let fallback = root.join("fallback-sockets");
+    fs::create_dir_all(&fallback).expect("fallback");
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&fallback, fs::Permissions::from_mode(0o700)).expect("chmod");
+    }
+    let sock = fallback.join("mariadb-3307-aabb.sock");
+    fs::write(&sock, b"not a socket").expect("regular at socket path");
+    let conf = format!(
+        "[mysqld]\nsocket={}\ntmpdir={}\n",
+        sock.display(),
+        run.join("tmp").display()
+    );
+    write_private_config(&config_path(&data), &conf).expect("conf");
+    let ctx = RunContext {
+        instance_name: "m".into(),
+        runtime_dir: root.join("rt"),
+        data_dir: data,
+        logs_dir: root.join("inst/logs"),
+        run_dir: run,
+        port: Port::new(3307).expect("port"),
+        superuser: "root".into(),
+        auth: AuthMode::None,
+        credential: None,
+    };
+    prepare_run(&ctx).expect("prepare");
+    assert!(sock.exists(), "regular file at socket path is left alone");
+}
+
+#[test]
+fn prepare_run_creates_natural_run_dir_when_socket_is_natural() {
+    let dir = tempdir().expect("tmp");
+    let root = dir.path();
+    let data = root.join("inst/data");
+    let run = root.join("inst/run");
+    fs::create_dir_all(&data).expect("data");
+    let sock = run.join("mariadb-3307.sock");
+    let conf = format!(
+        "[mysqld]\nsocket={}\ntmpdir={}\n",
+        sock.display(),
+        run.join("tmp").display()
+    );
+    write_private_config(&config_path(&data), &conf).expect("conf");
+    let ctx = RunContext {
+        instance_name: "m".into(),
+        runtime_dir: root.join("rt"),
+        data_dir: data,
+        logs_dir: root.join("inst/logs"),
+        run_dir: run.clone(),
+        port: Port::new(3307).expect("port"),
+        superuser: "root".into(),
+        auth: AuthMode::None,
+        credential: None,
+    };
+    prepare_run(&ctx).expect("prepare");
+    assert!(run.is_dir(), "natural run dir recreated");
+    assert!(run.join("tmp").is_dir());
+}
+
+#[cfg(unix)]
+#[test]
+fn ensure_private_tmpdir_errors_on_non_directory() {
+    let dir = tempdir().expect("tmp");
+    let file = dir.path().join("tmp");
+    fs::write(&file, b"x").expect("file");
+    let err = ensure_private_tmpdir(&file).expect_err("non-dir");
+    assert!(matches!(err, DblError::Engine { .. }));
+}
+
+#[cfg(unix)]
+#[test]
+fn ensure_private_tmpdir_fixes_wrong_mode() {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+    let dir = tempdir().expect("tmp");
+    let tmp = dir.path().join("tmp");
+    fs::create_dir_all(&tmp).expect("tmp");
+    fs::set_permissions(&tmp, fs::Permissions::from_mode(0o755)).expect("chmod");
+    ensure_private_tmpdir(&tmp).expect("secure");
+    let meta = fs::metadata(&tmp).expect("meta");
+    assert_eq!(meta.mode() & 0o777, 0o700);
+    assert_eq!(meta.uid(), nix::unistd::geteuid().as_raw());
+}
+
+#[test]
+fn diagnose_via_adapter_maps_port_in_use() {
+    let failure = MariaDbAdapter.diagnose_start_failure(
+        "Can't start server: Bind on TCP/IP port. Got error: 98: Address already in use",
+        Some(1),
+    );
+    assert_eq!(failure, StartFailure::PortInUse);
+}
+
+#[test]
+fn read_log_tail_returns_last_lines_and_empty_for_missing() {
+    let dir = tempdir().expect("tmp");
+    let log = dir.path().join("mariadb.err");
+    let body: String = (1..=50).map(|n| format!("line-{n}\n")).collect();
+    fs::write(&log, body).expect("write");
+    let tail = read_log_tail(&log, 5);
+    assert_eq!(tail.lines().count(), 5);
+    assert!(tail.ends_with("line-50"));
+    assert_eq!(read_log_tail(&dir.path().join("nope.err"), 5), "");
+}
+
+fn serve_once(payload: Vec<u8>) -> u16 {
+    use std::io::Write as _;
+    use std::net::TcpListener;
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+    let port = listener.local_addr().expect("addr").port();
+    std::thread::spawn(move || {
+        if let Ok((mut stream, _)) = listener.accept() {
+            let _ = stream.write_all(&payload);
+            let _ = stream.flush();
+        }
+    });
+    port
+}
+
+#[test]
+fn probe_greeting_reports_ready_on_error_packet() {
+    // Server speaks an error packet (0xff) instead of a greeting: still Ready.
+    let mut payload = vec![0u8; 4];
+    payload[0] = 3; // length
+    payload.extend_from_slice(&[0xff, 0x10, 0x04]);
+    let port = serve_once(payload);
+    let health = probe_greeting(port).expect("probe");
+    assert_eq!(health, Health::Ready);
+}
+
+#[test]
+fn probe_greeting_errors_on_non_protocol_greeting() {
+    let mut payload = vec![0u8; 4];
+    payload[0] = 4;
+    payload.extend_from_slice(&[0x09, b'x', b'y', 0]);
+    let port = serve_once(payload);
+    assert!(probe_greeting(port).is_err());
+}
+
+#[test]
+fn probe_greeting_errors_on_io_failure() {
+    // Accept then close immediately: read_exact fails with EOF.
+    use std::net::TcpListener;
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+    let port = listener.local_addr().expect("addr").port();
+    std::thread::spawn(move || {
+        let _ = listener.accept();
+    });
+    assert!(probe_greeting(port).is_err());
+}
+
+#[test]
+fn greeting_error_from_io_error_wraps() {
+    let err: GreetingError = std::io::Error::other("boom").into();
+    assert!(matches!(err, GreetingError::Io(_)));
+}
+
+#[test]
+fn parse_greeting_rejects_empty_payload() {
+    assert!(parse_greeting(&[]).is_err());
+}
