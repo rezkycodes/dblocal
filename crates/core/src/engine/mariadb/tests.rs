@@ -515,7 +515,7 @@ fn identity_rejects_wrong_exe_and_wrong_cmdline() {
         data_dir: PathBuf::from("/tmp/inst/data"),
         config_path: PathBuf::from("/tmp/inst/data/my.cnf"),
     };
-    let args = parse_cmdline(b"/usr/bin/sleep\060\0");
+    let args = parse_cmdline(b"/usr/bin/sleep\0--ignored\0");
     assert!(!cmdline_targets_instance(&args, &expected));
     let wrong_data = parse_cmdline(
         b"/opt/mariadb/bin/mariadbd\0--defaults-file=/tmp/other/data/my.cnf\0--datadir=/tmp/other/data\0",

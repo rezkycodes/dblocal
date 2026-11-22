@@ -15,10 +15,7 @@ use super::{config_path, pidfile_path};
 
 pub(super) fn shutdown_by_sigterm(ctx: &RunContext) -> Result<()> {
     let pid_path = pidfile_path(&ctx.data_dir);
-    let pid = match read_pidfile(&pid_path) {
-        Ok(pid) => pid,
-        Err(e) => return Err(e),
-    };
+    let pid = read_pidfile(&pid_path)?;
     let identity = expected_identity(ctx);
     match verify_pid_identity(pid, &identity) {
         PidIdentity::Match => {}
@@ -247,16 +244,16 @@ pub(crate) fn cmdline_targets_instance(args: &[String], expected: &ExpectedIdent
         let a = &args[i];
         if let Some(v) = a.strip_prefix("--datadir=") {
             saw_datadir = path_arg_matches(v, &datadir);
-        } else if a == "--datadir" {
-            if let Some(v) = args.get(i + 1) {
-                saw_datadir = path_arg_matches(v, &datadir);
-            }
+        } else if a == "--datadir"
+            && let Some(v) = args.get(i + 1)
+        {
+            saw_datadir = path_arg_matches(v, &datadir);
         } else if let Some(v) = a.strip_prefix("--defaults-file=") {
             saw_conf = path_arg_matches(v, &conf);
-        } else if a == "--defaults-file" {
-            if let Some(v) = args.get(i + 1) {
-                saw_conf = path_arg_matches(v, &conf);
-            }
+        } else if a == "--defaults-file"
+            && let Some(v) = args.get(i + 1)
+        {
+            saw_conf = path_arg_matches(v, &conf);
         }
         i += 1;
     }
