@@ -21,11 +21,17 @@ use super::service::Inner;
 #[cfg(test)]
 type ListHook = Box<dyn FnOnce(&Arc<Inner>) + Send>;
 
+/// Runs between the status write and the identity clear of a `mark`, so a test can
+/// observe a fresh connection at exactly that instant.
+#[cfg(test)]
+type AfterStatusHook = Box<dyn FnOnce(&Arc<Inner>, &InstanceId) + Send>;
+
 #[cfg(test)]
 #[derive(Default)]
 struct Hooks {
     before_list: Option<ListHook>,
     after_list: Option<ListHook>,
+    after_status: Option<AfterStatusHook>,
     done: Option<std::sync::mpsc::Sender<()>>,
 }
 
@@ -97,6 +103,29 @@ fn fire_done(inner: &Arc<Inner>) {
     }
 }
 
+/// Registers a hook that runs between `mark`'s status write and its identity clear.
+#[cfg(test)]
+pub(crate) fn on_after_status(
+    root: &std::path::Path,
+    hook: impl FnOnce(&Arc<Inner>, &InstanceId) + Send + 'static,
+) {
+    edit_hooks(&root.display().to_string(), |hooks| {
+        hooks.after_status = Some(Box::new(hook));
+    });
+}
+
+#[cfg(test)]
+fn run_after_status(inner: &Arc<Inner>, id: &InstanceId) -> bool {
+    let root = inner.paths.root().display().to_string();
+    match edit_hooks_capture(&root, |hooks| hooks.after_status.take()) {
+        Some(hook) => {
+            hook(inner, id);
+            true
+        }
+        None => false,
+    }
+}
+
 /// Runs `take` on the hooks for `root` and returns the value it removed.
 #[cfg(test)]
 fn edit_hooks_capture<T>(root: &str, take: impl FnOnce(&mut Hooks) -> Option<T>) -> Option<T> {
@@ -110,6 +139,11 @@ fn run_before_list(_: &Arc<Inner>) {}
 
 #[cfg(not(test))]
 fn run_after_list(_: &Arc<Inner>) {}
+
+#[cfg(not(test))]
+fn run_after_status(_: &Arc<Inner>, _: &InstanceId) -> bool {
+    false
+}
 
 #[cfg(not(test))]
 fn fire_done(_: &Arc<Inner>) {}
@@ -464,6 +498,10 @@ async fn mark(inner: &Arc<Inner>, instance: &Instance, event: InstanceEvent) {
         event,
         InstanceEvent::ReconciledAbsent | InstanceEvent::Interrupted
     ) {
+        // The buggy window: the status is already terminal here, while the identity
+        // is still recorded. A test hook observes it.
+        #[cfg(test)]
+        run_after_status(inner, instance.id());
         clear_identity(inner, instance.id()).await;
     }
     emit_changed(inner, instance.id());
