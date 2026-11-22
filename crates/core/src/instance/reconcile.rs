@@ -26,12 +26,18 @@ type ListHook = Box<dyn FnOnce(&Arc<Inner>) + Send>;
 #[cfg(test)]
 type AfterStatusHook = Box<dyn FnOnce(&Arc<Inner>, &InstanceId) + Send>;
 
+/// Runs in phase 3 while the instance guard is held (after the fresh read, before
+/// the probe), so a test can issue a user command into that window.
+#[cfg(test)]
+type GuardedHook = Box<dyn FnOnce(&Arc<Inner>, &InstanceId) + Send>;
+
 #[cfg(test)]
 #[derive(Default)]
 struct Hooks {
     before_list: Option<ListHook>,
     after_list: Option<ListHook>,
     after_status: Option<AfterStatusHook>,
+    guarded: Option<GuardedHook>,
     done: Option<std::sync::mpsc::Sender<()>>,
 }
 
@@ -114,6 +120,29 @@ pub(crate) fn on_after_status(
     });
 }
 
+/// Registers a hook that runs in phase 3 while the instance guard is held.
+#[cfg(test)]
+pub(crate) fn on_guard_held(
+    root: &std::path::Path,
+    hook: impl FnOnce(&Arc<Inner>, &InstanceId) + Send + 'static,
+) {
+    edit_hooks(&root.display().to_string(), |hooks| {
+        hooks.guarded = Some(Box::new(hook));
+    });
+}
+
+#[cfg(test)]
+fn run_guarded(inner: &Arc<Inner>, id: &InstanceId) {
+    let root = inner.paths.root().display().to_string();
+    if let Some(hook) = edit_hooks_capture(&root, |hooks| hooks.guarded.take()) {
+        hook(inner, id);
+    }
+}
+
+#[cfg(not(test))]
+#[allow(dead_code)]
+fn run_guarded(_: &Arc<Inner>, _: &InstanceId) {}
+
 #[cfg(test)]
 fn run_after_status(inner: &Arc<Inner>, id: &InstanceId) -> bool {
     let root = inner.paths.root().display().to_string();
@@ -141,6 +170,7 @@ fn run_before_list(_: &Arc<Inner>) {}
 fn run_after_list(_: &Arc<Inner>) {}
 
 #[cfg(not(test))]
+#[allow(dead_code)]
 fn run_after_status(_: &Arc<Inner>, _: &InstanceId) -> bool {
     false
 }
@@ -250,6 +280,10 @@ pub(crate) async fn reconcile_on_startup(inner: Arc<Inner>) {
         if fresh.status() == InstanceStatus::Starting && identity_of(&fresh).is_none() {
             continue;
         }
+        // Test seam: run a hook here, with the guard held, to issue a user command
+        // into the window a one-shot CLI lands in.
+        #[cfg(test)]
+        run_guarded(&inner, instance.id());
         guarded.push((guard, fresh));
     }
     if guarded.is_empty() {
@@ -290,8 +324,12 @@ pub(crate) async fn reconcile_on_startup(inner: Arc<Inner>) {
 /// that releases on drop. It is the only in-process proof that a create/delete is
 /// not mid-flight, so every mutating reconciliation decision takes it before
 /// reading fresh state.
+///
+/// It takes the **reconciliation** guard, not an operation guard, so a user
+/// command that arrives while reconciliation is deciding waits for it bounded
+/// (`Ops::lock_instance`) instead of being refused as busy.
 fn lock_if_idle(inner: &Arc<Inner>, id: &InstanceId) -> Option<super::registry::InstanceLock> {
-    inner.ops.lock_instance(id).ok()
+    inner.ops.lock_instance_for_reconcile(id).ok()
 }
 
 /// Re-reads one instance from the store, so a decision never acts on a stale
