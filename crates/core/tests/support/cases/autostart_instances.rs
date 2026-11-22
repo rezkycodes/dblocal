@@ -96,7 +96,10 @@ fn autostart_two_flagged_one_blocked() {
     );
 
     // The free instance reaches Running; the blocked one ends Failed with the
-    // port diagnosis. Neither failure blocked the other (AC2).
+    // port diagnosis. Neither blocked the other (AC2). `start_instance` accepts
+    // both requests synchronously (the port probe runs inside the operation), so
+    // the summary records both as accepted; the *instance* state is the
+    // authoritative result of the pass.
     harness.wait_status(&id_a, InstanceStatus::Running, Duration::from_secs(120));
     harness.wait_status(&id_b, InstanceStatus::Failed, Duration::from_secs(120));
     let view_b = harness.view("auto-blocked").expect("auto-blocked view");
@@ -113,21 +116,30 @@ fn autostart_two_flagged_one_blocked() {
         "the blocked start must report DBL-1005"
     );
 
+    assert_eq!(
+        summary.outcomes.len(),
+        targets.len(),
+        "one outcome per accepted request"
+    );
     let blocked_outcome = summary
         .outcomes
         .iter()
         .find(|o| o.target.name == "auto-blocked")
         .expect("blocked outcome");
     assert!(
-        blocked_outcome.is_err(),
-        "the blocked start must be recorded as an error"
+        blocked_outcome.result.is_ok(),
+        "the pass accepts the request; the port probe fails inside the operation"
     );
-    let ok_outcome = summary
-        .outcomes
-        .iter()
-        .find(|o| o.target.name == "auto-ok")
-        .expect("ok outcome");
-    assert!(ok_outcome.result.is_ok(), "the free start must succeed");
+    // The decisive AC2 evidence: the free instance is genuinely Running while
+    // the other is Failed, so the failure provably did not block it.
+    assert_eq!(
+        harness.instance_by_id(&id_a).expect("row a").status(),
+        InstanceStatus::Running,
+    );
+    assert_eq!(
+        harness.instance_by_id(&id_b).expect("row b").status(),
+        InstanceStatus::Failed,
+    );
 
     // Cleanup.
     drop(foreign);
