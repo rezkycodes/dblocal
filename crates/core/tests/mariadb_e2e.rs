@@ -841,13 +841,13 @@ fn mariadb_118_restart_after_volatile_dirs_removed() {
 #[ignore = "e2e: requires cached MariaDB 11.8 tarball; run with DBLOCAL_E2E=1 under flock $HOME/.cache/dblocal-e2e.lock"]
 fn mariadb_118_shared_tmpdir_isolated() {
     require_e2e();
+    // The default process TMPDIR is already shared by every e2e test that runs in
+    // parallel: that is the failure mode the adapter must survive. Do not mutate
+    // the environment here, or concurrently created temp dirs would be captured
+    // and deleted when this test ends.
     let rt = setup_runtime(Path::new("."));
-    let shared_tmp = tempfile::tempdir().expect("shared tmpdir");
-    #[allow(unsafe_code)]
-    unsafe {
-        std::env::set_var("TMPDIR", shared_tmp.path());
-    }
-    let decoy = shared_tmp.path().join("#sql-temptable-decoy");
+    let shared = std::env::temp_dir();
+    let decoy = shared.join(format!("#sql-temptable-decoy-{}", std::process::id()));
     fs::write(&decoy, b"foreign").expect("decoy");
 
     let port1 = 43120u16;
@@ -895,8 +895,9 @@ fn mariadb_118_shared_tmpdir_isolated() {
 
     assert!(
         decoy.exists(),
-        "foreign #sql-temptable decoy in process TMPDIR must survive"
+        "foreign #sql-temptable decoy in the shared process TMPDIR must survive"
     );
+    let _ = fs::remove_file(&decoy);
     eprintln!("mariadb shared TMPDIR isolation OK");
 }
 
