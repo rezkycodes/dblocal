@@ -10,8 +10,9 @@ use crate::service::{OperationId, OperationStage};
 
 use super::helpers::{
     OpResult, blocking, db_async, dir_size, emit_changed, emit_removed, emit_stage,
-    finish_operation, identity_of, load, remove_tree_retrying, safe_within,
+    finish_operation, identity_of, load, safe_within,
 };
+use super::retry::remove_tree_retrying;
 use super::service::Inner;
 
 /// How many times a delete re-reads the status before giving up, which absorbs
