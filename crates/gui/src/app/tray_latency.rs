@@ -237,14 +237,9 @@ fn tray_action_reaches_the_model_through_bridge() {
 /// The echo service answers every call the latency test does not use, so the
 /// test fake cannot rot into a stub that only implements the happy path.
 #[test]
-fn echo_service_answers_every_other_call() {
+fn echo_service_answers_the_lifecycle_calls() {
     let service = EchoService::new();
     let id = service.list_instances().expect("instances")[0].id.clone();
-    assert!(service.catalog().expect("catalog").engines.is_empty());
-    assert_eq!(
-        service.refresh_catalog(false).expect("refresh").as_str(),
-        "op"
-    );
     let spec = InstanceSpec::new(
         InstanceName::new("pg-echo").expect("name"),
         EngineKey::Postgresql,
@@ -254,13 +249,6 @@ fn echo_service_answers_every_other_call() {
     )
     .expect("spec");
     assert!(service.validate_spec(&spec).is_ok());
-    assert_eq!(
-        service
-            .suggest_port(EngineKey::Postgresql)
-            .expect("port")
-            .get(),
-        5432
-    );
     assert!(service.create_instance(spec).is_ok());
     assert!(service.stop_instance(&id).is_ok());
     assert!(
@@ -273,9 +261,29 @@ fn echo_service_answers_every_other_call() {
             .change_port(&id, Port::new(5503).expect("port"))
             .is_ok()
     );
-    assert_eq!(service.data_size(&id).expect("size"), 0);
     assert!(service.set_autostart(&id, true).is_ok());
     assert!(service.cancel_operation(&OperationId::new("op")).is_ok());
+    assert!(service.watch_logs(&id, true).is_ok());
+    assert_eq!(service.starts.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn echo_service_answers_the_reads() {
+    let service = EchoService::new();
+    let id = service.list_instances().expect("instances")[0].id.clone();
+    assert!(service.catalog().expect("catalog").engines.is_empty());
+    assert_eq!(
+        service.refresh_catalog(false).expect("refresh").as_str(),
+        "op"
+    );
+    assert_eq!(
+        service
+            .suggest_port(EngineKey::Postgresql)
+            .expect("port")
+            .get(),
+        5432
+    );
+    assert_eq!(service.data_size(&id).expect("size"), 0);
     assert!(
         service
             .connection_uri(&id, UriFormat::Uri)
@@ -284,13 +292,16 @@ fn echo_service_answers_every_other_call() {
             .starts_with("postgresql://")
     );
     assert!(service.tail_logs(&id, 10).expect("logs").is_empty());
-    assert!(service.watch_logs(&id, true).is_ok());
     assert!(service.list_runtimes().expect("runtimes").is_empty());
-    assert!(service.remove_runtime("none").is_ok());
     assert!(service.list_archives().expect("archives").is_empty());
-    assert!(service.purge_archive("none").is_ok());
     assert_eq!(service.subscribe().len(), 0);
-    assert_eq!(service.starts.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn echo_service_answers_the_maintenance_calls() {
+    let service = EchoService::new();
+    assert!(service.remove_runtime("none").is_ok());
+    assert!(service.purge_archive("none").is_ok());
 }
 
 fn wait_for_running(

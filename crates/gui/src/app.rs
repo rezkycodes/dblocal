@@ -16,6 +16,9 @@ mod create_submit;
 mod delete_dialog;
 mod dock;
 mod instance_actions;
+#[cfg(test)]
+#[path = "app/instance_actions_tests.rs"]
+mod instance_actions_tests;
 mod palette;
 mod preview;
 mod quit_flow;
@@ -148,6 +151,17 @@ pub struct Workspace {
     _tray_task: Option<Task<()>>,
 }
 
+/// The owned pieces `Workspace::assemble` takes, so the constructor stays one
+/// readable call per concern instead of an eight-argument function.
+struct Parts {
+    service: Arc<dyn DblService>,
+    events: flume::Receiver<UiEvent>,
+    tray_start: crate::tray::TrayStartup,
+    command_state: Entity<CommandState>,
+    filter_input: Entity<InputState>,
+    focus_handle: FocusHandle,
+}
+
 impl Workspace {
     /// Builds the workspace and starts the event pump.
     pub fn new(service: Arc<dyn DblService>, window: &mut Window, cx: &mut Context<Self>) -> Self {
@@ -167,41 +181,53 @@ impl Workspace {
         cx: &mut Context<Self>,
         live: bool,
     ) -> Self {
-        let events = if live {
-            service_bridge::spawn_bridge(service.clone())
-        } else {
-            // A channel this view can never receive on, closed immediately, so
-            // the type is the same and no thread is ever started.
-            let (tx, rx) = flume::unbounded::<UiEvent>();
-            drop(tx);
-            rx
-        };
-        let tray_start = if crate::tray::app_enabled() {
-            start_tray()
-        } else {
-            crate::tray::TrayStartup::none()
-        };
-        let tray_available = tray_start.handle.is_available();
+        let tray_start = Self::tray_startup();
         let focus_handle = cx.focus_handle();
         let command_state = cx.new(|cx| CommandState::new(window, cx));
         let filter_input = cx
             .new(|cx| InputState::new(window, cx).placeholder(strings::UI_DOCK_FILTER.to_owned()));
         cx.observe(&filter_input, |_, _, cx| cx.notify()).detach();
+        let events = Self::event_source(service.clone(), live);
+        let mut workspace = Self::assemble(Parts {
+            service,
+            events,
+            tray_start,
+            command_state,
+            filter_input,
+            focus_handle,
+        });
+        if live {
+            workspace.startup_load(cx);
+            workspace.start_event_pump(cx);
+            workspace.start_tray_pump(cx);
+        }
+        workspace
+    }
+
+    /// The freshly built, unmoved pieces `assemble` needs.
+    fn assemble(parts: Parts) -> Self {
+        let tray_available = parts.tray_start.handle.is_available();
         let tray_note = if tray_available {
             None
         } else {
             Some(SharedString::from(strings::UI_TRAY_UNAVAILABLE_NOTE))
         };
-        let mut workspace = Self {
-            service,
-            events,
+        Self {
+            service: parts.service,
+            events: parts.events,
+            tray: parts.tray_start.handle,
+            tray_actions: parts.tray_start.actions,
+            tray_note_shown: !tray_available,
+            tray_note,
+            command_state: parts.command_state,
+            filter_input: Some(parts.filter_input),
+            focus_handle: parts.focus_handle,
             state: ShellState::default(),
             catalog: Self::offline_catalog(),
             runtimes: Vec::new(),
             tabs: Tabs::default(),
             logs: LogStore::new(),
             log_scroll: gpui_kit::UniformListScrollHandle::new(),
-            filter_input: Some(filter_input),
             collapsed: HashSet::new(),
             data_sizes: HashMap::new(),
             dotenv_cache: HashMap::new(),
@@ -214,16 +240,10 @@ impl Workspace {
             delete_size: 0,
             palette_open: false,
             palette_query: String::new(),
-            command_state,
             last_failure_mirror: None,
             toast: None,
-            tray: tray_start.handle,
-            tray_actions: tray_start.actions,
-            tray_note_shown: !tray_available,
-            tray_note,
             quit: QuitMachine::new(),
             version: env!("CARGO_PKG_VERSION"),
-            focus_handle,
             started_at: Instant::now(),
             first_paint_logged: false,
             demo_content: false,
@@ -233,13 +253,28 @@ impl Workspace {
             _appearance: None,
             _event_task: None,
             _tray_task: None,
-        };
-        if live {
-            workspace.startup_load(cx);
-            workspace.start_event_pump(cx);
-            workspace.start_tray_pump(cx);
         }
-        workspace
+    }
+
+    /// The event source. A live app gets the bridge thread; a preview gets a
+    /// channel this view can never receive on, closed immediately, so no thread
+    /// is ever started.
+    fn event_source(service: Arc<dyn DblService>, live: bool) -> flume::Receiver<UiEvent> {
+        if live {
+            return service_bridge::spawn_bridge(service);
+        }
+        let (tx, rx) = flume::unbounded::<UiEvent>();
+        drop(tx);
+        rx
+    }
+
+    /// Starts the platform tray when the app is enabled to own one.
+    fn tray_startup() -> crate::tray::TrayStartup {
+        if crate::tray::app_enabled() {
+            start_tray()
+        } else {
+            crate::tray::TrayStartup::none()
+        }
     }
 
     /// Preview/test constructor: synchronous reads, no bg startup.

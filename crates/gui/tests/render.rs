@@ -519,6 +519,19 @@ fn renders_overview_failed_with_diagnosis_banner() {
     );
 }
 
+/// Assert a logs frame's viewer body shows exactly `expected` text bands.
+fn assert_log_bands(frame: &Frame, border: [u8; 3], bg: [u8; 3], expected: usize, label: &str) {
+    let body = log_viewer_body(frame, border);
+    let bands = text_bands(frame, body, bg, 14);
+    eprintln!("{label}_BODY rect={body:?} bands={}", bands.len());
+    assert_eq!(
+        bands.len(),
+        expected,
+        "{label} viewer body must show {expected} log bands, got {} in {body:?}",
+        bands.len()
+    );
+}
+
 #[test]
 fn renders_logs_body_bands_from_layout() {
     // Round 2, defect 1: the old tests counted bands in a wide magic region that
@@ -536,17 +549,8 @@ fn renders_logs_body_bands_from_layout() {
     let border_dark = [38, 40, 51];
     let border_light = [223, 224, 231];
 
-    // Diagnosis case: 8 lines in the buffer, all visible.
     let diagnosis = render(true, "logs-diagnosis-dark.png", Workspace::preview_failure);
-    let body = log_viewer_body(&diagnosis, border_dark);
-    let bands = text_bands(&diagnosis, body, DARK_BG, 14);
-    eprintln!("DIAG_BODY rect={body:?} bands={}", bands.len());
-    assert_eq!(
-        bands.len(),
-        8,
-        "diagnosis viewer body must show 8 log bands, got {} in {body:?}",
-        bands.len()
-    );
+    assert_log_bands(&diagnosis, border_dark, DARK_BG, 8, "DIAG");
     let danger_tinted = diagnosis.count_tint(
         (DOCK, 100, LOGICAL_W - 20, LOGICAL_H / 2),
         DARK_BG,
@@ -559,32 +563,19 @@ fn renders_logs_body_bands_from_layout() {
         "diagnosis banner not visible (tint={danger_tinted}, text={danger_text})"
     );
 
-    // Light case: 2 demo lines.
     let light = render(false, "logs-light.png", Workspace::preview_logs);
-    let body = log_viewer_body(&light, border_light);
-    let bands = text_bands(&light, body, LIGHT_BG, 14);
-    eprintln!("LOGS_BODY rect={body:?} bands={}", bands.len());
-    assert_eq!(
-        bands.len(),
-        2,
-        "light viewer body must show 2 log bands, got {} in {body:?}",
-        bands.len()
-    );
+    assert_log_bands(&light, border_light, LIGHT_BG, 2, "LOGS");
 
-    // Short buffer: 1 line.
     let short = render(false, "logs-short-light.png", Workspace::preview_logs_short);
-    let body = log_viewer_body(&short, border_light);
-    let bands = text_bands(&short, body, LIGHT_BG, 14);
-    eprintln!("SHORT_BODY rect={body:?} bands={}", bands.len());
-    assert_eq!(
-        bands.len(),
-        1,
-        "short buffer should show 1 band, got {} in {body:?}",
-        bands.len()
-    );
+    assert_log_bands(&short, border_light, LIGHT_BG, 1, "SHORT");
 
-    // Long buffer: 200 lines, follow on → last lines visible. Band count must
-    // equal the number of visible rows that fit the body.
+    assert_logs_long_fills_its_rows();
+}
+
+/// A 200-line buffer with follow on: the body must be filled with visible rows
+/// and the newest line must sit near the bottom.
+fn assert_logs_long_fills_its_rows() {
+    let border_light = [223, 224, 231];
     let long = render(false, "logs-long-light.png", Workspace::preview_logs_long);
     let body = log_viewer_body(&long, border_light);
     let bands = text_bands(&long, body, LIGHT_BG, 14);
@@ -607,7 +598,6 @@ fn renders_logs_body_bands_from_layout() {
         "long buffer should fill visible rows, got {} expected ~{visible_rows}",
         bands.len()
     );
-    // Follow is on, so the last line must be near the bottom of the body.
     let last = bands.last().expect("bands present");
     let bottom_gap = (y1 * long.scale).saturating_sub(last.1);
     assert!(

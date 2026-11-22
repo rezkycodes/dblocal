@@ -141,68 +141,63 @@ impl Workspace {
                             .text_color(theme.muted_foreground)
                             .child(body),
                     )
-                    .child(
-                        h_flex()
-                            .gap_2()
-                            .justify_end()
-                            .when(!stopping && !failed, |this| {
-                                this.child(
-                                    gpui_kit::component::button::Button::new("quit-cancel")
-                                        .ghost()
-                                        .label(strings::UI_CANCEL)
-                                        .on_click(
-                                            cx.listener(|this, _, _, cx| this.quit_cancel(cx)),
-                                        ),
-                                )
-                                .child(
-                                    gpui_kit::component::button::Button::new("quit-stop-all")
-                                        .ghost()
-                                        .label(strings::UI_QUIT_STOP_ALL)
-                                        .on_click(
-                                            cx.listener(|this, _, _, cx| this.quit_stop_all(cx)),
-                                        ),
-                                )
-                                .child(
-                                    gpui_kit::component::button::Button::new("quit-keep")
-                                        .primary()
-                                        .label(strings::UI_QUIT_KEEP_RUNNING)
-                                        .on_click(
-                                            cx.listener(|this, _, _, cx| {
-                                                this.quit_keep_running(cx)
-                                            }),
-                                        ),
-                                )
-                            })
-                            .when(stopping, |this| {
-                                this.child(
-                                    gpui_kit::component::button::Button::new("quit-force")
-                                        .ghost()
-                                        .label(strings::UI_QUIT_FORCE_CONFIRM)
-                                        .on_click(
-                                            cx.listener(|this, _, _, cx| this.quit_force_exit(cx)),
-                                        ),
-                                )
-                            })
-                            .when(failed, |this| {
-                                this.child(
-                                    gpui_kit::component::button::Button::new("quit-fail-cancel")
-                                        .ghost()
-                                        .label(strings::UI_CANCEL)
-                                        .on_click(
-                                            cx.listener(|this, _, _, cx| this.quit_cancel(cx)),
-                                        ),
-                                )
-                                .child(
-                                    gpui_kit::component::button::Button::new("quit-fail-exit")
-                                        .primary()
-                                        .label(strings::UI_QUIT_STOP_ALL)
-                                        .on_click(
-                                            cx.listener(|this, _, _, cx| this.quit_force_exit(cx)),
-                                        ),
-                                )
-                            }),
-                    ),
+                    .child(self.quit_dialog_buttons(cx, stopping, failed)),
             )
+    }
+
+    /// The dialog's button row: cancel/stop-all/keep while confirming, a force
+    /// button while stopping, and cancel/exit-anyway after a failed stop.
+    fn quit_dialog_buttons(
+        &self,
+        cx: &mut Context<Self>,
+        stopping: bool,
+        failed: bool,
+    ) -> impl IntoElement {
+        h_flex()
+            .gap_2()
+            .justify_end()
+            .when(!stopping && !failed, |this| {
+                this.child(
+                    gpui_kit::component::button::Button::new("quit-cancel")
+                        .ghost()
+                        .label(strings::UI_CANCEL)
+                        .on_click(cx.listener(|this, _, _, cx| this.quit_cancel(cx))),
+                )
+                .child(
+                    gpui_kit::component::button::Button::new("quit-stop-all")
+                        .ghost()
+                        .label(strings::UI_QUIT_STOP_ALL)
+                        .on_click(cx.listener(|this, _, _, cx| this.quit_stop_all(cx))),
+                )
+                .child(
+                    gpui_kit::component::button::Button::new("quit-keep")
+                        .primary()
+                        .label(strings::UI_QUIT_KEEP_RUNNING)
+                        .on_click(cx.listener(|this, _, _, cx| this.quit_keep_running(cx))),
+                )
+            })
+            .when(stopping, |this| {
+                this.child(
+                    gpui_kit::component::button::Button::new("quit-force")
+                        .ghost()
+                        .label(strings::UI_QUIT_FORCE_CONFIRM)
+                        .on_click(cx.listener(|this, _, _, cx| this.quit_force_exit(cx))),
+                )
+            })
+            .when(failed, |this| {
+                this.child(
+                    gpui_kit::component::button::Button::new("quit-fail-cancel")
+                        .ghost()
+                        .label(strings::UI_CANCEL)
+                        .on_click(cx.listener(|this, _, _, cx| this.quit_cancel(cx))),
+                )
+                .child(
+                    gpui_kit::component::button::Button::new("quit-fail-exit")
+                        .primary()
+                        .label(strings::UI_QUIT_STOP_ALL)
+                        .on_click(cx.listener(|this, _, _, cx| this.quit_force_exit(cx))),
+                )
+            })
     }
 }
 
