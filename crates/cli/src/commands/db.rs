@@ -60,10 +60,8 @@ fn drop(ctx: &mut Ctx<'_>, instance: &str, name: &str, yes: bool, confirm: Optio
         Ok(view) => view,
         Err(code) => return code,
     };
-    if !yes {
-        if let Err(code) = confirm_name(ctx, name, confirm) {
-            return code;
-        }
+    if !yes && let Err(code) = confirm_name(ctx, name, confirm) {
+        return code;
     }
     match ctx.service.drop_database(&view.id, name, false) {
         Ok(()) => {

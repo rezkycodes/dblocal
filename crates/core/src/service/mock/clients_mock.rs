@@ -33,18 +33,18 @@ struct DetectedClients;
 
 impl DetectedClients {
     fn default_detected() -> Vec<DetectedClient> {
-        let mut out = Vec::new();
-        out.push(DetectedClient::new(
-            ClientKind::Psql,
-            PathBuf::from("/usr/bin/psql"),
-            ClientKind::Psql.supported_engines(),
-        ));
-        out.push(DetectedClient::new(
-            ClientKind::TablePlus,
-            PathBuf::from("/usr/bin/tableplus"),
-            ClientKind::TablePlus.supported_engines(),
-        ));
-        out
+        vec![
+            DetectedClient::new(
+                ClientKind::Psql,
+                PathBuf::from("/usr/bin/psql"),
+                ClientKind::Psql.supported_engines(),
+            ),
+            DetectedClient::new(
+                ClientKind::TablePlus,
+                PathBuf::from("/usr/bin/tableplus"),
+                ClientKind::TablePlus.supported_engines(),
+            ),
+        ]
     }
 }
 

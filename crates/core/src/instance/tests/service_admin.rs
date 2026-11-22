@@ -319,9 +319,10 @@ fn create_user_grants_and_returns_the_password_once() {
 
 #[test]
 fn a_failed_grant_drops_the_half_created_role() {
-    let mut fake = FakeAdmin::default();
-    fake.fail_grant = true;
-    let admin = Arc::new(fake);
+    let admin = Arc::new(FakeAdmin {
+        fail_grant: true,
+        ..FakeAdmin::default()
+    });
     let (h, id) = harness_with_admin(EngineKey::Postgresql, Arc::clone(&admin));
     let err = h
         .service
@@ -341,9 +342,10 @@ fn a_failed_grant_drops_the_half_created_role() {
 
 #[test]
 fn a_failed_grant_announces_nothing() {
-    let mut fake = FakeAdmin::default();
-    fake.fail_grant = true;
-    let admin = Arc::new(fake);
+    let admin = Arc::new(FakeAdmin {
+        fail_grant: true,
+        ..FakeAdmin::default()
+    });
     let (h, id) = harness_with_admin(EngineKey::Postgresql, Arc::clone(&admin));
     let mut rx = h.service.subscribe();
     let _ = h
@@ -378,9 +380,10 @@ fn reset_success_persists_the_new_pointer_and_announces() {
 
 #[test]
 fn a_failed_reset_leaves_the_credential_untouched() {
-    let mut fake = FakeAdmin::default();
-    fake.fail_reset = true;
-    let admin = Arc::new(fake);
+    let admin = Arc::new(FakeAdmin {
+        fail_reset: true,
+        ..FakeAdmin::default()
+    });
     let (h, id) = harness_with_admin(EngineKey::Postgresql, Arc::clone(&admin));
     let before = h
         .store()
