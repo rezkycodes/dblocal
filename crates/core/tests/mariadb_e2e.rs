@@ -1365,10 +1365,12 @@ fn mariadb_118_bootstrap_init_succeeds_with_foreign_listener_on_instance_port() 
 
     // Foreign listener on the instance port: holds the TCP port before the
     // bootstrap server would start.
-    let blocker = std::net::TcpListener::bind(("127.0.0.1", port)).expect("blocker");
-    MariaDbAdapter
-        .initialize(&init_ctx(&rt, &data, port, AuthMode::Password, Some(pw)))
-        .expect("init with foreign listener on instance port must succeed");
+    {
+        let _blocker = std::net::TcpListener::bind(("127.0.0.1", port)).expect("blocker");
+        MariaDbAdapter
+            .initialize(&init_ctx(&rt, &data, port, AuthMode::Password, Some(pw)))
+            .expect("init with foreign listener on instance port must succeed");
+    }
 
     let mut g = start_mariadb(&rt, &data, &logs, &run, port, AuthMode::Password, Some(pw));
     wait_ready(
@@ -1383,7 +1385,6 @@ fn mariadb_118_bootstrap_init_succeeds_with_foreign_listener_on_instance_port() 
     );
     let who = sql_query(&rt, port, "root", Some(pw), "SELECT 1;");
     assert_eq!(who, "1");
-    let _ = blocker;
     MariaDbAdapter
         .shutdown(&run_ctx(
             &rt,
