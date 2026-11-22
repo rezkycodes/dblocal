@@ -52,7 +52,109 @@ pub(crate) fn take_decisions(root: &std::path::Path) -> Vec<String> {
         .unwrap_or_default()
 }
 
+/// Hooks a test can park around the row listing, so the "the create finished
+/// while we were listing" interleaving is forced deterministically instead of
+/// waiting for it under load.
+#[cfg(test)]
+type ListHook = Box<dyn FnOnce(&Arc<Inner>) + Send>;
+
+/// When a test wants to know reconciliation finished, it parks a sender here and
+/// the end of `reconcile_on_startup` fires it.
+#[cfg(test)]
+fn done_hooks() -> &'static std::sync::Mutex<Vec<(String, std::sync::mpsc::Sender<()>)>> {
+    static DONE: std::sync::OnceLock<
+        std::sync::Mutex<Vec<(String, std::sync::mpsc::Sender<()>)>>,
+    > = std::sync::OnceLock::new();
+    DONE.get_or_init(|| std::sync::Mutex::new(Vec::new()))
+}
+
+/// Asks to be told when reconciliation for `root` finishes.
+#[cfg(test)]
+pub(crate) fn on_reconcile_done(root: &std::path::Path) -> std::sync::mpsc::Receiver<()> {
+    let root = root.display().to_string();
+    let (tx, rx) = std::sync::mpsc::channel();
+    done_hooks()
+        .lock()
+        .expect("done hooks")
+        .push((root, tx));
+    rx
+}
+
+#[cfg(test)]
+fn fire_done(inner: &Arc<Inner>) {
+    let root = inner.paths.root().display().to_string();
+    let sender = done_hooks().lock().ok().and_then(|mut hooks| {
+        hooks
+            .iter()
+            .position(|(seen, _)| seen == &root)
+            .map(|index| hooks.remove(index).1)
+    });
+    if let Some(sender) = sender {
+        let _ = sender.send(());
+    }
+}
+
+#[cfg(not(test))]
+fn fire_done(_: &Arc<Inner>) {}
+
+#[cfg(test)]
+fn hooks() -> &'static std::sync::Mutex<Vec<(String, Option<ListHook>, Option<ListHook>)>> {
+    static HOOKS: std::sync::OnceLock<
+        std::sync::Mutex<Vec<(String, Option<ListHook>, Option<ListHook>)>>,
+    > = std::sync::OnceLock::new();
+    HOOKS.get_or_init(|| std::sync::Mutex::new(Vec::new()))
+}
+
+/// Registers `before` to run just before reconciliation lists the rows and
+/// `after` to run just after, for the service rooted at `root`.
+#[cfg(test)]
+pub(crate) fn on_reconcile(
+    root: &std::path::Path,
+    before: impl FnOnce(&Arc<Inner>) + Send + 'static,
+    after: impl FnOnce(&Arc<Inner>) + Send + 'static,
+) {
+    let root = root.display().to_string();
+    hooks()
+        .lock()
+        .expect("hooks")
+        .push((root, Some(Box::new(before)), Some(Box::new(after))));
+}
+
+#[cfg(test)]
+fn take_hook(inner: &Arc<Inner>, after: bool) -> Option<ListHook> {
+    let root = inner.paths.root().display().to_string();
+    let mut hooks = hooks().lock().ok()?;
+    let index = hooks.iter().position(|(seen, _, _)| seen == &root)?;
+    let slot = if after {
+        &mut hooks[index].2
+    } else {
+        &mut hooks[index].1
+    };
+    slot.take()
+}
+
+#[cfg(test)]
+fn run_before_list(inner: &Arc<Inner>) {
+    if let Some(hook) = take_hook(inner, false) {
+        hook(inner);
+    }
+}
+
+#[cfg(test)]
+fn run_after_list(inner: &Arc<Inner>) {
+    if let Some(hook) = take_hook(inner, true) {
+        hook(inner);
+    }
+}
+
+#[cfg(not(test))]
+fn run_before_list(_: &Arc<Inner>) {}
+
+#[cfg(not(test))]
+fn run_after_list(_: &Arc<Inner>) {}
+
 pub(crate) async fn reconcile_on_startup(inner: Arc<Inner>) {
+    run_before_list(&inner);
     let instances = match db_async(&inner, |store| store.list_instances()).await {
         Ok(instances) => instances,
         Err(err) => {
@@ -60,6 +162,7 @@ pub(crate) async fn reconcile_on_startup(inner: Arc<Inner>) {
             return;
         }
     };
+    run_after_list(&inner);
     #[cfg(test)]
     record_decision(
         &inner,
@@ -77,7 +180,6 @@ pub(crate) async fn reconcile_on_startup(inner: Arc<Inner>) {
                 .collect::<Vec<_>>(),
         ),
     );
-
     // Act on a **freshly read** row under the in-process instance lock, never on
     // the startup snapshot alone. Listing the rows is an `await` point: a create
     // can insert `Initializing`, finish and release its lock before
@@ -150,6 +252,7 @@ pub(crate) async fn reconcile_on_startup(inner: Arc<Inner>) {
         .cloned()
         .collect();
     if pending.is_empty() {
+        fire_done(&inner);
         return;
     }
 
@@ -176,6 +279,7 @@ pub(crate) async fn reconcile_on_startup(inner: Arc<Inner>) {
             mark(&inner, instance, InstanceEvent::ReconciledAbsent).await;
         }
     }
+    fire_done(&inner);
 }
 
 /// Acquires the per-instance lock when no in-process operation owns it.

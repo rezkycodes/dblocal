@@ -67,6 +67,22 @@ impl Harness {
         Self::with_adapter(Arc::new(ScriptedAdapter::new(engine)), engine)
     }
 
+    /// A fresh empty home whose background work has **not** started.
+    ///
+    /// The caller registers what it needs to observe (a reconciliation hook, a
+    /// first-subscribed receiver) and then calls
+    /// [`crate::service::LocalService::start_background`]. Because nothing else
+    /// runs over the home, the interleaving cannot be consumed by a second
+    /// service's own reconciliation.
+    pub fn paused(engine: EngineKey) -> Self {
+        let _ = engine;
+        let dir = tempfile::tempdir().expect("tempdir");
+        let paths = DblPaths::with_root(dir.path());
+        let procs = Arc::new(FakeProcs::new());
+        let (harness, _startup) = build_no_start(dir, paths, procs);
+        harness
+    }
+
     /// Builds a harness that injects `adapter`.
     pub fn with_adapter(adapter: Arc<ScriptedAdapter>, engine: EngineKey) -> Self {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -491,6 +507,29 @@ pub fn restart_owned_with(old: Harness, prepare: impl FnOnce(&DblPaths)) -> Harn
     harness
 }
 
+/// A fresh service over an existing home whose background work (startup
+/// reconciliation and the supervisor) has **not** started yet.
+///
+/// The test registers whatever it needs to observe, then calls
+/// [`crate::service::LocalService::start_background`] itself. That makes the
+/// "reconciliation lists before X, acts after X" interleavings deterministic
+/// instead of a race: nothing runs until the caller starts it.
+pub fn restart_paused(paths: &DblPaths, procs: Arc<FakeProcs>) -> Harness {
+    let terminator = Arc::new(FakeTerminator::new(Arc::clone(&procs)));
+    let secrets = Arc::new(FakeSecrets::new());
+    let (harness, _startup) = build_inner(
+        tempfile::tempdir().expect("tempdir"),
+        paths.clone(),
+        procs,
+        terminator,
+        secrets,
+        Duration::from_millis(60),
+        None,
+        false,
+    );
+    harness
+}
+
 /// A fresh service over an existing home that also shares the terminator and
 /// secret backends of the original, so a test can inspect or script them after
 /// the restart.
@@ -582,9 +621,8 @@ fn build_over_shared(
 /// paths (a gated probe, for a deterministic race); the fake spawn still uses
 /// `procs` so identities and spawns stay in one table.
 ///
-/// A receiver is subscribed **before** `start_background()` so startup
-/// reconciliation events are observable. Every harness variant returns it; most
-/// tests ignore it and subscribe their own receiver when they need one.
+/// The one constructor every harness variant funnels through, starting
+/// background work.
 fn build(
     dir: TempDir,
     paths: DblPaths,
@@ -593,6 +631,54 @@ fn build(
     secrets: Arc<FakeSecrets>,
     status_poll: Duration,
     probe: Option<Arc<dyn ProcessProbe + Send + Sync>>,
+) -> (Harness, tokio::sync::broadcast::Receiver<ServiceEvent>) {
+    build_inner(
+        dir,
+        paths,
+        procs,
+        terminator,
+        secrets,
+        status_poll,
+        probe,
+        true,
+    )
+}
+
+/// A fresh empty home with no background work started, for a test that must
+/// control exactly when reconciliation runs.
+fn build_no_start(
+    dir: TempDir,
+    paths: DblPaths,
+    procs: Arc<FakeProcs>,
+) -> (Harness, tokio::sync::broadcast::Receiver<ServiceEvent>) {
+    let terminator = Arc::new(FakeTerminator::new(Arc::clone(&procs)));
+    let secrets = Arc::new(FakeSecrets::new());
+    build_inner(
+        dir,
+        paths,
+        procs,
+        terminator,
+        secrets,
+        Duration::from_millis(60),
+        None,
+        false,
+    )
+}
+
+/// One constructor variant; `start` decides whether background work runs now.
+///
+/// A receiver is subscribed **before** `start_background()` (when it starts) so
+/// startup reconciliation events are observable. Every harness variant returns
+/// it; most tests ignore it and subscribe their own receiver when they need one.
+fn build_inner(
+    dir: TempDir,
+    paths: DblPaths,
+    procs: Arc<FakeProcs>,
+    terminator: Arc<FakeTerminator>,
+    secrets: Arc<FakeSecrets>,
+    status_poll: Duration,
+    probe: Option<Arc<dyn ProcessProbe + Send + Sync>>,
+    start: bool,
 ) -> (Harness, tokio::sync::broadcast::Receiver<ServiceEvent>) {
     let adapter = Arc::new(ScriptedAdapter::new(EngineKey::Postgresql));
     let busy_ports = Arc::new(Mutex::new(Vec::new()));
@@ -631,7 +717,9 @@ fn build(
 
     let service = LocalService::new(paths.clone(), options).expect("service");
     let startup_receiver = service.subscribe();
-    service.start_background();
+    if start {
+        service.start_background();
+    }
     let harness = Harness {
         dir,
         paths,

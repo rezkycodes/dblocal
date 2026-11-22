@@ -345,6 +345,88 @@ fn a_reconciled_interrupted_create_leaves_nothing_behind() {
 }
 
 #[test]
+fn a_create_that_finishes_while_reconciliation_lists_is_never_rolled_back() {
+    // The flake this test pins: reconciliation lists the rows (an `await` point),
+    // then acts on that snapshot. A create that was `Initializing` at list time can
+    // finish and release its instance lock before reconciliation reaches the
+    // cleanup, so the stale snapshot row looks unowned and gets the failed-create
+    // rollback — deleting a successfully created instance.
+    //
+    // `on_reconcile` forces that interleaving deterministically: the `before` hook
+    // writes the `Initializing` row the snapshot will see, and the `after` hook
+    // settles it to `Stopped` — exactly what a create that completes mid-list
+    // leaves behind. Without the fix (act on the snapshot row, guarded only by
+    // `is_busy`) the row is deleted and this test fails. With the fix (take the
+    // instance lock and re-read the row) the settled row is left alone.
+    let h = Harness::paused(EngineKey::Postgresql);
+    let root = h.paths.root().to_path_buf();
+    let name = crate::model::InstanceName::new("finished-during-list").expect("name");
+    let port = test_port();
+    let id = crate::model::InstanceId::new();
+
+    let before_id = id.clone();
+    let before_name = name.clone();
+    let after_id = id.clone();
+    super::super::reconcile::on_reconcile(
+        &root,
+        move |inner| {
+            let spec = crate::model::InstanceSpec::new(
+                before_name,
+                EngineKey::Postgresql,
+                "18.7",
+                Some(crate::model::Port::new(port).expect("port")),
+                crate::model::AuthMode::Password,
+            )
+            .expect("spec");
+            let row = crate::model::Instance::new(
+                &spec,
+                before_id,
+                InstanceStatus::Initializing,
+                std::time::SystemTime::now(),
+            );
+            inner
+                .db(|store| store.insert_instance(&row))
+                .expect("insert initializing row");
+        },
+        move |inner| {
+            // The create finished between the list and the cleanup: the row settles
+            // to `Stopped`, and its operation lock is already released (never taken
+            // here, mirroring a create that completed and dropped its guard).
+            let moved = inner
+                .db(|store| {
+                    store.transition_status(
+                        &after_id,
+                        InstanceStatus::Initializing,
+                        InstanceStatus::Stopped,
+                    )
+                })
+                .expect("settle row");
+            assert!(moved, "the row must still be Initializing after the list");
+        },
+    );
+
+    let restarted = super::harness::restart_paused(&h.paths, Arc::clone(&h.procs));
+    let done = super::super::reconcile::on_reconcile_done(&root);
+    restarted.service.start_background();
+    // Wait for reconciliation to run to completion, so the assertion is made
+    // *after* every cleanup decision, not before it (observing the row first would
+    // let the bug pass on timing).
+    done.recv_timeout(std::time::Duration::from_secs(30))
+        .expect("reconciliation must finish");
+    let row = restarted.instance(&id).unwrap_or_else(|| {
+        panic!(
+            "a create that finished during reconciliation must survive; rows={:?}",
+            restarted.instances()
+        )
+    });
+    assert_eq!(
+        row.status(),
+        InstanceStatus::Stopped,
+        "the finished create keeps its settled status"
+    );
+}
+
+#[test]
 fn reconciliation_skips_a_deleting_row_owned_by_a_live_delete() {
     // The row alone cannot tell "a delete is running elsewhere" from "the app
     // died mid-delete": both are `Deleting`. The in-flight marker resolves it, and
