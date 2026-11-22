@@ -14,7 +14,4 @@ mod time;
 pub use api::Store;
 
 #[cfg(test)]
-pub(crate) use api::take_deletes_for_ids;
-
-#[cfg(test)]
 mod tests;

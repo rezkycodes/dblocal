@@ -82,7 +82,7 @@ fn create_emits_stages_in_order_and_one_operation_finished() {
     let op = h.service.create_instance(spec).expect("create");
     let run = h.run_on(&mut receiver, op.clone());
     let events = &run.events;
-    let stages = super::harness::stages(&events);
+    let stages = super::harness::stages(events);
     // The instance is created from a runtime that is "already installed" in the
     // harness, so the expected stage order is initializing then done.
     assert_eq!(stages.first(), Some(&"queued"), "{stages:?}");
@@ -228,9 +228,9 @@ fn a_forced_stop_is_reported_as_an_event_and_a_graceful_one_is_not() {
         super::harness::describe(events)
     );
     assert!(
-        !super::harness::stop_forced_for(&events, &id),
+        !super::harness::stop_forced_for(events, &id),
         "a graceful stop must not emit StopForced: {:#?}",
-        super::harness::describe(&events)
+        super::harness::describe(events)
     );
 
     // Now a stop that needs escalation: exactly one `StopForced`, before the

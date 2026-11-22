@@ -204,11 +204,6 @@ impl Store {
     /// Runtimes and archives are left alone: they outlive instances (D-18 and
     /// `F-RTM-04`).
     pub fn delete_instance(&self, id: &InstanceId) -> crate::Result<()> {
-        #[cfg(test)]
-        record_delete(
-            self.conn.path().map(std::path::PathBuf::from),
-            id,
-        );
         let affected = self
             .conn
             .execute("DELETE FROM instances WHERE id = ?1", params![id.as_str()])
@@ -267,32 +262,4 @@ fn instance_conflict(err: rusqlite::Error) -> DblError {
         },
         _ => map_sql(err),
     }
-}
-
-#[cfg(test)]
-fn delete_log() -> &'static std::sync::Mutex<Vec<(String, String, String)>> {
-    static LOG: std::sync::OnceLock<std::sync::Mutex<Vec<(String, String, String)>>> =
-        std::sync::OnceLock::new();
-    LOG.get_or_init(|| std::sync::Mutex::new(Vec::new()))
-}
-
-#[cfg(test)]
-pub(crate) fn record_delete(db: Option<std::path::PathBuf>, id: &InstanceId) {
-    let bt = std::backtrace::Backtrace::force_capture().to_string();
-    let db = db
-        .map(|path| path.display().to_string())
-        .unwrap_or_else(|| "<memory>".to_owned());
-    let mut log = delete_log().lock().expect("delete log");
-    log.push((db, id.as_str().to_owned(), bt));
-}
-
-/// All deletes recorded, for "who deleted the missing row" assertions.
-#[cfg(test)]
-pub(crate) fn take_deletes_for_ids(db: &std::path::Path) -> Vec<(String, String, String)> {
-    let db = db.display().to_string();
-    let log = delete_log().lock().expect("delete log");
-    log.iter()
-        .filter(|(seen_db, _, _)| *seen_db == db)
-        .map(|(_, id, bt)| (id.clone(), db.clone(), bt.clone()))
-        .collect()
 }

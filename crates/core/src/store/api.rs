@@ -23,9 +23,6 @@ use super::error::map_sql;
 use super::migrations::apply;
 use super::schema::{WAL_SWITCH_ATTEMPTS, WAL_SWITCH_BACKOFF_MS};
 
-#[cfg(test)]
-pub(crate) use instance::take_deletes_for_ids;
-
 /// Synchronous persistence for DBLocal state.
 ///
 /// One instance owns one SQLite connection. Share it behind the service's own

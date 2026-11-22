@@ -251,8 +251,7 @@ fn delete_after_a_failed_start_uses_the_failed_source_status() {
     assert!(start_run.is_err() || matches!(start_run.result(), Some(Ok(()))));
     h.wait_for_status(&id, InstanceStatus::Failed);
 
-    let (op, run) = h.run_call(|| h.service.delete_instance(&id, DeleteMode::PurgeData));
-    let events = &run.events;
+    let (_op, run) = h.run_call(|| h.service.delete_instance(&id, DeleteMode::PurgeData));
     assert!(
         matches!(run.result(), Some(Ok(()))),
         "delete: {:?}",

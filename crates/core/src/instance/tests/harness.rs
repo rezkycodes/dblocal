@@ -277,27 +277,15 @@ impl Harness {
             let db = self.paths.state_db();
             let wal = db.with_extension("db-wal");
             let shm = db.with_extension("db-shm");
-            let raw_rows: String = std::process::Command::new("sqlite3")
-                .arg(&db)
-                .arg("SELECT id,name,status FROM instances ORDER BY id; SELECT '---'; SELECT name FROM sqlite_master WHERE type='table' ORDER BY name;")
-                .output()
-                .map(|out| {
-                    let stdout = String::from_utf8_lossy(&out.stdout).trim().to_owned();
-                    let stderr = String::from_utf8_lossy(&out.stderr).trim().to_owned();
-                    if stderr.is_empty() { stdout } else { format!("{stdout} stderr={stderr}") }
-                })
-                .unwrap_or_else(|err| format!("<sqlite3 unavailable: {err}>"));
             let db_len = std::fs::metadata(&db).map(|m| m.len()).unwrap_or(0);
             let wal_len = std::fs::metadata(&wal).map(|m| m.len()).unwrap_or(0);
             let shm_len = std::fs::metadata(&shm).map(|m| m.len()).unwrap_or(0);
-            let deletes = crate::store::take_deletes_for_ids(&db);
-            let decisions = super::super::reconcile::take_decisions(&self.paths.root());
             assert!(
                 std::time::Instant::now() < deadline,
                 "create {op} reported success but no row is listed; \
                  service_view={service_view:?} fresh_view={fresh_view:?} \
                  state_db={} exists={} db_len={db_len} wal_len={wal_len} shm_len={shm_len} \
-                 raw=[{raw_rows}] deletes={deletes:#?} decisions={decisions:#?} events={:?}",
+                 events={:?}",
                 db.display(),
                 db.exists(),
                 describe(&run.events)
@@ -520,9 +508,11 @@ pub fn restart_paused(paths: &DblPaths, procs: Arc<FakeProcs>) -> Harness {
     let (harness, _startup) = build_inner(
         tempfile::tempdir().expect("tempdir"),
         paths.clone(),
-        procs,
-        terminator,
-        secrets,
+        BuiltFakes {
+            procs,
+            terminator,
+            secrets,
+        },
         Duration::from_millis(60),
         None,
         false,
@@ -635,9 +625,11 @@ fn build(
     build_inner(
         dir,
         paths,
-        procs,
-        terminator,
-        secrets,
+        BuiltFakes {
+            procs,
+            terminator,
+            secrets,
+        },
         status_poll,
         probe,
         true,
@@ -656,13 +648,22 @@ fn build_no_start(
     build_inner(
         dir,
         paths,
-        procs,
-        terminator,
-        secrets,
+        BuiltFakes {
+            procs,
+            terminator,
+            secrets,
+        },
         Duration::from_millis(60),
         None,
         false,
     )
+}
+
+/// The fakes one built harness owns, bundled so the constructor stays short.
+struct BuiltFakes {
+    procs: Arc<FakeProcs>,
+    terminator: Arc<FakeTerminator>,
+    secrets: Arc<FakeSecrets>,
 }
 
 /// One constructor variant; `start` decides whether background work runs now.
@@ -673,13 +674,16 @@ fn build_no_start(
 fn build_inner(
     dir: TempDir,
     paths: DblPaths,
-    procs: Arc<FakeProcs>,
-    terminator: Arc<FakeTerminator>,
-    secrets: Arc<FakeSecrets>,
+    fakes: BuiltFakes,
     status_poll: Duration,
     probe: Option<Arc<dyn ProcessProbe + Send + Sync>>,
     start: bool,
 ) -> (Harness, tokio::sync::broadcast::Receiver<ServiceEvent>) {
+    let BuiltFakes {
+        procs,
+        terminator,
+        secrets,
+    } = fakes;
     let adapter = Arc::new(ScriptedAdapter::new(EngineKey::Postgresql));
     let busy_ports = Arc::new(Mutex::new(Vec::new()));
 

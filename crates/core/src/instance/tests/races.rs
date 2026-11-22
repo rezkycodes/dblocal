@@ -43,7 +43,7 @@ fn the_supervisor_never_overwrites_a_clean_stop_with_failed() {
         assert!(
             matches!(run.result(), Some(Ok(()))),
             "round {round}: the stop must succeed: {:#?}",
-            super::harness::describe(&events)
+            super::harness::describe(events)
         );
 
         let final_status = h
@@ -83,9 +83,9 @@ fn a_finished_delete_ends_with_instance_removed() {
     let run = h.run_on(&mut receiver, op);
     let events = &run.events;
     assert!(
-        super::harness::removed_for(&events, &id),
+        super::harness::removed_for(events, &id),
         "a delete ends with InstanceRemoved: {:#?}",
-        super::harness::describe(&events)
+        super::harness::describe(events)
     );
     // The removal is the last thing about that instance.
     let last_instance_event = events
@@ -129,9 +129,9 @@ fn a_failed_create_ends_with_instance_removed_and_one_error() {
         })
         .expect("a rolled-back create ends with InstanceRemoved");
     assert!(h.instances().is_empty(), "no row survives a failed create");
-    assert!(super::harness::removed_for(&events, &removed));
+    assert!(super::harness::removed_for(events, &removed));
     assert_eq!(
-        super::harness::finished_count(&events),
+        super::harness::finished_count(events),
         1,
         "exactly one OperationFinished"
     );
@@ -230,9 +230,9 @@ fn a_stop_that_finds_nothing_to_stop_still_reports_cleanly() {
     assert!(
         matches!(run.result(), Some(Ok(()))),
         "no identity + graceful shutdown is a clean stop: {:#?}",
-        super::harness::describe(&events)
+        super::harness::describe(events)
     );
-    assert!(!super::harness::stop_forced_for(&events, &id));
+    assert!(!super::harness::stop_forced_for(events, &id));
     assert_eq!(
         h.instance(&id).expect("row").status(),
         InstanceStatus::Stopped

@@ -15,56 +15,23 @@ use crate::process::reconcile::{ReconcileRecord, reconcile};
 use super::helpers::{db_async, emit_changed, identity_of};
 use super::service::Inner;
 
-/// Test-only trace of the decisions reconciliation makes, keyed by state root,
-/// so a harness can explain why a row disappeared.
-#[cfg(test)]
-fn decisions() -> &'static std::sync::Mutex<Vec<(String, Vec<String>)>> {
-    static DECISIONS: std::sync::OnceLock<std::sync::Mutex<Vec<(String, Vec<String>)>>> =
-        std::sync::OnceLock::new();
-    DECISIONS.get_or_init(|| std::sync::Mutex::new(Vec::new()))
-}
-
-#[cfg(test)]
-fn record_decision(inner: &Inner, line: &str) {
-    let root = inner.paths.root().display().to_string();
-    if let Ok(mut decisions) = decisions().lock() {
-        if let Some((_, lines)) = decisions.iter_mut().find(|(seen, _)| seen == &root) {
-            lines.push(line.to_owned());
-        } else {
-            decisions.push((root, vec![line.to_owned()]));
-        }
-    }
-}
-
-/// Reconciliation decisions recorded for `root`.
-#[cfg(test)]
-pub(crate) fn take_decisions(root: &std::path::Path) -> Vec<String> {
-    let root = root.display().to_string();
-    decisions()
-        .lock()
-        .map(|mut decisions| {
-            decisions
-                .iter()
-                .find(|(seen, _)| seen == &root)
-                .map(|(_, lines)| lines.clone())
-                .unwrap_or_default()
-        })
-        .unwrap_or_default()
-}
-
 /// Hooks a test can park around the row listing, so the "the create finished
 /// while we were listing" interleaving is forced deterministically instead of
 /// waiting for it under load.
 #[cfg(test)]
 type ListHook = Box<dyn FnOnce(&Arc<Inner>) + Send>;
 
+#[cfg(test)]
+type DoneHook = (String, std::sync::mpsc::Sender<()>);
+
+#[cfg(test)]
+type PairHook = (String, Option<ListHook>, Option<ListHook>);
+
 /// When a test wants to know reconciliation finished, it parks a sender here and
 /// the end of `reconcile_on_startup` fires it.
 #[cfg(test)]
-fn done_hooks() -> &'static std::sync::Mutex<Vec<(String, std::sync::mpsc::Sender<()>)>> {
-    static DONE: std::sync::OnceLock<
-        std::sync::Mutex<Vec<(String, std::sync::mpsc::Sender<()>)>>,
-    > = std::sync::OnceLock::new();
+fn done_hooks() -> &'static std::sync::Mutex<Vec<DoneHook>> {
+    static DONE: std::sync::OnceLock<std::sync::Mutex<Vec<DoneHook>>> = std::sync::OnceLock::new();
     DONE.get_or_init(|| std::sync::Mutex::new(Vec::new()))
 }
 
@@ -73,10 +40,7 @@ fn done_hooks() -> &'static std::sync::Mutex<Vec<(String, std::sync::mpsc::Sende
 pub(crate) fn on_reconcile_done(root: &std::path::Path) -> std::sync::mpsc::Receiver<()> {
     let root = root.display().to_string();
     let (tx, rx) = std::sync::mpsc::channel();
-    done_hooks()
-        .lock()
-        .expect("done hooks")
-        .push((root, tx));
+    done_hooks().lock().expect("done hooks").push((root, tx));
     rx
 }
 
@@ -98,10 +62,8 @@ fn fire_done(inner: &Arc<Inner>) {
 fn fire_done(_: &Arc<Inner>) {}
 
 #[cfg(test)]
-fn hooks() -> &'static std::sync::Mutex<Vec<(String, Option<ListHook>, Option<ListHook>)>> {
-    static HOOKS: std::sync::OnceLock<
-        std::sync::Mutex<Vec<(String, Option<ListHook>, Option<ListHook>)>>,
-    > = std::sync::OnceLock::new();
+fn hooks() -> &'static std::sync::Mutex<Vec<PairHook>> {
+    static HOOKS: std::sync::OnceLock<std::sync::Mutex<Vec<PairHook>>> = std::sync::OnceLock::new();
     HOOKS.get_or_init(|| std::sync::Mutex::new(Vec::new()))
 }
 
@@ -163,23 +125,7 @@ pub(crate) async fn reconcile_on_startup(inner: Arc<Inner>) {
         }
     };
     run_after_list(&inner);
-    #[cfg(test)]
-    record_decision(
-        &inner,
-        &format!(
-            "listed={:?}",
-            instances
-                .iter()
-                .map(|instance| {
-                    (
-                        instance.id().as_str(),
-                        instance.status().as_str(),
-                        inner.ops.is_busy(instance.id()),
-                    )
-                })
-                .collect::<Vec<_>>(),
-        ),
-    );
+
     // Act on a **freshly read** row under the in-process instance lock, never on
     // the startup snapshot alone. Listing the rows is an `await` point: a create
     // can insert `Initializing`, finish and release its lock before
@@ -288,10 +234,7 @@ pub(crate) async fn reconcile_on_startup(inner: Arc<Inner>) {
 /// that releases on drop. It is the only in-process proof that a create/delete is
 /// not mid-flight, so every mutating reconciliation decision takes it before
 /// reading fresh state.
-fn lock_if_idle(
-    inner: &Arc<Inner>,
-    id: &InstanceId,
-) -> Option<super::registry::InstanceLock> {
+fn lock_if_idle(inner: &Arc<Inner>, id: &InstanceId) -> Option<super::registry::InstanceLock> {
     inner.ops.lock_instance(id).ok()
 }
 

@@ -69,7 +69,6 @@ fn a_failed_refresh_keeps_the_working_catalog() {
         matches!(finished, Some(Ok(()))),
         "a failed refresh is silent, not an error: {finished:?}"
     );
-    let events = &run.events;
     assert!(calls.load(Ordering::SeqCst) >= 1, "the fetcher ran");
 
     let after = h.service.catalog().expect("catalog after");
