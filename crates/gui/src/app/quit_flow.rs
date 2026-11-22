@@ -178,6 +178,11 @@ impl Workspace {
         self.quit_stops.keys().cloned().collect()
     }
 
+    #[cfg(test)]
+    pub(crate) fn quit_stop_buffer_len(&self) -> usize {
+        self.quit_stop_buffer.len()
+    }
+
     pub(crate) fn quit_keep_running(&mut self, cx: &mut Context<Self>) {
         let action = self.quit.apply(QuitEvent::KeepRunning);
         self.handle_quit_action(action, cx);
@@ -502,7 +507,7 @@ mod glue_tests {
     /// R2: an OperationFinished that arrives before stop registration is buffered.
     #[gpui_kit::test]
     fn quit_stop_finished_before_registration_is_buffered(cx: &mut TestAppContext) {
-        let (view, service, cx) = fixture(cx);
+        let (view, _service, cx) = fixture(cx);
         view.update(cx, |this, cx| this.request_quit(cx));
         cx.run_until_parked();
         view.update(cx, |this, cx| this.quit_stop_all(cx));
@@ -514,12 +519,10 @@ mod glue_tests {
             std::thread::sleep(std::time::Duration::from_millis(2));
         }
         let ops = view.read_with(cx, |this, _| this.quit_stop_pending_ops());
-        assert!(!ops.is_empty());
-        // Simulate finish arriving before registration by clearing pending and
-        // delivering event; then re-register. Easier: directly call handler.
         let op = ops[0].clone();
+        // Simulate finish arriving before registration.
         view.update(cx, |this, _| {
-            this.quit_stops.remove(&op);
+            this.quit_stops.clear();
         });
         view.update(cx, |this, cx| {
             this.apply_event_with_cx(
@@ -531,24 +534,17 @@ mod glue_tests {
             );
         });
         cx.run_until_parked();
-        // Reinsert as pending (simulating late registration) - buffer should resolve it.
-        let id = service.id_with(InstanceStatus::Running);
+        assert_eq!(view.read_with(cx, |this, _| this.quit_stop_buffer_len()), 1);
+        // Late registration should consume the buffered outcome.
         view.update(cx, |this, cx| {
-            if matches!(this.quit_machine().state(), QuitState::StoppingAll { .. }) {
-                if let Some(ok) = this.quit_stop_buffer.remove(&op) {
-                    let action = this.quit.apply(crate::quit::QuitEvent::StopFinished {
-                        id: id.clone(),
-                        ok,
-                    });
-                    this.handle_quit_action(action, cx);
-                } else {
-                    this.quit_stops.insert(op, id);
-                }
+            let id = this.instances()[0].id.clone();
+            if let Some(ok) = this.quit_stop_buffer.remove(&op) {
+                let action = this.quit.apply(crate::quit::QuitEvent::StopFinished { id, ok });
+                this.handle_quit_action(action, cx);
             }
         });
         cx.run_until_parked();
-        // After buffered completion is applied, quit should be Done (only 1 running in fixture? fixture has 3, but we only handled one op; easier to just assert not StoppingAll timeout wait)
-        let _ = view.read_with(cx, |this, _| this.quit_machine().state().clone());
+        assert_eq!(view.read_with(cx, |this, _| this.quit_stop_buffer_len()), 0);
     }
 
     /// Q1: if an operation never finishes, the bounded wait moves to StopFailed.

@@ -19,7 +19,7 @@ use crate::service_bridge::UiEvent;
 
 use super::Workspace;
 
-fn dir_size_bytes(path: &std::path::Path) -> u64 {
+pub(crate) fn dir_size_bytes(path: &std::path::Path) -> u64 {
     let mut total = 0u64;
     let mut stack = vec![path.to_path_buf()];
     while let Some(dir) = stack.pop() {
