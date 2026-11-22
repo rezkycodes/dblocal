@@ -20,8 +20,7 @@ use crate::service::{
 };
 use crate::update::{
     AvailableUpdate, InstallKind, InstallPlan, InstallStep, UpdateCheck, UpdateCheckOptions,
-    UpdateDownloadOptions, UpdateError, UpdateFetcher, UpdateResult, apply, check, download_update,
-    plan_install,
+    UpdateDownloadOptions, UpdateError, UpdateResult, apply, check, download_update, plan_install,
 };
 
 use super::service::Inner;
@@ -116,7 +115,6 @@ pub trait UpdateInstaller: Send + Sync {
 
 /// Production installer: stage into the home, then plan and apply.
 pub struct DownloadInstaller {
-    paths: DblPaths,
     handle: tokio::runtime::Handle,
     current_exe: PathBuf,
     staging: PathBuf,
@@ -127,7 +125,6 @@ impl DownloadInstaller {
     pub fn new(paths: DblPaths, handle: tokio::runtime::Handle, current_exe: PathBuf) -> Self {
         let staging = paths.root().join(consts::DIR_UPDATE_STAGING);
         Self {
-            paths,
             handle,
             current_exe,
             staging,
@@ -156,7 +153,6 @@ impl DownloadInstaller {
 
 impl UpdateInstaller for DownloadInstaller {
     fn install(&self, update: &AvailableUpdate, kind: &InstallKind) -> UpdateResult<()> {
-        let _ = &self.paths;
         self.preflight(update, kind)?;
         let staging = self.staging.clone();
         let options = UpdateDownloadOptions::default();
@@ -177,7 +173,3 @@ impl UpdateInstaller for DownloadInstaller {
 pub(crate) fn running_version() -> Version {
     Version::parse(env!("CARGO_PKG_VERSION")).unwrap_or_else(|_| Version::new(0, 0, 0))
 }
-
-/// The update fetcher's type name is used only in the service's `Debug`; this
-/// helper keeps the import meaningful when the fetcher is the production one.
-pub(crate) fn _fetcher_is_object_safe(_: &dyn UpdateFetcher) {}
