@@ -305,3 +305,20 @@ fn public_prepare_run_prepares_the_tmpdir_before_any_config_exists() {
     let meta = fs::symlink_metadata(run_dir.join("tmp")).expect("tmp meta");
     assert_eq!(meta.permissions().mode() & 0o777, 0o700);
 }
+
+#[test]
+fn cleanup_entrypoint_reads_xdg_and_removes_a_verified_socket() {
+    // Exercise the environment-reading wrapper so the production entry point is
+    // covered too. It uses the real XDG_RUNTIME_DIR and uid of this process; the
+    // path we place is inside /tmp/dblocal-<uid>, which is always a candidate.
+    let uid = uid();
+    let fb = PathBuf::from(format!("/tmp/dblocal-{uid}"));
+    crate::fsutil::ensure_private_dir(&fb).expect("candidate dir");
+    let sock = fb.join(format!("m42600-{}.sock", "a".repeat(12)));
+    bind_socket(&sock);
+    let dir = tempfile::tempdir().expect("tmp");
+    let cnf = dir.path().join("my.cnf");
+    fs::write(&cnf, format!("[mysqld]\nsocket={}\n", sock.display())).expect("cnf");
+    cleanup_fallback_socket_from_my_cnf(&cnf, 42600);
+    assert!(!sock.exists(), "the verified fallback socket is removed");
+}

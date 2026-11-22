@@ -867,3 +867,130 @@ fn clear_dir_contents_removes_files_and_nested_directories() {
     let err = clear_dir_contents(&dir.path().join("missing")).expect_err("missing dir");
     assert!(err.to_string().contains("cannot read private dir"), "{err}");
 }
+
+#[test]
+fn prepare_run_removes_a_stale_natural_socket() {
+    let l = layout();
+    // A natural socket left by a crash must be removed before the next start.
+    bind_socket(&l.natural);
+    fs::write(
+        &l.config,
+        format!("[mysqld]\nsocket={}\n", l.natural.display()),
+    )
+    .expect("cnf");
+    prepare_run(&spec(&l, None)).expect("prepare");
+    assert!(!l.natural.exists(), "a stale natural socket is removed");
+}
+
+#[test]
+fn prepare_run_reports_a_parent_that_is_a_file_for_the_natural_socket() {
+    let l = layout();
+    // The run dir is a regular file, so the natural socket's parent cannot be
+    // prepared; the caller gets an Engine error naming it.
+    let bad_run = l._dir.path().join("run-file");
+    fs::write(&bad_run, b"x").expect("write run file");
+    let config = l._dir.path().join("cfg/my.cnf");
+    fs::create_dir_all(config.parent().unwrap()).expect("cfg dir");
+    let natural = bad_run.join("mysqld-42200.sock");
+    fs::write(&config, format!("[mysqld]\nsocket={}\n", natural.display())).expect("cnf");
+    let spec = PrepareSpec {
+        config: &config,
+        natural_socket: &natural,
+        port: 42200,
+        tmpdir: &l.tmpdir,
+        xdg_runtime_dir: None,
+        uid: uid(),
+    };
+    let err = prepare_run(&spec).expect_err("run dir is a file");
+    assert!(
+        err.to_string().contains("cannot prepare run directory"),
+        "{err}"
+    );
+}
+
+#[test]
+fn cleanup_tolerates_a_socket_that_cannot_be_stat_ed() {
+    use std::os::unix::fs::PermissionsExt;
+    if uid() == 0 {
+        eprintln!("skipping as root: mode 000 on a parent does not block root");
+        return;
+    }
+    let dir = tempdir().expect("tmp");
+    let (xdg, fb) = xdg_candidate(dir.path());
+    let sock = fb.join("m42500-abc123def456.sock");
+    bind_socket(&sock);
+    // A 0000 parent makes the entry un-stattable: cleanup must not fail, and it
+    // must not delete a path it cannot verify.
+    fs::set_permissions(&fb, fs::Permissions::from_mode(0o000)).expect("chmod");
+    cleanup_socket(&sock, 42500, Some(xdg), uid());
+    fs::set_permissions(&fb, fs::Permissions::from_mode(0o700)).expect("restore");
+    assert!(sock.exists(), "an unverifiable path is left alone");
+}
+
+#[test]
+fn prepare_run_reports_a_fallback_parent_that_is_a_file() {
+    let l = layout();
+    let not_dir = l._dir.path().join("fb-file");
+    fs::write(&not_dir, b"x").expect("file");
+    let sock = not_dir.join("m42200-abc123def456.sock");
+    fs::write(&l.config, format!("[mysqld]\nsocket={}\n", sock.display())).expect("cnf");
+    let err = prepare_run(&spec(&l, None)).expect_err("fallback parent is a file");
+    assert!(
+        err.to_string()
+            .contains("cannot prepare fallback socket dir"),
+        "{err}"
+    );
+}
+
+#[test]
+fn ensure_secure_dir_reports_a_regular_file_and_a_missing_parent_for_creation() {
+    let dir = tempdir().expect("tmp");
+    let file = dir.path().join("file");
+    fs::write(&file, b"x").expect("file");
+    let err = ensure_secure_dir(&file, uid()).expect_err("regular file");
+    assert!(err.to_string().contains("not a real directory"), "{err}");
+}
+
+#[test]
+fn ensure_secure_dir_reports_a_parent_it_cannot_create_and_a_dir_it_cannot_create() {
+    use std::os::unix::fs::PermissionsExt;
+    if uid() == 0 {
+        eprintln!("skipping as root: a read-only parent does not block root");
+        return;
+    }
+    let dir = tempdir().expect("tmp");
+    let ro = dir.path().join("ro");
+    fs::create_dir(&ro).expect("ro");
+    fs::set_permissions(&ro, fs::Permissions::from_mode(0o500)).expect("chmod");
+
+    // `ro/x/y`: the immediate parent `ro/x` cannot be created.
+    let err = ensure_secure_dir(&ro.join("x").join("y"), uid()).expect_err("parent create");
+    assert!(err.to_string().contains("cannot create parent"), "{err}");
+
+    // `ro/x`: `ro` exists, but the child cannot be created inside it.
+    let err = ensure_secure_dir(&ro.join("x"), uid()).expect_err("dir create");
+    assert!(
+        err.to_string().contains("cannot create private dir"),
+        "{err}"
+    );
+
+    fs::set_permissions(&ro, fs::Permissions::from_mode(0o700)).expect("restore");
+}
+
+#[test]
+fn cleanup_warns_and_leaves_the_socket_when_removal_fails() {
+    use std::os::unix::fs::PermissionsExt;
+    if uid() == 0 {
+        eprintln!("skipping as root: a read-only parent does not block root");
+        return;
+    }
+    let dir = tempdir().expect("tmp");
+    let (xdg, fb) = xdg_candidate(dir.path());
+    let sock = fb.join("m42510-abc123def456.sock");
+    bind_socket(&sock);
+    // The socket verifies (parent is r-x), but the unlink fails with EACCES.
+    fs::set_permissions(&fb, fs::Permissions::from_mode(0o500)).expect("chmod");
+    cleanup_socket(&sock, 42510, Some(xdg), uid());
+    fs::set_permissions(&fb, fs::Permissions::from_mode(0o700)).expect("restore");
+    assert!(sock.exists(), "a socket that cannot be unlinked is kept");
+}
