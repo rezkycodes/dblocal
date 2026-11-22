@@ -483,12 +483,12 @@ mod socket;
 
 pub(in crate::engine::mysql) use socket::{
     cleanup_fallback_socket, cleanup_fallback_socket_from_my_cnf,
+};
+#[cfg(test)]
+pub(in crate::engine::mysql) use socket::{
     resolve_socket_path_with_fallback_dir, socket_path_from_my_cnf,
 };
-pub use socket::{
-    ensure_fallback_socket_dir, resolve_socket_path, socket_path, socket_path_limit,
-    validate_socket_path_len,
-};
+pub use socket::{resolve_socket_path, socket_path, socket_path_limit, validate_socket_path_len};
 
 pub fn sibling_dir(data_dir: &Path, leaf: &str) -> PathBuf {
     match data_dir.parent() {

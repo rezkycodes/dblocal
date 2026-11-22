@@ -50,17 +50,6 @@ fn assert_no_secret_in_command(cmd: &Command, secret: &str) {
     }
 }
 
-fn assert_mysql_pwd_env(cmd: &Command, secret: &str, expected: bool) {
-    let mut saw = false;
-    for (k, v) in cmd.get_envs() {
-        if k.to_string_lossy() == "MYSQL_PWD" {
-            saw = true;
-            let v = v.expect("MYSQL_PWD value").to_string_lossy();
-            assert_eq!(v, secret, "MYSQL_PWD must carry the exact secret");
-        }
-    }
-    assert_eq!(saw, expected, "MYSQL_PWD presence mismatch");
-}
 
 #[test]
 fn render_my_cnf_contains_required_security_settings() {
