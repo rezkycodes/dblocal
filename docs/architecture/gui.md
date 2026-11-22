@@ -252,20 +252,16 @@ Events drive everything (`app.rs::apply_event` / `apply_event_with_cx`):
   disabled while `Starting`/`Stopping`; plus "Buka DBLocal" (`UI_TRAY_OPEN`) and "Keluar"
   (`UI_TRAY_QUIT`). Unit-tested for grouping, labels, disabled states and id→action lookup.
 - `TrayBackend` is the platform glue trait. Linux implements it with **ksni 0.3** (StatusNotifierItem
-  over D-Bus, `blocking` + `async-io`, no GTK). `start_tray()` also runs a `StatusNotifierWatcher`
-  probe via `gdbus` and reports "no tray" instead of failing the app when the item cannot register.
-- macOS and Windows are **not implemented**: `start_tray()` returns `TrayStartup::none()` there, the
-  status bar says the tray is unavailable, and close-to-quit applies. `tray-icon` 0.26 remains
-  reasoned-only (`docs/spikes/gpui/README.md` §6).
-- No idle timer (OPEN-08): the tray sends actions over a `flume` channel and the workspace parks on
-  `recv_async`, so the loop wakes only on real activity. The tray menu is pushed on
-  `InstanceChanged`/`InstanceRemoved` — no polling. There is no `sleep`, `poll`, or timer in the
-  bridge (`service_bridge::spawn_bridge` does `rx.blocking_recv()` / `recv_async()` only) and the tray
-  pump (`start_tray_pump`) is a `recv_async` loop.
-- Tray actions call the **same** `start_instance`/`stop_instance`/`request_quit` methods the window
-  uses, so the window reflects a tray action through the normal event path (F-TRY-01 AC2).
-- Previews never start the tray: `tray::enable_for_app()` is set by `run_with_service`, so a headless
-  render cannot register a StatusNotifierItem on the test host.
+  over D-Bus, `blocking` + `async-io`, no GTK).
+- macOS and Windows tray backends are **not implemented in this round**: `start_tray()` returns
+  `TrayStartup::none()` there, the status bar says the tray is unavailable, and close-to-quit applies
+  (F-TRY-01 AC3 fallback). This is tracked as a separate task; no fake tray is created.
+- No idle timer (OPEN-08): tray actions travel over flume and are pumped by the app-level async loop.
+  The tray menu is refreshed on instance/catalog events. There is no `sleep`, `poll`, or timer in the
+  bridge (`service_bridge::spawn_bridge` does `recv_async()` only).
+- Tray actions call the **same** service/window quit paths as the UI. With no window open, the app-level
+  pump handles Start/Stop directly through the service and opens/focuses the window for Open/Quit.
+- Previews never start the tray.
 
 #### Tray latency (W2-B-r2, deliverable 5)
 
@@ -312,21 +308,26 @@ Confirming --StopAll--------------> StoppingAll                 (StopInstances)
 Confirming --Cancel---------------> Idle
 StoppingAll --StopFinished{ok}----> StoppingAll | Done         (None | Exit)
 StoppingAll --StopFinished{!ok}---> StoppingAll | StopFailed   (None | ShowDialog)
+StoppingAll --Timeout-------------> StopFailed                 (ShowDialog)
 StoppingAll --ForceExit-----------> Done                       (Exit)
 StopFailed --ForceExit------------> Done                       (Exit)
 StopFailed --Cancel---------------> Idle
 ```
 
-Every transition is unit-tested, including "a stop fails" and "the user cancels".
+Every transition is unit-tested, including "a stop fails", "the user cancels", and a bounded timeout.
 
-Window behaviour: `window.on_window_should_close` calls
-`Workspace::handle_window_close_request`. With a tray it calls `cx.hide()` and returns `false`, so the
-window is hidden and the app keeps running with engines untouched (AC1). Without a tray the close is
-a quit. The quit dialog's default (primary) button is "Biarkan tetap berjalan" (AC2, AC3); the
-alternative issues `stop_instance` for each running instance and shows `UI_QUIT_STOPPING`; a failed
-stop shows `UI_QUIT_STOP_FAILED` with cancel or exit-anyway, and while stops are pending the user
-may confirm `UI_QUIT_FORCE_CONFIRM` — the app never exits with a stop pending without that
-confirmation.
+`StopFinished` is driven only by `UiEvent::OperationFinished` for the quit-issued stop operation id.
+Request acceptance (`stop_instance` returning `Ok(OperationId)`) records the pending operation but
+does not advance the machine. If the bounded wait elapses (`STOP_GRACE_SECS + 10s`), the machine moves
+to `StopFailed` and the dialog offers "Keluar sekarang".
+
+Window behaviour: on Linux `cx.hide()` is not implemented in gpui-pre, so with a tray present the
+window is actually closed and the app-level runtime (service, tray, bridge, quit state owner) stays
+alive via `QuitMode::Explicit`. "Buka DBLocal" opens a fresh window attached to the same service; if
+a main window already exists it is focused instead of opening a second one. Without a tray the close
+goes through the quit flow. The quit dialog's default (primary) button is "Biarkan tetap berjalan"
+(AC2, AC3); "Hentikan semua lalu keluar" disables actions while stopping and only exits after
+operation completion, failure, timeout, or explicit force-exit confirmation.
 
 ### Modules added in W2-B
 
@@ -381,12 +382,14 @@ A debug build panic was seen once on a real desktop with accessibility enabled: 
 
 ### Unverified per OS
 
-- **Linux/Wayland (this host):** ksni registers (a `StatusNotifierWatcher`/AppIndicator extension is
-  present here); the tray-to-window latency through the real service path is reported with p50/max
-  in the W2-B report.
-- **GNOME without the AppIndicator extension:** untested removal path; the code reports "tray tidak
-  tersedia", keeps the app usable and applies close-to-quit.
-- **X11:** builds and runs (W2-D), tray not exercised there.
-- **macOS / Windows:** neither the tray nor the window/quit behaviour can be built or run here.
-  `tray-icon` integration is reasoned only; `start_tray` returns no tray on those targets.
+- **Linux/Wayland (this host):** ksni registers where a StatusNotifier host is present; tray actions
+  are handled by the app-level pump even when no window is open. Close-with-tray closes the window and
+  keeps the process alive (Linux `hide()` is not implemented in gpui-pre).
+- **GNOME without AppIndicator extension:** code degrades to no tray and close-to-quit fallback; not
+  exhaustively exercised in this round.
+- **X11:** not re-verified in this round.
+- **macOS / Windows:** cannot be built or run on this Linux machine. The GUI display preflight and
+  Vulkan preflight are gated by pure OS-aware functions so they do not block Windows/macOS startup, but
+  tray backend and real window/quit semantics on those OSes remain unverified here. macOS tray and
+  Windows tray are tracked as separate follow-up work.
 
