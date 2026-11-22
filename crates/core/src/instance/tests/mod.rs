@@ -8,6 +8,7 @@ mod coverage;
 mod download;
 mod gates;
 mod harness;
+mod harness_assert;
 mod harness_fakes;
 mod lifecycle;
 mod mutations;
