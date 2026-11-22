@@ -178,12 +178,35 @@ turned into a wrong verdict.
 ## Exit codes
 
 | Code | Meaning |
-|---:|---|
+| ---:|---|
 | 0 | success / help / version |
 | 1 | general error |
 | 2 | bad arguments / invalid input / refused confirmation |
 | 3 | instance not found |
 | 4 | engine failed to start |
+
+## `autostart` (W4-D)
+
+`dblocal autostart status|enable|disable [--json]` manages the per-user login
+item. It needs no state database, so the CLI dispatches it before building
+`LocalService` — a login item that runs at boot must not fail because the store
+could not be opened.
+
+| Command | stdout | stderr |
+|---|---|---|
+| `autostart status` | `autostart: aktif` or `autostart: nonaktif` | `lokasi: <path>` |
+| `autostart enable` | same, after writing the login item | `lokasi: <path>` |
+| `autostart disable` | `autostart: nonaktif` | `lokasi: <path>` |
+| `autostart ... --json` | one line `{"enabled":bool,"location":"..."}` | empty |
+
+Exit codes: 0 success, 2 unknown action, 1 backend failure (the `DBL-85xx` code
+is printed on stderr). The mechanism per OS (systemd `--user`, XDG desktop,
+LaunchAgent, `HKCU\...\Run`) is documented in `docs/architecture/autostart.md`.
+
+The hidden `autostart-run` subcommand and the raw `--autostart` flag (which the
+login item passes) run the login mode: the GUI opens tray-only and starts the
+flagged instances, or the CLI starts them headless and exits with a clear
+message when nothing needs to run.
 
 `DblError` mapping lives in `output::code_for`; command handlers may refine based
 on operation context (e.g. create argument errors -> 2).
