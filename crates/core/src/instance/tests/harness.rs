@@ -234,7 +234,14 @@ impl Harness {
         // opened afterwards misses every event.
         let mut receiver = self.receiver();
         let op = self.service.create_instance(spec).expect("create");
-        self.run_on(&mut receiver, op).events
+        let run = self.run_on(&mut receiver, op.clone());
+        if let Some(Err(err)) = run.result() {
+            panic!(
+                "create {op} failed: {err:?}; events={:?}",
+                describe(&run.events)
+            );
+        }
+        run.events
     }
 
     /// Number of instances currently watched for live logs.

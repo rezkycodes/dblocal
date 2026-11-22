@@ -35,10 +35,22 @@ fn created(h: &Harness, name: &str) -> crate::model::Instance {
         })
         .collect();
     assert!(failed.is_empty(), "create failed: {failed:?}");
-    h.instances()
-        .into_iter()
-        .find(|i| i.name().as_str() == name)
-        .expect("created instance")
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    loop {
+        if let Some(instance) = h
+            .instances()
+            .into_iter()
+            .find(|i| i.name().as_str() == name)
+        {
+            return instance;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "created instance {name} not listed after successful create; events={:?}",
+            super::harness::describe(&events)
+        );
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
 }
 
 #[test]
