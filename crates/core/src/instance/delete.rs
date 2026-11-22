@@ -81,38 +81,14 @@ fn next_delete_sequence() -> u64 {
     NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1
 }
 
-/// Deleted-instance marker nonces recorded for a state root, for the item-5(b) test.
-#[cfg(test)]
-fn delete_nonce_log() -> &'static std::sync::Mutex<Vec<(String, InstanceId, String)>> {
-    static LOG: std::sync::OnceLock<std::sync::Mutex<Vec<(String, InstanceId, String)>>> =
-        std::sync::OnceLock::new();
-    LOG.get_or_init(|| std::sync::Mutex::new(Vec::new()))
-}
-
-#[cfg(test)]
-fn record_delete_nonce(root: &str, id: &InstanceId, nonce: &str) {
-    if let Ok(mut log) = delete_nonce_log().lock() {
-        log.push((root.to_owned(), id.clone(), nonce.to_owned()));
-    }
-}
-
-/// Every delete nonce recorded for `root` and `id`, in order.
-#[cfg(test)]
-pub(crate) fn take_delete_nonces(root: &std::path::Path, id: &InstanceId) -> Vec<String> {
-    let root = root.display().to_string();
-    let Ok(mut log) = delete_nonce_log().lock() else {
-        return Vec::new();
-    };
-    let mut out = Vec::new();
-    log.retain(|(seen_root, seen_id, nonce)| {
-        if seen_root == &root && seen_id == id {
-            out.push(nonce.clone());
-            false
-        } else {
-            true
-        }
-    });
-    out
+/// Builds the in-flight marker nonce for one delete.
+///
+/// `sequence` is the process-wide [`next_delete_sequence`] value and `op_id` the
+/// issuing service's operation id. The sequence is what makes the nonce distinct
+/// across services: two services can both be at `op-1`, but never at the same
+/// sequence value.
+fn delete_nonce(sequence: u64, op_id: &str) -> String {
+    format!("{}-{}-{}", std::process::id(), sequence, op_id)
 }
 
 /// The owner recorded by an in-flight marker.
@@ -307,18 +283,8 @@ pub(crate) fn delete_instance(
     // and the loser's marker `Drop` would remove the winner's marker. A process-wide
     // sequence guarantees a distinct nonce for every delete regardless of service.
     let op_id = inner.ops.next_id();
-    let nonce = format!(
-        "{}-{}-{}",
-        std::process::id(),
-        next_delete_sequence(),
-        op_id.as_str()
-    );
+    let nonce = delete_nonce(next_delete_sequence(), op_id.as_str());
     let marker = InFlightMarker::create(inner, &inner.paths.instance_dir(instance.name()), &nonce);
-    // Test seam: record the marker nonce this call used, keyed by state root and
-    // instance, so a test can prove two deletes of one id get distinct nonces (the
-    // loser must never be able to remove the winner's marker).
-    #[cfg(test)]
-    record_delete_nonce(&inner.paths.root().display().to_string(), id, &nonce);
 
     // Claim `Deleting` synchronously, like `start_instance` claims `Starting`.
     // The compare-and-set is the cross-process lock, so a second service (or a
@@ -602,5 +568,23 @@ mod tests {
         let first = next_delete_sequence();
         let second = next_delete_sequence();
         assert_ne!(first, second, "the process-wide sequence never repeats");
+    }
+
+    /// Item 5(b): two services in one process can both be at `op-1` for their first
+    /// delete (`Ops::next_id` is per service). The nonce must still differ, or the
+    /// loser's marker `Drop` removes the winner's marker.
+    ///
+    /// This pins the exact collision without racing two threads: the same `op_id`
+    /// with two different process-wide sequences must yield two different nonces.
+    /// Reverting to `{pid}-{op_id}` (or any per-(process,instance) shape) makes them
+    /// equal and fails here.
+    #[test]
+    fn a_nonce_differs_for_two_services_both_at_op_1() {
+        let a = delete_nonce(next_delete_sequence(), "op-1");
+        let b = delete_nonce(next_delete_sequence(), "op-1");
+        assert_ne!(
+            a, b,
+            "two deletes with the same per-service op id must still get distinct nonces: {a:?} / {b:?}"
+        );
     }
 }
