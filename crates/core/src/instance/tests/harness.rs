@@ -258,13 +258,30 @@ impl Harness {
             if !fresh_view.is_empty() {
                 break;
             }
+            let db = self.paths.state_db();
+            let wal = db.with_extension("db-wal");
+            let shm = db.with_extension("db-shm");
+            let raw_rows: String = std::process::Command::new("sqlite3")
+                .arg(&db)
+                .arg("SELECT id,name,status FROM instances ORDER BY id; SELECT '---'; SELECT name FROM sqlite_master WHERE type='table' ORDER BY name;")
+                .output()
+                .map(|out| {
+                    let stdout = String::from_utf8_lossy(&out.stdout).trim().to_owned();
+                    let stderr = String::from_utf8_lossy(&out.stderr).trim().to_owned();
+                    if stderr.is_empty() { stdout } else { format!("{stdout} stderr={stderr}") }
+                })
+                .unwrap_or_else(|err| format!("<sqlite3 unavailable: {err}>"));
+            let db_len = std::fs::metadata(&db).map(|m| m.len()).unwrap_or(0);
+            let wal_len = std::fs::metadata(&wal).map(|m| m.len()).unwrap_or(0);
+            let shm_len = std::fs::metadata(&shm).map(|m| m.len()).unwrap_or(0);
             assert!(
                 std::time::Instant::now() < deadline,
                 "create {op} reported success but no row is listed; \
                  service_view={service_view:?} fresh_view={fresh_view:?} \
-                 state_db={} exists={} events={:?}",
-                self.paths.state_db().display(),
-                self.paths.state_db().exists(),
+                 state_db={} exists={} db_len={db_len} wal_len={wal_len} shm_len={shm_len} \
+                 raw=[{raw_rows}] events={:?}",
+                db.display(),
+                db.exists(),
                 describe(&run.events)
             );
             std::thread::sleep(Duration::from_millis(20));
