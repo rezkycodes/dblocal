@@ -329,7 +329,10 @@ fn install_db_failure_removes_data_dir() {
     let msg = format!("{err:?}");
     assert!(msg.contains("mariadb-install-db failed"));
     assert!(msg.contains("boom"));
-    assert!(!data.exists(), "data dir must be removed on install-db failure");
+    assert!(
+        !data.exists(),
+        "data dir must be removed on install-db failure"
+    );
 }
 
 #[test]
@@ -380,7 +383,11 @@ fn shutdown_timeout_names_pid() {
     let bin = root.join("bin");
     fs::create_dir_all(&bin).expect("bin");
     let fake = bin.join("mariadbd");
-    fs::write(&fake, "#!/bin/sh\ntrap '' TERM\nwhile true; do sleep 1; done\n").expect("write");
+    fs::write(
+        &fake,
+        "#!/bin/sh\ntrap '' TERM\nwhile true; do sleep 1; done\n",
+    )
+    .expect("write");
     fs::set_permissions(&fake, fs::Permissions::from_mode(0o755)).expect("chmod");
     let data = root.join("inst/data");
     let conf = data.join("my.cnf");
