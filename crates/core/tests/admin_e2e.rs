@@ -475,11 +475,29 @@ fn list_users_exists_revoke_drop_and_duplicate_and_not_found_paths() {
         .expect_err("dropping a missing database must fail");
     assert_eq!(err, AdminError::DatabaseNotFound);
 
-    // Dropping the role, then dropping it again is UserNotFound? PostgreSQL
-    // reports 42704 (undefined object) which we classify as a generic
-    // QueryFailed; the important part is that it is typed, not a panic.
+    // Dropping the role, then dropping it again: 42704 maps to UserNotFound (F4).
     fixture.admin.drop_user(&user).expect("drop user");
     assert!(!fixture.admin.user_exists(&user).expect("exists after drop"));
+    let err = fixture
+        .admin
+        .drop_user(&user)
+        .expect_err("dropping a missing user must fail");
+    assert_eq!(err, AdminError::UserNotFound);
+
+    // Revoke/grant on a missing role are also UserNotFound (F4).
+    let ghost = Identifier::new("ghost_role").expect("valid");
+    let db2 = Identifier::new("cruddb2").expect("valid");
+    fixture.admin.create_database(&db2).expect("create db2");
+    let err = fixture
+        .admin
+        .revoke(&ghost, &db2)
+        .expect_err("revoke missing user");
+    assert_eq!(err, AdminError::UserNotFound);
+    let err = fixture
+        .admin
+        .grant(&ghost, &db2, PrivilegeLevel::ReadOnly)
+        .expect_err("grant missing user");
+    assert_eq!(err, AdminError::UserNotFound);
 
     // A target pointing at a closed port is a typed Connect error, not a panic.
     let closed = AdminTarget::new(
@@ -524,4 +542,295 @@ fn wait_connections(port: u16, db: &str, want: i64, timeout: Duration) {
         }
         std::thread::sleep(Duration::from_millis(100));
     }
+}
+
+// ---------------------------------------------------------------------------
+// W3-A fix 1 additions: F1, F2, F3, F5, F6.
+// ---------------------------------------------------------------------------
+
+fn read_log(cluster: &AdminCluster) -> String {
+    std::fs::read_to_string(cluster.log_path()).unwrap_or_default()
+}
+
+fn assert_log_has_no_canary(cluster: &AdminCluster, canaries: &[&str]) {
+    let log = read_log(cluster);
+    for canary in canaries {
+        assert!(
+            !log.contains(canary),
+            "engine log leaked canary {canary:?}; log tail: {}",
+            &log[log.len().saturating_sub(2000)..]
+        );
+    }
+    assert!(
+        !log.contains("PASSWORD E'"),
+        "engine log contains a cleartext PASSWORD literal; log tail: {}",
+        &log[log.len().saturating_sub(2000)..]
+    );
+}
+
+#[test]
+#[ignore = "e2e: real PostgreSQL; run with DBLOCAL_E2E=1"]
+fn f1_password_never_reaches_engine_log_on_failures() {
+    require_e2e();
+    // Allow server-side logging to be observable: SCRAM must be the reason the
+    // canary is absent, not connection-level suppression. (Spec F1 mutation note.)
+    unsafe { std::env::set_var("DBLOCAL_ADMIN_SUPPRESS_LOG_OPTIONS", "0"); }
+    let fixture = Fixture::new("dblocal-admin-f1-");
+    fixture
+        .cluster
+        .append_conf_and_reload("log_min_error_statement = 'error'\n");
+    std::thread::sleep(Duration::from_millis(200));
+    let canary_pw = "CanaryPw_F1_9f3a!do-not-log";
+    let canary = SecretString::from(canary_pw);
+    let user = Identifier::new("leaky_role").expect("valid");
+
+    // (a) create_user with known password, then duplicate create fails.
+    fixture
+        .admin
+        .create_user_with_password(&user, &canary)
+        .expect("create user with known password");
+    let err = fixture
+        .admin
+        .create_user_with_password(&user, &canary)
+        .expect_err("duplicate must fail");
+    assert_eq!(err, AdminError::UserExists);
+
+    // (b) failing ALTER on a missing role through our admin seam.
+    let missing = Identifier::new("missing_role").expect("valid");
+    let err = fixture
+        .admin
+        .alter_user_password(&missing, &canary)
+        .expect_err("alter missing role must fail");
+    assert_eq!(err, AdminError::UserNotFound);
+
+    // (c) sink-failure rollback path: reset password fails to persist, rolls back.
+    struct FailingSink;
+    impl CredentialSink for FailingSink {
+        fn store(&self, _password: &SecretString) -> DblResult<()> {
+            Err(dblocal_core::DblError::Secret {
+                reason: "keychain locked".to_owned(),
+            })
+        }
+    }
+    let err = fixture
+        .admin
+        .reset_superuser_password(&FailingSink)
+        .expect_err("sink failure must fail reset");
+    assert_eq!(err, AdminError::CredentialStore);
+
+    // Give the server a moment to flush logs.
+    std::thread::sleep(Duration::from_millis(200));
+    assert_log_has_no_canary(&fixture.cluster, &[canary_pw, PASSWORD]);
+
+    // The created role can still authenticate with the cleartext password.
+    let ok = Sql::connect(
+        fixture.cluster.port(),
+        "leaky_role",
+        canary_pw,
+        "postgres",
+    )
+    .expect("role must authenticate with its cleartext password");
+    assert_eq!(ok.count("SELECT 1::bigint"), Ok(1));
+
+    // Old superuser password still works after rolled-back reset.
+    let su = Sql::connect(fixture.cluster.port(), SUPERUSER, PASSWORD, "postgres")
+        .expect("superuser password must survive rollback");
+    assert_eq!(su.count("SELECT 1::bigint"), Ok(1));
+    unsafe { std::env::remove_var("DBLOCAL_ADMIN_SUPPRESS_LOG_OPTIONS"); }
+}
+
+#[test]
+#[ignore = "e2e: real PostgreSQL; run with DBLOCAL_E2E=1"]
+fn f2_wrong_password_is_auth_failed_and_closed_port_is_connect() {
+    require_e2e();
+    let fixture = Fixture::new("dblocal-admin-f2-");
+
+    let wrong = AdminTarget::new(
+        "127.0.0.1",
+        fixture.cluster.port(),
+        SUPERUSER,
+        SecretString::from("wrong-password-canary"),
+    )
+    .expect("target");
+    let err = PgAdmin::new(wrong)
+        .list_databases()
+        .expect_err("wrong password must fail");
+    assert_eq!(err, AdminError::AuthFailed);
+
+    let closed = AdminTarget::new(
+        "127.0.0.1",
+        port::reserve(),
+        SUPERUSER,
+        SecretString::from(PASSWORD),
+    )
+    .expect("target");
+    let err = PgAdmin::new(closed)
+        .list_databases()
+        .expect_err("closed port must fail");
+    assert_eq!(err, AdminError::Connect);
+
+    assert_ne!(
+        AdminError::AuthFailed.user_message(),
+        AdminError::Connect.user_message()
+    );
+    for e in [AdminError::AuthFailed, AdminError::Connect] {
+        let surfaces = format!("{e:?} {e} {}", e.user_message());
+        assert!(!surfaces.contains("wrong-password-canary"));
+        assert!(!surfaces.contains(PASSWORD));
+    }
+}
+
+#[test]
+#[ignore = "e2e: real PostgreSQL; run with DBLOCAL_E2E=1"]
+fn f5_force_drop_kills_live_session_and_false_refuses() {
+    require_e2e();
+    let fixture = Fixture::new("dblocal-admin-f5-");
+    let db = Identifier::new("forcedb").expect("valid");
+    fixture.admin.create_database(&db).expect("create db");
+
+    let _held = Sql::connect(fixture.cluster.port(), SUPERUSER, PASSWORD, "forcedb")
+        .expect("hold a session");
+    let err = fixture
+        .admin
+        .drop_database(&db, false)
+        .expect_err("force=false must refuse");
+    assert_eq!(err, AdminError::DatabaseInUse);
+    let sql = fixture.superuser();
+    assert_eq!(
+        sql.count("SELECT count(*) FROM pg_database WHERE datname = 'forcedb'"),
+        Ok(1),
+        "database must still exist after DatabaseInUse"
+    );
+
+    fixture
+        .admin
+        .drop_database(&db, true)
+        .expect("force=true must drop");
+    assert_eq!(
+        sql.count("SELECT count(*) FROM pg_database WHERE datname = 'forcedb'"),
+        Ok(0)
+    );
+}
+
+#[test]
+#[ignore = "e2e: real PostgreSQL; run with DBLOCAL_E2E=1"]
+fn f6_hostile_names_never_reach_server_statement_log() {
+    require_e2e();
+    let fixture = Fixture::new("dblocal-admin-f6-");
+    // Enable full statement logging; our admin connections also suppress logging,
+    // so we count statements another way too (pg_stat_database xact counters).
+    fixture
+        .cluster
+        .append_conf_and_reload("log_statement = 'all'\n");
+    std::thread::sleep(Duration::from_millis(300));
+    let marker = "F6_BOUNDARY_MARKER";
+    let marker_sql = fixture.cluster.psql(
+        &SecretString::from(PASSWORD),
+        &format!("SELECT '{marker}'"),
+    );
+    assert!(marker_sql.status.success());
+
+    let hostile = [
+        "app'; DROP DATABASE postgres; --",
+        "app\"; DROP DATABASE postgres; --",
+        "app`; DROP DATABASE postgres; --",
+        "app\\",
+        "app\0x",
+        "café",
+        "名前",
+        "1leading",
+        "-dash",
+        "--comment",
+        "a b",
+        "a;b",
+    ];
+    let valid_db = Identifier::new("f6db").expect("valid");
+    fixture.admin.create_database(&valid_db).expect("create f6db");
+
+    let sql = fixture.superuser();
+    let xact_before: i64 = sql
+        .count("SELECT (xact_commit + xact_rollback)::bigint FROM pg_stat_database WHERE datname = 'postgres'")
+        .expect("xact before");
+
+    for raw in hostile {
+        // If validation were weakened, construction succeeds and the call reaches
+        // the server - the catalog/log assertions below catch it.
+        if let Ok(id) = Identifier::new(raw) {
+            let _ = fixture.admin.create_database(&id);
+            let _ = fixture.admin.drop_database(&id, false);
+        }
+        if let Ok(role) = Identifier::role(raw) {
+            let _ = fixture.admin.drop_user(&role);
+        }
+        // Every public method that takes a name: the hostile corpus must be
+        // rejected by the typed constructor, so no call can be made.
+        assert!(
+            Identifier::new(raw).is_err(),
+            "hostile db name {raw:?} must be rejected"
+        );
+        // role constructor allows "postgres" but hostile corpus has no reserved role.
+        assert!(
+            Identifier::role(raw).is_err(),
+            "hostile role name {raw:?} must be rejected"
+        );
+    }
+
+    // Exercise list methods (no name input) to prove cluster is still healthy.
+    let _ = fixture.admin.list_databases().expect("list");
+    let _ = fixture.admin.list_users().expect("list users");
+
+    std::thread::sleep(Duration::from_millis(300));
+    let log = read_log(&fixture.cluster);
+    let after_marker = log.split(marker).nth(1).unwrap_or(&log);
+    for raw in hostile {
+        assert!(
+            !after_marker.contains(raw),
+            "hostile fragment {raw:?} reached server log"
+        );
+    }
+    let lower = after_marker.to_ascii_lowercase();
+    for forbidden in [
+        "create role",
+        "drop role",
+        "grant ",
+        "alter role",
+        "drop database \"app",
+        "create database \"app",
+    ] {
+        assert!(
+            !lower.contains(forbidden),
+            "unexpected statement containing {forbidden:?} in log after marker"
+        );
+    }
+
+    // Catalog: no hostile-named database or role was created.
+    for raw in hostile {
+        let db_count = sql
+            .count(&format!(
+                "SELECT count(*)::bigint FROM pg_database WHERE datname = '{}'",
+                raw.replace('\'', "''")
+            ))
+            .unwrap_or(0);
+        assert_eq!(db_count, 0, "hostile db {raw:?} appeared in catalog");
+        let role_count = sql
+            .count(&format!(
+                "SELECT count(*)::bigint FROM pg_roles WHERE rolname = '{}'",
+                raw.replace('\'', "''")
+            ))
+            .unwrap_or(0);
+        assert_eq!(role_count, 0, "hostile role {raw:?} appeared in catalog");
+    }
+    assert_eq!(
+        sql.count("SELECT count(*) FROM pg_database WHERE datname = 'f6db'"),
+        Ok(1)
+    );
+    // No meaningful transaction spike from hostile attempts (allow small delta for
+    // our own list queries).
+    let xact_after: i64 = sql
+        .count("SELECT (xact_commit + xact_rollback)::bigint FROM pg_stat_database WHERE datname = 'postgres'")
+        .expect("xact after");
+    assert!(
+        xact_after - xact_before < 40,
+        "unexpected transaction spike: before={xact_before} after={xact_after}"
+    );
 }

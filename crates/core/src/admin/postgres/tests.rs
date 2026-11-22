@@ -241,11 +241,85 @@ fn config_sets_timeouts_and_never_debug_leaks_the_password() {
 }
 
 #[test]
+fn connect_errors_distinguish_auth_from_unreachable() {
+    // We cannot construct tokio_postgres::Error directly; classify via SQLSTATE
+    // strings through the public-facing logic by exercising classify_sql_state
+    // and the connect mapping through the documented codes.
+    // map_connect_error is exercised in e2e; here we lock the AuthFailed variant
+    // shape and that it differs from Connect.
+    let auth = AdminError::AuthFailed;
+    assert_eq!(auth.code(), "DBL-8116");
+    assert_ne!(auth.user_message(), AdminError::Connect.user_message());
+    assert!(!auth.user_message().is_empty());
+}
+
+#[test]
+fn scram_credential_does_not_contain_cleartext() {
+    let password = SecretString::from("s3cret-canary-password");
+    let credential = scram_credential(&password);
+    assert!(credential.starts_with("SCRAM-SHA-256$4096:"));
+    assert!(!credential.contains("s3cret-canary-password"));
+}
+
+#[test]
+fn with_client_works_inside_current_thread_runtime() {
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("rt");
+    let port = 20001u16; // closed port; we only care it doesn't panic and maps to Connect
+    let target =
+        AdminTarget::new("127.0.0.1", port, "postgres", SecretString::from("pw")).expect("target");
+    let admin = PgAdmin::new(target);
+    let err = rt.block_on(async { admin.list_databases().unwrap_err() });
+    assert_eq!(err, AdminError::Connect);
+}
+
+#[test]
+fn with_client_works_inside_multi_thread_runtime() {
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .expect("rt");
+    let port = 20002u16;
+    let target =
+        AdminTarget::new("127.0.0.1", port, "postgres", SecretString::from("pw")).expect("target");
+    let admin = PgAdmin::new(target);
+    let err = rt.block_on(async { admin.list_databases().unwrap_err() });
+    assert_eq!(err, AdminError::Connect);
+}
+
+#[test]
+fn with_client_works_inside_spawn_blocking() {
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .expect("rt");
+    let port = 20003u16;
+    let target =
+        AdminTarget::new("127.0.0.1", port, "postgres", SecretString::from("pw")).expect("target");
+    let admin = PgAdmin::new(target);
+    let err = rt.block_on(async {
+        tokio::task::spawn_blocking(move || admin.list_databases().unwrap_err())
+            .await
+            .expect("join")
+    });
+    assert_eq!(err, AdminError::Connect);
+}
+
+#[test]
 fn sql_states_map_to_typed_errors() {
     assert_eq!(classify_sql_state("3D000"), AdminError::DatabaseNotFound);
     assert_eq!(classify_sql_state("42P04"), AdminError::DatabaseExists);
     assert_eq!(classify_sql_state("55006"), AdminError::DatabaseInUse);
     assert_eq!(classify_sql_state("42710"), AdminError::UserExists);
+    // 42704 is mapped to UserNotFound only at role call sites (F4), not globally.
+    assert_eq!(
+        classify_sql_state("42704"),
+        AdminError::QueryFailed(SqlStateCode::parse("42704"))
+    );
     assert_eq!(
         classify_sql_state("42501"),
         AdminError::InsufficientPrivilege

@@ -21,10 +21,10 @@ use crate::secrets::generate_password;
 
 use super::error::{AdminError, AdminResult, RollbackState, SqlStateCode, TargetProblem};
 use super::sql::{
-    self, Dialect, Identifier, PrivilegeLevel, alter_password, create_database_postgres,
-    create_user, database_connection_count_postgres, drop_database_postgres, drop_user_postgres,
-    grant_privileges, list_databases_postgres, list_users_postgres, revoke_privileges,
-    role_exists_postgres,
+    self, Dialect, Identifier, PrivilegeLevel, alter_role_password_postgres,
+    create_database_postgres, create_role_postgres, database_connection_count_postgres,
+    drop_database_postgres, drop_user_postgres, grant_privileges, list_databases_postgres,
+    list_users_postgres, revoke_privileges, role_exists_postgres,
 };
 
 /// Connection target for admin operations.
@@ -133,12 +133,21 @@ impl AdminTarget {
             .user(&self.superuser)
             .password(self.password.expose().as_bytes())
             .connect_timeout(self.connect_timeout)
-            .application_name("dblocal-admin")
-            .options(format!(
-                "-c statement_timeout={} -c lock_timeout={}",
-                self.statement_timeout.as_millis(),
-                self.statement_timeout.as_millis()
-            ));
+            .application_name("dblocal-admin");
+        let suppress = std::env::var_os("DBLOCAL_ADMIN_SUPPRESS_LOG_OPTIONS")
+            .as_deref()
+            != Some(std::ffi::OsStr::new("0"));
+        let log_opts = if suppress {
+            " -c log_min_error_statement=panic -c log_statement=none \
+             -c log_min_duration_statement=-1"
+        } else {
+            ""
+        };
+        cfg.options(format!(
+            "-c statement_timeout={} -c lock_timeout={}{log_opts}",
+            self.statement_timeout.as_millis(),
+            self.statement_timeout.as_millis()
+        ));
         cfg
     }
 }
@@ -246,6 +255,15 @@ pub trait CredentialSink: Send + Sync {
     fn store(&self, password: &SecretString) -> crate::error::Result<()>;
 }
 
+/// Computes a PostgreSQL SCRAM-SHA-256 verifier for `password`.
+///
+/// The cleartext is never sent on the wire or embedded in a logged statement:
+/// PostgreSQL logs failing statements by default (`log_min_error_statement =
+/// error`), and that log is what `dblocal logs` / the Logs tab show.
+fn scram_credential(password: &SecretString) -> String {
+    postgres_protocol::password::scram_sha_256(password.expose().as_bytes())
+}
+
 /// PostgreSQL admin client over one [`AdminTarget`].
 #[derive(Debug, Clone)]
 pub struct PgAdmin {
@@ -321,27 +339,23 @@ impl PgAdmin {
     /// nothing is dropped. With `force`, PostgreSQL's `WITH (FORCE)` terminates
     /// the sessions; the switch is explicit so it is never the default.
     pub fn drop_database(&self, db: &Identifier, force: bool) -> AdminResult<()> {
-        let sql = drop_database_postgres(db);
-        let statement = if force {
-            format!("{} WITH (FORCE)", sql.sql())
-        } else {
-            sql.sql().to_owned()
-        };
+        let statement = drop_database_postgres(db, force);
         if !force {
             self.ensure_no_connections(db)?;
         }
-        self.execute(&self.target, consts::DEFAULT_DATABASE, &statement)
+        self.execute(&self.target, consts::DEFAULT_DATABASE, statement.sql())
     }
 
     /// Counts live connections to `db`, refusing to drop when any exists.
     fn ensure_no_connections(&self, db: &Identifier) -> AdminResult<()> {
         let stmt = database_connection_count_postgres(db);
+        let db_name = db.as_str().to_owned();
         let count = self.with_client(
             &self.target,
             consts::DEFAULT_DATABASE,
             move |client, _| async move {
                 let row = client
-                    .query_one(stmt.sql(), &[&db.as_str()])
+                    .query_one(stmt.sql(), &[&db_name.as_str()])
                     .await
                     .map_err(|err| map_pg_error(&err))?;
                 let count: i64 = row.try_get(0).map_err(|err| map_pg_error(&err))?;
@@ -360,15 +374,51 @@ impl PgAdmin {
     /// logged and never stored here; the caller hands it to a `CredentialSink`.
     pub fn create_user(&self, user: &Identifier) -> AdminResult<SecretString> {
         let password = generate_password().map_err(|_| AdminError::PasswordGenerate)?;
-        let stmt = create_user(Dialect::Postgres, user, password.expose());
-        self.execute(&self.target, consts::DEFAULT_DATABASE, stmt.sql())?;
+        self.create_user_with_password(user, &password)?;
         Ok(password)
+    }
+
+    /// Creates a login role with a caller-supplied password.
+    ///
+    /// `#[doc(hidden)]`: the production API generates its own password; tests use
+    /// this seam so they can look for the exact cleartext in the engine log.
+    /// The cleartext is still never sent on the wire — only its SCRAM verifier
+    /// is.
+    #[doc(hidden)]
+    pub fn create_user_with_password(
+        &self,
+        user: &Identifier,
+        password: &SecretString,
+    ) -> AdminResult<()> {
+        let credential = scram_credential(password);
+        let stmt = create_role_postgres(user, &credential);
+        self.execute(&self.target, consts::DEFAULT_DATABASE, stmt.sql())
+    }
+
+    /// Alters a role password with a caller-supplied password.
+    ///
+    /// `#[doc(hidden)]`: test seam for F1 (failing ALTER path). Production code
+    /// uses `reset_superuser_password`.
+    #[doc(hidden)]
+    pub fn alter_user_password(
+        &self,
+        user: &Identifier,
+        password: &SecretString,
+    ) -> AdminResult<()> {
+        let credential = scram_credential(password);
+        let stmt = alter_role_password_postgres(user, &credential);
+        self.execute_mapped(
+            &self.target,
+            consts::DEFAULT_DATABASE,
+            stmt.sql(),
+            map_role_error,
+        )
     }
 
     /// Drops a role.
     pub fn drop_user(&self, user: &Identifier) -> AdminResult<()> {
         let stmt = drop_user_postgres(user);
-        self.execute(&self.target, consts::DEFAULT_DATABASE, stmt.sql())
+        self.execute_mapped(&self.target, consts::DEFAULT_DATABASE, stmt.sql(), map_role_error)
     }
 
     /// Grants `level` to `user` on `db`, running the schema-level statements
@@ -380,24 +430,25 @@ impl PgAdmin {
         level: PrivilegeLevel,
     ) -> AdminResult<()> {
         let statements = grant_privileges(Dialect::Postgres, user, db, level);
-        self.execute_batch(&self.target, db.as_str(), &statements)
+        self.execute_batch_mapped(&self.target, db.as_str(), &statements, map_role_error)
     }
 
     /// Revokes every managed privilege from `user` on `db`.
     pub fn revoke(&self, user: &Identifier, db: &Identifier) -> AdminResult<()> {
         let statements = revoke_privileges(Dialect::Postgres, user, db);
-        self.execute_batch(&self.target, db.as_str(), &statements)
+        self.execute_batch_mapped(&self.target, db.as_str(), &statements, map_role_error)
     }
 
     /// Whether `user` exists.
     pub fn user_exists(&self, user: &Identifier) -> AdminResult<bool> {
         let stmt = role_exists_postgres(user);
+        let user_name = user.as_str().to_owned();
         let count = self.with_client(
             &self.target,
             consts::DEFAULT_DATABASE,
             move |client, _| async move {
                 let row = client
-                    .query_one(stmt.sql(), &[&user.as_str()])
+                    .query_one(stmt.sql(), &[&user_name.as_str()])
                     .await
                     .map_err(|err| map_pg_error(&err))?;
                 let count: i64 = row.try_get(0).map_err(|err| map_pg_error(&err))?;
@@ -436,21 +487,28 @@ impl PgAdmin {
 
     /// Runs one statement on `dbname`.
     fn execute(&self, target: &AdminTarget, dbname: &str, statement: &str) -> AdminResult<()> {
+        self.execute_mapped(target, dbname, statement, map_pg_error)
+    }
+
+    fn execute_mapped(
+        &self,
+        target: &AdminTarget,
+        dbname: &str,
+        statement: &str,
+        map: fn(&tokio_postgres::Error) -> AdminError,
+    ) -> AdminResult<()> {
+        let statement = statement.to_owned();
         self.with_client(target, dbname, move |client, _| async move {
-            client
-                .batch_execute(statement)
-                .await
-                .map_err(|err| map_pg_error(&err))
+            client.batch_execute(&statement).await.map_err(|err| map(&err))
         })
     }
 
-    /// Runs a batch of statements in order on `dbname`, stopping at the first
-    /// failure.
-    fn execute_batch(
+    fn execute_batch_mapped(
         &self,
         target: &AdminTarget,
         dbname: &str,
         statements: &[sql::SqlStatement],
+        map: fn(&tokio_postgres::Error) -> AdminError,
     ) -> AdminResult<()> {
         let sqls: Vec<String> = statements.iter().map(|s| s.sql().to_owned()).collect();
         self.with_client(target, dbname, move |client, _| async move {
@@ -458,36 +516,66 @@ impl PgAdmin {
                 client
                     .batch_execute(&statement)
                     .await
-                    .map_err(|err| map_pg_error(&err))?;
+                    .map_err(|err| map(&err))?;
             }
             Ok(())
         })
     }
 
     /// Opens a connection to `dbname` and drives `f` to completion on a
-    /// throwaway current-thread runtime.
+    /// throwaway current-thread runtime, on a dedicated OS thread so this is
+    /// safe to call from inside an existing tokio runtime (F3).
     fn with_client<T, F, Fut>(&self, target: &AdminTarget, dbname: &str, f: F) -> AdminResult<T>
     where
-        F: FnOnce(Client, String) -> Fut,
-        Fut: Future<Output = AdminResult<T>>,
+        T: Send + 'static,
+        F: FnOnce(Client, String) -> Fut + Send + 'static,
+        Fut: Future<Output = AdminResult<T>> + 'static,
     {
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .map_err(|_| AdminError::Connect)?;
+        let target = target.clone();
         let dbname_owned = dbname.to_owned();
-        runtime.block_on(async move {
-            let (client, connection) = target
-                .config(dbname)
-                .connect(tokio_postgres::NoTls)
-                .await
+        let run = move || {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
                 .map_err(|_| AdminError::Connect)?;
-            // The connection task lives only as long as this `block_on`.
-            tokio::spawn(async move {
-                let _ = connection.await;
-            });
-            f(client, dbname_owned).await
-        })
+            runtime.block_on(async move {
+                let (client, connection) = target
+                    .config(&dbname_owned)
+                    .connect(tokio_postgres::NoTls)
+                    .await
+                    .map_err(|err| map_connect_error(&err))?;
+                tokio::spawn(async move {
+                    let _ = connection.await;
+                });
+                f(client, dbname_owned).await
+            })
+        };
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            // Inside a runtime: move the blocking + block_on work to a fresh
+            // OS thread so we never call block_on on a worker thread.
+            match handle.runtime_flavor() {
+                tokio::runtime::RuntimeFlavor::MultiThread => {
+                    tokio::task::block_in_place(run)
+                }
+                _ => std::thread::scope(|scope| {
+                    scope
+                        .spawn(run)
+                        .join()
+                        .unwrap_or(Err(AdminError::Connect))
+                }),
+            }
+        } else {
+            run()
+        }
+    }
+}
+
+/// Maps a connection failure to [`AdminError`]. Wrong/stale credentials are
+/// distinct from an unreachable engine (F2), but the driver text is dropped.
+fn map_connect_error(err: &tokio_postgres::Error) -> AdminError {
+    match err.code().map(|code| code.code()) {
+        Some("28P01" | "28000") => AdminError::AuthFailed,
+        _ => AdminError::Connect,
     }
 }
 
@@ -511,6 +599,16 @@ fn classify_sql_state(code: &str) -> AdminError {
     }
 }
 
+/// Role DDL/DCL statements report `42704` (undefined_object) when the role is
+/// missing. Map only at those call sites so other `42704`s (missing schema,
+/// missing extension) remain `QueryFailed`.
+fn map_role_error(err: &tokio_postgres::Error) -> AdminError {
+    match err.code().map(|code| code.code()) {
+        Some("42704") => AdminError::UserNotFound,
+        _ => map_pg_error(err),
+    }
+}
+
 /// The engine-facing half of a password reset, abstracted so the state machine
 /// can be unit-tested with injected failures instead of a live server.
 ///
@@ -529,9 +627,15 @@ impl PasswordEngine for PgAdmin {
     fn apply(&self, connect_as: &SecretString, target: &SecretString) -> AdminResult<()> {
         let role = Identifier::role(&self.target.superuser)
             .map_err(|_| AdminError::InvalidTarget(TargetProblem::EmptySuperuser))?;
-        let stmt = alter_password(Dialect::Postgres, &role, target.expose());
+        let credential = scram_credential(target);
+        let stmt = alter_role_password_postgres(&role, &credential);
         let connector = PgAdmin::new(self.target.with_password(connect_as.clone()));
-        connector.execute(&connector.target, consts::DEFAULT_DATABASE, stmt.sql())
+        connector.execute_mapped(
+            &connector.target,
+            consts::DEFAULT_DATABASE,
+            stmt.sql(),
+            map_role_error,
+        )
     }
 
     fn verify(&self, password: &SecretString) -> AdminResult<()> {

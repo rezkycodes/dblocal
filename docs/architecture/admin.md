@@ -66,6 +66,22 @@ statement with the original text.
 `CREATE DATABASE "name" WITH ENCODING 'UTF8' TEMPLATE template0` — `template0` so
 the requested encoding is honoured even when `template1` was customised.
 
+Passwords are **never** sent as cleartext in `CREATE ROLE` / `ALTER ROLE`.
+PostgreSQL logs the text of a failing statement by default
+(`log_min_error_statement = error`), and `logs/postgres.log` is the file surfaced
+by `dblocal logs` and the Logs tab. Instead the client computes a SCRAM-SHA-256
+verifier with `postgres_protocol::password::scram_sha_256` and sends
+`PASSWORD E'SCRAM-SHA-256$4096:...'` through `quote_postgres_literal`. The
+server stores a verifier either way, so authentication is unchanged. Every admin
+connection also sets `-c log_min_error_statement=panic -c log_statement=none -c
+log_min_duration_statement=-1` as belt-and-braces (the admin user is superuser).
+
+MySQL/MariaDB note (adapter not implemented here): enabling the general query log
+records `CREATE USER ... IDENTIFIED BY '<cleartext>'`. The later MySQL adapter
+must send a precomputed hash (`IDENTIFIED WITH caching_sha2_password AS
+'<hash>'` or the engine-equivalent form) rather than cleartext; do not log or
+persist the cleartext.
+
 Read-only, run against the target database:
 ```sql
 GRANT CONNECT ON DATABASE "<db>" TO "<user>";
@@ -114,6 +130,18 @@ ORDER BY d.datname;
 - `force == true`: `DROP DATABASE "<db>" WITH (FORCE)`. The switch is explicit so
   terminating other sessions is never accidental.
 
+The SQL statement is built by the pure `drop_database_postgres(db, force)` builder
+(unit-tested for both forms), so the `force` decision is pinned by an exact-SQL
+test independent of the pre-check.
+
+## Runtime contract (F3)
+
+`PgAdmin::with_client` is safe to call from inside an existing tokio runtime. It
+runs the connection work on a dedicated OS thread (`std::thread::scope` for
+current-thread runtimes, `tokio::task::block_in_place` for multi-thread
+runtimes) and builds a throwaway current-thread runtime there. Callers never
+need to worry about "Cannot start a runtime from within a runtime".
+
 ## Password reset and the F-DBU-03 AC2 guarantee
 
 `PgAdmin::reset_superuser_password(sink)` runs the pure state machine
@@ -155,7 +183,8 @@ inside the range, unique, and reached by a variant.
 
 | Code | Variant | Meaning |
 |---|---|---|
-| 8100 | `Connect` | engine unreachable |
+| 8100 | `Connect` | engine unreachable (TCP/timeout, not auth) |
+| 8116 | `AuthFailed` | stored credential refused (`28P01`/`28000`) |
 | 8101 | `InvalidIdentifier` | name failed the allowlist |
 | 8102 | `NonLoopbackHost` | host is not loopback |
 | 8103 | `InvalidTarget` | empty host/superuser, zero port |
@@ -163,7 +192,7 @@ inside the range, unique, and reached by a variant.
 | 8105 | `DatabaseNotFound` | `3D000` |
 | 8106 | `DatabaseInUse` | `55006` / live connections |
 | 8107 | `UserExists` | `42710` |
-| 8108 | `UserNotFound` | (reserved for the drop path) |
+| 8108 | `UserNotFound` | role missing on drop/revoke/grant (`42704`) |
 | 8109 | `InsufficientPrivilege` | `42501` |
 | 8110 | `QueryFailed` | any other SQLSTATE |
 | 8111 | `Unsupported` | engine lacks the operation |
@@ -207,6 +236,65 @@ Valkey has no databases/users in this sense: it has numbered logical databases
 table privileges. This task proposes **no admin ops for Valkey v1**; the
 Databases tab shows nothing for a Valkey instance. This matches the PRD's
 `admin_ops()` comment ("None untuk Valkey v1").
+
+## W3-A fix round 1 findings
+
+### F1 (HIGH) — cleartext password in engine log on statement failure
+
+- **Finding.** A failing `CREATE ROLE`/`ALTER ROLE` caused PostgreSQL to log the
+  statement text at `log_min_error_statement = error` (default). The reviewer
+  probe saw `STATEMENT: CREATE ROLE "leaky" LOGIN PASSWORD E'<cleartext>'` in
+  `logs/postgres.log`, which is the file surfaced by `dblocal logs` and the Logs
+  tab. This violated "passwords never appear in logs" for any failure after parse
+  (duplicate role, timeout, missing role, failed reset rollback).
+- **Fix.** The client computes the SCRAM verifier with
+  `postgres_protocol::password::scram_sha_256(password.as_bytes())` and sends
+  `PASSWORD E'<SCRAM-SHA-256$4096:...>'` via `quote_postgres_literal`. The server
+  stores a verifier either way, so authentication is unchanged. Belt and braces:
+  every admin connection sets `-c log_min_error_statement=panic -c
+  log_statement=none -c log_min_duration_statement=-1`.
+- **Tests.** Real-cluster e2e creates a role with a known canary password,
+  triggers (a) duplicate create, (b) failing ALTER on a missing role, (c) sink-
+  failure reset rollback, then reads `logs/postgres.log` and asserts the canary
+  is absent and no `PASSWORD E'` appears; it also proves the role still
+  authenticates and reset e2e still passes. Mutation: cleartext literal restored
+  -> red; log options removed alone -> the log-absence test stays green because
+  SCRAM already prevents the cleartext from being in the statement (reported
+  honestly in the worker report).
+- **MySQL note.** If the MySQL general query log is enabled it records
+  `CREATE USER ... IDENTIFIED BY '<cleartext>'`. The later MySQL adapter must
+  send a precomputed hash (`IDENTIFIED WITH ... AS '<hash>'`); do not implement
+  it now.
+
+### F2 (MEDIUM) — wrong password vs stopped engine
+
+Connect failures carrying SQLSTATE `28P01`/`28000` map to `AuthFailed`
+(DBL-8116) with its own Indonesian message; timeouts/refused connections remain
+`Connect` (DBL-8100). Neither error's Debug/Display contains the password.
+
+### F3 (MEDIUM) — admin API panics inside a tokio runtime
+
+`with_client` runs on a dedicated OS thread and builds a throwaway current-thread
+runtime there (`block_in_place` on multi-thread runtimes, `std::thread::scope`
+on current-thread). Safe from `#[tokio::test]` (current-thread and multi-thread)
+and from `spawn_blocking`.
+
+### F4 (LOW) — `UserNotFound`
+
+`42704` from role DDL/DCL call sites maps to `UserNotFound` (DBL-8108); the
+mapping is scoped to role statements so other `42704`s stay `QueryFailed`.
+
+### F5 (LOW) — force pinned by pure builder
+
+`drop_database_postgres(db, force)` builds the exact SQL; unit tests pin `false`
+and `true`. The e2e proves a live session blocks `force=false` with
+`DatabaseInUse` and is terminated by `force=true`.
+
+### F6 (LOW) — hostile names proved at the server boundary
+
+The hostile e2e enables `log_statement = 'all'` and asserts the log contains no
+hostile fragment and no `CREATE/DROP/GRANT/ALTER` after setup, across every
+public method that takes a name.
 
 ## Tests and coverage
 

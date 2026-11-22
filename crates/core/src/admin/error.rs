@@ -47,6 +47,8 @@ pub const CODE_CREDENTIAL_STORE: &str = "DBL-8113";
 pub const CODE_ROLLBACK: &str = "DBL-8114";
 /// Code for [`AdminError::PasswordGenerate`].
 pub const CODE_PASSWORD_GENERATE: &str = "DBL-8115";
+/// Code for [`AdminError::AuthFailed`].
+pub const CODE_AUTH_FAILED: &str = "DBL-8116";
 
 /// Why an identifier was rejected. Static: it never echoes the rejected value.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -136,6 +138,8 @@ pub struct RollbackState {
 pub enum AdminError {
     /// The engine could not be reached over TCP.
     Connect,
+    /// The engine rejected the stored credential (`28P01` / `28000`).
+    AuthFailed,
     /// A name failed the allowlist.
     InvalidIdentifier(IdentifierReject),
     /// The host was not a loopback address.
@@ -173,6 +177,7 @@ impl AdminError {
     pub fn code(&self) -> &'static str {
         match self {
             Self::Connect => CODE_CONNECT,
+            Self::AuthFailed => CODE_AUTH_FAILED,
             Self::InvalidIdentifier(_) => CODE_INVALID_IDENTIFIER,
             Self::NonLoopbackHost => CODE_NON_LOOPBACK,
             Self::InvalidTarget(_) => CODE_INVALID_TARGET,
@@ -196,6 +201,7 @@ impl AdminError {
     pub fn user_message(&self) -> &'static str {
         match self {
             Self::Connect => messages::ERR_CONNECT,
+            Self::AuthFailed => messages::ERR_AUTH_FAILED,
             Self::InvalidIdentifier(_) => messages::ERR_INVALID_IDENTIFIER,
             Self::NonLoopbackHost => messages::ERR_NON_LOOPBACK,
             Self::InvalidTarget(_) => messages::ERR_INVALID_TARGET,
@@ -218,6 +224,7 @@ impl AdminError {
     fn label(&self) -> &'static str {
         match self {
             Self::Connect => "connect failed",
+            Self::AuthFailed => "authentication failed",
             Self::InvalidIdentifier(reason) => match reason {
                 IdentifierReject::Empty => "identifier empty",
                 IdentifierReject::TooLong => "identifier too long",
@@ -270,6 +277,7 @@ mod tests {
     fn all_variants() -> Vec<AdminError> {
         vec![
             AdminError::Connect,
+            AdminError::AuthFailed,
             AdminError::InvalidIdentifier(IdentifierReject::Empty),
             AdminError::InvalidIdentifier(IdentifierReject::TooLong),
             AdminError::InvalidIdentifier(IdentifierReject::StartsWithDigit),
@@ -330,6 +338,7 @@ mod tests {
         // Every declared code constant appears in the variant list exactly once.
         let declared = [
             CODE_CONNECT,
+            CODE_AUTH_FAILED,
             CODE_INVALID_IDENTIFIER,
             CODE_NON_LOOPBACK,
             CODE_INVALID_TARGET,
@@ -359,6 +368,7 @@ mod tests {
     fn codes_map_to_distinct_constant_values() {
         let mut numbers: Vec<u16> = [
             CODE_CONNECT,
+            CODE_AUTH_FAILED,
             CODE_INVALID_IDENTIFIER,
             CODE_NON_LOOPBACK,
             CODE_INVALID_TARGET,

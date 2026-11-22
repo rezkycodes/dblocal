@@ -61,6 +61,54 @@ impl AdminCluster {
         self.port
     }
 
+    /// Path to the server log file.
+    pub fn log_path(&self) -> PathBuf {
+        self.logs_dir.join("postgres.log")
+    }
+
+    /// Appends `lines` to `postgresql.conf` and reloads the server.
+    pub fn append_conf_and_reload(&self, lines: &str) {
+        let conf = self.data_dir.join("postgresql.conf");
+        let mut contents = fs::read_to_string(&conf).expect("read conf");
+        if !contents.ends_with('\n') {
+            contents.push('\n');
+        }
+        contents.push_str(lines);
+        if !contents.ends_with('\n') {
+            contents.push('\n');
+        }
+        fs::write(&conf, contents).expect("write conf");
+        let status = Command::new(self.runtime_bin.join("pg_ctl"))
+            .arg("-D")
+            .arg(&self.data_dir)
+            .arg("reload")
+            .stdin(Stdio::null())
+            .status()
+            .expect("run pg_ctl reload");
+        assert!(status.success(), "pg_ctl reload failed");
+    }
+
+    /// Runs `psql -c <sql>` as the superuser against `postgres`.
+    pub fn psql(&self, password: &SecretString, sql: &str) -> std::process::Output {
+        Command::new(self.runtime_bin.join("psql"))
+            .arg("-h")
+            .arg("127.0.0.1")
+            .arg("-p")
+            .arg(self.port.to_string())
+            .arg("-U")
+            .arg(SUPERUSER)
+            .arg("-d")
+            .arg("postgres")
+            .arg("-v")
+            .arg("ON_ERROR_STOP=1")
+            .arg("-c")
+            .arg(sql)
+            .env("PGPASSWORD", password.expose())
+            .stdin(Stdio::null())
+            .output()
+            .expect("run psql")
+    }
+
     fn start_server(&self) {
         let status = Command::new(self.runtime_bin.join("pg_ctl"))
             .arg("-D")

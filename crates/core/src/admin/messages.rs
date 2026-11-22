@@ -7,6 +7,9 @@
 /// `DBL-8100`: the engine could not be reached.
 pub const ERR_CONNECT: &str =
     "Tidak dapat terhubung ke server database. Pastikan server sedang berjalan.";
+/// `DBL-8116`: the stored password was refused by the engine.
+pub const ERR_AUTH_FAILED: &str =
+    "Password yang tersimpan tidak cocok. Periksa kredensial server.";
 /// `DBL-8101`: a name or value failed validation.
 pub const ERR_INVALID_IDENTIFIER: &str =
     "Nama tidak valid. Gunakan hanya huruf, angka, dan garis bawah.";

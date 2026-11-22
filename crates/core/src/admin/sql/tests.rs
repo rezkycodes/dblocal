@@ -417,21 +417,41 @@ fn create_database_builders() {
 #[test]
 fn drop_database_builders() {
     let db = Identifier::new("appdb").expect("valid");
-    assert_eq!(drop_database_postgres(&db).sql(), "DROP DATABASE \"appdb\"");
+    assert_eq!(
+        drop_database_postgres(&db, false).sql(),
+        "DROP DATABASE \"appdb\""
+    );
+    assert_eq!(
+        drop_database_postgres(&db, true).sql(),
+        "DROP DATABASE \"appdb\" WITH (FORCE)"
+    );
     assert_eq!(drop_database_mysql(&db).sql(), "DROP DATABASE `appdb`");
     assert_eq!(
-        one_statement(drop_database_postgres(&db).sql()),
+        one_statement(drop_database_postgres(&db, false).sql()),
         vec![w("DROP"), w("DATABASE"), ident("appdb")]
+    );
+    assert_eq!(
+        one_statement(drop_database_postgres(&db, true).sql()),
+        vec![
+            w("DROP"),
+            w("DATABASE"),
+            ident("appdb"),
+            w("WITH"),
+            Token::LParen,
+            w("FORCE"),
+            Token::RParen
+        ]
     );
 }
 
 #[test]
 fn create_user_builders() {
     let user = Identifier::new("app_user").expect("valid");
-    let pg = create_user(Dialect::Postgres, &user, "p@ss'w0rd");
+    let verifier = "SCRAM-SHA-256$4096:salt$stored:server";
+    let pg = create_role_postgres(&user, verifier);
     assert_eq!(
         pg.sql(),
-        "CREATE ROLE \"app_user\" LOGIN PASSWORD E'p@ss''w0rd'"
+        "CREATE ROLE \"app_user\" LOGIN PASSWORD E'SCRAM-SHA-256$4096:salt$stored:server'"
     );
     assert_eq!(
         one_statement(pg.sql()),
@@ -441,11 +461,11 @@ fn create_user_builders() {
             ident("app_user"),
             w("LOGIN"),
             w("PASSWORD"),
-            lit("p@ss'w0rd"),
+            lit(verifier),
         ]
     );
 
-    let my = create_user(Dialect::MySql, &user, "p@ss'w0rd");
+    let my = create_user_mysql(&user, "p@ss'w0rd");
     assert_eq!(
         my.sql(),
         "CREATE USER `app_user`@'127.0.0.1' IDENTIFIED BY 'p@ss''w0rd'"
@@ -538,8 +558,12 @@ fn revoke_builders() {
 #[test]
 fn alter_password_and_drop_user_builders() {
     let user = Identifier::new("app").expect("valid");
-    let pg = alter_password(Dialect::Postgres, &user, "pa'ss");
-    assert_eq!(pg.sql(), "ALTER ROLE \"app\" PASSWORD E'pa''ss'");
+    let verifier = "SCRAM-SHA-256$4096:salt$stored:server";
+    let pg = alter_role_password_postgres(&user, verifier);
+    assert_eq!(
+        pg.sql(),
+        "ALTER ROLE \"app\" PASSWORD E'SCRAM-SHA-256$4096:salt$stored:server'"
+    );
     assert_eq!(
         one_statement(pg.sql()),
         vec![
@@ -547,10 +571,10 @@ fn alter_password_and_drop_user_builders() {
             w("ROLE"),
             ident("app"),
             w("PASSWORD"),
-            lit("pa'ss")
+            lit(verifier)
         ]
     );
-    let my = alter_password(Dialect::MySql, &user, "pa'ss");
+    let my = alter_password_mysql(&user, "pa'ss");
     assert_eq!(
         my.sql(),
         "ALTER USER `app`@'127.0.0.1' IDENTIFIED BY 'pa''ss'"

@@ -1603,6 +1603,7 @@ dependencies = [
  "mysql_async",
  "nix",
  "percent-encoding",
+ "postgres-protocol",
  "rand 0.10.4",
  "redis",
  "reqwest",

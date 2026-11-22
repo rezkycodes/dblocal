@@ -239,9 +239,17 @@ pub fn create_database_mysql(db: &Identifier) -> SqlStatement {
 }
 
 /// Builds `DROP DATABASE` for PostgreSQL.
-pub fn drop_database_postgres(db: &Identifier) -> SqlStatement {
+///
+/// `force == true` appends `WITH (FORCE)` so the server terminates the live
+/// sessions itself; `false` never does. The switch is explicit so terminating
+/// other sessions is never accidental.
+pub fn drop_database_postgres(db: &Identifier, force: bool) -> SqlStatement {
     let name = quote_identifier(Dialect::Postgres, db);
-    SqlStatement::new(format!("DROP DATABASE {name}"))
+    if force {
+        SqlStatement::new(format!("DROP DATABASE {name} WITH (FORCE)"))
+    } else {
+        SqlStatement::new(format!("DROP DATABASE {name}"))
+    }
 }
 
 /// Builds `DROP DATABASE` for MySQL/MariaDB.
@@ -289,23 +297,29 @@ pub fn role_exists_postgres(user: &Identifier) -> SqlStatement {
     )
 }
 
-/// Builds a role/user creation statement.
+/// Builds a PostgreSQL role creation statement from a precomputed credential.
 ///
-/// PostgreSQL: `CREATE ROLE "name" LOGIN PASSWORD E'...'`.
-/// MySQL: ``CREATE USER `name`@'127.0.0.1' IDENTIFIED BY '...'``.
-pub fn create_user(dialect: Dialect, user: &Identifier, password: &str) -> SqlStatement {
-    match dialect {
-        Dialect::Postgres => {
-            let name = quote_identifier(Dialect::Postgres, user);
-            let pw = quote_postgres_literal(password);
-            SqlStatement::new(format!("CREATE ROLE {name} LOGIN PASSWORD {pw}"))
-        }
-        Dialect::MySql => {
-            let name = quote_identifier(Dialect::MySql, user);
-            let pw = quote_mysql_literal(password);
-            SqlStatement::new(format!("CREATE USER {name}@'127.0.0.1' IDENTIFIED BY {pw}"))
-        }
-    }
+/// `credential` is a SCRAM-SHA-256 verifier (`SCRAM-SHA-256$4096:...`), computed
+/// by the caller from the cleartext. The cleartext is **never** interpolated:
+/// PostgreSQL logs the text of a failing statement, and that file is what
+/// `dblocal logs` and the Logs tab show. The server stores a verifier either
+/// way, so authentication is unchanged.
+pub fn create_role_postgres(user: &Identifier, credential: &str) -> SqlStatement {
+    let name = quote_identifier(Dialect::Postgres, user);
+    let pw = quote_postgres_literal(credential);
+    SqlStatement::new(format!("CREATE ROLE {name} LOGIN PASSWORD {pw}"))
+}
+
+/// Builds a MySQL role creation statement.
+///
+/// MySQL/MariaDB takes a cleartext `IDENTIFIED BY '...'`; the later adapter must
+/// switch this to `IDENTIFIED WITH ... AS '<hash>'` so the cleartext never
+/// reaches its general query log (see `docs/architecture/admin.md`). Not
+/// executed in this task.
+pub fn create_user_mysql(user: &Identifier, password: &str) -> SqlStatement {
+    let name = quote_identifier(Dialect::MySql, user);
+    let pw = quote_mysql_literal(password);
+    SqlStatement::new(format!("CREATE USER {name}@'127.0.0.1' IDENTIFIED BY {pw}"))
 }
 
 /// Builds the statements that grant privileges for `user` on `db`.
@@ -412,22 +426,24 @@ pub fn revoke_privileges(
     }
 }
 
-/// Builds an `ALTER ROLE/USER ... PASSWORD` statement.
-pub fn alter_password(dialect: Dialect, user: &Identifier, password: &str) -> SqlStatement {
-    match dialect {
-        Dialect::Postgres => {
-            let user_q = quote_identifier(Dialect::Postgres, user);
-            let pw = quote_postgres_literal(password);
-            SqlStatement::new(format!("ALTER ROLE {user_q} PASSWORD {pw}"))
-        }
-        Dialect::MySql => {
-            let user_q = quote_identifier(Dialect::MySql, user);
-            let pw = quote_mysql_literal(password);
-            SqlStatement::new(format!(
-                "ALTER USER {user_q}@'127.0.0.1' IDENTIFIED BY {pw}"
-            ))
-        }
-    }
+/// Builds a PostgreSQL `ALTER ROLE ... PASSWORD` from a precomputed credential.
+///
+/// Like [`create_role_postgres`], the value is a SCRAM-SHA-256 verifier, so the
+/// cleartext can never appear in a logged failing statement.
+pub fn alter_role_password_postgres(user: &Identifier, credential: &str) -> SqlStatement {
+    let name = quote_identifier(Dialect::Postgres, user);
+    let pw = quote_postgres_literal(credential);
+    SqlStatement::new(format!("ALTER ROLE {name} PASSWORD {pw}"))
+}
+
+/// Builds a MySQL `ALTER USER ... PASSWORD` statement (cleartext, see
+/// [`create_user_mysql`]; not executed in this task).
+pub fn alter_password_mysql(user: &Identifier, password: &str) -> SqlStatement {
+    let name = quote_identifier(Dialect::MySql, user);
+    let pw = quote_mysql_literal(password);
+    SqlStatement::new(format!(
+        "ALTER USER {name}@'127.0.0.1' IDENTIFIED BY {pw}"
+    ))
 }
 
 /// Builds `DROP ROLE` for PostgreSQL.
