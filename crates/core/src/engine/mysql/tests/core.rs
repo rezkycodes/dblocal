@@ -15,7 +15,7 @@ fn render_my_cnf_contains_required_security_settings() {
     assert!(cnf.contains("datadir=/i/data\n"));
     assert!(cnf.contains("socket=/i/run/mysqld-42345.sock\n"));
     assert!(cnf.contains("pid-file=/i/run/mysqld.pid\n"));
-    assert!(cnf.contains("log-error=/i/logs/error.log\n"));
+    assert!(cnf.contains("log-error=/i/logs/mysql.log\n"));
     assert!(cnf.contains("tmpdir=/i/run/tmp\n"));
     assert!(cnf.contains("mysqlx=OFF\n"));
     assert!(cnf.contains("skip-name-resolve\n"));

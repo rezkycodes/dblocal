@@ -1,44 +1,65 @@
 {
   "release_id": "11.8.10",
+  "date_of_release": "2026-11-17",
   "files": [
     {
       "file_name": "mariadb-11.8.10-linux-systemd-x86_64.tar.gz",
       "os": "Linux",
       "cpu": "x86_64",
-      "file_download_url": "https://example.test/mariadb/mariadb-11.8.10-linux-systemd-x86_64.tar.gz",
-      "size": 413068258,
+      "file_download_url": "http://example.test/mariadb/mariadb-11.8.10-linux-systemd-x86_64.tar.gz",
+      "size": null,
       "checksum": {
         "sha256sum": "15ca40274597af84fa8f89f8248b37740c5a712c003df80b4c7b32a4486e2027"
+      }
+    },
+    {
+      "file_name": "mariadb-plugin-tidesdb-11.8.10-5.2.1-linux-systemd-x86_64.tar.gz",
+      "os": "Linux",
+      "cpu": "x86_64",
+      "file_download_url": "http://example.test/mariadb/mariadb-plugin-tidesdb-11.8.10-5.2.1-linux-systemd-x86_64.tar.gz",
+      "size": null,
+      "checksum": {
+        "sha256sum": "89df35ea4a8df709550fc49ba77bb8443f27f32fce27bafb984ca20422dbfd74"
+      }
+    },
+    {
+      "file_name": "mariadb-plugin-levenshtein-11.8.10-0.2.2-linux-systemd-x86_64.tar.gz",
+      "os": "Linux",
+      "cpu": "x86_64",
+      "file_download_url": "http://example.test/mariadb/mariadb-plugin-levenshtein-11.8.10-0.2.2-linux-systemd-x86_64.tar.gz",
+      "size": null,
+      "checksum": {
+        "sha256sum": "df95aaa8fee6d84fda1b3d98cee724559a3c6b70544db9e21f00ce789720d68d"
       }
     },
     {
       "file_name": "mariadb-11.8.10-winx64.zip",
       "os": "Windows",
       "cpu": "x86_64",
-      "file_download_url": "https://example.test/mariadb/mariadb-11.8.10-winx64.zip",
+      "file_download_url": "http://example.test/mariadb/mariadb-11.8.10-winx64.zip",
       "size": 99027722,
       "checksum": {
-        "sha256sum": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        "sha256sum": "05d04b46763ea3dc9111bfc82dc061e0a158c682a73d31ba34b13f2653c88d17"
       }
     },
     {
-      "file_name": "mariadb-11.8.10-winx64.msi",
+      "file_name": "mariadb-11.8.10-winx64-debugsymbols.zip",
       "os": "Windows",
       "cpu": "x86_64",
-      "file_download_url": "https://example.test/mariadb/mariadb-11.8.10-winx64.msi",
-      "size": 90214400,
+      "file_download_url": "http://example.test/mariadb/mariadb-11.8.10-winx64-debugsymbols.zip",
+      "size": 99123456,
       "checksum": {
-        "sha256sum": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        "sha256sum": "ee0caf9675db288dd40e33a69a7d9ab642bd409d9515026e0ab582c0cecc0f00"
       }
     },
     {
-      "file_name": "mariadb-11.8.10-source.tar.gz",
+      "file_name": "mariadb-11.8.10.tar.gz",
       "os": "Source",
-      "cpu": "x86_64",
-      "file_download_url": "https://example.test/mariadb/mariadb-11.8.10-source.tar.gz",
+      "cpu": null,
+      "file_download_url": "http://example.test/mariadb/mariadb-11.8.10.tar.gz",
       "size": 12345,
       "checksum": {
-        "sha256sum": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+        "sha256sum": "77d62a86477d5b836da960f5228eb4e13458692ab775f2ad95d55fd4a4d3b117"
       }
     }
   ]

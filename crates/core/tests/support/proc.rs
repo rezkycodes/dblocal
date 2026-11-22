@@ -139,13 +139,15 @@ pub fn wait_none_under(home: &Path, timeout: Duration) -> bool {
     }
 }
 
-/// Every engine process (`postgres` or `valkey-server`) that mentions `home`.
+/// Every engine process that mentions `home`.
 ///
 /// This is the set the task requires to be empty after a test: an engine, not
 /// just any process. Identification is by executable file name, which is what the
 /// service itself records, so a `sh` that happens to have the path in an argument
-/// is not mistaken for an engine.
+/// is not mistaken for an engine. `mysqld` is the MySQL launcher's real name and
+/// `mariadbd` MariaDB's (its `bin/mysqld` is a symlink to it).
 pub fn engines_under(home: &Path) -> Vec<ProcInfo> {
+    const ENGINE_NAMES: [&str; 4] = ["postgres", "valkey-server", "mysqld", "mariadbd"];
     under(home)
         .into_iter()
         .filter(|info| {
@@ -153,7 +155,7 @@ pub fn engines_under(home: &Path) -> Vec<ProcInfo> {
                 .as_ref()
                 .and_then(|exe| exe.file_name())
                 .and_then(|name| name.to_str())
-                .is_some_and(|name| name == "postgres" || name == "valkey-server")
+                .is_some_and(|name| ENGINE_NAMES.contains(&name))
         })
         .collect()
 }
