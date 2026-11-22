@@ -621,7 +621,7 @@ fn app_loop_drops_events_with_no_window(cx: &mut TestAppContext) {
     }
     for _ in 0..50 {
         cx.run_until_parked();
-        if sender.len() == 0 {
+        if sender.is_empty() {
             break;
         }
         std::thread::sleep(std::time::Duration::from_millis(5));
