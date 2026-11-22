@@ -275,31 +275,34 @@ fn pid_alive_reports_reaped_child_as_dead() {
 #[test]
 fn pid_alive_reports_zombie_as_dead() {
     use nix::sys::wait::waitpid;
-    use nix::unistd::{ForkResult, Pid, fork};
+    use nix::unistd::Pid;
 
-    // SAFETY: test-only fork; child exits immediately.
-    #[allow(unsafe_code)]
-    let forked = unsafe { fork() }.expect("fork");
-    match forked {
-        ForkResult::Child => std::process::exit(0),
-        ForkResult::Parent { child } => {
-            let pid = child.as_raw() as u32;
-            let deadline = std::time::Instant::now() + Duration::from_secs(2);
-            let mut saw_zombie = false;
-            while std::time::Instant::now() < deadline {
-                let stat = fs::read_to_string(format!("/proc/{pid}/stat")).unwrap_or_default();
-                if is_zombie_stat(&stat) {
-                    saw_zombie = true;
-                    break;
-                }
-                std::thread::sleep(Duration::from_millis(20));
-            }
-            if saw_zombie {
-                assert!(!pid_alive(pid), "zombie must not be treated as alive");
-            }
-            let _ = waitpid(Pid::from_raw(pid as i32), None);
+    // Spawn a short-lived child and deliberately do not reap it until we have
+    // observed its zombie state. We avoid `fork()` here: forking a multithreaded
+    // test binary (libtest/tokio) deadlocks in the child if it touches mutex
+    // state before exec/exit.
+    let mut child = Command::new("true")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn true");
+    let pid = child.id();
+    let deadline = std::time::Instant::now() + Duration::from_secs(2);
+    let mut saw_zombie = false;
+    while std::time::Instant::now() < deadline {
+        let stat = fs::read_to_string(format!("/proc/{pid}/stat")).unwrap_or_default();
+        if is_zombie_stat(&stat) {
+            saw_zombie = true;
+            break;
         }
+        std::thread::sleep(Duration::from_millis(20));
     }
+    if saw_zombie {
+        assert!(!pid_alive(pid), "zombie must not be treated as alive");
+    }
+    let _ = child.try_wait();
+    let _ = waitpid(Pid::from_raw(pid as i32), None);
 }
 
 #[test]
