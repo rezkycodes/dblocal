@@ -79,9 +79,9 @@ fn config_paths_are_derived_from_instance_layout() {
 #[test]
 fn socket_path_length_is_checked() {
     let short = Path::new("/tmp/m.sock");
-    assert!(socket::validate_socket_path_len(short).is_ok());
+    assert!(sockdir::validate_socket_path_len(short).is_ok());
     let long = PathBuf::from(format!("/tmp/{}", "a".repeat(120)));
-    let err = socket::validate_socket_path_len(&long).expect_err("too long");
+    let err = sockdir::validate_socket_path_len(&long).expect_err("too long");
     assert!(matches!(
         err,
         DblError::InvalidInput {
@@ -889,13 +889,13 @@ fn bootstrap_password_errors_without_password() {
 }
 
 #[test]
-fn read_config_socket_path_errors_on_missing_directive() {
+fn prepare_run_errors_when_the_config_has_no_socket_directive() {
     let dir = tempdir().expect("tmp");
     let data = dir.path().join("data");
     fs::create_dir_all(&data).expect("data");
     write_private_config(&config_path(&data), "[mysqld]\nport=3307\n").expect("conf");
-    let err = read_config_socket_path(&data).expect_err("no socket");
-    assert!(matches!(err, DblError::Engine { .. }));
+    let err = prepare_run_spec(&data, 3307).expect_err("no socket");
+    assert!(matches!(err, DblError::Engine { .. }), "{err:?}");
 }
 
 #[test]
@@ -987,23 +987,23 @@ fn prepare_run_creates_natural_run_dir_when_socket_is_natural() {
 
 #[cfg(unix)]
 #[test]
-fn ensure_private_tmpdir_errors_on_non_directory() {
+fn prepare_tmpdir_rejects_a_non_directory() {
     let dir = tempdir().expect("tmp");
     let file = dir.path().join("tmp");
     fs::write(&file, b"x").expect("file");
-    let err = ensure_private_tmpdir(&file).expect_err("non-dir");
-    assert!(matches!(err, DblError::Engine { .. }));
+    let err = sockdir::prepare_tmpdir(&file, sockdir::current_uid()).expect_err("non-dir");
+    assert!(matches!(err, DblError::Engine { .. }), "{err:?}");
 }
 
 #[cfg(unix)]
 #[test]
-fn ensure_private_tmpdir_fixes_wrong_mode() {
+fn prepare_tmpdir_tightens_a_directory_we_own() {
     use std::os::unix::fs::{MetadataExt, PermissionsExt};
     let dir = tempdir().expect("tmp");
     let tmp = dir.path().join("tmp");
     fs::create_dir_all(&tmp).expect("tmp");
     fs::set_permissions(&tmp, fs::Permissions::from_mode(0o755)).expect("chmod");
-    ensure_private_tmpdir(&tmp).expect("secure");
+    sockdir::prepare_tmpdir(&tmp, sockdir::current_uid()).expect("secure");
     let meta = fs::metadata(&tmp).expect("meta");
     assert_eq!(meta.mode() & 0o777, 0o700);
     assert_eq!(meta.uid(), nix::unistd::geteuid().as_raw());

@@ -1,14 +1,9 @@
 use super::*;
 use crate::engine::Credential;
 use crate::model::Port;
-use sha2::Digest;
 
 mod core;
-mod prepare;
 mod process;
-mod socket_cleanup;
-mod socket_limits;
-mod socket_resolve;
 
 pub(crate) const SECRET: &str = "S3cret-Canary-Pw-MySql!9x";
 
@@ -149,8 +144,4 @@ where
         }
     }
     Err(last.expect("retry budget always records the last ETXTBSY"))
-}
-
-pub(crate) fn long_run_under(dir: &Path) -> PathBuf {
-    dir.join("r".repeat(140)).join("run")
 }
