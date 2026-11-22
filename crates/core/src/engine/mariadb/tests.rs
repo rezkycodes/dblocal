@@ -318,10 +318,7 @@ fn install_db_command_has_no_password_and_uses_normal_auth() {
             assert_ne!(k.as_ref(), "MYSQL_PWD");
             assert!(!v.to_string_lossy().contains("super-secret"));
             if k == "TMPDIR" {
-                assert_eq!(
-                    v.to_string_lossy(),
-                    "/tmp/dblocal/instances/mdb/run/tmp"
-                );
+                assert_eq!(v.to_string_lossy(), "/tmp/dblocal/instances/mdb/run/tmp");
                 saw_tmpdir = true;
             }
         }

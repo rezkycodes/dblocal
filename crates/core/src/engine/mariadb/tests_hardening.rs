@@ -35,9 +35,10 @@ fn config_tmpdir_is_instance_private() {
     let ctx = init_ctx(AuthMode::None, None);
     let sock = socket_path(&ctx.data_dir, ctx.port.get());
     let conf = render_config(&config_params(&ctx, &sock).expect("params"));
-    assert!(conf
-        .expose()
-        .contains("tmpdir=/tmp/dblocal/instances/mdb/run/tmp"));
+    assert!(
+        conf.expose()
+            .contains("tmpdir=/tmp/dblocal/instances/mdb/run/tmp")
+    );
 }
 
 #[test]
@@ -211,8 +212,12 @@ fn shutdown_unverifiable_identity_is_error() {
 
 #[test]
 fn shutdown_no_such_process_is_ok() {
-    shutdown_verified_pid(999_999, PidIdentity::NoSuchProcess, Duration::from_millis(10))
-        .expect("no such process is ok");
+    shutdown_verified_pid(
+        999_999,
+        PidIdentity::NoSuchProcess,
+        Duration::from_millis(10),
+    )
+    .expect("no such process is ok");
 }
 
 #[test]
