@@ -973,6 +973,47 @@ mod tests {
         );
     }
 
+    /// R5: with a window open, a failing tray Start lands as the toast.
+    #[gpui_kit::test]
+    fn tray_start_failure_with_a_window_sets_the_toast(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+        cx.update(crate::theme::init);
+        let service = Arc::new(CountingService::new(vec![CountingService::view(
+            "pg1",
+            InstanceStatus::Stopped,
+        )]));
+        service.fail_start.store(true, Ordering::SeqCst);
+        let id = service.views.lock().unwrap()[0].id.to_string();
+        install_runtime(cx, service, crate::tray::TrayHandle::unavailable());
+        let _window = cx.update(|cx| open_main_window(cx).expect("window"));
+        cx.update(|cx| handle_tray_action(crate::tray::TrayAction::Start(id), cx));
+        for _ in 0..100 {
+            cx.run_until_parked();
+            let toasted = cx.update(|cx| {
+                cx.global::<AppRuntime>()
+                    .workspace
+                    .as_ref()
+                    .is_some_and(|ws| ws.read(cx).toast_text().is_some())
+            });
+            if toasted {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        let toast = cx.update(|cx| {
+            cx.global::<AppRuntime>()
+                .workspace
+                .as_ref()
+                .and_then(|ws| ws.read(cx).toast_text())
+                .map(|t| t.to_string())
+                .unwrap_or_default()
+        });
+        assert!(
+            toast.contains("DBL-"),
+            "R5: the open window must show the error toast: {toast:?}"
+        );
+    }
+
     struct FakeTray {
         available: bool,
     }
