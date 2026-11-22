@@ -341,4 +341,35 @@ windows: (no dblocal window)
 unit-tested through the seam. **Not run on a real AppImage** — none available
 here.
 
+### Mutation checks for the fix round (red then restored, `git status` clean)
+
+**D1 — do not wait for the start** (`mode.rs::start_targets` drops the
+`wait_started` call):
+
+```text
+% cargo test -p dblocal-core --lib autostart::mode::tests::run_pass_waits_for_every_start_to_finish
+test autostart::mode::tests::run_pass_waits_for_every_start_to_finish ... FAILED
+panicked at crates/core/src/autostart/mode.rs:334:9 (run_pass returned before the start finished)
+```
+
+**D2 — no rollback and status ignores the wants symlink** (`linux.rs`):
+
+```text
+% cargo test -p dblocal-core --lib autostart::linux::tests::a_failed_enable_rolls_back_a_newly_written_unit
+test ... FAILED  panicked at crates/core/src/autostart/linux.rs:674:9
+% cargo test -p dblocal-core --lib autostart::linux::tests::status_is_not_enabled_for_a_unit_without_a_wants_symlink
+test ... FAILED  panicked at crates/core/src/autostart/linux.rs:723:9
+```
+
+**D4 — always tray-only, never a window** (`plan.rs::decide_gui_presentation`):
+
+```text
+% cargo test -p dblocal-core --lib autostart::plan::tests::gui_presentation
+test autostart::plan::tests::gui_presentation_without_a_tray_opens_a_window ... FAILED
+assertion `left == right` failed
+  left: TrayOnly
+ right: Window
+```
+
+
 
