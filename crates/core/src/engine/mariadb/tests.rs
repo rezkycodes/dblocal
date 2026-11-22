@@ -566,6 +566,55 @@ fn path_arg_matches_rejects_unequal_missing_paths() {
 }
 
 #[test]
+fn contains_arg_token_breaks_when_only_tail_match_has_no_left_boundary() {
+    // The only hit is at the last byte and is glued to a non-space, so the
+    // loop advances past the end and stops.
+    assert!(!contains_arg_token("xa", "a"));
+}
+
+#[test]
+fn verify_ps_command_output_empty_is_no_such_process() {
+    let expected = ExpectedIdentity {
+        exe: PathBuf::from("/opt/mariadb/bin/mariadbd"),
+        data_dir: PathBuf::from("/tmp/inst/data"),
+        config_path: PathBuf::from("/tmp/inst/data/my.cnf"),
+    };
+    assert_eq!(
+        verify_ps_command_output("", &expected),
+        PidIdentity::NoSuchProcess
+    );
+}
+
+#[test]
+fn ps_command_output_rejects_executable_glued_to_suffix() {
+    let expected = ExpectedIdentity {
+        exe: PathBuf::from("/opt/mariadb/bin/mariadbd"),
+        data_dir: PathBuf::from("/tmp/inst/data"),
+        config_path: PathBuf::from("/tmp/inst/data/my.cnf"),
+    };
+    let cmd = "/opt/mariadb/bin/mariadbdX --datadir=/tmp/inst/data";
+    assert!(matches!(
+        verify_ps_command_output(cmd, &expected),
+        PidIdentity::NotOurs(_)
+    ));
+}
+
+#[test]
+fn same_executable_compares_canonical_paths() {
+    let dir = tempdir().expect("tmp");
+    let a = dir.path().join("a");
+    let b = dir.path().join("b");
+    fs::create_dir_all(&a).expect("a");
+    fs::create_dir_all(&b).expect("b");
+    let exe_a = a.join("mariadbd");
+    let exe_b = b.join("mariadbd");
+    fs::write(&exe_a, b"x").expect("write a");
+    fs::write(&exe_b, b"x").expect("write b");
+    // Same file name, both canonicalize Ok, different inode: not the same exe.
+    assert!(!same_executable(&exe_a, &exe_b));
+}
+
+#[test]
 fn cmdline_parsing_and_instance_targeting() {
     let args =
         parse_cmdline(b"/usr/bin/mariadbd\0--defaults-file=/tmp/a/my.cnf\0--datadir=/tmp/a/data\0");
