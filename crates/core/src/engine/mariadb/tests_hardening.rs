@@ -424,7 +424,7 @@ fn prepare_run_recreates_missing_tmpdir_and_socket_dir() {
     let run = root.join("inst/run");
     fs::create_dir_all(&data).expect("data");
     let fallback = root.join("fallback-sockets");
-    let sock = fallback.join("mariadb-3307-aabb.sock");
+    let sock = fallback.join("m3307-abc123def456.sock");
     write_config_with_socket(&data, &sock);
     let ctx = RunContext {
         instance_name: "m".into(),
@@ -463,7 +463,7 @@ fn prepare_run_refuses_symlinked_fallback_dir() {
     fs::create_dir_all(&target).expect("outside");
     let fallback = root.join("fallback-sockets");
     symlink(&target, &fallback).expect("symlink");
-    let sock = fallback.join("mariadb-3307-aabb.sock");
+    let sock = fallback.join("m3307-abc123def456.sock");
     write_config_with_socket(&data, &sock);
     let ctx = RunContext {
         instance_name: "m".into(),
@@ -495,7 +495,7 @@ fn prepare_run_refuses_wrong_mode_fallback_dir() {
         use std::os::unix::fs::PermissionsExt;
         fs::set_permissions(&fallback, fs::Permissions::from_mode(0o755)).expect("chmod");
     }
-    let sock = fallback.join("mariadb-3307-aabb.sock");
+    let sock = fallback.join("m3307-abc123def456.sock");
     write_config_with_socket(&data, &sock);
     let ctx = RunContext {
         instance_name: "m".into(),
@@ -527,7 +527,7 @@ fn prepare_run_removes_stale_socket_but_keeps_regular_file() {
         use std::os::unix::fs::PermissionsExt;
         fs::set_permissions(&fallback, fs::Permissions::from_mode(0o700)).expect("chmod");
     }
-    let sock = fallback.join("mariadb-3307-aabb.sock");
+    let sock = fallback.join("m3307-abc123def456.sock");
     let listener = UnixListener::bind(&sock).expect("bind socket");
     drop(listener);
     let _ = fs::symlink_metadata(&sock).expect("socket exists");

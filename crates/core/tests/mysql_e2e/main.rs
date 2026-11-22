@@ -327,6 +327,33 @@ fn socket_path_from_my_cnf(cnf_path: &Path) -> PathBuf {
     panic!("socket not found in {}", cnf_path.display());
 }
 
+/// Replaces the `socket=` directive of an instance `my.cnf` with `sock`.
+///
+/// Used to point an instance at a private directory a test creates and owns, so
+/// the test never has to delete the shared per-user fallback directory.
+fn rewrite_socket_in_my_cnf(cnf: &Path, sock: &Path) {
+    let text = fs::read_to_string(cnf).expect("read my.cnf");
+    let mut out = String::with_capacity(text.len() + 64);
+    let mut replaced = false;
+    for line in text.lines() {
+        if line.trim_start().starts_with("socket=") {
+            use std::fmt::Write as _;
+            let _ = writeln!(out, "socket={}", sock.display());
+            replaced = true;
+        } else {
+            out.push_str(line);
+            out.push('\n');
+        }
+    }
+    assert!(replaced, "my.cnf must have a socket directive to rewrite");
+    fs::write(cnf, out.as_bytes()).expect("rewrite my.cnf");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(cnf, fs::Permissions::from_mode(0o600)).expect("chmod my.cnf");
+    }
+}
+
 fn assert_file_has_no_password_bytes(path: &Path, needle: &[u8], label: &str) {
     let bytes = fs::read(path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
     if bytes.windows(needle.len()).any(|w| w == needle) {
@@ -648,7 +675,10 @@ fn mysql_84_deep_socket_restart_after_volatile_dirs_disappear() {
     let cnf = run.join("my.cnf");
     let actual_sock = socket_path_from_my_cnf(&cnf);
     assert_ne!(actual_sock, preferred, "deep path must use fallback socket");
-    let fallback_dir = actual_sock.parent().expect("fallback dir").to_path_buf();
+    let shared_fallback_dir = actual_sock
+        .parent()
+        .expect("fallback dir")
+        .to_path_buf();
     let private_tmpdir = run.join("tmp");
 
     let mut guard = mysql_start(&rt, &data, &logs, &run, port, pw);
@@ -670,24 +700,55 @@ fn mysql_84_deep_socket_restart_after_volatile_dirs_disappear() {
 
     // A reboot wipes /run/user/<uid> and /tmp, and a restored backup may lose
     // run/tmp. Both are volatile: the start path must rebuild them.
+    //
+    // The shared fallback directory (`$XDG_RUNTIME_DIR/dblocal` or
+    // `/tmp/dblocal-<uid>`) belongs to every DBLocal instance of this user, so
+    // this test must never delete it. Point the socket at a private short
+    // directory we create under /tmp, delete THAT directory, then run
+    // `prepare` and start, which proves the same recreation without touching
+    // another instance's live sockets.
     assert!(
         actual_sock.as_os_str().as_encoded_bytes().len() <= 60,
         "fallback socket should live in a short volatile directory: {}",
         actual_sock.display()
     );
-    fs::remove_dir_all(&fallback_dir).expect("remove fallback dir");
+    assert!(
+        shared_fallback_dir.is_dir(),
+        "the shared fallback directory must survive the test"
+    );
+    let private = tempfile::Builder::new()
+        .prefix("mysql-sock-")
+        .tempdir_in("/tmp")
+        .expect("private socket dir");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(private.path(), fs::Permissions::from_mode(0o700))
+            .expect("chmod private socket dir");
+    }
+    let private_sock = private.path().join(
+        actual_sock
+            .file_name()
+            .expect("socket file name")
+            .to_string_lossy()
+            .into_owned(),
+    );
+    rewrite_socket_in_my_cnf(&cnf, &private_sock);
+    let private_dir_path = private.path().to_path_buf();
+    private.close().expect("remove private socket dir");
+    assert!(!private_dir_path.exists());
+
     fs::remove_dir_all(&private_tmpdir).expect("remove private tmpdir");
-    assert!(!fallback_dir.exists());
     assert!(!private_tmpdir.exists());
 
     // The service calls prepare, then builds the spawn command.
     dblocal_core::engine::mysql_prepare_run(&ctx).expect("prepare recreates volatile dirs");
-    assert!(fallback_dir.is_dir(), "fallback dir must be recreated");
+    assert!(private_dir_path.is_dir(), "socket dir must be recreated");
     assert!(private_tmpdir.is_dir(), "private tmpdir must be recreated");
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt;
-        for dir in [&fallback_dir, &private_tmpdir] {
+        for dir in [&private_dir_path, &private_tmpdir] {
             let meta = fs::symlink_metadata(dir).expect("meta");
             assert_eq!(meta.uid(), nix::unistd::geteuid().as_raw());
             assert_eq!(meta.mode() & 0o777, 0o700, "{} must be 0700", dir.display());
@@ -715,6 +776,11 @@ fn mysql_84_deep_socket_restart_after_volatile_dirs_disappear() {
         out.status.success(),
         "tcp login after restart failed: {}",
         String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(
+        socket_path_from_my_cnf(&cnf),
+        private_sock,
+        "the server uses the rewritten socket path"
     );
     MysqlAdapter.shutdown(&ctx).expect("shutdown restart");
     if let Some(mut c) = guard2.0.take() {

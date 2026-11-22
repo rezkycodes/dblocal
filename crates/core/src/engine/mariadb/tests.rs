@@ -918,8 +918,10 @@ fn escape_sql_handles_control_chars() {
 
 #[cfg(unix)]
 #[test]
-fn prepare_run_keeps_regular_file_named_like_socket_dir_and_ignores_regular_socket() {
-    // A regular file at the socket path must be left alone (only real sockets are removed).
+fn prepare_run_refuses_a_regular_file_at_the_socket_path_without_deleting_it() {
+    // Only a real stale socket is removed. A regular file at the configured
+    // socket path is a start failure: the engine could not bind there, and the
+    // file may belong to someone else.
     let dir = tempdir().expect("tmp");
     let root = dir.path();
     let data = root.join("inst/data");
@@ -932,7 +934,7 @@ fn prepare_run_keeps_regular_file_named_like_socket_dir_and_ignores_regular_sock
         use std::os::unix::fs::PermissionsExt;
         fs::set_permissions(&fallback, fs::Permissions::from_mode(0o700)).expect("chmod");
     }
-    let sock = fallback.join("mariadb-3307-aabb.sock");
+    let sock = fallback.join("m3307-abc123def456.sock");
     fs::write(&sock, b"not a socket").expect("regular at socket path");
     let conf = format!(
         "[mysqld]\nsocket={}\ntmpdir={}\n",
@@ -951,8 +953,9 @@ fn prepare_run_keeps_regular_file_named_like_socket_dir_and_ignores_regular_sock
         auth: AuthMode::None,
         credential: None,
     };
-    prepare_run(&ctx).expect("prepare");
-    assert!(sock.exists(), "regular file at socket path is left alone");
+    let err = prepare_run(&ctx).expect_err("a regular file at the socket path must fail");
+    assert!(err.to_string().contains("is not a socket"), "{err}");
+    assert!(sock.exists(), "the foreign regular file is not deleted");
 }
 
 #[test]
