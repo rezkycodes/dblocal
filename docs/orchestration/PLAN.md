@@ -89,3 +89,8 @@ Launch order (machine load): F, B, C, D first; A and E when slots free; G after 
 | W4-G | spec waits | F-PLH keyboard navigation and contrast, after the GUI changes settle. |
 | WIN | planned (Wave 3 end) | User decision: Windows is verified on this dual-boot machine by rebooting into Windows. Deliverable `docs/dev/windows-verification.md`: toolchain setup, `cargo xtask ci`, portable e2e, manual checks (Credential Manager, tray, window, rename/symlink/ACL, MSI, SmartScreen), how to report results back. Until the user runs it, every Windows behaviour stays listed as unverified |
 | W1-G | spec waits for W0-C | |
+
+## Incident log
+
+- **2026-11-22 15:14** load 50, RAM and zram exhausted: one `cargo xtask ci` linking ~8 test binaries at once plus other workers and the editor's rust-analyzer. Recovered by itself at ~15:25 after the editor was closed. Gate results taken at load > 20 are not used. Workers now told: heavy gates under the heavy lock, `CARGO_BUILD_JOBS=8`, MemAvailable > 8 GB first.
+- **2026-11-22 15:33** unexplained reboot (no clean shutdown in `last -x`). All four worker terminals lost, `/tmp` content lost, every worktree clean and committed. Restarted on the same branches with wrapper specs in `~/.cache/dblocal-review/resume-*.md`: W3-B1 `ctx_ddca8f93452e` (resume 3), W3-B2 `ctx_d7ef401a6296` (resume 3), W2-B `ctx_2c081e11ba9d` (fix 3, must first identify the unnamed gui lib flake: 230 passed / 1 failed), W2-A `ctx_8507b01ac853` (flake round 4, ~4 h already spent: capture 3 failures then state the root cause or `ask`). No number reported before the reboot counts.
