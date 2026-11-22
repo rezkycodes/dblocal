@@ -772,5 +772,8 @@ pub use placeholders::*;
 #[path = "masking_tests.rs"]
 mod masking_tests;
 #[cfg(test)]
+#[path = "path_tests.rs"]
+mod path_tests;
+#[cfg(test)]
 #[path = "tests.rs"]
 mod tests;
