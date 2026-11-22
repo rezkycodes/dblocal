@@ -182,27 +182,33 @@ mod tests {
 
     #[test]
     fn starts_are_concurrent_not_serial() {
-        // A hanging start must not serialize the others. Two targets each wait on
-        // a barrier that only releases when both have started.
-        let targets = vec![target("slow-a"), target("slow-b")];
-        let barrier = Arc::new(std::sync::Barrier::new(2));
-        let started = Arc::new(AtomicUsize::new(0));
+        // Two targets may only finish if both start before either finishes. Each
+        // start waits (with a bounded deadline) for the other to be in flight; a
+        // serial runner never sees the peer and times out, so the mutation turns
+        // this red within seconds instead of deadlocking the test binary.
+        let targets = vec![target("peer-a"), target("peer-b")];
+        let live = Arc::new(AtomicUsize::new(0));
         let start: StartFn = {
-            let barrier = Arc::clone(&barrier);
-            let started = Arc::clone(&started);
+            let live = Arc::clone(&live);
             Arc::new(move |_| {
-                started.fetch_add(1, Ordering::SeqCst);
-                barrier.wait();
+                live.fetch_add(1, Ordering::SeqCst);
+                let deadline = Instant::now() + Duration::from_secs(2);
+                while live.load(Ordering::SeqCst) < 2 {
+                    if Instant::now() > deadline {
+                        live.fetch_sub(1, Ordering::SeqCst);
+                        return Err("the peer never started: the runner is serial".to_owned());
+                    }
+                    std::thread::sleep(Duration::from_millis(5));
+                }
                 Ok(())
             })
         };
-        let begin = Instant::now();
         let summary = run_start_targets(&targets, start).expect("run");
-        assert_eq!(summary.succeeded(), 2);
-        assert!(
-            begin.elapsed() < Duration::from_secs(5),
-            "serial starts would deadlock the barrier; elapsed {:?}",
-            begin.elapsed()
+        assert_eq!(
+            summary.succeeded(),
+            2,
+            "both starts must be in flight at once; outcomes: {:?}",
+            summary.outcomes
         );
     }
 
