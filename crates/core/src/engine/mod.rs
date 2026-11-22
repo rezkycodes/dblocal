@@ -11,6 +11,12 @@ mod postgres;
 pub mod uri;
 mod valkey;
 
+pub use mysql::{
+    Handshake as MysqlHandshake, MysqlAdapter, my_cnf_path,
+    parse_handshake_payload as parse_mysql_handshake_payload, pidfile_path as mysql_pidfile_path,
+    read_handshake as read_mysql_handshake,
+    socket_path as mysql_socket_path, validate_socket_path_len as validate_mysql_socket_path_len,
+};
 pub use postgres::{
     PostgresAdapter, PostmasterIdentity, SocketDir as PostgresSocketDir,
     choose_socket_dir as choose_postgres_socket_dir,
@@ -276,7 +282,8 @@ pub fn adapter_for(engine: EngineKey) -> Box<dyn EngineAdapter> {
     match engine {
         EngineKey::Postgresql => Box::new(postgres::PostgresAdapter),
         EngineKey::Valkey => Box::new(valkey::ValkeyAdapter),
-        EngineKey::Mysql | EngineKey::Mariadb => Box::new(StubAdapter::new(engine)),
+        EngineKey::Mysql => Box::new(mysql::MysqlAdapter),
+        EngineKey::Mariadb => Box::new(StubAdapter::new(engine)),
     }
 }
 
@@ -312,44 +319,39 @@ mod tests {
     }
 
     #[test]
-    fn mysql_and_mariadb_remain_stubs() {
-        for engine in [EngineKey::Mysql, EngineKey::Mariadb] {
-            let adapter = adapter_for(engine);
-            let (init, run) = ctx();
-            assert_eq!(adapter.key(), engine);
-            assert_eq!(adapter.canonical_port(), engine.canonical_port());
-            assert!(matches!(
-                adapter.initialize(&init),
-                Err(DblError::NotImplemented(_))
-            ));
-            assert_eq!(
-                adapter.spawn_command(&run).get_program(),
-                std::ffi::OsStr::new("dblocal-stub")
-            );
-            assert!(matches!(
-                adapter.health_check(&run),
-                Err(DblError::NotImplemented(_))
-            ));
-            assert!(matches!(
-                adapter.shutdown(&run),
-                Err(DblError::NotImplemented(_))
-            ));
-            assert!(adapter.admin_ops().is_none());
-            assert_eq!(
-                adapter.diagnose_start_failure("address already in use", Some(1)),
-                StartFailure::Unknown
-            );
-        }
+    fn mariadb_remains_stub_mysql_is_real() {
+        let mariadb = adapter_for(EngineKey::Mariadb);
+        let (init, run) = ctx();
+        assert_eq!(mariadb.key(), EngineKey::Mariadb);
+        assert!(matches!(
+            mariadb.initialize(&init),
+            Err(DblError::NotImplemented(_))
+        ));
+        assert_eq!(
+            mariadb.spawn_command(&run).get_program(),
+            std::ffi::OsStr::new("dblocal-stub")
+        );
+
+        let mysql = adapter_for(EngineKey::Mysql);
+        assert_eq!(mysql.key(), EngineKey::Mysql);
+        assert_eq!(mysql.canonical_port(), 3306);
+        assert!(mysql.admin_ops().is_none());
+        assert_ne!(
+            mysql.spawn_command(&run).get_program(),
+            std::ffi::OsStr::new("dblocal-stub")
+        );
     }
 
     #[test]
-    fn postgres_and_valkey_are_real_adapters() {
+    fn postgres_valkey_mysql_are_real_adapters() {
         let pg = adapter_for(EngineKey::Postgresql);
         assert_eq!(pg.key(), EngineKey::Postgresql);
         assert!(pg.admin_ops().is_none());
         let vk = adapter_for(EngineKey::Valkey);
         assert_eq!(vk.key(), EngineKey::Valkey);
         assert!(vk.admin_ops().is_none());
+        let my = adapter_for(EngineKey::Mysql);
+        assert_eq!(my.key(), EngineKey::Mysql);
     }
 
     #[test]
