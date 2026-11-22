@@ -491,18 +491,36 @@ async fn adopt(inner: &Arc<Inner>, instance: &Instance) {
 }
 
 async fn mark(inner: &Arc<Inner>, instance: &Instance, event: InstanceEvent) {
-    if let Ok(next) = instance.status().apply(event) {
-        persist(inner, instance.id(), next).await;
-    }
-    if matches!(
+    let clears_identity = matches!(
         event,
         InstanceEvent::ReconciledAbsent | InstanceEvent::Interrupted
-    ) {
-        // The buggy window: the status is already terminal here, while the identity
-        // is still recorded. A test hook observes it.
-        #[cfg(test)]
+    );
+    let Ok(next) = instance.status().apply(event) else {
+        emit_changed(inner, instance.id());
+        return;
+    };
+    // A terminal status must never be observable while the identity of the process
+    // we just declared gone is still recorded: the next start, a stop, the
+    // supervisor and `identity_of` all read it. Both writes go in one store
+    // transaction, so no reader on any connection can see the half-updated row.
+    let id = instance.id().clone();
+    if clears_identity {
+        let from = instance.status();
+        let _ = db_async(inner, move |store| {
+            store.transition_status_and_clear_identity(&id, from, next)
+        })
+        .await;
+    } else {
+        let id_for_store = id.clone();
+        let _ = db_async(inner, move |store| store.update_status(&id_for_store, next)).await;
+    }
+    // A test observation point placed exactly where the old two-write code had its
+    // window (status written, identity not yet cleared). With both writes in one
+    // transaction there is nothing half-written to see; with the old order a fresh
+    // reader here catches `Stopped` with the identity still recorded.
+    #[cfg(test)]
+    if clears_identity {
         run_after_status(inner, instance.id());
-        clear_identity(inner, instance.id()).await;
     }
     emit_changed(inner, instance.id());
 }
@@ -510,12 +528,4 @@ async fn mark(inner: &Arc<Inner>, instance: &Instance, event: InstanceEvent) {
 async fn persist(inner: &Arc<Inner>, id: &InstanceId, next: InstanceStatus) {
     let id = id.clone();
     let _ = db_async(inner, move |store| store.update_status(&id, next)).await;
-}
-
-async fn clear_identity(inner: &Arc<Inner>, id: &InstanceId) {
-    let id = id.clone();
-    let _ = db_async(inner, move |store| {
-        store.update_process_identity(&id, None, None, None)
-    })
-    .await;
 }
