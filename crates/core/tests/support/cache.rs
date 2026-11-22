@@ -131,9 +131,15 @@ pub fn extract_archive_to_runtime(
     fs::create_dir_all(&staging).expect("staging directory");
     // The archives carry exactly one top-level directory (`strip_prefix` in the
     // catalog), so dropping the first path component reproduces the extractor's
-    // result: `bin/` one level inside the runtime root.
+    // result: `bin/` one level inside the runtime root. `.tar.xz` needs `-J`;
+    // forcing `-z` on it fails with "not in gzip format".
+    let flag = if archive_name.ends_with(".tar.xz") {
+        "-xJf"
+    } else {
+        "-xzf"
+    };
     let status = std::process::Command::new("tar")
-        .arg("-xzf")
+        .arg(flag)
         .arg(&archive)
         .arg("-C")
         .arg(&staging)

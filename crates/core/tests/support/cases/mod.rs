@@ -7,6 +7,9 @@
 pub mod cancel_and_checksum;
 pub mod concurrency;
 pub mod engines_outlive_app;
+pub mod mariadb_download;
+pub mod mysql_download;
+pub mod mysql_mariadb;
 pub mod numbers;
 pub mod port_in_use;
 pub mod postgres_happy_path;

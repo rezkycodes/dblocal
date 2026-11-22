@@ -264,6 +264,15 @@ fn mariadb_reads_sha256_from_the_rest_api() {
         Some("mariadb-11.8.10-linux-systemd-x86_64"),
         "the strip prefix must be the archive's real root"
     );
+    let windows = artifacts
+        .iter()
+        .find(|a| a.os == "windows")
+        .expect("windows artifact");
+    assert_eq!(
+        windows.strip_prefix.as_deref(),
+        Some("mariadb-11.8.10-winx64"),
+        "the Windows zip root must not keep its extension"
+    );
     // Plugins and debug-symbol archives never become the installable build.
     assert!(
         artifacts.iter().all(|a| !a.url.contains("plugin")

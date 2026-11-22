@@ -49,6 +49,72 @@ fn catalog_lists_only_versions_installable_here() {
 }
 
 #[test]
+fn the_bundled_catalog_covers_all_four_engines_on_linux_x86_64() {
+    // W4-E: without real MySQL and MariaDB entries the service could never
+    // install either engine. This pins the shipped snapshot's shape so a future
+    // regeneration that drops an engine fails loudly.
+    use crate::catalog::{InstalledVersions, build_catalog_view, bundled_snapshot};
+    use crate::platform::{Arch, Os};
+
+    let snapshot = bundled_snapshot().expect("bundled catalog");
+    let view = build_catalog_view(
+        &snapshot,
+        Os::Linux,
+        Arch::X86_64,
+        &InstalledVersions::empty(),
+        None,
+    );
+    for engine in EngineKey::ALL {
+        let entry = view
+            .engines
+            .iter()
+            .find(|entry| entry.engine == engine)
+            .expect("engine listed");
+        assert!(
+            entry.available,
+            "{} must be installable on Linux x86_64: {:?}",
+            engine.as_str(),
+            entry.unavailable_reason
+        );
+        assert!(!entry.versions.is_empty());
+        assert!(
+            entry.versions.iter().all(|v| v.size_bytes > 0),
+            "{} sizes",
+            engine.as_str()
+        );
+    }
+
+    // MariaDB is Linux/Windows x86_64 only: no macOS, no arm64.
+    let macos = build_catalog_view(
+        &snapshot,
+        Os::Macos,
+        Arch::X86_64,
+        &InstalledVersions::empty(),
+        None,
+    );
+    let mariadb = macos
+        .engines
+        .iter()
+        .find(|e| e.engine == EngineKey::Mariadb)
+        .expect("mariadb");
+    assert!(!mariadb.available, "MariaDB has no macOS build");
+    assert!(mariadb.unavailable_reason.is_some());
+    let linux_arm = build_catalog_view(
+        &snapshot,
+        Os::Linux,
+        Arch::Aarch64,
+        &InstalledVersions::empty(),
+        None,
+    );
+    let mariadb_arm = linux_arm
+        .engines
+        .iter()
+        .find(|e| e.engine == EngineKey::Mariadb)
+        .expect("mariadb");
+    assert!(!mariadb_arm.available, "MariaDB has no arm64 Linux tarball");
+}
+
+#[test]
 fn a_failed_refresh_keeps_the_working_catalog() {
     let fetcher = AlwaysFails {
         calls: Arc::new(AtomicUsize::new(0)),

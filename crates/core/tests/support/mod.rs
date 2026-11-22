@@ -13,6 +13,7 @@ pub mod clients;
 pub mod env;
 pub mod events;
 pub mod harness;
+pub mod mariadb_shim;
 pub mod ports;
 pub mod proc;
 pub mod security;

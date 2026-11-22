@@ -7,6 +7,7 @@
 
 use std::time::Duration;
 
+use mysql_async::prelude::Queryable;
 use redis::{Commands, Connection};
 use tokio_postgres::{Client, NoTls};
 
@@ -101,6 +102,49 @@ impl RedisClient {
         self.connection
             .get(key)
             .map_err(|err| format!("GET {key}: {err}"))
+    }
+}
+
+/// A `mysql_async` session kept alive by its own small runtime.
+///
+/// This is the production client crate the MySQL/MariaDB adapters already depend
+/// on, driven with the URI the service produced, so the test proves real SQL and
+/// not just a socket that opens.
+pub struct MyClient {
+    runtime: tokio::runtime::Runtime,
+    conn: mysql_async::Conn,
+}
+
+impl MyClient {
+    /// Connects using the URI the service produced.
+    pub fn connect(uri: &str) -> Result<Self, String> {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|err| format!("build the client runtime: {err}"))?;
+        let opts = mysql_async::Opts::from_url(uri)
+            .map_err(|err| format!("parse the mysql URI {uri}: {err}"))?;
+        let conn = runtime
+            .block_on(mysql_async::Conn::new(opts))
+            .map_err(|err| format!("connect to mysql at {uri}: {err}"))?;
+        Ok(Self { runtime, conn })
+    }
+
+    /// Runs a query whose first column is an integer.
+    pub fn query_i64(&mut self, sql: &str) -> Result<i64, String> {
+        let value: Option<i64> = self
+            .runtime
+            .block_on(self.conn.query_first(sql))
+            .map_err(|err| format!("query {sql:?}: {err}"))?;
+        value.ok_or_else(|| format!("query {sql:?} returned no row"))
+    }
+
+    /// Runs one or more statements with no result.
+    pub fn batch(&mut self, sql: &str) -> Result<(), String> {
+        self.runtime
+            .block_on(self.conn.query_drop(sql))
+            .map(|_| ())
+            .map_err(|err| format!("batch {sql:?}: {err}"))
     }
 }
 

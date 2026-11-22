@@ -13,7 +13,9 @@ mod valkey;
 
 pub use helpers::{assemble, require_https};
 pub use mariadb::{mariadb_from_api, mariadb_release_from_api};
-pub use mysql::{MysqlBuild, md5_hex as mysql_md5_hex, mysql_artifact};
+#[cfg(test)]
+pub use mysql::md5_hex as mysql_md5_hex;
+pub use mysql::{MysqlBuild, mysql_artifact};
 pub use postgresql::{GithubRelease, postgresql_from_releases};
 pub use valkey::{WAVE_ONE_VARIANTS, valkey_from_sidecars};
 
