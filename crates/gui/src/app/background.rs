@@ -17,6 +17,10 @@ use gpui_kit::{AppContext as _, BorrowAppContext, Context, Task};
 
 use super::Workspace;
 
+/// Minimum gap between two home-size walks; a burst of operations must not make
+/// the bar walk the tree repeatedly (R7).
+const HOME_SIZE_MIN_INTERVAL: Duration = Duration::from_secs(5);
+
 pub(crate) fn dir_size_bytes(path: &std::path::Path) -> u64 {
     let mut total = 0u64;
     let mut stack = vec![path.to_path_buf()];
@@ -136,7 +140,7 @@ impl Workspace {
             return;
         }
         let now = Instant::now();
-        let min_interval = Duration::from_secs(5);
+        let min_interval = HOME_SIZE_MIN_INTERVAL;
         if let Some(last) = self.home_size_last {
             let elapsed = now.saturating_duration_since(last);
             if elapsed < min_interval {
