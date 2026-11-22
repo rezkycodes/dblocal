@@ -655,3 +655,125 @@ in-process loopback server and no real engine.
 - The two crash-point and race tests use the harness's fake process table. The
   real `SysinfoProbe` and `process::terminate` paths they stand in for are
   covered by W1-D's own evidence tests and by W2-C's real-engine e2e.
+
+## W4-A fix 1 — three defects and one untested data-loss path
+
+The reviewer's follow-up round on the merged W4-A (`43e7f8f`). All five gates
+stay green; the real-binary and e2e transcripts are below.
+
+### F1 — the credential pointer after a reset is now tested
+
+`admin_ops::reset_superuser_password` re-records the credential pointer to the
+backend that actually stored the new password (keychain unavailable → file). The
+new test `reset_moves_the_credential_pointer_to_the_backend_that_stored_it` seeds
+a **keychain** pointer with the old password in the keychain, makes the keychain
+unavailable so the reset's write falls back to the **file**, and asserts the
+pointer now says `File`, the named credential holds the new password, and
+`connection_uri` carries it. Replacing the pointer write with a no-op turns it
+red (pasted below). This is the F-DBU-03 data-loss path: without the pointer
+move, the engine would hold the new password while DBLocal reads the old
+backend — an instance DBLocal could never log in to.
+
+### F2 — `user create` with an unknown database
+
+`create_user` checks the target database exists **before** creating the role, so
+a missing database is `DBL-8105` (Database tidak ditemukan) instead of the GRANT
+step's connect failure (`DBL-8100`, "server unreachable"). `map_connect_error`
+also maps SQLSTATE `3D000` on connect to `DatabaseNotFound`, so a database
+dropped between the check and the grant still answers correctly. No role is left
+behind either way (the check precedes `create_user`).
+
+### F3 — `--no-password` PostgreSQL says "engine not supported"
+
+`executor_for` used to gate on `engine != Postgresql || auth != Password`, so a
+no-password PostgreSQL instance answered `DBL-8111` "not supported for this
+engine". The gate is now split: a non-PostgreSQL engine is `DBL-8111`, and a
+PostgreSQL instance created without a password is the new `DBL-8117` ("instance
+ini dibuat tanpa password, …"), which names what to do.
+
+### Update source not found (`dblocal update check`)
+
+An HTTP 404 (and a 403 that is not a rate limit) from the releases API is the
+repository missing or private, not a connection failure. It now maps to
+`DBL-8011` "sumber rilis tidak ditemukan atau tidak publik", instead of
+`DBL-8004` "periksa koneksi".
+
+### Mutation checks (each reverted, red pasted, restored, `git status --short` empty)
+
+| Mutation | Red test | Evidence |
+|---|---|---|
+| F1: no-op the pointer write | `reset_moves_the_credential_pointer_to_the_backend_that_stored_it` | `left: Keychain, right: File` |
+| F2: drop the existence check | `create_user_reports_database_not_found_without_creating_a_role` | the create is attempted and the call no longer returns DBL-8105 |
+| F3: collapse the gate back | `a_no_password_postgres_instance_reports_its_own_error` | `left: "DBL-8111", right: "DBL-8117"` |
+| Update: 404 back to Network | `check_maps_an_unknown_repository_to_source_not_found` | `left: "DBL-8004", right: "DBL-8011"` |
+
+### Recorded runs
+
+- `cargo test -p dblocal-core --features mock --lib`: 1257 passed (2 ignored).
+- `DBLOCAL_E2E=1 flock … cargo test -p dblocal-core --test service_admin_e2e --
+  --ignored --test-threads=1`: **6 passed** in 13.22 s at load 12.61 (the new F2
+  case is one of them).
+- Real binary on an isolated `DBLOCAL_HOME` with a real PostgreSQL 18.7.0:
+  - F3: `dblocal create --engine postgresql --version 18.7.0 --name nopw
+    --port 25432 --no-password`, then `db list nopw` and `password reset nopw`
+    both print `[DBL-8117] Instance ini dibuat tanpa password, …` (exit 1), not
+    `DBL-8111`.
+  - F2: `dblocal user create pg1 u9 --db nosuchdb --level ro` prints
+    `[DBL-8105] Database tidak ditemukan.` (exit 2) with the server running;
+    `SELECT count(*) FROM pg_roles WHERE rolname='u9'` is `0` (no role left
+    behind); `db drop pg1 nosuchdb --yes` still reports `DBL-8105`; `user create`
+    into an existing `appdb` succeeds.
+  - Cleanup: both instances deleted with `--purge`; `pgrep -x postgres` = 0.
+
+### Open questions (from the fix task; answers, no code this round)
+
+1. **Storing the created user's password (F-DBU-02 AC2).** The PRD says the
+   password is shown once *and stored in the keychain like the superuser*. Doing
+   that costs: a credential key that is (instance, user) rather than per instance
+   — `credentials` is currently keyed by `instance_id` with a single row, so the
+   schema gains a `username`/role dimension (or a second table
+   `user_credentials(instance_id, rolname, backend, key_ref, …)` with a composite
+   key); `CredentialRef` already carries a `username`, but `credential_ref_for`
+   derives the key as `dblocal:<instance-id>`, so a per-role key
+   (`dblocal:<instance-id>:<role>`) and the file-backend name encoder must
+   change with it; the delete/purge paths (`delete.rs`, `rollback_create`,
+   reconciliation) must delete every role credential for the instance, not one;
+   and instances created before the change need a migration (a new table with no
+   backfill is the safe form). It is a schema + multi-key change, not a line.
+   Recommendation: take it to the product owner as a deliberate deviation for v1
+   — show-once is implemented and honest (`user create` says so), and a stored
+   per-role secret multiplies the credential surface (N secrets per instance to
+   rotate, back up and delete) for a password the user pastes into their app
+   once. If it is required, the second-table form above is the smallest correct
+   shape, owned as its own task with its own migration and e2e.
+2. **Per-instance admin guard.** `admin_ops` calls take no `InstanceLock`, so a
+   `password reset` can overlap a `stop`/`delete`. Corruption, not a crash:
+   - A `delete` removes the credential from **both** backends and drops the
+     pointer. If it lands between the reset's `sink.store` and the pointer
+     update, the reset writes a fresh secret into a backend the delete already
+     swept and then re-records a pointer for a row that is about to be removed —
+     a secret leaked in the keychain with no row pointing at it (a cleanup
+     orphan, not data loss). If it lands after the pointer write, the delete's
+     own "remove both backends" still removes the new secret, so the row cannot
+     end up claiming a secret that is gone.
+   - A `stop` mid-statement makes the `ALTER ROLE`/`GRANT` fail with a
+     connection error, which surfaces as `DBL-8100`/`DBL-8110`; the engine's
+     `reset_with` rolls back to the old password, so the stored credential and
+     engine stay consistent. The worst case is a reset that had already applied +
+     verified but not yet stored when the engine died: the rollback re-applies the
+     old password over a connection that no longer exists, which returns
+     `RollbackFailed` — an honest "state inconsistent" that tells the operator to
+     check the credential. Nothing silently diverges.
+   - The smallest fix is a read-only guard next to `LockKind`: a new
+     `LockKind::Admin` that `admin_ops` takes for the duration of a call and that
+     a `stop`/`delete` (and the supervisor's crash write) already treats as
+     "busy" through the existing `is_busy`/`lock_instance` exclusion. Failing
+     that, refusing when `ops.is_busy(id)` is the one-line version, but it has a
+     TOCTOU window the lock does not. It is not implemented in this round.
+3. **`update check` against a missing/private repo** is answered in code above:
+   `DBL-8011` "sumber rilis tidak ditemukan atau tidak publik", with a fake-fetcher
+   test. Note the release repository in `consts::UPDATE_REPO` is
+   `dblocal-org/dblocal`, which does not exist; the real one is
+   `rezkycodes/db-local` (private), so a production check will hit `DBL-8011`
+   until that constant is corrected or the repo is made public — the message now
+   says so instead of blaming the connection.

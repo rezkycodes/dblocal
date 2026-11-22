@@ -200,6 +200,15 @@ inside the range, unique, and reached by a variant.
 | 8113 | `CredentialStore` | sink refused the password |
 | 8114 | `RollbackFailed` | rollback failed, state inconsistent |
 | 8115 | `PasswordGenerate` | OS RNG failed |
+| 8117 | `NoPassword` | the instance was created without a password; admin needs one created with a password (W4-A fix 1) |
+
+`NoPassword` is deliberately distinct from `Unsupported` (8111): the engine is
+PostgreSQL (supported), but an instance created with `--no-password` has no
+credential to authenticate an admin session with, so the fix is a different
+instance, not a later adapter. `map_connect_error` also maps SQLSTATE `3D000`
+(unknown database) to `DatabaseNotFound` (8105), so the grant step's connect to a
+database dropped mid-operation is a missing-database answer, not "server
+unreachable".
 
 ## Proposed `DblService` surface (for the wiring task)
 
