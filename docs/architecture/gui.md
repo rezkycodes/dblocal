@@ -263,6 +263,16 @@ Events drive everything (`app.rs::apply_event` / `apply_event_with_cx`):
   pump handles Start/Stop directly through the service and opens/focuses the window for Open/Quit.
 - Previews never start the tray.
 
+#### Real-window run at `01cafe0` (reviewer, before W2-B-fix2)
+
+Close with a tray really closed the window and the process, tray and both engines stayed up (RSS
+195 MB -> 75 MB). "Buka DBLocal" opened a window showing "2 berjalan" and the "Pilih instance" empty
+state. With the window open, tray "Keluar" showed the dialog and "Hentikan semua lalu keluar" kept the
+window until both engines were down (Valkey at 1.3 s, PostgreSQL at 1.6 s, exit at 2.5 s). Relaunch
+re-adopted the running engines. Two defects were confirmed there and are fixed in the section above:
+tray "Keluar" with no window exited at once with both engines running (`R1`), and the D-Bus menu
+carried no `icon-data` while `IconName` stayed `utilities-terminal-symbolic` (`R8`).
+
 #### Tray latency (W2-B-r2, deliverable 5)
 
 Measured by `crates/gui/src/app/tray_latency.rs` (`tray_action_reaches_the_model_through_bridge`),
