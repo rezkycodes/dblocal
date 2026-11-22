@@ -119,7 +119,10 @@ fn password_change_sql_escapes_and_has_no_plain_formatting_leak() {
     assert!(sql.contains("ALTER USER 'root'@'localhost' IDENTIFIED BY 'p@ss''w0rd';"));
     assert!(sql.contains("FLUSH PRIVILEGES;"));
     assert!(sql.contains("SHUTDOWN;"));
-    assert!(!sql.contains("p@ss'w0rd';\nALTER")); // escaped, not raw quote break
+    assert!(!sql.contains("p@ss'w0rd';\nALTER"));
+    let hostile = password_change_sql(&SecretString::from("Cx9!it's\"q\\z$HOME`id`;&&%*-é"));
+    assert!(hostile.contains("it''s\"q\\\\z"));
+    assert!(hostile.contains("SHUTDOWN;"));
 }
 
 #[test]

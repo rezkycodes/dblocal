@@ -243,9 +243,7 @@ fn bootstrap_password(ctx: &InitContext) -> Result<()> {
 }
 
 fn password_change_sql(password: &SecretString) -> String {
-    // Escape single quotes for SQL literal. Password is CSPRNG-generated in the
-    // product, but we still escape defensively.
-    let escaped = password.expose().replace('\'', "''");
+    let escaped = escape_sql_single_quoted(password.expose());
     format!(
         "ALTER USER 'root'@'localhost' IDENTIFIED BY '{escaped}';\n\
          ALTER USER 'root'@'127.0.0.1' IDENTIFIED BY '{escaped}';\n\
@@ -253,6 +251,22 @@ fn password_change_sql(password: &SecretString) -> String {
          FLUSH PRIVILEGES;\n\
          SHUTDOWN;\n"
     )
+}
+
+fn escape_sql_single_quoted(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for ch in value.chars() {
+        match ch {
+            '\\' => out.push_str("\\\\"),
+            '\'' => out.push_str("''"),
+            '\0' => out.push_str("\\0"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\u{1a}' => out.push_str("\\Z"),
+            _ => out.push(ch),
+        }
+    }
+    out
 }
 
 fn run_bootstrap_server(ctx: &InitContext, init_file: &Path) -> Result<()> {

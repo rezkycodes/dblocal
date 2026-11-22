@@ -226,6 +226,9 @@ fn start_mariadb(
     c.stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
+    if let Some(v) = std::env::var_os("LD_LIBRARY_PATH") {
+        c.env("LD_LIBRARY_PATH", v);
+    }
     for (k, v) in cmd.get_envs() {
         match v {
             Some(v) => {
