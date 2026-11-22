@@ -199,6 +199,8 @@ pub struct ServiceOptions {
     pub current_version: Option<semver::Version>,
     /// GitHub repository the update check queries. Defaults to [`consts::UPDATE_REPO`].
     pub update_repo: Option<String>,
+    /// Builds the admin executor (production: `PgAdmin`; tests: a fake).
+    pub admin_factory: Option<admin_ops::AdminFactory>,
 }
 
 impl std::fmt::Debug for ServiceOptions {
@@ -337,6 +339,8 @@ pub(crate) struct Inner {
     pub update_repo: String,
     /// Pre-detected install kind; when `None`, detected on first `check_update`.
     pub install_kind: Option<InstallKind>,
+    /// Builds the admin executor (production: `PgAdmin`; tests: a fake).
+    pub admin_factory: admin_ops::AdminFactory,
 }
 
 impl Inner {
@@ -570,6 +574,10 @@ impl LocalService {
                 .clone()
                 .unwrap_or_else(|| consts::UPDATE_REPO.to_owned()),
             install_kind: options.install_kind.clone(),
+            admin_factory: options
+                .admin_factory
+                .clone()
+                .unwrap_or_else(admin_ops::pg_admin_factory),
         });
 
         let service = Self { inner, runtime };

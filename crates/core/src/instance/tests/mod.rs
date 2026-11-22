@@ -15,6 +15,7 @@ mod mutations;
 mod races;
 mod recovery;
 mod safety;
+mod service_admin;
 
 use crate::model::{EngineKey, InstanceStatus};
 use crate::service::DblService;
