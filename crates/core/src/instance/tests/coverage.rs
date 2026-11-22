@@ -171,27 +171,31 @@ fn a_watched_log_streams_appended_lines() {
 
     let mut receiver = h.service.subscribe();
     h.service.watch_logs(&id, true).expect("watch");
-    std::thread::sleep(Duration::from_millis(100));
-    {
-        use std::io::Write as _;
-        let mut file = std::fs::OpenOptions::new()
-            .append(true)
-            .open(&log)
-            .expect("open log");
-        writeln!(file, "engine ready").expect("append");
-        file.flush().expect("flush");
-    }
 
-    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    // The follower tail may start after the first append, so keep appending until a
+    // line is delivered. The wait is bounded (`try_recv`, never `blocking_recv`), so
+    // a follower that never delivers fails the test instead of hanging it.
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
     loop {
-        match receiver.blocking_recv() {
-            Ok(ServiceEvent::LogLines { id: got, lines }) if got == id => {
-                assert!(lines.iter().any(|line| line.contains("engine ready")));
-                break;
-            }
-            Ok(_) => {}
-            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
-            Err(_) => panic!("event channel closed"),
+        {
+            use std::io::Write as _;
+            let mut file = std::fs::OpenOptions::new()
+                .append(true)
+                .open(&log)
+                .expect("open log");
+            writeln!(file, "engine ready").expect("append");
+            file.flush().expect("flush");
+        }
+        let seen = super::harness::recv_for(&mut receiver, Duration::from_millis(300));
+        if let Some(ServiceEvent::LogLines { lines, .. }) = seen
+            .iter()
+            .find(|event| matches!(event, ServiceEvent::LogLines { id: got, .. } if got == &id))
+        {
+            assert!(
+                lines.iter().any(|line| line.contains("engine ready")),
+                "the delivered line is the appended one: {lines:?}"
+            );
+            break;
         }
         assert!(
             std::time::Instant::now() < deadline,
