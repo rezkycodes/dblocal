@@ -790,6 +790,86 @@ mod tests {
             rt.workspace.is_none() && rt.main_window.is_none()
         });
         assert!(cleared, "R4: runtime must forget the closed window");
+        // The test platform stores `should_close_handler` but never invokes it,
+        // so the platform's own window list cannot be driven headlessly. The
+        // return value is the contract the platform acts on, and it is true only
+        // when the handler closed the window instead of routing a quit.
+        assert_eq!(
+            cx.read(|cx| cx.windows().len()),
+            1,
+            "R4: the close was requested, not performed by the test platform"
+        );
+        let still_answers = service_calls_before_close(cx);
+        assert!(still_answers, "R4: the service must still answer");
+    }
+
+    fn service_calls_before_close(cx: &mut TestAppContext) -> bool {
+        cx.update(|cx| {
+            let rt = cx.global::<AppRuntime>();
+            rt.service.list_instances().is_ok()
+        })
+    }
+
+    /// R3: a window opened after a burst of events reads the service, it does
+    /// not replay the dropped backlog.
+    #[gpui_kit::test]
+    fn window_opened_after_a_burst_reads_the_service(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+        cx.update(crate::theme::init);
+        let service = Arc::new(CountingService::new(vec![CountingService::view(
+            "pg-live",
+            InstanceStatus::Running,
+        )]));
+        let runtime = AppRuntime::new_for_test_with_bridge(
+            service.clone(),
+            crate::tray::TrayHandle::unavailable(),
+        );
+        cx.update(|cx| {
+            cx.set_global(QuitLedger::default());
+            cx.set_global(runtime);
+            start_app_loops(cx);
+        });
+        for _ in 0..10_000 {
+            let _ = service.tx.send(ServiceEvent::InstanceChanged {
+                view: CountingService::view("noise", InstanceStatus::Stopped),
+            });
+        }
+        for _ in 0..30 {
+            cx.run_until_parked();
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        cx.update(|cx| handle_tray_action(crate::tray::TrayAction::OpenWindow, cx));
+        for _ in 0..200 {
+            cx.run_until_parked();
+            let ready = cx.update(|cx| {
+                cx.global::<AppRuntime>()
+                    .workspace
+                    .as_ref()
+                    .is_some_and(|ws| ws.read(cx).instances().len() == 1)
+            });
+            if ready {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        let shown = cx.update(|cx| {
+            cx.global::<AppRuntime>()
+                .workspace
+                .as_ref()
+                .map(|ws| {
+                    ws.read(cx)
+                        .instances()
+                        .iter()
+                        .map(|v| v.name.clone())
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default()
+        });
+        assert_eq!(
+            shown,
+            vec!["pg-live".to_owned()],
+            "R3: the new window must equal the service's list, not the backlog"
+        );
     }
 
     /// R4.2: no tray + close request with nothing running quits.
