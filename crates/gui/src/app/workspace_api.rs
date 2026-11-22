@@ -15,23 +15,31 @@ use crate::format::{self, PaletteAction};
 
 use super::{ActiveDownload, CreateForm, InnerTab, UriView, Workspace};
 
+/// The user's home directory as the platform reports it, read once at
+/// construction so a render never touches the environment (R9).
+pub(crate) fn home_dir_from_env() -> Option<std::path::PathBuf> {
+    std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(std::path::PathBuf::from)
+}
+
 impl Workspace {
     /// Selects a centre-pane tab and loads that instance's own state.
-    pub(crate) fn select_tab(&mut self, index: usize) {
+    pub(crate) fn select_tab(&mut self, index: usize, cx: &mut Context<Self>) {
         if let Some(id) = self.tabs.select(index) {
-            self.load_logs_for(&id);
-            self.load_data_size(&id);
+            self.load_logs_for(&id, cx);
+            self.load_data_size(&id, cx);
         }
     }
 
     /// Sets the visible tab's inner tab, loading the log tail on first use.
-    pub(crate) fn set_inner_tab(&mut self, inner: InnerTab) {
+    pub(crate) fn set_inner_tab(&mut self, inner: InnerTab, cx: &mut Context<Self>) {
         let index = self.tabs.selected_index();
         self.tabs.set_inner(index, inner);
         if inner == InnerTab::Logs
             && let Some(id) = self.tabs.selected_instance().cloned()
         {
-            self.load_logs_for(&id);
+            self.load_logs_for(&id, cx);
         }
     }
 
@@ -80,6 +88,11 @@ impl Workspace {
         self.palette_query.clear();
     }
 
+    #[cfg(test)]
+    pub(crate) fn palette_is_open(&self) -> bool {
+        self.palette_open
+    }
+
     pub(crate) fn set_palette_open(&mut self, open: bool) {
         self.palette_open = open;
         self.palette_query.clear();
@@ -126,12 +139,12 @@ impl Workspace {
             }
             PaletteAction::Start(value) => {
                 if let Ok(id) = value.parse::<InstanceId>() {
-                    self.start_instance(id);
+                    self.start_instance(id, cx);
                 }
             }
             PaletteAction::Stop(value) => {
                 if let Ok(id) = value.parse::<InstanceId>() {
-                    self.stop_instance(id);
+                    self.stop_instance(id, cx);
                 }
             }
             PaletteAction::CopyUri(value) => {
@@ -214,26 +227,10 @@ impl Workspace {
         self.choose_auth(auth);
     }
 
-    /// Overrides the cached catalog status for preview renders.
-    pub(crate) fn set_catalog_status_for_preview(
-        &mut self,
-        status: dblocal_core::model::CatalogStatus,
-    ) {
-        self.catalog.status = status;
-        self.catalog.banner = match status {
-            dblocal_core::model::CatalogStatus::Fresh => None,
-            dblocal_core::model::CatalogStatus::Stale => Some(strings::CATALOG_STALE.to_owned()),
-            dblocal_core::model::CatalogStatus::Offline => {
-                Some(strings::CATALOG_OFFLINE.to_owned())
-            }
-            _ => None,
-        };
-    }
-
     /// Next free port for an instance's engine, falling back to its port + 1.
+    /// Uses cached suggestion; never calls the service on the render path.
     pub(crate) fn instance_port_proposal(&self, id: &InstanceId) -> u16 {
-        let engine = self.instance(id).map(|view| view.engine);
-        let suggestion = engine.and_then(|engine| self.service_suggest_port(engine));
+        let suggestion = self.port_suggestions.get(id).copied();
         match self.instance(id) {
             Some(view) => format::suggested_fix_port(view, suggestion),
             None => suggestion.unwrap_or(0),
@@ -253,14 +250,23 @@ impl Workspace {
             cx.notify();
             return;
         };
-        match self.service_change_port(id, port) {
-            Ok(()) => {
-                self.refresh_instances();
-                self.start_instance(id.clone());
+        let service = self.service.clone();
+        let iid = id.clone();
+        self.bg(cx, move || {
+            let result = service
+                .change_port(&iid, port)
+                .map(|_| service.start_instance(&iid));
+            move |this: &mut Workspace, cx: &mut Context<Workspace>| {
+                match result {
+                    Ok(Ok(_)) => {
+                        this.toast = Some(SharedString::from(strings::UI_TOAST_START_REQUESTED));
+                        this.refresh_instances_bg(cx);
+                    }
+                    Ok(Err(err)) | Err(err) => this.report_error(&err),
+                }
+                cx.notify();
             }
-            Err(err) => self.report_error(&err),
-        }
-        cx.notify();
+        });
     }
 
     /// The URI text for an instance's card, masked unless revealed.
@@ -277,12 +283,13 @@ impl Workspace {
     }
 
     /// The `.env` block for the card preview, masked unless revealed.
+    /// Uses cached dotenv fetched in background; never calls service on render.
     pub(crate) fn dotenv_rows(&self, id: &InstanceId) -> Vec<crate::format::EnvLine> {
         let revealed = self.uri_revealed(id);
         let uri_secret = self.state.uri(id).map(|u| u.secret());
-        match self.service_connection_uri(id, UriFormat::DotEnv) {
-            Ok(secret) => super::masked_env_rows(secret.expose(), revealed, uri_secret),
-            Err(_) => Vec::new(),
+        match self.dotenv_cache.get(id) {
+            Some(secret) => super::masked_env_rows(secret.expose(), revealed, uri_secret),
+            None => Vec::new(),
         }
     }
 
@@ -342,9 +349,43 @@ impl Workspace {
         self.version
     }
 
+    /// Whether a background service call is in flight (neutral pending state).
+    pub(crate) fn pending(&self) -> bool {
+        self.is_pending()
+    }
+
     pub(crate) fn tray_available(&self) -> bool {
         self.tray_available
     }
+
+    pub(crate) fn tray_note(&self) -> Option<SharedString> {
+        self.tray_note.clone()
+    }
+
+    pub(crate) fn total_home_size(&self) -> Option<u64> {
+        self.home_size_bytes
+    }
+
+    pub(crate) fn home_display(&self) -> String {
+        crate::format::abbreviate_home(&self.home_root, self.home_dir.as_deref())
+    }
+
+    /// The user's home directory, for abbreviating instance paths (R9).
+    pub(crate) fn home_dir(&self) -> Option<&std::path::Path> {
+        self.home_dir.as_deref()
+    }
+
+    pub(crate) fn home_root(&self) -> &std::path::Path {
+        &self.home_root
+    }
+
+    #[cfg(test)]
+    pub(crate) fn quit_machine(&self) -> &crate::quit::QuitMachine {
+        &self.quit
+    }
+
+    // tray_sender/reset_for_latency removed: tray latency test measures the
+    // real bridge+model path directly, no GPUI scheduler needed.
 
     pub(crate) fn open_new_instance(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.open_create_dialog(window, cx);

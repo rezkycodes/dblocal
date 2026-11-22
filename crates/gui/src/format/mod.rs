@@ -250,6 +250,36 @@ pub fn format_bytes(bytes: u64) -> String {
 ///
 /// `7.5 MB` becomes `7,5 MB`, so a size reads as a sentence rather than a
 /// machine figure.
+/// Abbreviate a path by replacing the home prefix with `~`.
+pub fn abbreviate_home(path: &std::path::Path, home: Option<&std::path::Path>) -> String {
+    if let Some(home) = home
+        && let Ok(rest) = path.strip_prefix(home)
+    {
+        if rest.as_os_str().is_empty() {
+            return "~".to_owned();
+        }
+        let rest = rest.to_string_lossy();
+        return format!("~/{rest}");
+    }
+    path.to_string_lossy().into_owned()
+}
+
+/// Engine log file path, derived from the real home root (R9).
+pub fn engine_log_path(
+    home_root: &std::path::Path,
+    home: Option<&std::path::Path>,
+    name: &str,
+) -> String {
+    abbreviate_home(
+        &home_root
+            .join("instances")
+            .join(name)
+            .join("logs")
+            .join("engine.log"),
+        home,
+    )
+}
+
 pub fn format_bytes_id(bytes: u64) -> String {
     format_bytes(bytes).replace('.', ",")
 }
@@ -301,9 +331,12 @@ pub fn header_subtitle(view: &InstanceView) -> String {
     )
 }
 
-/// Data directory of an instance, as the UI prints it.
-pub fn data_dir(name: &str) -> String {
-    format!("~/.dblocal/instances/{name}/data")
+/// Data directory of an instance, derived from the real home root (R9).
+///
+/// `$HOME`-relative paths are abbreviated the same way the status bar is, so
+/// the card never prints a path the user does not have.
+pub fn data_dir(home_root: &std::path::Path, home: Option<&std::path::Path>, name: &str) -> String {
+    abbreviate_home(&home_root.join("instances").join(name).join("data"), home)
 }
 
 /// Credential reference shown for an instance (`dblocal:<name>`).
@@ -738,6 +771,9 @@ pub use placeholders::*;
 #[cfg(test)]
 #[path = "masking_tests.rs"]
 mod masking_tests;
+#[cfg(test)]
+#[path = "path_tests.rs"]
+mod path_tests;
 #[cfg(test)]
 #[path = "tests.rs"]
 mod tests;

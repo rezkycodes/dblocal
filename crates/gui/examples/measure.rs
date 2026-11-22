@@ -149,9 +149,10 @@ fn main() {
                 ..Default::default()
             };
             let service_for_window = service.clone();
+            let runtime = dblocal_gui::app::bootstrap::AppRuntime::new(service_for_window);
+            cx.set_global(runtime);
             let _ = cx.open_window(options, move |window, cx| {
-                let view =
-                    cx.new(|cx| dblocal_gui::app::Workspace::new(service_for_window, window, cx));
+                let view = cx.new(|cx| dblocal_gui::app::Workspace::new(window, cx));
                 cx.new(|cx| gpui_kit::component::Root::new(view, window, cx))
             });
 

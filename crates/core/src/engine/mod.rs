@@ -14,6 +14,13 @@ mod valkey;
 pub use mariadb::{
     MariaDbAdapter, prepare_run as prepare_mariadb_run, sync_port as sync_mariadb_port,
 };
+pub use mysql::{
+    Handshake as MysqlHandshake, MysqlAdapter, my_cnf_path,
+    parse_handshake_payload as parse_mysql_handshake_payload, pidfile_path as mysql_pidfile_path,
+    prepare_run as prepare_mysql_run, read_handshake as read_mysql_handshake,
+    socket_path as mysql_socket_path, socket_path_limit as mysql_socket_path_limit,
+    validate_socket_path_len as validate_mysql_socket_path_len,
+};
 pub use postgres::{
     PostgresAdapter, PostmasterIdentity, SocketDir as PostgresSocketDir,
     choose_socket_dir as choose_postgres_socket_dir,
@@ -25,10 +32,16 @@ pub use valkey::{
     read_pidfile, sync_port as sync_valkey_port,
 };
 
+/// The MySQL adapter's start preparation, as an associated-function style entry
+/// used by the start dispatch (`instance/start.rs::prepare`).
+pub fn mysql_prepare_run(ctx: &RunContext) -> Result<()> {
+    MysqlAdapter.prepare_run(ctx)
+}
+
 use std::path::PathBuf;
 use std::process::Command;
 
-use crate::error::{DblError, Result};
+use crate::error::Result;
 use crate::model::{AuthMode, EngineKey, Port, StartFailure};
 use crate::secret::SecretString;
 use crate::service::UriFormat;
@@ -223,54 +236,14 @@ pub trait EngineAdapter: Send + Sync {
     fn admin_ops(&self) -> Option<&dyn AdminOps> {
         None
     }
-}
 
-/// Adapter that deliberately refuses every operation.
-struct StubAdapter {
-    engine: EngineKey,
-}
-
-impl StubAdapter {
-    fn new(engine: EngineKey) -> Self {
-        Self { engine }
-    }
-
-    fn not_implemented(&self) -> DblError {
-        DblError::NotImplemented(format!("{} adapter", self.engine.display_name()))
-    }
-}
-
-impl EngineAdapter for StubAdapter {
-    fn key(&self) -> EngineKey {
-        self.engine
-    }
-
-    fn initialize(&self, _ctx: &InitContext) -> Result<()> {
-        Err(self.not_implemented())
-    }
-
-    fn spawn_command(&self, _ctx: &RunContext) -> Command {
-        Command::new("dblocal-stub")
-    }
-
-    fn health_check(&self, _ctx: &RunContext) -> Result<Health> {
-        Err(self.not_implemented())
-    }
-
-    fn shutdown(&self, _ctx: &RunContext) -> Result<()> {
-        Err(self.not_implemented())
-    }
-
-    fn connection_uri(
-        &self,
-        _ctx: &RunContext,
-        _credential: &Credential,
-        format: UriFormat,
-    ) -> SecretString {
-        match format {
-            UriFormat::Uri => SecretString::new(format!("{}://", self.engine.as_str())),
-            UriFormat::DotEnv => SecretString::new(String::new()),
-        }
+    /// Recreates engine-owned runtime state before every start.
+    ///
+    /// The start path calls this on every start so volatile directories that a
+    /// previous run may have lost (tempfiles root, fallback unix socket dir) are
+    /// rebuilt. Returns the engine error when the state cannot be rebuilt.
+    fn prepare_run(&self, _ctx: &RunContext) -> Result<()> {
+        Ok(())
     }
 }
 
@@ -280,7 +253,7 @@ pub fn adapter_for(engine: EngineKey) -> Box<dyn EngineAdapter> {
         EngineKey::Postgresql => Box::new(postgres::PostgresAdapter),
         EngineKey::Valkey => Box::new(valkey::ValkeyAdapter),
         EngineKey::Mariadb => Box::new(mariadb::MariaDbAdapter),
-        EngineKey::Mysql => Box::new(StubAdapter::new(engine)),
+        EngineKey::Mysql => Box::new(mysql::MysqlAdapter),
     }
 }
 
@@ -316,51 +289,37 @@ mod tests {
     }
 
     #[test]
-    fn mysql_remains_stub() {
-        let engine = EngineKey::Mysql;
-        let adapter = adapter_for(engine);
-        let (init, run) = ctx();
-        assert_eq!(adapter.key(), engine);
-        assert_eq!(adapter.canonical_port(), engine.canonical_port());
-        assert!(matches!(
-            adapter.initialize(&init),
-            Err(DblError::NotImplemented(_))
-        ));
-        assert_eq!(
-            adapter.spawn_command(&run).get_program(),
+    fn mysql_and_mariadb_are_real_adapters() {
+        let (_init, run) = ctx();
+        let mysql = adapter_for(EngineKey::Mysql);
+        assert_eq!(mysql.key(), EngineKey::Mysql);
+        assert_eq!(mysql.canonical_port(), 3306);
+        assert!(mysql.admin_ops().is_none());
+        assert_ne!(
+            mysql.spawn_command(&run).get_program(),
             std::ffi::OsStr::new("dblocal-stub")
         );
-        assert!(matches!(
-            adapter.health_check(&run),
-            Err(DblError::NotImplemented(_))
-        ));
-        assert!(matches!(
-            adapter.shutdown(&run),
-            Err(DblError::NotImplemented(_))
-        ));
-        assert!(adapter.admin_ops().is_none());
-        assert_eq!(
-            adapter.diagnose_start_failure("address already in use", Some(1)),
-            StartFailure::Unknown
+
+        let mariadb = adapter_for(EngineKey::Mariadb);
+        assert_eq!(mariadb.key(), EngineKey::Mariadb);
+        assert_eq!(mariadb.canonical_port(), 3307);
+        assert!(mariadb.admin_ops().is_none());
+        assert_ne!(
+            mariadb.spawn_command(&run).get_program(),
+            std::ffi::OsStr::new("dblocal-stub")
         );
     }
 
     #[test]
-    fn mariadb_is_real_adapter() {
-        let adapter = adapter_for(EngineKey::Mariadb);
-        assert_eq!(adapter.key(), EngineKey::Mariadb);
-        assert_eq!(adapter.canonical_port(), 3307);
-        assert!(adapter.admin_ops().is_none());
-    }
-
-    #[test]
-    fn postgres_and_valkey_are_real_adapters() {
+    fn postgres_valkey_mysql_are_real_adapters() {
         let pg = adapter_for(EngineKey::Postgresql);
         assert_eq!(pg.key(), EngineKey::Postgresql);
         assert!(pg.admin_ops().is_none());
         let vk = adapter_for(EngineKey::Valkey);
         assert_eq!(vk.key(), EngineKey::Valkey);
         assert!(vk.admin_ops().is_none());
+        let my = adapter_for(EngineKey::Mysql);
+        assert_eq!(my.key(), EngineKey::Mysql);
     }
 
     #[test]

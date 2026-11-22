@@ -212,7 +212,7 @@ impl Workspace {
                                 strings::UI_SHOW_PASSWORD
                             })
                             .on_click(cx.listener(move |this, _, _, cx| {
-                                this.toggle_reveal(&id_reveal);
+                                this.toggle_reveal(&id_reveal, cx);
                                 cx.notify();
                             })),
                     )
@@ -298,9 +298,13 @@ impl Workspace {
             ))
             .child(kv(
                 strings::UI_OVERVIEW_DATA_DIR,
-                Label::new(format::data_dir(&view.name))
-                    .font_family(theme.mono_font_family.clone())
-                    .truncate(),
+                Label::new(format::data_dir(
+                    self.home_root(),
+                    self.home_dir(),
+                    &view.name,
+                ))
+                .font_family(theme.mono_font_family.clone())
+                .truncate(),
                 theme,
             ))
             .child(kv(strings::UI_OVERVIEW_DATA_SIZE, Label::new(size), theme))
@@ -404,7 +408,7 @@ impl Workspace {
                             .compact()
                             .label(strings::UI_OVERVIEW_GOTO_LOGS)
                             .on_click(cx.listener(|this, _, _, cx| {
-                                this.set_inner_tab(crate::app::InnerTab::Logs);
+                                this.set_inner_tab(crate::app::InnerTab::Logs, cx);
                                 cx.notify();
                             })),
                     ),

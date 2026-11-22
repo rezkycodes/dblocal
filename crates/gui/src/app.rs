@@ -6,40 +6,64 @@
 //! render the title bar, dock, tabs, screens, status bar, palette and dialogs.
 
 mod actions;
-mod bootstrap;
+mod background;
+#[cfg(test)]
+mod bg_service_tests;
+pub mod bootstrap;
+#[cfg(test)]
+#[path = "app/bootstrap_r3_tests.rs"]
+mod bootstrap_r3_tests;
+#[cfg(test)]
+#[path = "app/bootstrap_tests.rs"]
+mod bootstrap_tests;
 mod components;
 mod create_dialog;
 mod create_submit;
 mod delete_dialog;
 mod dock;
+mod instance_actions;
+#[cfg(test)]
+#[path = "app/instance_actions_tests.rs"]
+mod instance_actions_tests;
 mod palette;
 mod preview;
+mod quit_flow;
+#[cfg(test)]
+#[path = "app/quit_flow_tests.rs"]
+mod quit_flow_tests;
 mod screens;
 mod state;
 mod status_bar;
+#[cfg(test)]
+#[path = "app/test_service.rs"]
+mod test_service;
+#[cfg(test)]
+#[path = "app/tests_secret.rs"]
+mod tests_secret;
 mod title_bar;
+#[cfg(test)]
+#[path = "app/tray_latency.rs"]
+mod tray_latency;
+mod tray_paths;
 mod workspace_api;
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use std::time::Instant;
+use std::sync::atomic::AtomicUsize;
+use std::time::{Duration, Instant};
 
-use dblocal_core::model::{
-    AuthMode, CatalogStatus, DeleteMode, EngineKey, InstanceId, Port, Runtime,
-};
+use dblocal_core::model::{AuthMode, DeleteMode, EngineKey, InstanceId, Port, Runtime};
 use dblocal_core::service::{CatalogView, DblService, InstanceView, UriFormat, UserFacingError};
 use dblocal_core::strings;
-use gpui_kit::component::{
-    ActiveTheme, WindowExt, command::CommandState, h_flex, input::InputState,
-    notification::Notification,
-};
+use gpui_kit::component::{ActiveTheme, command::CommandState, h_flex, input::InputState};
 use gpui_kit::{
-    App, AppContext as _, ClipboardItem, Context, Entity, FocusHandle, Focusable, IntoElement,
-    ParentElement, Render, SharedString, Subscription, Window, div, prelude::*,
+    App, AppContext as _, Context, Entity, FocusHandle, Focusable, IntoElement, ParentElement,
+    Render, SharedString, Subscription, Task, Window, div, prelude::*,
 };
 
 use crate::logs::LogStore;
-use crate::service_bridge::{self, UiEvent};
+use crate::quit::QuitMachine;
+use crate::service_bridge::UiEvent;
 
 pub use actions::{ROOT_CONTEXT, modifier_label, palette_hint};
 pub use bootstrap::{appearance_is_dark, run_with_service};
@@ -49,6 +73,7 @@ pub use state::{ActiveDownload, InnerTab, OpenTab, ShellState, Tabs, UriView};
 ///
 /// This is the demo/headless entry point the render tests use; it seeds the
 /// prototype scenario so every screen can be produced without a live session.
+#[cfg(feature = "demo")]
 pub fn run_with_mock() -> dblocal_core::Result<()> {
     bootstrap::run_with_mock()
 }
@@ -76,7 +101,6 @@ pub use create_submit::{CreateDraft, SubmitError, Submitted};
 /// The main workspace entity.
 pub struct Workspace {
     service: Arc<dyn DblService>,
-    events: flume::Receiver<UiEvent>,
     state: ShellState,
     catalog: CatalogView,
     /// Installed runtimes, re-read after a create finishes.
@@ -92,7 +116,20 @@ pub struct Workspace {
     /// Collapsed engine groups in the dock.
     collapsed: HashSet<EngineKey>,
     /// Data size per instance, read on demand for the Overview card.
-    data_sizes: std::collections::HashMap<InstanceId, u64>,
+    data_sizes: HashMap<InstanceId, u64>,
+    /// Cached dotenv blocks fetched in background (never on render path).
+    dotenv_cache: HashMap<InstanceId, dblocal_core::secret::SecretString>,
+    /// Cached port suggestions for fix banners.
+    port_suggestions: HashMap<InstanceId, u16>,
+    /// Total DBLocal home size in bytes, computed in background.
+    home_size_bytes: Option<u64>,
+    /// DBLocal home root for status bar display.
+    home_root: std::path::PathBuf,
+    /// The user's home directory, computed once for path abbreviation.
+    home_dir: Option<std::path::PathBuf>,
+    home_size_in_flight: bool,
+    home_size_dirty: bool,
+    home_size_last: Option<Instant>,
     create: Option<CreateForm>,
     delete_target: Option<InstanceId>,
     delete_name_input: Option<Entity<InputState>>,
@@ -107,49 +144,139 @@ pub struct Workspace {
     last_failure_mirror: Option<UserFacingError>,
     toast: Option<SharedString>,
     tray_available: bool,
+    tray_note_shown: bool,
+    tray_note: Option<SharedString>,
+    quit: QuitMachine,
+    /// Quit-issued stop operations and their outcomes, ordering-safe (R2).
+    quit_stops: crate::quit::StopLedger,
+    /// Wall-clock bound for quit-stop completion; injectable for tests.
+    quit_stop_timeout: Duration,
+    /// Task that fires the quit timeout.
+    quit_timeout_task: Option<Task<()>>,
     version: &'static str,
     focus_handle: FocusHandle,
     started_at: Instant,
     first_paint_logged: bool,
     /// Whether the demo build may show sample rows in the placeholder tabs.
     demo_content: bool,
+    /// Background service tasks currently in flight, kept so they are not
+    /// dropped while pending. Completed tasks are drained opportunistically.
+    bg_tasks: Vec<Task<()>>,
+    /// How many background service calls are in flight. Read on the render path
+    /// so the status bar can show a neutral pending note; never polled.
+    pending: Arc<AtomicUsize>,
+    /// Forces the pending note for a render preview, where background calls have
+    /// already drained by the time the frame is captured.
+    pending_preview: bool,
+    tray_needs_refresh: bool,
     _appearance: Option<Subscription>,
-    _event_task: Option<gpui_kit::Task<()>>,
+    _event_task: Option<Task<()>>,
+}
+
+/// The owned pieces `Workspace::assemble` takes, so the constructor stays one
+/// readable call per concern instead of an eight-argument function.
+struct Parts {
+    service: Arc<dyn DblService>,
+    tray_available: bool,
+    command_state: Entity<CommandState>,
+    filter_input: Entity<InputState>,
+    focus_handle: FocusHandle,
 }
 
 impl Workspace {
-    /// Builds the workspace and starts the event pump.
-    pub fn new(service: Arc<dyn DblService>, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let events = service_bridge::spawn_bridge(service.clone());
-        let instances = service.list_instances().unwrap_or_default();
-        let catalog = service.catalog().unwrap_or_else(|_| CatalogView {
-            status: CatalogStatus::Offline,
-            banner: Some(strings::CATALOG_OFFLINE.to_owned()),
-            engines: Vec::new(),
-        });
-        let runtimes = service.list_runtimes().unwrap_or_default();
+    /// Builds a live workspace attached to the app-level runtime.
+    pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let (service, tray_available) = {
+            let runtime = cx.global::<crate::app::bootstrap::AppRuntime>();
+            (runtime.service.clone(), runtime.tray_available())
+        };
+        Self::build_live(service, tray_available, window, cx)
+    }
+
+    /// Live constructor wired to an existing service/bridge.
+    fn build_live(
+        service: Arc<dyn DblService>,
+        tray_available: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let focus_handle = cx.focus_handle();
         let command_state = cx.new(|cx| CommandState::new(window, cx));
         let filter_input = cx
             .new(|cx| InputState::new(window, cx).placeholder(strings::UI_DOCK_FILTER.to_owned()));
         cx.observe(&filter_input, |_, _, cx| cx.notify()).detach();
-        let mut workspace = Self {
+        let mut workspace = Self::assemble(Parts {
             service,
-            events,
-            state: ShellState {
-                instances,
-                downloads: Vec::new(),
-                last_failure: None,
-                uris: std::collections::HashMap::new(),
-            },
-            catalog,
-            runtimes,
+            tray_available,
+            command_state,
+            filter_input,
+            focus_handle,
+        });
+        workspace.startup_load(cx);
+        // No per-window event pump: the app-level loop is the single consumer of
+        // the one bridge and forwards each event here (R3). Two pumps on one
+        // flume channel would split the stream between them.
+        workspace
+    }
+
+    /// Preview/test constructor: synchronous reads, no bg startup, no app global.
+    fn build_preview(
+        service: Arc<dyn DblService>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let focus_handle = cx.focus_handle();
+        let command_state = cx.new(|cx| CommandState::new(window, cx));
+        let filter_input = cx
+            .new(|cx| InputState::new(window, cx).placeholder(strings::UI_DOCK_FILTER.to_owned()));
+        cx.observe(&filter_input, |_, _, cx| cx.notify()).detach();
+        let mut workspace = Self::assemble(Parts {
+            service,
+            tray_available: false,
+            command_state,
+            filter_input,
+            focus_handle,
+        });
+        workspace.tray_note_shown = true;
+        workspace.tray_note = Some(SharedString::from(strings::UI_TRAY_UNAVAILABLE_NOTE));
+        workspace
+    }
+
+    /// The freshly built, unmoved pieces `assemble` needs.
+    fn assemble(parts: Parts) -> Self {
+        let tray_note = if parts.tray_available {
+            None
+        } else {
+            Some(SharedString::from(strings::UI_TRAY_UNAVAILABLE_NOTE))
+        };
+        Self {
+            service: parts.service,
+            tray_available: parts.tray_available,
+            tray_note_shown: !parts.tray_available,
+            tray_note,
+            command_state: parts.command_state,
+            filter_input: Some(parts.filter_input),
+            focus_handle: parts.focus_handle,
+            state: ShellState::default(),
+            catalog: Self::offline_catalog(),
+            runtimes: Vec::new(),
             tabs: Tabs::default(),
             logs: LogStore::new(),
             log_scroll: gpui_kit::UniformListScrollHandle::new(),
-            filter_input: Some(filter_input),
             collapsed: HashSet::new(),
-            data_sizes: std::collections::HashMap::new(),
+            data_sizes: HashMap::new(),
+            dotenv_cache: HashMap::new(),
+            port_suggestions: HashMap::new(),
+            home_size_bytes: None,
+            // Documented fallback only: `from_env` resolves the real root, so the
+            // literal never reaches a user-facing path.
+            home_root: dblocal_core::paths::DblPaths::from_env()
+                .map(|p| p.root().to_path_buf())
+                .unwrap_or_else(|_| std::path::PathBuf::from("~/.dblocal")),
+            home_dir: workspace_api::home_dir_from_env(),
+            home_size_in_flight: false,
+            home_size_dirty: false,
+            home_size_last: None,
             create: None,
             delete_target: None,
             delete_name_input: None,
@@ -158,53 +285,77 @@ impl Workspace {
             delete_size: 0,
             palette_open: false,
             palette_query: String::new(),
-            command_state,
             last_failure_mirror: None,
             toast: None,
-            tray_available: false,
+            quit: QuitMachine::new(),
+            quit_stops: crate::quit::StopLedger::new(),
+            quit_stop_timeout: crate::quit::QUIT_STOP_TIMEOUT,
+            quit_timeout_task: None,
             version: env!("CARGO_PKG_VERSION"),
-            focus_handle,
             started_at: Instant::now(),
             first_paint_logged: false,
             demo_content: false,
+            bg_tasks: Vec::new(),
+            pending: Arc::new(AtomicUsize::new(0)),
+            pending_preview: false,
+            tray_needs_refresh: false,
             _appearance: None,
             _event_task: None,
-        };
-        workspace.refresh_instances();
-        workspace.start_event_pump(cx);
-        workspace
-    }
-
-    fn start_event_pump(&mut self, cx: &mut Context<Self>) {
-        let events = self.events.clone();
-        // Parks on the channel; there is no timer, so idle cost is zero.
-        let task = cx.spawn(async move |this, cx| {
-            while let Ok(event) = events.recv_async().await {
-                let closed = matches!(event, UiEvent::Closed);
-                let _ = this.update(cx, |workspace, cx| {
-                    workspace.apply_event(event);
-                    cx.notify();
-                });
-                if closed {
-                    break;
-                }
-            }
-        });
-        self._event_task = Some(task);
-    }
-
-    pub(crate) fn refresh_instances(&mut self) {
-        if let Ok(instances) = self.service.list_instances() {
-            self.state.replace_instances(instances);
         }
-        if let Ok(runtimes) = self.service.list_runtimes() {
-            self.runtimes = runtimes;
+    }
+
+    /// Preview/test constructor: synchronous reads, no bg startup.
+    pub fn new_preview(
+        service: Arc<dyn DblService>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let mut this = Self::build_preview(service, window, cx);
+        if let Ok(instances) = this.service.list_instances() {
+            this.state.replace_instances(instances);
+        }
+        if let Ok(catalog) = this.service.catalog() {
+            this.catalog = catalog;
+        }
+        if let Ok(runtimes) = this.service.list_runtimes() {
+            this.runtimes = runtimes;
+        }
+        this
+    }
+
+    pub(crate) fn open_tab_sync(&mut self, id: InstanceId) {
+        self.tabs.open_or_select(id.clone());
+        self.load_logs_sync(&id);
+        let _ = self.service.watch_logs(&id, true);
+        if self.state.uri(&id).is_none()
+            && let Ok(uri) = self.service.connection_uri(&id, UriFormat::Uri)
+        {
+            self.state.set_uri(&id, &uri);
+        }
+        if !self.data_sizes.contains_key(&id)
+            && let Ok(size) = self.service.data_size(&id)
+        {
+            self.data_sizes.insert(id.clone(), size);
+        }
+        if !self.dotenv_cache.contains_key(&id)
+            && let Ok(secret) = self.service.connection_uri(&id, UriFormat::DotEnv)
+        {
+            self.dotenv_cache.insert(id.clone(), secret);
+        }
+        if !self.port_suggestions.contains_key(&id)
+            && let Some(engine) = self.instance(&id).map(|v| v.engine)
+            && let Ok(port) = self.service.suggest_port(engine)
+        {
+            self.port_suggestions.insert(id, port.get());
         }
     }
 
     fn apply_event(&mut self, event: UiEvent) {
         match event {
-            UiEvent::InstanceChanged(view) => self.state.upsert_instance(view),
+            UiEvent::InstanceChanged(view) => {
+                self.state.upsert_instance(view);
+                self.tray_needs_refresh = true;
+            }
             UiEvent::OperationProgress { id, stage } => self.state.on_progress(&id, stage),
             UiEvent::DownloadProgress { id, progress } => {
                 self.state
@@ -212,20 +363,18 @@ impl Workspace {
             }
             UiEvent::OperationFinished { id, result } => {
                 self.state.on_finished(&id, result.clone());
-                if let Err(err) = result {
+                if let Err(err) = &result {
                     self.toast = Some(SharedString::from(format!(
                         "{} — {}",
                         err.code, err.message
                     )));
-                    self.last_failure_mirror = Some(err);
+                    self.last_failure_mirror = Some(err.clone());
                 }
-                self.refresh_instances();
+                // Quit-stop completion is driven by the finished operation, never
+                // by request acceptance. The actual state transition is applied in
+                // `apply_event_with_cx` where we have `cx`.
             }
-            UiEvent::CatalogUpdated => {
-                if let Ok(catalog) = self.service.catalog() {
-                    self.catalog = catalog;
-                }
-            }
+            UiEvent::CatalogUpdated => {}
             UiEvent::LogLines { instance, lines } => {
                 if let Ok(id) = instance.parse::<InstanceId>() {
                     self.state.on_log_lines(&mut self.logs, &id, lines);
@@ -235,27 +384,55 @@ impl Workspace {
                 }
             }
             UiEvent::InstanceRemoved(id) => {
-                // A deleted (or rolled-back) instance is gone for good: drop the
-                // row, its tab, the selection, its log buffer and its URI.
                 self.state
                     .apply_removed(&id, &mut self.tabs, &mut self.logs);
-                if let Err(err) = self.service.watch_logs(&id, false) {
-                    self.report_error(&err);
-                }
+                self.forget_instance(&id);
+                self.tray_needs_refresh = true;
             }
-            UiEvent::StopForced(id) => {
+            UiEvent::StopForced(_id) => {
                 self.toast = Some(SharedString::from(strings::UI_TOAST_STOP_FORCED));
-                self.load_logs_for(&id);
             }
-            UiEvent::Resync => {
-                // A lagged stream may have skipped `InstanceChanged` events, so
-                // re-read the truth rather than trusting the delta stream.
-                self.refresh_instances();
-                if let Ok(catalog) = self.service.catalog() {
-                    self.catalog = catalog;
-                }
-            }
+            UiEvent::Resync => {}
             UiEvent::Closed => {}
+        }
+    }
+
+    fn apply_event_with_cx(&mut self, event: UiEvent, cx: &mut Context<Self>) {
+        let needs_resync = matches!(event, UiEvent::Resync);
+        let needs_catalog = matches!(event, UiEvent::CatalogUpdated);
+        let removed_id = match &event {
+            UiEvent::InstanceRemoved(id) => Some(id.clone()),
+            _ => None,
+        };
+        let quit_stop_finished = match &event {
+            UiEvent::OperationFinished { id, result } => Some((id.clone(), result.is_ok())),
+            _ => None,
+        };
+        let finished = quit_stop_finished.is_some();
+        let removed = removed_id.is_some();
+        self.apply_event(event);
+        if self.tray_needs_refresh {
+            self.tray_needs_refresh = false;
+            self.refresh_tray(cx);
+        }
+        if let Some((op, ok)) = quit_stop_finished {
+            self.on_quit_stop_finished(&op, ok, cx);
+        }
+        if let Some(id) = removed_id {
+            let service = self.service.clone();
+            self.bg(cx, move || {
+                let _ = service.watch_logs(&id, false);
+                move |_: &mut Workspace, _: &mut Context<Workspace>| {}
+            });
+        }
+        if needs_catalog {
+            self.reload_catalog_bg(cx);
+        }
+        if needs_resync || finished {
+            self.refresh_instances_bg(cx);
+        }
+        if finished || removed {
+            self.refresh_home_size_bg(cx);
         }
     }
 
@@ -263,367 +440,15 @@ impl Workspace {
         self.state.instances.iter().find(|view| &view.id == id)
     }
 
-    pub(crate) fn open_tab(&mut self, id: InstanceId, cx: &mut Context<Self>) {
-        self.tabs.open_or_select(id.clone());
-        self.load_logs_for(&id);
-        if let Err(err) = self.service.watch_logs(&id, true) {
-            self.report_error(&err);
-        }
-        // The URI is fetched once per opened tab and held masked; the plaintext
-        // only appears while the user asks for it.
-        if self.state.uri(&id).is_none()
-            && let Ok(uri) = self.service.connection_uri(&id, UriFormat::Uri)
-        {
-            self.state.set_uri(&id, &uri);
-        }
-        self.load_data_size(&id);
-        cx.notify();
-    }
-
-    /// Loads one instance's tail into its own buffer.
-    pub(crate) fn load_logs_for(&mut self, id: &InstanceId) {
-        match self.service.tail_logs(id, crate::logs::capacity()) {
-            Ok(lines) => self.logs.load(id, lines),
-            Err(err) => self.report_error(&err),
-        }
-    }
-
-    /// Reads the data directory size once per instance, on first open.
-    pub(crate) fn load_data_size(&mut self, id: &InstanceId) {
-        if self.data_sizes.contains_key(id) {
-            return;
-        }
-        if let Ok(size) = self.service.data_size(id) {
-            self.data_sizes.insert(id.clone(), size);
-        }
-    }
-
-    /// Whether the currently visible Logs tab is this instance and following.
-    fn visible_logs_following(&self, id: &InstanceId) -> bool {
-        let Some(tab) = self.tabs.selected_tab() else {
-            return false;
-        };
-        tab.instance == *id
-            && tab.inner == InnerTab::Logs
-            && self
-                .logs
-                .get(id)
-                .is_some_and(|buffer| buffer.is_following())
-    }
-
-    pub(crate) fn start_instance(&mut self, id: InstanceId) {
-        match self.service.start_instance(&id) {
-            Ok(_) => self.toast = Some(SharedString::from(strings::UI_TOAST_START_REQUESTED)),
-            Err(err) => self.report_error(&err),
-        }
-    }
-
-    pub(crate) fn stop_instance(&mut self, id: InstanceId) {
-        match self.service.stop_instance(&id) {
-            Ok(_) => self.toast = Some(SharedString::from(strings::UI_TOAST_STOP_REQUESTED)),
-            Err(err) => self.report_error(&err),
-        }
-    }
-
-    /// Start/stop for the visible tab, which the `Ctrl+Enter` action runs.
-    pub(crate) fn toggle_run_selected(&mut self) {
-        let Some(tab) = self.tabs.selected_tab() else {
-            return;
-        };
-        let id = tab.instance.clone();
-        let Some(view) = self.instance(&id) else {
-            return;
-        };
-        if crate::format::can_start(view.status) {
-            self.start_instance(id);
-        } else if crate::format::can_stop(view.status) {
-            self.stop_instance(id);
-        }
-    }
-
-    pub(crate) fn report_error(&mut self, err: &dblocal_core::DblError) {
-        let facing = UserFacingError::from(err);
-        self.toast = Some(SharedString::from(format!(
-            "{} — {}",
-            facing.code, facing.message
-        )));
-        self.last_failure_mirror = Some(facing);
-    }
-
-    pub(crate) fn copy_uri(
-        &mut self,
-        id: InstanceId,
-        format: UriFormat,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        match self.service.connection_uri(&id, format) {
-            Ok(secret) => {
-                cx.write_to_clipboard(ClipboardItem::new_string(secret.expose().to_owned()));
-                let message = match format {
-                    UriFormat::DotEnv => strings::UI_TOAST_DOTENV_COPIED,
-                    _ => strings::UI_TOAST_URI_COPIED,
-                };
-                self.toast = Some(SharedString::from(message));
-                window.push_notification(Notification::success(message), cx);
-            }
-            Err(err) => self.report_error(&err),
-        }
-        cx.notify();
-    }
-
-    /// Turns the plaintext on or off for one tab, fetching it only to reveal.
-    pub(crate) fn toggle_reveal(&mut self, id: &InstanceId) {
-        let revealed = self.state.uri(id).is_some_and(UriView::is_revealed);
-        if revealed {
-            if let Some(uri) = self.state.uri_mut(id) {
-                uri.hide();
-            }
-            return;
-        }
-        match self.service.connection_uri(id, UriFormat::Uri) {
-            Ok(secret) => {
-                if let Some(uri) = self.state.uri_mut(id) {
-                    uri.reveal(secret);
-                } else {
-                    self.state.set_uri(id, &secret);
-                }
-            }
-            Err(err) => self.report_error(&err),
-        }
-    }
-
-    pub(crate) fn copy_logs(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let text = self
-            .tabs
-            .selected_tab()
-            .and_then(|tab| self.logs.get(&tab.instance))
-            .map(|buffer| buffer.copy_text())
-            .unwrap_or_default();
-        cx.write_to_clipboard(ClipboardItem::new_string(text));
-        self.toast = Some(SharedString::from(strings::UI_TOAST_LOGS_COPIED));
-        window.push_notification(Notification::success(strings::UI_TOAST_LOGS_COPIED), cx);
-        cx.notify();
-    }
-
-    pub(crate) fn set_autostart(&mut self, id: &InstanceId, enabled: bool, cx: &mut Context<Self>) {
-        match self.service.set_autostart(id, enabled) {
-            Ok(()) => {
-                self.toast = Some(SharedString::from(if enabled {
-                    strings::UI_TOAST_AUTOSTART_ON
-                } else {
-                    strings::UI_TOAST_AUTOSTART_OFF
-                }));
-                self.refresh_instances();
-            }
-            Err(err) => self.report_error(&err),
-        }
-        cx.notify();
-    }
-
-    pub(crate) fn open_create_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let engine = EngineKey::Postgresql;
-        let (version, port) = self.default_engine_version(engine);
-        let suggested = self.service.suggest_port(engine).ok();
-        let name_input =
-            cx.new(|cx| InputState::new(window, cx).placeholder(strings::UI_FIELD_NAME.to_owned()));
-        let port_input =
-            cx.new(|cx| InputState::new(window, cx).placeholder(strings::UI_FIELD_PORT.to_owned()));
-        let name = crate::format::suggested_name(engine, &version);
-        name_input.update(cx, |state, cx| state.set_value(name, window, cx));
-        if let Some(port) = suggested.or(port) {
-            port_input.update(cx, |state, cx| {
-                state.set_value(port.to_string(), window, cx);
-            });
-        }
-        self.create = Some(CreateForm {
-            engine,
-            version,
-            auth: AuthMode::Password,
-            suggested_port: suggested.or(port),
-            name_input: Some(name_input),
-            port_input: Some(port_input),
-        });
-        cx.notify();
-    }
-
-    pub(crate) fn default_engine_version(&self, engine: EngineKey) -> (String, Option<Port>) {
-        let version = self
-            .catalog
-            .engines
-            .iter()
-            .find(|entry| entry.engine == engine)
-            .map(crate::format::default_version)
-            .and_then(|version| version.map(|v| v.version.clone()))
-            .unwrap_or_default();
-        (version, self.service.suggest_port(engine).ok())
-    }
-
-    pub(crate) fn choose_engine(
-        &mut self,
-        engine: EngineKey,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let (version, port) = self.default_engine_version(engine);
-        if let Some(form) = self.create.as_mut() {
-            form.engine = engine;
-            form.version = version.clone();
-            form.suggested_port = port;
-        }
-        // The prototype pre-fills a name and port for the new engine, so a
-        // user who only picks a card still gets a submittable form.
-        let name = crate::format::suggested_name(engine, &version);
-        let port_text = port.map(|p| p.to_string()).unwrap_or_default();
-        self.set_create_field_texts(&name, &port_text, window, cx);
-        cx.notify();
-    }
-
-    pub(crate) fn choose_version(
-        &mut self,
-        version: String,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let engine = match self.create.as_mut() {
-            Some(form) => {
-                form.version = version.clone();
-                form.engine
-            }
-            None => return,
-        };
-        let name = crate::format::suggested_name(engine, &version);
-        self.set_create_field_texts(&name, "", window, cx);
-        cx.notify();
-    }
-
-    /// Writes prefill text into the dialog's inputs without touching the entity
-    /// while a borrow of `self.create` is live.
-    fn set_create_field_texts(
-        &mut self,
-        name: &str,
-        port: &str,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let (name_input, port_input) = match self.create.as_ref() {
-            Some(form) => (form.name_input.clone(), form.port_input.clone()),
-            None => return,
-        };
-        if let Some(input) = name_input {
-            input.update(cx, |state, cx| state.set_value(name.to_owned(), window, cx));
-        }
-        if let Some(input) = port_input.filter(|_| !port.is_empty()) {
-            input.update(cx, |state, cx| state.set_value(port.to_owned(), window, cx));
-        }
-    }
-
-    pub(crate) fn choose_auth(&mut self, auth: AuthMode) {
-        if let Some(form) = self.create.as_mut() {
-            form.auth = auth;
-        }
-    }
-
-    pub(crate) fn cancel_create(&mut self) {
-        self.create = None;
-    }
-
-    pub(crate) fn submit_create(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(form) = self.create.take() else {
-            return;
-        };
-        let draft = CreateDraft {
-            engine: form.engine,
-            version: form.version.clone(),
-            auth: form.auth,
-            name: form
-                .name_input
-                .as_ref()
-                .map(|input| input.read(cx).value().to_string())
-                .unwrap_or_default(),
-            port_text: form
-                .port_input
-                .as_ref()
-                .map(|input| input.read(cx).value().to_string())
-                .unwrap_or_default(),
-        };
-        match create_submit::submit(self.service.as_ref(), &draft, &self.state.instances) {
-            Ok(submitted) => {
-                self.state.downloads.push(submitted.download);
-            }
-            Err(create_submit::SubmitError::Invalid(message)) => {
-                self.create = Some(form);
-                self.toast = Some(SharedString::from(message));
-                window.push_notification(Notification::error(strings::ERR_INVALID_INPUT), cx);
-            }
-            Err(create_submit::SubmitError::Service(err)) => {
-                self.create = Some(form);
-                self.report_error(&err);
-            }
-        }
-        cx.notify();
-    }
-
-    pub(crate) fn open_delete_dialog(
-        &mut self,
-        id: InstanceId,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let name_input = cx.new(|cx| {
-            InputState::new(window, cx).placeholder(strings::UI_DELETE_NAME_PLACEHOLDER.to_owned())
-        });
-        self.delete_target = Some(id.clone());
-        self.delete_mode = DeleteMode::ArchiveData;
-        self.delete_name_input = Some(name_input);
-        self.delete_size = self.service.data_size(&id).unwrap_or(0);
-        cx.notify();
-    }
-
-    pub(crate) fn delete_confirmation_matches(&self, cx: &App) -> bool {
-        let Some(id) = self.delete_target.as_ref() else {
-            return false;
-        };
-        let expected = self
-            .instance(id)
-            .map(|v| v.name.clone())
-            .unwrap_or_default();
-        if let Some(input) = self.delete_name_input.as_ref() {
-            input.read(cx).value().as_ref() == expected.as_str()
-        } else {
-            self.delete_typed_name.as_deref() == Some(expected.as_str())
-        }
-    }
-
-    pub(crate) fn confirm_delete(&mut self, cx: &mut Context<Self>) {
-        let Some(id) = self.delete_target.clone() else {
-            return;
-        };
-        if self.delete_mode == DeleteMode::PurgeData && !self.delete_confirmation_matches(cx) {
-            self.toast = Some(SharedString::from(strings::UI_DELETE_TYPE_NAME));
-            cx.notify();
-            return;
-        }
-        match self.service.delete_instance(&id, self.delete_mode) {
-            Ok(_) => {
-                self.close_tab_by_instance(&id);
-                self.delete_target = None;
-                self.delete_name_input = None;
-                self.toast = Some(SharedString::from(strings::UI_TOAST_DELETED));
-                self.refresh_instances();
-            }
-            Err(err) => self.report_error(&err),
-        }
-        cx.notify();
-    }
-
-    fn close_tab_by_instance(&mut self, id: &InstanceId) {
+    fn close_tab_by_instance(&mut self, id: &InstanceId, cx: &mut Context<Self>) {
         if let Some(closed) = self.tabs.close_by_instance(id) {
-            if let Err(err) = self.service.watch_logs(&closed.instance, false) {
-                self.report_error(&err);
-            }
+            let service = self.service.clone();
+            let wid = closed.instance.clone();
+            self.bg(cx, move || {
+                let _ = service.watch_logs(&wid, false);
+                move |_: &mut Workspace, _: &mut Context<Workspace>| {}
+            });
             self.logs.close(&closed.instance);
-            // Closing the tab drops the plaintext, not only the render.
             self.state.forget_uri(&closed.instance);
         }
     }
@@ -631,40 +456,20 @@ impl Workspace {
     /// Closes the tab at `index`, withdrawing its log buffer and URI.
     pub(crate) fn close_tab(&mut self, index: usize, cx: &mut Context<Self>) {
         if let Some(closed) = self.tabs.close(index) {
-            if let Err(err) = self.service.watch_logs(&closed.instance, false) {
-                self.report_error(&err);
-            }
+            let service = self.service.clone();
+            let wid = closed.instance.clone();
+            self.bg(cx, move || {
+                let _ = service.watch_logs(&wid, false);
+                move |_: &mut Workspace, _: &mut Context<Workspace>| {}
+            });
             self.logs.close(&closed.instance);
             self.state.forget_uri(&closed.instance);
         }
         cx.notify();
     }
 
-    /// One service call, kept here so `workspace_api` needs no field access.
-    pub(crate) fn service_suggest_port(&self, engine: EngineKey) -> Option<u16> {
-        self.service
-            .suggest_port(engine)
-            .ok()
-            .map(|port| port.get())
-    }
-
-    /// Reads the connection URI for one instance in the requested format.
-    pub(crate) fn service_connection_uri(
-        &self,
-        id: &InstanceId,
-        format: UriFormat,
-    ) -> dblocal_core::Result<dblocal_core::secret::SecretString> {
-        self.service.connection_uri(id, format)
-    }
-
-    /// Moves an instance to another port.
-    pub(crate) fn service_change_port(
-        &mut self,
-        id: &InstanceId,
-        port: Port,
-    ) -> dblocal_core::Result<()> {
-        self.service.change_port(id, port)
-    }
+    // No synchronous DblService wrappers: every service call must go through
+    // Workspace::bg() so the GPUI thread never blocks on SQLite/keychain.
 
     /// The three status-bar counts.
     pub(crate) fn counts(&self) -> crate::format::InstanceCounts {
@@ -725,7 +530,7 @@ impl Render for Workspace {
                 }
             }))
             .on_action(cx.listener(|this, _: &actions::ToggleRun, _window, cx| {
-                this.toggle_run_selected();
+                this.toggle_run_selected(cx);
                 cx.notify();
             }))
             .on_action(cx.listener(|this, _: &actions::CloseOverlay, _window, cx| {
@@ -748,6 +553,9 @@ impl Render for Workspace {
             .when(deleting, |this| this.child(delete_dialog::render(self, cx)))
             .when(self.palette_open, |this| {
                 this.child(palette::render(self, cx))
+            })
+            .when(self.quit.is_confirming(), |this| {
+                this.child(self.render_quit_dialog(cx))
             })
     }
 }
@@ -781,4 +589,176 @@ pub(crate) fn masked_env_rows(
         }
     };
     crate::format::env_lines(&text)
+}
+
+#[cfg(test)]
+mod event_tests {
+    #![allow(clippy::expect_used, clippy::unwrap_used)]
+
+    use std::sync::Arc;
+
+    use dblocal_core::model::InstanceStatus;
+    use dblocal_core::service::{DblService, OperationId, UserFacingError};
+    use gpui_kit::TestAppContext;
+
+    use super::Workspace;
+    use super::test_service::QuietService;
+    use crate::service_bridge::UiEvent;
+
+    fn fixture(
+        cx: &mut TestAppContext,
+    ) -> (
+        gpui_kit::Entity<Workspace>,
+        QuietService,
+        &mut gpui_kit::VisualTestContext,
+    ) {
+        cx.update(gpui_kit::init);
+        cx.update(crate::theme::init);
+        let service = QuietService::three();
+        let svc: Arc<dyn DblService> = Arc::new(service.clone());
+        let (view, cx) = cx.add_window_view(|window, cx| Workspace::new_preview(svc, window, cx));
+        cx.run_until_parked();
+        (view, service, cx)
+    }
+
+    /// `InstanceChanged` upserts the row and refreshes the tray.
+    #[gpui_kit::test]
+    fn instance_changed_upserts_the_row(cx: &mut TestAppContext) {
+        let (view, service, cx) = fixture(cx);
+        let mut changed = view.read_with(cx, |this, _| {
+            this.instances()
+                .iter()
+                .find(|v| v.status == InstanceStatus::Stopped)
+                .expect("stopped instance")
+                .clone()
+        });
+        changed.status = InstanceStatus::Running;
+        view.update(cx, |this, cx| {
+            this.apply_event_with_cx(UiEvent::InstanceChanged(changed.clone()), cx)
+        });
+        cx.run_until_parked();
+        let status = view.read_with(cx, |this, _| this.instance(&changed.id).map(|v| v.status));
+        assert_eq!(status, Some(InstanceStatus::Running));
+        assert!(
+            service.calls() > 0,
+            "the tray refresh must re-read instances"
+        );
+    }
+
+    /// `InstanceRemoved` drops the row, its tab, its logs and every cache, then
+    /// asks the service to stop watching it.
+    #[gpui_kit::test]
+    fn instance_removed_drops_tab_logs_and_caches(cx: &mut TestAppContext) {
+        let (view, service, cx) = fixture(cx);
+        let id = service.id_with(InstanceStatus::Stopped);
+        view.update(cx, |this, cx| this.open_tab(id.clone(), cx));
+        cx.run_until_parked();
+
+        view.update(cx, |this, cx| {
+            this.apply_event_with_cx(UiEvent::InstanceRemoved(id.clone()), cx)
+        });
+        cx.run_until_parked();
+
+        let (row, tabs, logs) = view.read_with(cx, |this, _| {
+            (
+                this.instance(&id).is_some(),
+                this.tabs.len(),
+                this.log_lines(&id).is_empty(),
+            )
+        });
+        assert!(!row, "the removed row is still in the dock");
+        assert_eq!(tabs, 0, "the removed instance kept its tab");
+        assert!(logs, "the removed instance kept its log buffer");
+    }
+
+    /// `StopForced` raises the Indonesian forced-stop toast.
+    #[gpui_kit::test]
+    fn stop_forced_raises_the_toast(cx: &mut TestAppContext) {
+        let (view, service, cx) = fixture(cx);
+        let id = service.id_with(InstanceStatus::Running);
+        view.update(cx, |this, cx| {
+            this.apply_event_with_cx(UiEvent::StopForced(id.clone()), cx)
+        });
+        assert_eq!(
+            view.read_with(cx, |this, _| this.toast_text())
+                .as_deref()
+                .map(ToString::to_string),
+            Some(dblocal_core::strings::UI_TOAST_STOP_FORCED.to_owned())
+        );
+    }
+
+    /// A failed operation lands as `<DBL code> — <message>` and is mirrored for
+    /// the failure panel.
+    #[gpui_kit::test]
+    fn a_failed_operation_shows_the_code_and_message(cx: &mut TestAppContext) {
+        let (view, _service, cx) = fixture(cx);
+        let err = dblocal_core::DblError::InvalidInput {
+            field: "port",
+            reason: "nilai tidak valid".to_owned(),
+        };
+        let facing = UserFacingError::from(&err);
+        view.update(cx, |this, cx| {
+            this.apply_event_with_cx(
+                UiEvent::OperationFinished {
+                    id: OperationId::new("op-fail"),
+                    result: Err(facing.clone()),
+                },
+                cx,
+            )
+        });
+        cx.run_until_parked();
+        let toast = view
+            .read_with(cx, |this, _| this.toast_text())
+            .map(|t| t.to_string())
+            .unwrap_or_default();
+        assert!(
+            toast.contains(&facing.code),
+            "toast lacks the code: {toast}"
+        );
+        assert!(
+            toast.contains(&facing.message),
+            "toast lacks the message: {toast}"
+        );
+    }
+
+    /// `close_tab_by_instance` is what a delete calls; it withdraws the tab.
+    #[gpui_kit::test]
+    fn close_tab_by_instance_withdraws_the_tab(cx: &mut TestAppContext) {
+        let (view, service, cx) = fixture(cx);
+        let id = service.id_with(InstanceStatus::Stopped);
+        view.update(cx, |this, cx| this.open_tab(id.clone(), cx));
+        cx.run_until_parked();
+        view.update(cx, |this, cx| this.close_tab_by_instance(&id, cx));
+        cx.run_until_parked();
+        assert_eq!(view.read_with(cx, |this, _| this.tabs.len()), 0);
+    }
+
+    /// The toast setter, the focus handle and the count accessors are what the
+    /// element tree reads every frame.
+    #[gpui_kit::test]
+    fn small_accessors_answer_from_state(cx: &mut TestAppContext) {
+        let (view, _service, cx) = fixture(cx);
+        view.update(cx, |this, _| {
+            this.set_toast(gpui_kit::SharedString::from("halo"));
+        });
+        assert_eq!(
+            view.read_with(cx, |this, _| this.toast_text())
+                .map(|t| t.to_string()),
+            Some("halo".to_owned())
+        );
+        let counts = view.read_with(cx, |this, _| this.counts());
+        assert_eq!(
+            (counts.running, counts.stopped, counts.failed),
+            (1, 1, 1),
+            "the counts must see the seeded instances"
+        );
+        assert_eq!(
+            view.read_with(cx, |this, _| this.version()),
+            env!("CARGO_PKG_VERSION")
+        );
+        view.update(cx, |this, _| this.close_modals());
+        assert!(view.read_with(cx, |this, _| this.create_form().is_none()));
+        let _ = view.read_with(cx, |this, _| this.focus_handle.clone());
+        let _ = view.read_with(cx, |this, _| this.command_state().clone());
+    }
 }

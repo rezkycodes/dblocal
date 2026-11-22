@@ -1,8 +1,8 @@
 # Engine adapters (W1-F)
 
 This document records the concrete behavior implemented in `crates/core/src/engine/`
-for PostgreSQL and Valkey. It follows the W0-B spike findings and the coordinator
-decisions for W1-F. Spawning detached processes is owned by W1-D/W2-A; adapters
+for PostgreSQL, Valkey and MySQL. It follows the W0-B/W3-B1 spike findings and the
+coordinator decisions. Spawning detached processes is owned by W1-D/W2-A; adapters
 build commands, parse identities, run protocol health checks, stop engines and
 diagnose failures.
 
@@ -299,6 +299,34 @@ REST API `checksum.sha256sum`.
   - `BinaryMissing`: exec `Exec format error` or missing mariadbd/install-db.
   - `Unknown`: socket path too long, bad config/unknown variable, missing data
     dir / `Can't change dir to`, disk full, and anything unrecognized.
+
+## MySQL (`engine::mysql`)
+
+Spike refs: `docs/spikes/engines/mysql.md` (W3-B1, real 8.4.11 minimal tarball, Linux x86_64).
+
+- **Runtime:** MySQL 8.4 LTS minimal tarball, `strip_prefix` `mysql-8.4.11-linux-glibc2.28-x86_64-minimal/`. Binaries used: `bin/mysqld`, `bin/mysqladmin`. `mysql` client is present in the tarball and used by e2e tests. glibc floor GLIBC_2.28, `RUNPATH=$ORIGIN/../lib/private`, 0 missing ldd deps on the spike host.
+
+- **Initialize (`mysqld --initialize-insecure`):** runs `mysqld --no-defaults --initialize-insecure --datadir=<dir> --basedir=<runtime> --log-error=<logs>/init.err`. The initialize step creates `root@localhost` with an empty password; it does **not** create `root@127.0.0.1`. The adapter then writes `run/my.cnf` (0600), writes a one-shot `run/dblocal-init.sql` (0600), starts `mysqld --defaults-file=<my.cnf> --init-file=<init.sql>` foreground, waits for TCP readiness, issues `mysqladmin ... shutdown` (password via `MYSQL_PWD` env when `AuthMode::Password`, never argv), waits for exit bounded by `STOP_GRACE_SECS`, and deletes the init SQL file. On any failure the data directory and init SQL file are removed and raw output/log tail is returned.
+
+- **Auth bootstrap (no password in argv/file left behind):** password mode init SQL runs `ALTER USER 'root'@'localhost' IDENTIFIED BY '...'`, creates/grants `root@127.0.0.1`, and `FLUSH PRIVILEGES`. No-password mode creates/grants `root@127.0.0.1` with empty password and keeps localhost as created by initialize-insecure. Passwords are SQL single-quote escaped before embedding in the one-shot init SQL; the init SQL is a `SecretString`-backed render and is never logged.
+
+- **`my.cnf` (0600, atomic write):** `bind-address=127.0.0.1`, `port=<port>`, `datadir`, `socket=<resolved socket>`, `pid-file=<run>/mysqld.pid`, `log-error=<logs>/error.log`, `mysqlx=OFF`, `skip-name-resolve`, `basedir=<runtime>`. No `0.0.0.0`. `mysqlx=OFF` is required: without it MySQL 8.4 binds X Plugin on `*:33060` and a unix `mysqlx.sock`, which violates the single-loopback-port invariant (spike proved with ss).
+
+- **Socket path limit and fallback:** MySQL has no "no unix socket" switch, so the adapter cannot disable the unix socket the way PostgreSQL does. It applies a platform `sun_path` limit: 107 bytes on Linux, 103 bytes on macOS/BSD. If `<run_dir>/mysqld-<port>.sock` fits, it is used unchanged. If it is too long, the adapter resolves a short fallback socket under a verified private directory candidate: `$XDG_RUNTIME_DIR/dblocal/` when set and usable, else `/tmp/dblocal-<euid>/`. Candidates are tried in order; a candidate is used only when it is a real 0700 directory owned by the current euid and the resulting `<candidate>/m<port>-<12hex>.sock` path fits the platform limit. The fallback socket file name is derived from the port and a short SHA-256 hash of the instance directory so two instances never collide. `initialize`, bootstrap and `spawn_command` read the same `my.cnf`, so they agree on the socket. `shutdown` and protocol health use TCP and are unaffected. `shutdown` removes a fallback socket file only when its parent is an allowed fallback directory, its name matches `m<port>-<12hex>.sock` for that port, and the path is a real unix socket; otherwise it warns and leaves it alone. The adapter returns `DblError::InvalidInput { field: "socket", ... }` only when no verified candidate can produce a fitting socket path. macOS behavior is implemented by platform limit/cfg but **unverified on macOS** in this workspace.
+
+- **Start command:** `mysqld --defaults-file=<run>/my.cnf`. No password in argv or env.
+
+- **Prepare on every start:** the fallback socket directory (`$XDG_RUNTIME_DIR/dblocal/` or `/tmp/dblocal-<euid>/`) and the per-instance `tmpdir` (`<run_dir>/tmp`) are volatile — `/run/user/<uid>` and `/tmp` are wiped at logout/reboot (macOS clears `/private/tmp` at boot) and a restored backup can lose `<run_dir>/tmp`. `MysqlAdapter::prepare_run` runs on every start from `instance/start.rs::prepare`: it re-reads `socket=` from `my.cnf`, recreates and re-verifies the fallback directory (0700, our euid, not a symlink) only when the socket lives under an allowed fallback candidate, deletes a stale socket file left by a crash (and refuses a non-socket regular file), recreates the private `tmpdir` 0700, and fails with a clear `Engine` error when it cannot. Without this an instance whose socket path needed the fallback starts once and then fails after the first reboot. macOS is **unverified on macOS** in this workspace.
+
+- **Health check:** real TCP MySQL protocol handshake. The adapter reads the 4-byte packet header and payload; protocol v10 greeting => `Ready`; ERR packet 1045/1130/1251/1524 (or Access denied / Host not allowed messages) => `Ready` (server is up, auth challenge). Other ERR/empty/unknown => `NotReady`. `mysqladmin ping` exit code is not trusted (spike showed rc 0 with a host-not-allowed error).
+
+- **Shutdown:** `mysqladmin --no-defaults -h 127.0.0.1 -P <port> -u root --protocol=TCP shutdown`, password via `MYSQL_PWD` env only when password auth is configured. Non-zero exit returns `DblError::Engine` with raw output. Spike confirmed SQL shutdown and SIGTERM both produce `Shutdown complete`; the adapter's normal path is SQL shutdown.
+
+- **Connection URI:** `UriFormat::Uri` => `mysql://root:<percent-encoded>@127.0.0.1:<port>/`; `UriFormat::DotEnv` includes `DATABASE_URL`, `DB_HOST`, `DB_PORT`, `DB_DATABASE=` (empty), `DB_USERNAME`, `DB_PASSWORD`. No-password (`F-CRD-03`): `mysql://root@127.0.0.1:<port>/` and `.env` omits `DB_PASSWORD`.
+
+- **Diagnosis mapping:** `StartFailure::PortInUse` for `Bind on TCP/IP port: Address already in use` / `Do you already have another mysqld server running on port`. `StartFailure::PermissionDenied` for `Permission denied` / `OS errno 13`. `StartFailure::BinaryMissing` for exec/ENOENT of mysqld/mysqladmin. Socket-path-too-long, bad config/value, missing/garbled ibdata1/datadir, DD init failures, and unrecognized cases map to `StartFailure::Unknown` with raw tail kept by caller.
+
+- **Deviations / notes:** No `mysql_async` runtime dependency was added for health/shutdown; a small handshake reader keeps behavior explicit and auditable. `mysqladmin` is used for shutdown because it is present in the minimal tarball and gives a clean SQL shutdown path; password is passed through `MYSQL_PWD` env, not argv. Windows/macOS/aarch64/MySQL 9.x are unverified.
 
 ## Host glibc detection (`engine::glibc`, C-03)
 

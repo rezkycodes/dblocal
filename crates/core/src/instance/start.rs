@@ -237,8 +237,8 @@ fn prepare(adapter: &dyn EngineAdapter, ctx: &RunContext) -> Result<()> {
     match adapter.key() {
         EngineKey::Postgresql => crate::engine::prepare_postgres_run(ctx).map(|_| ()),
         EngineKey::Valkey => crate::engine::prepare_valkey_run(ctx),
+        EngineKey::Mysql => crate::engine::mysql_prepare_run(ctx),
         EngineKey::Mariadb => crate::engine::prepare_mariadb_run(ctx),
-        EngineKey::Mysql => Ok(()),
     }
 }
 
