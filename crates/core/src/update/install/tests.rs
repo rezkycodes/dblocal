@@ -768,14 +768,19 @@ fn restore_backup_is_continuous_and_never_unlinks_the_target() {
         );
         std::thread::yield_now();
     }
-    // Keep restoring until the reader has observed the target many times or a
-    // generous deadline passes, so the restores genuinely overlap the reads.
-    let mut restores = 0;
+    // Keep restoring until both the reader has observed the target many times AND at
+    // least 200 restores have run, so the loop does real work even when the reader is
+    // fast (otherwise `reads` can hit the threshold before the first restore and the
+    // target would be left at 2.0.0), and the restores still span the reads. A 60 s
+    // deadline bounds a pathological case.
+    let mut restores = 0u32;
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
-    while reads.load(Ordering::SeqCst) < 100 && std::time::Instant::now() < deadline {
+    while (restores < 200 || reads.load(Ordering::SeqCst) < 100)
+        && std::time::Instant::now() < deadline
+    {
         restore_backup(&backup, &target).expect("restore");
         restores += 1;
-        if restores > 5000 {
+        if restores > 100_000 {
             break;
         }
     }
