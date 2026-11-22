@@ -702,14 +702,16 @@ fn verify_pid_identity_linux_matches_real_process() {
     fs::create_dir_all(&data).expect("data");
     fs::write(&conf, "[mysqld]\n").expect("conf");
 
-    let mut child = Command::new(&fake)
-        .arg(format!("--defaults-file={}", conf.display()))
-        .arg(format!("--datadir={}", data.display()))
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .expect("spawn fake mariadbd");
+    let mut child = retry_etxtbsy(|| {
+        Command::new(&fake)
+            .arg(format!("--defaults-file={}", conf.display()))
+            .arg(format!("--datadir={}", data.display()))
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+    })
+    .expect("spawn fake mariadbd");
     let pid = child.id();
     std::thread::sleep(Duration::from_millis(100));
 
