@@ -528,6 +528,66 @@ version is already that, `apply_update` refuses a package-manager install set vi
 - A real GitHub release download/apply (tests inject the fetcher and installer).
 - Windows/macOS clients and terminals.
 
+### Mutation checks
+
+Each reversion was applied to the working tree, the red test pasted, and the file
+restored (`git status --short` empty afterwards).
+
+**1. Typed-name confirmation dropped** — `commands/db.rs`, the
+`if !yes && let Err(code) = confirm_name(…)` guard replaced by two `let _`:
+
+```text
+test commands::tests::service_admin::db_drop_without_confirmation_is_refused_non_interactively ... FAILED
+test commands::tests::service_admin::db_drop_rejects_a_mismatched_confirm ... FAILED
+test result: FAILED. 17 passed; 2 failed; 0 ignored; 0 measured; 96 filtered out
+```
+
+**2. Identifier validation bypassed** — `instance/admin_ops.rs`, `create_database`
+sends a fixed valid token instead of the caller's name:
+
+```text
+test instance::tests::service_admin::create_database_rejects_a_bad_name_before_calling_the_engine ... FAILED
+test instance::tests::service_admin::create_database_announces_the_admin_change ... FAILED
+test result: FAILED. 32 passed; 2 failed; 0 ignored; 0 measured; 1209 filtered out
+```
+
+**3. Password sent through an event** — `instance/admin_ops.rs`,
+`reset_superuser_password` emits a `LogLines` carrying the new password:
+
+```text
+test instance::tests::service_admin::the_admin_event_carries_no_secret ... FAILED
+an event leaked the password: LogLines { id: InstanceId("2c16b941-…"), lines: ["reset-once-pw"] }
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1242 filtered out
+```
+
+**4. Credential pointer written before the reset succeeds** — `instance/admin_ops.rs`,
+the pointer `set_credential` moved ahead of `reset_superuser_password`:
+
+```text
+test instance::tests::service_admin::a_failed_reset_leaves_the_credential_untouched ... FAILED
+assertion `left == right` failed: the pointer must not move on a failed reset
+  left: CredentialRef { … backend: File … }
+ right: CredentialRef { … backend: Keychain … }
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1242 filtered out
+```
+
+**5. `update apply` runs for a package-manager install** — `instance/update_ops.rs`,
+the `if !kind.can_self_update()` guard becomes `if false`:
+
+```text
+test instance::tests::service_admin::apply_update_refuses_a_package_manager_install_before_downloading ... FAILED
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1242 filtered out
+```
+
+### Recorded runs
+
+- `cargo test -p dblocal-core --features mock --lib service_admin` x40 at load
+  16.01: **40/40 passed**.
+- `DBLOCAL_E2E=1 flock … cargo test -p dblocal-core --test service_admin_e2e --
+  --ignored --test-threads=1`: **5 passed** in 14.15 s at load 16.31 (a second run
+  earlier passed 5 in 12.97 s at load 16.57).
+- `cargo xtask ci` under the heavy lock: **all gates passed** at load 16.19.
+
 ## Cross-process safety
 
 The GUI and a CLI share `~/.dblocal`. The compare-and-set
