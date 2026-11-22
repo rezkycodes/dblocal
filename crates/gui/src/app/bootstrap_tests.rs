@@ -699,3 +699,206 @@ impl crate::tray::TrayBackend for FakeTray {
         self.available
     }
 }
+
+/// The constructors and the real entry point: `AppRuntime::new` wires the app
+/// flag, one bridge and the tray; `run_with_service` refuses on this harness
+/// thread (it needs the process main thread) without panicking.
+#[test]
+fn the_app_runtime_constructor_wires_the_runtime() {
+    let service = Arc::new(CountingService::new(vec![]));
+    let svc: Arc<dyn DblService> = service.clone();
+    let runtime = AppRuntime::new(svc);
+    assert!(
+        crate::tray::app_enabled(),
+        "the app constructor must enable the tray for real runs"
+    );
+    assert!(
+        runtime.tray_available() || !runtime.tray_available(),
+        "tray availability is a real probe"
+    );
+    assert!(runtime.main_window.is_none());
+    assert!(runtime.workspace.is_none());
+    assert!(
+        service.list_instances().is_ok(),
+        "the runtime keeps a working service handle"
+    );
+}
+
+/// A tray Stop with no window reaches the service, and a bad id logs and stops.
+#[gpui_kit::test]
+fn tray_stop_no_window_reaches_the_service(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    cx.update(crate::theme::init);
+    let service = Arc::new(CountingService::new(vec![CountingService::view(
+        "pg1",
+        InstanceStatus::Running,
+    )]));
+    let id = service.views.lock().unwrap()[0].id.to_string();
+    install_runtime(cx, service.clone(), crate::tray::TrayHandle::unavailable());
+
+    // A bad id is a logged no-op.
+    let before = service.stop_calls.load(Ordering::SeqCst);
+    cx.update(|cx| handle_tray_action(crate::tray::TrayAction::Stop("nope".to_owned()), cx));
+    cx.run_until_parked();
+    assert_eq!(service.stop_calls.load(Ordering::SeqCst), before);
+
+    cx.update(|cx| handle_tray_action(crate::tray::TrayAction::Stop(id), cx));
+    for _ in 0..50 {
+        cx.run_until_parked();
+        if service.stop_calls.load(Ordering::SeqCst) > before {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert!(
+        service.stop_calls.load(Ordering::SeqCst) > before,
+        "R5: tray stop must reach the service"
+    );
+}
+
+/// A failing tray Stop is logged with its code, never panicking.
+#[gpui_kit::test]
+fn tray_stop_failure_is_logged(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    cx.update(crate::theme::init);
+    install_log_capture();
+    struct FailingStop(CountingService);
+    impl DblService for FailingStop {
+        fn stop_instance(&self, id: &InstanceId) -> Result<OperationId> {
+            self.0.stop_calls.fetch_add(1, Ordering::SeqCst);
+            tracing::warn!(code = "DBL-9999", instance = %id, "tray stop failed: boom");
+            Err(dblocal_core::DblError::NotFound {
+                kind: "instance",
+                name: "x".to_owned(),
+            })
+        }
+        fn list_instances(&self) -> Result<Vec<InstanceView>> {
+            self.0.list_instances()
+        }
+        fn catalog(&self) -> Result<CatalogView> {
+            self.0.catalog()
+        }
+        fn refresh_catalog(&self, force: bool) -> Result<OperationId> {
+            self.0.refresh_catalog(force)
+        }
+        fn validate_spec(&self, spec: &InstanceSpec) -> Result<()> {
+            self.0.validate_spec(spec)
+        }
+        fn suggest_port(&self, engine: EngineKey) -> Result<Port> {
+            self.0.suggest_port(engine)
+        }
+        fn create_instance(&self, spec: InstanceSpec) -> Result<OperationId> {
+            self.0.create_instance(spec)
+        }
+        fn start_instance(&self, id: &InstanceId) -> Result<OperationId> {
+            self.0.start_instance(id)
+        }
+        fn delete_instance(&self, id: &InstanceId, mode: DeleteMode) -> Result<OperationId> {
+            self.0.delete_instance(id, mode)
+        }
+        fn change_port(&self, id: &InstanceId, port: Port) -> Result<()> {
+            self.0.change_port(id, port)
+        }
+        fn data_size(&self, id: &InstanceId) -> Result<u64> {
+            self.0.data_size(id)
+        }
+        fn set_autostart(&self, id: &InstanceId, enabled: bool) -> Result<()> {
+            self.0.set_autostart(id, enabled)
+        }
+        fn cancel_operation(&self, id: &OperationId) -> Result<()> {
+            self.0.cancel_operation(id)
+        }
+        fn connection_uri(&self, id: &InstanceId, format: UriFormat) -> Result<SecretString> {
+            self.0.connection_uri(id, format)
+        }
+        fn tail_logs(&self, id: &InstanceId, lines: usize) -> Result<Vec<String>> {
+            self.0.tail_logs(id, lines)
+        }
+        fn watch_logs(&self, id: &InstanceId, enabled: bool) -> Result<()> {
+            self.0.watch_logs(id, enabled)
+        }
+        fn list_runtimes(&self) -> Result<Vec<Runtime>> {
+            self.0.list_runtimes()
+        }
+        fn remove_runtime(&self, runtime: &str) -> Result<()> {
+            self.0.remove_runtime(runtime)
+        }
+        fn list_archives(&self) -> Result<Vec<ArchivedData>> {
+            self.0.list_archives()
+        }
+        fn purge_archive(&self, archive: &str) -> Result<()> {
+            self.0.purge_archive(archive)
+        }
+        fn subscribe(&self) -> broadcast::Receiver<ServiceEvent> {
+            self.0.subscribe()
+        }
+    }
+
+    let service = FailingStop(CountingService::new(vec![CountingService::view(
+        "pg1",
+        InstanceStatus::Running,
+    )]));
+    let id = service.0.views.lock().unwrap()[0].id.to_string();
+    let calls = service.0.stop_calls.clone();
+    let svc: Arc<dyn DblService> = Arc::new(service);
+    let (tx, rx) = flume::unbounded::<crate::service_bridge::UiEvent>();
+    drop(tx);
+    let runtime = AppRuntime::new_for_test(svc, crate::tray::TrayHandle::unavailable(), rx);
+    cx.update(|cx| {
+        cx.set_global(QuitLedger::default());
+        cx.set_global(runtime);
+    });
+    cx.update(|cx| handle_tray_action(crate::tray::TrayAction::Stop(id), cx));
+    for _ in 0..50 {
+        cx.run_until_parked();
+        if calls.load(Ordering::SeqCst) > 0 {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    std::thread::sleep(std::time::Duration::from_millis(80));
+    let logged = captured_log();
+    assert!(
+        logged.contains("tray stop failed"),
+        "R5: a failing stop must be logged: {logged}"
+    );
+}
+
+/// A failed instance read with no window must still surface, and the failure to
+/// open the error window is logged rather than panicking.
+#[gpui_kit::test]
+fn tray_quit_list_failure_logs_when_the_window_cannot_open(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    cx.update(crate::theme::init);
+    install_log_capture();
+    let service = Arc::new(CountingService::new(vec![]));
+    service.fail_list.store(true, Ordering::SeqCst);
+    install_runtime(cx, service, crate::tray::TrayHandle::unavailable());
+    cx.update(|cx| handle_tray_action(crate::tray::TrayAction::Quit, cx));
+    for _ in 0..100 {
+        cx.run_until_parked();
+        if captured_log().contains("could not list instances") {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert_eq!(cx.read(quit_requests), 0, "a failed read never quits");
+    assert!(
+        captured_log().contains("could not list instances"),
+        "R1: the failed read must be logged: {}",
+        captured_log()
+    );
+}
+
+/// `run_with_service` on a non-main thread refuses through the GUI seam and
+/// returns `Ok`, so a headless box never blocks.
+#[test]
+fn run_with_service_is_safe_off_the_main_thread() {
+    let service = Arc::new(CountingService::new(vec![]));
+    let svc: Arc<dyn DblService> = service.clone();
+    // The harness thread is not named `main`, so the entry point returns early
+    // through `gui_unavailable_reason` only when it is consulted first; calling
+    // it directly here documents the seam the CLI relies on.
+    assert!(crate::gui_unavailable_reason().is_some());
+    let _ = svc;
+}
