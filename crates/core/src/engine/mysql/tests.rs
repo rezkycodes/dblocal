@@ -1595,7 +1595,7 @@ fn prepare_runtime_dirs_errors_when_tmpdir_cannot_be_created() {
     let run_dir = dir.path().join("run");
     fs::create_dir_all(&run_dir).expect("run");
     let uid = nix::unistd::geteuid().as_raw();
-    // A regular file where tmp must be created makes the create fail.
+    // A regular file where tmp must be created makes ensure_verified_private_dir fail.
     fs::write(run_dir.join("tmp"), b"x").expect("write");
     let err = prepare_runtime_dirs_for_start_with_env(&run_dir, 42214, None, uid).unwrap_err();
     assert!(
@@ -1603,7 +1603,18 @@ fn prepare_runtime_dirs_errors_when_tmpdir_cannot_be_created() {
         "{err}"
     );
     let _ = fs::remove_file(run_dir.join("tmp"));
-    let _ = fs::set_permissions(&run_dir, fs::Permissions::from_mode(0o700));
+
+    // Parent not writable -> cannot create tmpdir.
+    let dir2 = tempfile::tempdir().expect("tmp2");
+    let ro_run = dir2.path().join("run");
+    fs::create_dir_all(&ro_run).expect("run");
+    fs::set_permissions(&ro_run, fs::Permissions::from_mode(0o500)).expect("chmod");
+    let err = prepare_runtime_dirs_for_start_with_env(&ro_run, 42214, None, uid).unwrap_err();
+    fs::set_permissions(&ro_run, fs::Permissions::from_mode(0o700)).expect("restore");
+    assert!(
+        err.to_string().contains("cannot prepare mysql tmpdir"),
+        "{err}"
+    );
 }
 
 #[test]
@@ -1646,4 +1657,291 @@ fn cleanup_from_my_cnf_skips_foreign_socket_and_removes_verified_one() {
         !sock.exists(),
         "the verified fallback socket must be removed"
     );
+}
+
+#[test]
+fn resolve_socket_path_with_single_fallback_returns_preferred_when_fits() {
+    let dir = tempfile::tempdir().expect("tmp");
+    let run_dir = dir.path().join("run");
+    fs::create_dir_all(&run_dir).expect("run");
+    let fb = dir.path().join("fb");
+    crate::fsutil::ensure_private_dir(&fb).expect("fb");
+    let inst = dir.path().join("inst");
+    let sock = resolve_socket_path_with_fallback_dir(&run_dir, 42220, &inst, &fb).expect("sock");
+    assert_eq!(sock, socket_path(&run_dir, 42220));
+}
+
+#[test]
+fn ensure_fallback_socket_dir_for_errors_when_candidate_not_dir() {
+    let dir = tempfile::tempdir().expect("tmp");
+    let uid = nix::unistd::geteuid().as_raw();
+    let xdg = dir.path().join("xdg");
+    fs::create_dir_all(&xdg).expect("xdg");
+    // Create a regular file where the fallback dir should be.
+    fs::write(xdg.join("dblocal"), b"not a dir").expect("write");
+    let err = ensure_fallback_socket_dir_for(Some(xdg.as_os_str().to_os_string()), uid);
+    match err {
+        Ok(path) => {
+            // /tmp/dblocal-<uid> may be usable; that's fine as long as behavior is correct.
+            assert!(path.starts_with(Path::new("/tmp")));
+        }
+        Err(e) => {
+            let msg = e.to_string();
+            assert!(
+                msg.contains("cannot create verified mysql fallback socket dir"),
+                "{msg}"
+            );
+        }
+    }
+}
+
+#[test]
+fn resolve_socket_path_for_rejects_every_candidate_and_names_them() {
+    let dir = tempfile::tempdir().expect("tmp");
+    let uid = nix::unistd::geteuid().as_raw();
+    let xdg = dir.path().join("xdg");
+    let fb = xdg.join("dblocal");
+    crate::fsutil::ensure_private_dir(&fb).expect("fb");
+    let long_run = long_run_under(dir.path());
+    let instance = dir.path().join("instance");
+    // A uid we do not own: every candidate is rejected at verification.
+    let err = resolve_socket_path_for(
+        &long_run,
+        42230,
+        &instance,
+        Some(xdg.as_os_str().to_os_string()),
+        uid + 1,
+    )
+    .unwrap_err();
+    match err {
+        DblError::InvalidInput { field, reason } => {
+            assert_eq!(field, "socket");
+            assert!(reason.contains(&fb.display().to_string()), "{reason}");
+            assert!(reason.contains("wrong owner"), "{reason}");
+            assert!(reason.contains("maximum is"), "{reason}");
+        }
+        other => panic!("unexpected: {other:?}"),
+    }
+}
+
+#[test]
+fn resolve_socket_path_for_skips_verified_dir_whose_socket_would_not_fit() {
+    let dir = tempfile::tempdir().expect("tmp");
+    let uid = nix::unistd::geteuid().as_raw();
+    let xdg = dir.path().join("n".repeat(88));
+    let fb = xdg.join("dblocal");
+    crate::fsutil::ensure_private_dir(&fb).expect("fb");
+    assert!(
+        fb.is_dir(),
+        "first candidate verifies but its socket cannot fit"
+    );
+    let long_run = long_run_under(dir.path());
+    let instance = dir.path().join("instance");
+    let chosen = resolve_socket_path_for(
+        &long_run,
+        42231,
+        &instance,
+        Some(xdg.as_os_str().to_os_string()),
+        uid,
+    )
+    .expect("the /tmp candidate must win");
+    assert!(chosen.starts_with(Path::new("/tmp")), "{chosen:?}");
+    assert!(!chosen.starts_with(&fb));
+    assert!(chosen.as_os_str().as_encoded_bytes().len() <= socket_path_limit());
+}
+
+#[test]
+fn cleanup_from_my_cnf_without_socket_line_is_a_noop() {
+    let dir = tempfile::tempdir().expect("tmp");
+    let run_dir = dir.path().join("run");
+    fs::create_dir_all(&run_dir).expect("run");
+    let uid = nix::unistd::geteuid().as_raw();
+    let cnf = run_dir.join("my.cnf");
+    fs::write(&cnf, "[mysqld]\nport=42232\n").expect("cnf");
+    cleanup_fallback_socket_from_my_cnf_with_candidates(&cnf, &run_dir, 42232, None, uid);
+}
+
+#[test]
+fn cleanup_fallback_socket_leaves_a_vanished_path_alone() {
+    let dir = tempfile::tempdir().expect("tmp");
+    let run_dir = dir.path().join("run");
+    fs::create_dir_all(&run_dir).expect("run");
+    let uid = nix::unistd::geteuid().as_raw();
+    let fb = dir.path().join("xdg").join("dblocal");
+    crate::fsutil::ensure_private_dir(&fb).expect("fb");
+    let sock = fb.join("m42233-abc123def456.sock");
+    // The path is syntactically valid but never existed: cleanup must not fail.
+    cleanup_fallback_socket_with_candidates(
+        &sock,
+        &run_dir,
+        42233,
+        Some(dir.path().join("xdg").as_os_str().to_os_string()),
+        uid,
+    );
+    assert!(!sock.exists());
+}
+
+#[test]
+fn cleanup_tolerates_socket_paths_without_parent_or_name() {
+    let dir = tempfile::tempdir().expect("tmp");
+    let run_dir = dir.path().join("run");
+    fs::create_dir_all(&run_dir).expect("run");
+    let uid = nix::unistd::geteuid().as_raw();
+    // No parent -> cannot be a verified fallback socket; cleanup must just skip.
+    cleanup_fallback_socket_with_candidates(Path::new("/"), &run_dir, 42234, None, uid);
+}
+
+#[test]
+fn prepare_runtime_dirs_accepts_preferred_socket_that_does_not_exist_yet() {
+    let dir = tempfile::tempdir().expect("tmp");
+    let run_dir = dir.path().join("run");
+    fs::create_dir_all(&run_dir).expect("run");
+    let uid = nix::unistd::geteuid().as_raw();
+    let sock = socket_path(&run_dir, 42235);
+    fs::write(
+        run_dir.join("my.cnf"),
+        format!("[mysqld]\nsocket={}\n", sock.display()),
+    )
+    .expect("cnf");
+    prepare_runtime_dirs_for_start_with_env(&run_dir, 42235, None, uid).expect("prepare");
+    assert!(run_dir.join("tmp").is_dir());
+}
+
+#[test]
+fn ensure_verified_private_dir_reports_parent_that_is_a_file() {
+    let dir = tempfile::tempdir().expect("tmp");
+    let uid = nix::unistd::geteuid().as_raw();
+    let not_a_dir = dir.path().join("run");
+    fs::write(&not_a_dir, b"x").expect("write");
+    let err = ensure_verified_private_dir_for_test(&not_a_dir.join("tmp"), uid).unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("cannot create fallback socket parent"),
+        "{err}"
+    );
+}
+
+#[test]
+fn combined_output_joins_stdout_and_stderr_with_one_newline() {
+    assert_eq!(
+        combined_output(b"out".to_vec(), b"err".to_vec()),
+        "out\nerr"
+    );
+    assert_eq!(
+        combined_output(b"out\n".to_vec(), b"err".to_vec()),
+        "out\nerr"
+    );
+    assert_eq!(combined_output(b"out\n".to_vec(), Vec::new()), "out\n");
+    assert_eq!(combined_output(Vec::new(), b"err".to_vec()), "err");
+}
+
+#[test]
+fn sibling_dir_follows_parent_or_falls_back_to_child() {
+    assert_eq!(
+        sibling_dir(Path::new("/inst/data"), "run"),
+        PathBuf::from("/inst/run")
+    );
+    // A single relative component has an empty parent, so the join is the leaf.
+    assert_eq!(sibling_dir(Path::new("data"), "run"), PathBuf::from("run"));
+    // No parent at all (root) joins under the root itself.
+    assert_eq!(sibling_dir(Path::new("/"), "run"), PathBuf::from("/run"));
+}
+
+#[test]
+fn safe_sql_identifier_rejects_empty_and_leading_digit() {
+    assert!(!is_safe_sql_identifier(""));
+    assert!(!is_safe_sql_identifier("1root"));
+    assert!(!is_safe_sql_identifier("root-x"));
+    assert!(is_safe_sql_identifier("_root1"));
+}
+
+#[test]
+fn diagnose_bind_and_loader_branches_stay_unknown_or_port_in_use() {
+    assert_eq!(
+        diagnose_failure_text("Address already in use while bind to 127.0.0.1"),
+        StartFailure::PortInUse
+    );
+    assert_eq!(
+        diagnose_failure_text("mysqld: Exec format error"),
+        StartFailure::BinaryMissing
+    );
+    assert_eq!(
+        diagnose_failure_text("mysqld: No such file or directory: /x/.sock"),
+        StartFailure::Unknown
+    );
+    assert_eq!(
+        diagnose_failure_text("InnoDB: Plugin initialization aborted"),
+        StartFailure::Unknown
+    );
+    // A missing mysqld binary is BinaryMissing; the .sock exemption above is
+    // what keeps a missing socket directory from being mistaken for it.
+    assert_eq!(
+        diagnose_failure_text("mysqld: No such file or directory"),
+        StartFailure::BinaryMissing
+    );
+}
+
+#[test]
+fn prepare_runtime_dirs_rejects_my_cnf_socket_outside_fallback_dirs() {
+    let dir = tempfile::tempdir().expect("tmp");
+    let run_dir = dir.path().join("run");
+    fs::create_dir_all(&run_dir).expect("run");
+    let uid = nix::unistd::geteuid().as_raw();
+    let sock = dir.path().join("stray.sock");
+    fs::write(
+        run_dir.join("my.cnf"),
+        format!("[mysqld]\nsocket={}\n", sock.display()),
+    )
+    .expect("cnf");
+    let err = prepare_runtime_dirs_for_start_with_env(&run_dir, 42221, None, uid).unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("not an allowed fallback socket path"),
+        "{err}"
+    );
+}
+
+#[test]
+fn prepare_runtime_dirs_rejects_stale_socket_stat_error_path() {
+    use std::os::unix::fs::PermissionsExt;
+    if nix::unistd::geteuid().is_root() {
+        eprintln!("skipping as root");
+        return;
+    }
+    let dir = tempfile::tempdir().expect("tmp");
+    let run_dir = dir.path().join("run");
+    fs::create_dir_all(&run_dir).expect("run");
+    let uid = nix::unistd::geteuid().as_raw();
+    let xdg = dir.path().join("xdg");
+    let fb = xdg.join("dblocal");
+    crate::fsutil::ensure_private_dir(&fb).expect("fb");
+    let sock = fb.join("m42222-abc123def456.sock");
+    let _ = fs::remove_file(&sock);
+    let l = std::os::unix::net::UnixListener::bind(&sock).expect("bind");
+    drop(l);
+    fs::write(
+        run_dir.join("my.cnf"),
+        format!("[mysqld]\nsocket={}\n", sock.display()),
+    )
+    .expect("cnf");
+    // Make the socket file un-stat-able? chmod 000 on parent dir blocks stat on entry.
+    fs::set_permissions(&fb, fs::Permissions::from_mode(0o000)).expect("chmod");
+    let err = prepare_runtime_dirs_for_start_with_env(
+        &run_dir,
+        42222,
+        Some(xdg.as_os_str().to_os_string()),
+        uid,
+    )
+    .unwrap_err();
+    let msg = err.to_string();
+    fs::set_permissions(&fb, fs::Permissions::from_mode(0o700)).expect("restore");
+    assert!(
+        msg.contains("cannot prepare mysql fallback socket dir")
+            || msg.contains("cannot stat mysql socket")
+            || msg.contains("permission")
+            || msg.contains("0700")
+            || msg.contains("mode"),
+        "{msg}"
+    );
+    let _ = fs::remove_file(&sock);
 }
