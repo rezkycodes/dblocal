@@ -144,7 +144,7 @@ impl EngineAdapter for PostgresAdapter {
         }
         strip_password_env(&mut cmd);
 
-        let outcome = cmd.output();
+        let outcome = crate::fsutil::output_retrying_text_file_busy(cmd);
         let init_result = match outcome {
             Ok(out) if out.status.success() => configure_after_init(ctx, &socket_plan),
             Ok(out) => Err(initdb_failed(out.stdout, out.stderr, out.status.code())),
@@ -229,8 +229,8 @@ impl EngineAdapter for PostgresAdapter {
 
     fn shutdown(&self, ctx: &RunContext) -> Result<()> {
         let pg_ctl = ctx.runtime_dir.join("bin").join(exe_name("pg_ctl"));
-        let status = Command::new(pg_ctl)
-            .arg("-D")
+        let mut cmd = Command::new(pg_ctl);
+        cmd.arg("-D")
             .arg(&ctx.data_dir)
             .arg("-m")
             .arg("fast")
@@ -238,11 +238,9 @@ impl EngineAdapter for PostgresAdapter {
             .arg("-t")
             .arg(consts::STOP_GRACE_SECS.to_string())
             .arg("stop")
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .output()
-            .map_err(|e| DblError::Engine {
+            .stdin(Stdio::null());
+        let status =
+            crate::fsutil::output_retrying_text_file_busy(cmd).map_err(|e| DblError::Engine {
                 reason: format!("failed to execute pg_ctl stop: {e}"),
             })?;
         if status.status.success() {

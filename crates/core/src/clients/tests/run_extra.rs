@@ -53,16 +53,11 @@ fn system_spawner_runs_with_temp_file_and_env() {
     let launcher_dir = secure_dir(&dir.path().join("launcher"));
     let out = dir.path().join("out.txt");
     let script = dir.path().join("fake.sh");
-    fs::write(
+    crate::fsutil::write_executable_file_atomic(
         &script,
-        format!("#!/bin/sh\necho $MY_SECRET > {}\n", out.display()),
+        format!("#!/bin/sh\necho $MY_SECRET > {}\n", out.display()).as_bytes(),
     )
     .unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
-    }
     let temp = TempFile::new(
         "dblocal-open-test-run-extra.sh".to_owned(),
         SecretString::from("#!/bin/sh\nexit 0\n"),
@@ -143,12 +138,11 @@ fn script_placeholder_is_substituted_from_the_injected_dir() {
     let dir = tempfile::tempdir().unwrap();
     let launcher_dir = secure_dir(&dir.path().join("launcher"));
     let term = dir.path().join("term.sh");
-    fs::write(&term, "#!/bin/sh\nfor last do true; done\nsh \"$last\"\n").unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&term, fs::Permissions::from_mode(0o755)).unwrap();
-    }
+    crate::fsutil::write_executable_file_atomic(
+        &term,
+        b"#!/bin/sh\nfor last do true; done\nsh \"$last\"\n",
+    )
+    .unwrap();
     let out = dir.path().join("ran.txt");
     let temp = TempFile::new(
         "dblocal-open-sub.sh".to_owned(),

@@ -6,6 +6,11 @@
 use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
 use std::path::Path;
+use std::process::{Command, Output, Stdio};
+use std::time::Duration;
+
+const EXEC_BUSY_RETRY_WINDOW: Duration = Duration::from_secs(5);
+const EXEC_BUSY_RETRY_DELAY: Duration = Duration::from_millis(20);
 
 /// Creates `path` (and parents) and tightens it to `0700` on Unix.
 ///
@@ -27,6 +32,26 @@ pub fn ensure_private_dir(path: &Path) -> io::Result<()> {
 /// fsynced, then renamed into place. On Unix the parent directory is fsynced
 /// best-effort after the rename. The temporary file is removed on failure.
 pub fn write_private_file_atomic(path: &Path, contents: &[u8]) -> io::Result<()> {
+    write_file_atomic(path, contents, 0o600)
+}
+
+/// Atomically writes an executable file with mode `0755` on Unix.
+///
+/// Uses the same temp-write-fsync-rename pattern as [`write_private_file_atomic`], so
+/// the final path never has an open write descriptor. That prevents ETXTBSY when a
+/// concurrent fork in the same process inherits the temporary write fd.
+pub fn write_executable_file_atomic(path: &Path, contents: &[u8]) -> io::Result<()> {
+    write_file_atomic(path, contents, 0o755)
+}
+
+/// Atomically writes a file with the given Unix mode.
+///
+/// Exposed for callers that need a specific mode (e.g. launcher scripts with 0600).
+pub fn write_file_atomic_with_mode(path: &Path, contents: &[u8], mode: u32) -> io::Result<()> {
+    write_file_atomic(path, contents, mode)
+}
+
+fn write_file_atomic(path: &Path, contents: &[u8], mode: u32) -> io::Result<()> {
     let parent = path.parent().ok_or_else(|| {
         io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -43,8 +68,10 @@ pub fn write_private_file_atomic(path: &Path, contents: &[u8]) -> io::Result<()>
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt;
-        opts.mode(0o600);
+        opts.mode(mode);
     }
+    #[cfg(not(unix))]
+    let _ = mode;
     let mut file = opts.open(&tmp)?;
     if let Err(e) = file.write_all(contents).and_then(|_| file.sync_all()) {
         let _ = fs::remove_file(&tmp);
@@ -60,6 +87,30 @@ pub fn write_private_file_atomic(path: &Path, contents: &[u8]) -> io::Result<()>
         let _ = dir.sync_all();
     }
     Ok(())
+}
+
+/// Runs a command, retrying ETXTBSY (`os error 26`) within a bounded window.
+///
+/// Concurrent test threads in the same process can inherit a write fd of a script
+/// that another thread just wrote; while that fd stays open, exec fails with
+/// ETXTBSY. The bounded retry covers that narrow window without hiding real errors.
+pub fn output_retrying_text_file_busy(mut cmd: Command) -> io::Result<Output> {
+    let spawn_deadline = std::time::Instant::now() + EXEC_BUSY_RETRY_WINDOW;
+    loop {
+        match cmd.stdout(Stdio::piped()).stderr(Stdio::piped()).output() {
+            Ok(output) => return Ok(output),
+            Err(source)
+                if is_text_file_busy(&source) && std::time::Instant::now() < spawn_deadline =>
+            {
+                std::thread::sleep(EXEC_BUSY_RETRY_DELAY);
+            }
+            Err(source) => return Err(source),
+        }
+    }
+}
+
+fn is_text_file_busy(err: &io::Error) -> bool {
+    err.raw_os_error() == Some(26)
 }
 
 #[cfg(test)]
@@ -103,21 +154,31 @@ mod tests {
         assert_eq!(fs::read(&path).expect("read"), b"two");
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn write_executable_file_atomic_writes_0755_and_no_leftovers() {
+        let dir = tempdir().expect("tmp");
+        let path = dir.path().join("bin").join("tool");
+        write_executable_file_atomic(&path, b"#!/bin/sh\nexit 0\n").expect("write");
+        assert_eq!(fs::read(&path).expect("read"), b"#!/bin/sh\nexit 0\n");
+        assert_eq!(mode(&path), 0o755, "executable must be 0755");
+        let leftovers: Vec<_> = fs::read_dir(path.parent().expect("parent"))
+            .expect("read dir")
+            .filter_map(Result::ok)
+            .filter(|e| e.file_name().to_string_lossy().contains(".tmp-"))
+            .collect();
+        assert!(leftovers.is_empty(), "temp files left: {leftovers:?}");
+    }
+
     #[test]
     fn write_private_file_atomic_removes_temp_on_failure() {
         let dir = tempdir().expect("tmp");
-        // Writing into a path whose parent exists as a file forces create failure
-        // after temp-name selection? Easier: make the target dir read-only so rename fails.
-        // Instead, verify that a failure path leaves no .tmp files by targeting a directory
-        // as the file path (write_all fails? no, open fails differently). We'll simulate by
-        // making parent read-only on Unix so create_new fails; then assert no tmp exists.
         #[cfg(unix)]
         {
             let parent = dir.path().join("ro");
             fs::create_dir_all(&parent).expect("mkdir");
             fs::set_permissions(&parent, fs::Permissions::from_mode(0o500)).expect("chmod");
             let path = parent.join("sub").join("f");
-            // create_dir_all inside write_private_file_atomic will fail on read-only parent.
             let err = write_private_file_atomic(&path, b"x");
             assert!(err.is_err());
             // Parent itself should have no tmp files.

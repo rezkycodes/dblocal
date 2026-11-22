@@ -336,20 +336,13 @@ fn trait_diagnose_dispatches_to_the_shared_table() {
     );
 }
 
+#[cfg(unix)]
 #[test]
 fn shutdown_reports_a_nonzero_pg_ctl() {
     // A fake runtime whose pg_ctl exits 1 exercises the error branch without a
     // real server.
     let dir = tempdir().expect("tempdir");
-    let bin = dir.path().join("bin");
-    fs::create_dir_all(&bin).expect("bin");
-    let script = bin.join(exe_name("pg_ctl"));
-    fs::write(&script, "#!/bin/sh\n echo boom >&2\n exit 1\n").expect("script");
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).expect("chmod");
-    }
+    stub_runtime(dir.path(), "pg_ctl", "#!/bin/sh\n echo boom >&2\n exit 1\n");
     let ctx = RunContext {
         instance_name: "app".into(),
         runtime_dir: dir.path().to_path_buf(),
@@ -542,12 +535,10 @@ fn combined_output_joins_stdout_and_stderr_cleanly() {
 
 #[cfg(unix)]
 fn stub_runtime(dir: &std::path::Path, name: &str, script: &str) -> PathBuf {
-    use std::os::unix::fs::PermissionsExt;
     let bin = dir.join("bin");
     fs::create_dir_all(&bin).expect("bin");
     let path = bin.join(exe_name(name));
-    fs::write(&path, script).expect("script");
-    fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).expect("chmod");
+    crate::fsutil::write_executable_file_atomic(&path, script.as_bytes()).expect("script");
     path
 }
 

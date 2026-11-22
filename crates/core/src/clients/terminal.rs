@@ -393,49 +393,41 @@ fn sweep_old_scripts(dir: &Path) -> ClientResult<()> {
     Ok(())
 }
 
-/// Writes a launcher script with `O_CREAT|O_EXCL` so an existing name is never reused.
+/// Writes a launcher script atomically, never reusing an existing name.
+///
+/// Writes to a temp sibling, fsyncs, then hard-links into place so `create_new`
+/// semantics are preserved while avoiding ETXTBSY from an inherited write fd.
 pub fn write_script_file(dir: &Path, temp: &TempFile) -> ClientResult<PathBuf> {
     let path = dir.join(temp.name_hint());
-    let mut file = open_new_script(&path, temp.mode())?;
-    write_and_sync(&mut file, &path, temp.contents().expose())?;
+    write_script_file_create_new(&path, temp.contents().expose().as_bytes(), temp.mode()).map_err(
+        |e| ClientError::ScriptError {
+            reason: e.kind().to_string(),
+        },
+    )?;
     Ok(path)
 }
 
-#[cfg(unix)]
-fn open_new_script(path: &Path, mode: u32) -> ClientResult<std::fs::File> {
-    use std::os::unix::fs::OpenOptionsExt;
-    std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(mode)
-        .open(path)
-        .map_err(|e| ClientError::ScriptError {
-            reason: e.kind().to_string(),
-        })
-}
-
-#[cfg(not(unix))]
-fn open_new_script(path: &Path, _mode: u32) -> ClientResult<std::fs::File> {
-    std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(path)
-        .map_err(|e| ClientError::ScriptError {
-            reason: e.kind().to_string(),
-        })
-}
-
-/// Writes and flushes the contents, removing the partial file if either step fails.
-fn write_and_sync(file: &mut std::fs::File, path: &Path, contents: &str) -> ClientResult<()> {
-    use std::io::Write;
-    file.write_all(contents.as_bytes())
-        .and_then(|()| file.sync_all())
-        .map_err(|e| {
-            let _ = std::fs::remove_file(path);
-            ClientError::ScriptError {
-                reason: e.kind().to_string(),
-            }
-        })
+fn write_script_file_create_new(path: &Path, contents: &[u8], mode: u32) -> std::io::Result<()> {
+    let parent = path.parent().ok_or_else(|| {
+        std::io::Error::new(std::io::ErrorKind::InvalidInput, "path has no parent")
+    })?;
+    let nonce: u64 = rand::random();
+    let name = path
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("script");
+    let tmp = parent.join(format!(".{name}.tmp-{nonce:016x}"));
+    crate::fsutil::write_file_atomic_with_mode(&tmp, contents, mode)?;
+    match std::fs::hard_link(&tmp, path) {
+        Ok(()) => {
+            let _ = std::fs::remove_file(&tmp);
+            Ok(())
+        }
+        Err(e) => {
+            let _ = std::fs::remove_file(&tmp);
+            Err(e)
+        }
+    }
 }
 
 /// Substitute the script placeholder in an argv element.

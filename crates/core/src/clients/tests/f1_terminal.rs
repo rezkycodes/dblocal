@@ -11,8 +11,7 @@ use crate::model::EngineKey;
 use crate::secret::SecretString;
 
 fn write_exec(path: &Path, body: &str) {
-    fs::write(path, body).unwrap();
-    fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
+    crate::fsutil::write_executable_file_atomic(path, body.as_bytes()).unwrap();
 }
 
 fn secure_launcher_dir(base: &Path, name: &str) -> std::path::PathBuf {
