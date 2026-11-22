@@ -1822,6 +1822,61 @@ fn ensure_verified_private_dir_reports_parent_that_is_a_file() {
 }
 
 #[test]
+fn diagnose_start_failure_delegates_to_the_text_diagnoser() {
+    let bind = "Can't start server: Bind on TCP/IP port: Address already in use\n";
+    assert_eq!(
+        MysqlAdapter.diagnose_start_failure(bind, Some(1)),
+        StartFailure::PortInUse
+    );
+    assert_eq!(
+        MysqlAdapter.diagnose_start_failure("mysqld: Exec format error", None),
+        StartFailure::BinaryMissing
+    );
+}
+
+#[test]
+fn public_prepare_run_creates_the_private_tmpdir() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().expect("tmp");
+    let run_dir = dir.path().join("run");
+    fs::create_dir_all(&run_dir).expect("run");
+    let ctx = RunContext {
+        instance_name: "app".into(),
+        runtime_dir: dir.path().join("rt"),
+        data_dir: dir.path().join("data"),
+        logs_dir: dir.path().join("logs"),
+        run_dir: run_dir.clone(),
+        port: Port::new(42250).expect("port"),
+        superuser: "root".into(),
+        auth: AuthMode::None,
+        credential: None,
+    };
+    prepare_run(&ctx).expect("prepare_run");
+    let meta = fs::symlink_metadata(run_dir.join("tmp")).expect("tmp meta");
+    assert_eq!(meta.permissions().mode() & 0o777, 0o700);
+}
+
+#[test]
+fn read_handshake_reports_a_zero_length_packet() {
+    use std::io::Write;
+    use std::net::TcpListener;
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+    let port = listener.local_addr().expect("addr").port();
+    let t = std::thread::spawn(move || {
+        let (mut s, _) = listener.accept().expect("accept");
+        s.write_all(&[0u8; 4]).expect("zero header");
+    });
+    let h = read_handshake(port, Duration::from_millis(500)).expect("handshake");
+    match h {
+        Handshake::NotReady(reason) => {
+            assert!(reason.contains("invalid mysql packet length 0"), "{reason}")
+        }
+        other => panic!("unexpected: {other:?}"),
+    }
+    t.join().expect("join");
+}
+
+#[test]
 fn combined_output_joins_stdout_and_stderr_with_one_newline() {
     assert_eq!(
         combined_output(b"out".to_vec(), b"err".to_vec()),
