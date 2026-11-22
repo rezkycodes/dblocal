@@ -78,33 +78,42 @@ fn wait_for_running(
 ) -> Result<(), String> {
     let deadline = std::time::Instant::now() + timeout;
     loop {
-        match service.list_instances() {
-            Ok(views) => {
-                if let Some(view) = views.into_iter().find(|view| &view.id == id) {
-                    match view.status {
-                        crate::model::InstanceStatus::Running => return Ok(()),
-                        crate::model::InstanceStatus::Failed => {
-                            return Err(failure_message(&view, "gagal"));
-                        }
-                        crate::model::InstanceStatus::Stopped => {
-                            return Err("[DBL-4001] instance berhenti sebelum siap".to_owned());
-                        }
-                        _ => {}
-                    }
-                } else {
-                    return Err("[DBL-1002] instance hilang saat autostart".to_owned());
-                }
-            }
-            Err(err) => {
-                // A transient read failure must not be turned into a wrong
-                // verdict; keep polling until the deadline.
-                let _ = err;
-            }
+        match classify(service.list_instances(), id) {
+            Some(Ok(())) => return Ok(()),
+            Some(Err(message)) => return Err(message),
+            None => {}
         }
         if std::time::Instant::now() >= deadline {
             return Err("[DBL-8401] waktu tunggu autostart habis".to_owned());
         }
         std::thread::sleep(Duration::from_millis(consts::AUTOSTART_WAIT_POLL_MS));
+    }
+}
+
+/// Classifies one store read for the wait (pure, so the branches are tested).
+///
+/// `None` means "keep polling": the row is still `starting`/transitional, or the
+/// read failed transiently (a read error must never become a wrong verdict).
+fn classify(
+    read: crate::Result<Vec<crate::service::InstanceView>>,
+    id: &InstanceId,
+) -> Option<Result<(), String>> {
+    use crate::model::InstanceStatus;
+    let views = match read {
+        Ok(views) => views,
+        Err(_) => return None,
+    };
+    let Some(view) = views.into_iter().find(|view| &view.id == id) else {
+        // The row vanished mid-start (deleted, or a rolled-back create).
+        return Some(Err("[DBL-1002] instance hilang saat autostart".to_owned()));
+    };
+    match view.status {
+        InstanceStatus::Running => Some(Ok(())),
+        InstanceStatus::Failed => Some(Err(failure_message(&view, "gagal"))),
+        InstanceStatus::Stopped => {
+            Some(Err("[DBL-4001] instance berhenti sebelum siap".to_owned()))
+        }
+        _ => None,
     }
 }
 
@@ -371,5 +380,87 @@ mod tests {
             )
         );
         assert!(vk < pg, "valkey starts faster than postgres");
+    }
+
+    fn fictional() -> crate::service::InstanceView {
+        // A hand-built view with a chosen status; `classify` reads status only.
+        view("probe", true)
+    }
+
+    fn with_status(
+        view: crate::service::InstanceView,
+        status: InstanceStatus,
+    ) -> crate::service::InstanceView {
+        let mut view = view;
+        view.status = status;
+        view
+    }
+
+    #[test]
+    fn classify_running_is_success() {
+        let id = InstanceId::new();
+        let mut view = with_status(fictional(), InstanceStatus::Running);
+        view.id = id.clone();
+        assert_eq!(classify(Ok(vec![view]), &id), Some(Ok(())));
+    }
+
+    #[test]
+    fn classify_failed_carries_the_code() {
+        let id = InstanceId::new();
+        let mut view = with_status(fictional(), InstanceStatus::Failed);
+        view.id = id.clone();
+        view.failure = Some(crate::service::FailureInfo {
+            code: "DBL-1005".to_owned(),
+            message: "port dipakai".to_owned(),
+            diagnosis: crate::model::StartFailure::PortInUse,
+            log_tail: Vec::new(),
+        });
+        match classify(Ok(vec![view]), &id) {
+            Some(Err(message)) => assert!(message.starts_with("[DBL-1005]"), "{message}"),
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+
+    #[test]
+    fn classify_stopped_is_a_failure() {
+        let id = InstanceId::new();
+        let mut view = with_status(fictional(), InstanceStatus::Stopped);
+        view.id = id.clone();
+        match classify(Ok(vec![view]), &id) {
+            Some(Err(message)) => assert!(message.contains("DBL-4001")),
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+
+    #[test]
+    fn classify_starting_keeps_polling() {
+        let id = InstanceId::new();
+        let mut view = with_status(fictional(), InstanceStatus::Starting);
+        view.id = id.clone();
+        assert_eq!(classify(Ok(vec![view]), &id), None);
+    }
+
+    #[test]
+    fn classify_a_gone_instance_is_a_failure() {
+        let id = InstanceId::new();
+        let other = view("other", true);
+        match classify(Ok(vec![other]), &id) {
+            Some(Err(message)) => assert!(message.contains("DBL-1002")),
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+
+    #[test]
+    fn classify_a_read_error_keeps_polling() {
+        let id = InstanceId::new();
+        assert_eq!(
+            classify(
+                Err(crate::DblError::Storage {
+                    reason: "busy".to_owned()
+                }),
+                &id
+            ),
+            None
+        );
     }
 }

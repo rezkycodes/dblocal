@@ -45,8 +45,34 @@ manager answers; only then does it write the unit and `enable` it. Otherwise it
 writes the desktop entry. When systemd becomes available later, `enable`
 removes a stale desktop entry so the app cannot start twice.
 
+The unit binds to the **graphical session**, not `default.target` (fix D3):
+`After=graphical-session.target`, `PartOf=graphical-session.target`,
+`WantedBy=graphical-session.target`. A unit on `default.target` starts at the
+first login session, before the compositor imports `DISPLAY`/`WAYLAND_DISPLAY`
+into the user manager, so the app would take the headless path instead of the
+tray path `F-AUT-01` AC3 wants. On a session where the display is imported (as
+here: `systemd-run --user --wait --collect -P env` shows `DISPLAY=:0`,
+`WAYLAND_DISPLAY=wayland-0`, and `systemctl --user is-active
+graphical-session.target` is `active`), the graphical-session unit runs with the
+tray available.
+
+**Caveat (documented, not fixed):** a window manager that never activates
+`graphical-session.target` (plain i3/sway without systemd session integration)
+will not run the unit. On those, the XDG `.desktop` fallback is the portable
+mechanism — but today that fallback is chosen only when no user systemd manager
+exists at all. A future task may broaden the choice; for now the limitation is
+stated here.
+
+**Failed enable is rolled back (fix D2).** `enable` records the unit file's
+previous content before writing. If `daemon-reload` or `enable` fails, it
+restores the previous content (or removes a unit this call created) and reports
+the original error, so a half-written unit cannot make `status` claim the login
+item exists. `status` counts the systemd unit as enabled only when a `.wants`
+symlink points at it (`graphical-session.target.wants/` or the legacy
+`default.target.wants/`); a bare unit file is reported `enabled: false`.
+
 **Removal (`F-AUT-01` AC2).** `disable` deletes every file or value the backend
-created: the unit, its `default.target.wants` symlink (only a symlink whose
+created: the unit, its `.wants` symlink in either target (only a symlink whose
 target is our unit, never a neighbour), the desktop entry, the plist, or the
 `Run` value. It is idempotent: removing an absent item is a success.
 
@@ -55,24 +81,48 @@ target is our unit, never a neighbour), the desktop entry, the plist, or the
 The login item passes `--autostart`. `cli::run` normalizes that token into the
 hidden `autostart-run` subcommand before parsing.
 
-`gui::run_autostart()` (used when a display is available) and the headless CLI
-path both decide presentation through the pure `decide_mode(tray_available,
-flagged_instances)`:
+### Headless CLI path (no display — the boot case, fix D1)
 
-| Tray | Flagged instances | Decision | Result |
-|---|---|---|---|
-| yes | any | `TrayOnly` | straight to the tray, no window |
-| no | ≥ 1 | `HeadlessKeepAlive` | start them, keep the process alive headless |
-| no | 0 | `HeadlessExit` | exit with `MODE_EXIT_NO_INSTANCES` |
+Without `DISPLAY`/`WAYLAND_DISPLAY` (exactly a systemd user unit at boot before
+`import-environment`), the CLI runs `mode::run_pass` against a real service and
+**waits for every flagged start to finish** before returning:
 
-The decision is a pure function (`plan::decide_mode`) tested without a tray or
-engine. A login item never surprises the user with a window.
+- `AutostartService::start` requests the start; `start_targets` then calls
+  `wait_started(id, bound)` inside the same worker, so the waits run
+  concurrently and one hanging engine never serializes the rest.
+- `bound = engine start timeout + AUTOSTART_START_MARGIN_SECS` (15 s), both
+  values from `consts` — never an invented number.
+- One stderr line per flagged instance: `autostart: <name> mulai berjalan` or
+  `autostart: <name> gagal berjalan — [DBL-xxxx] …`.
+- Exit 0 only when every flagged instance started; exit 1 otherwise. This is the
+  visible failure channel for a login item: there is no modal and no tray at
+  boot, so `systemctl --user status dblocal` (and the journal) show the failure.
+
+A one-line note `Autostart: tray tidak tersedia; instance tetap berjalan tanpa
+jendela.` is written once, then the process exits — but only *after* the engines
+are up, so the detached engines outlive it.
+
+### GUI path (a display is present)
+
+`gui::run_autostart()` starts the flagged instances through the same
+`start_targets` (which waits per instance), then presents itself through the
+pure `decide_gui_presentation(tray_available)` (fix D4):
+
+| Tray host | Decision | Result |
+|---|---|---|
+| present | `TrayOnly` | no window; the tray is the UI (AC3) |
+| absent | `Window` | open the main window (PRD `F-TRY-01` AC3 fallback) |
+
+The decision is written to stderr (`journalctl --user -u dblocal` shows it), so
+a login-mode run is diagnosable even before a tracing subscriber exists. A
+missing tray no longer leaves an invisible ~170 MB process that nothing can quit.
 
 ## Instance autostart (`F-AUT-02`)
 
 `plan::flagged_targets` selects only instances with `autostart == true` whose
 status is `Stopped` or `Failed` — a running or transitioning instance is left
-alone so a double login cannot race a live engine.
+alone so a double login cannot race a live engine. Each target carries its
+engine so `start_wait_bound` can pick the right timeout.
 
 `runner::run_start_targets` fans the starts out to at most
 `consts::AUTOSTART_CONCURRENCY` (4) workers, one target per worker iteration:
@@ -83,9 +133,11 @@ alone so a double login cannot race a live engine.
 
 `mode::run_pass` reads `list_instances`, applies the plan, runs the fan-out and
 returns the decision together with one outcome per target in input order. The
-service call (`start_instance`) returns an `OperationId` immediately; the
-eventual success or failure reaches the tray and window through the normal
-`ServiceEvent`s, so the pass never waits on an engine.
+fan-out **waits** (fix D1): `start_instance` returns an `OperationId`
+immediately and the engine comes up asynchronously, so the pass polls the store
+until each instance leaves `starting`. A failed instance is reported with the
+stored `DBL-xxxx` code; a wait that exceeds its bound reports `DBL-8401`.
+
 
 ## CLI
 
@@ -201,4 +253,92 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 15 filtered out; fin
 ```
 
 Exit code 0; no `postgres` process from the temp home survived.
+
+## Fix round 1 (D1–D5) — real-binary evidence (2026-11-23)
+
+### D1 red first (unit test on the pre-fix head)
+
+```text
+% cargo test -p dblocal-core --lib autostart::mode::tests::run_pass_waits_for_every_start_to_finish
+test autostart::mode::tests::run_pass_waits_for_every_start_to_finish ... FAILED
+panicked at crates/core/src/autostart/mode.rs:227:9:
+run_pass returned before the start operation finished (D1)
+```
+
+### D1 green, one flagged instance, no display (real binary)
+
+Isolated `DBLOCAL_HOME`, one valkey instance flagged `autostart`, status
+stopped. Before the fix: exit 0 in 0 s, row left `starting`, no process.
+
+```text
+% env -u DISPLAY -u WAYLAND_DISPLAY dblocal --autostart
+autostart: instance mulai berjalan: vk-auto
+Autostart: tray tidak tersedia; instance tetap berjalan tanpa jendela.
+exit=0 elapsed=0.37s
+store: [('vk-auto', 'running', 3241730)]
+LISTEN 127.0.0.1:20501   LISTEN [::1]:20501
+```
+
+### D1 + F-AUT-02 AC2, two flagged, one port held (real binary)
+
+Two flagged valkey instances; a foreign listener holds `20502`.
+
+```text
+% env -u DISPLAY -u WAYLAND_DISPLAY dblocal --autostart
+autostart: instance mulai berjalan: vk-auto
+autostart: instance gagal berjalan: vk-blocked — [DBL-1005] Port itu sedang dipakai proses lain.
+Autostart: tray tidak tersedia; instance tetap berjalan tanpa jendela.
+exit=1 elapsed=0.32s
+store: [('vk-auto', 'running', 3278370), ('vk-blocked', 'failed', None)]
+valkey: 3278370 .../valkey-server 127.0.0.1:20501
+20501 listening: yes
+```
+
+The free instance is up and listening; the blocked one is `failed` with the
+`DBL-1005` port diagnosis; exit 1 so `systemctl --user status dblocal` shows the
+failure. No modal dialog.
+
+### D3 unit verify + what a unit really sees (real systemd user manager)
+
+Generated with the CLI into a temp config root (fake `systemctl` so no real
+enable ran), then verified on a copy:
+
+```text
+% systemd-analyze --user verify /tmp/w4d_d3/verify.service
+(no output)  exit=0
+```
+
+```text
+% systemd-run --user --wait --collect -P env | grep -E 'DISPLAY|WAYLAND'
+DISPLAY=:0
+WAYLAND_DISPLAY=wayland-0
+% systemctl --user is-active graphical-session.target
+active
+```
+
+A graphical-session unit therefore starts in a session that already has the
+display, so the tray path is reachable (D3).
+
+### D4 both branches (real binary, Xwayland)
+
+Private session bus (no StatusNotifierWatcher):
+
+```text
+Autostart: tray tidak tersedia, jendela dibuka.
+windows: 0x01000001   (a mapped window exists)
+```
+
+Real session bus (tray host present):
+
+```text
+Autostart: tray aktif, tanpa jendela.
+windows: (no dblocal window)
+```
+
+### D5
+
+`resolve_login_exe_from` prefers a real `$APPIMAGE` file over `current_exe()`;
+unit-tested through the seam. **Not run on a real AppImage** — none available
+here.
+
 

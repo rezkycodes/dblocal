@@ -44,3 +44,38 @@ pub const GUI_TRAY_ONLY: &str = "Autostart: tray aktif, tanpa jendela.";
 pub const GUI_WINDOW_OPENED: &str = "Autostart: tray tidak tersedia, jendela dibuka.";
 /// GUI login mode: the window could not be opened.
 pub const GUI_WINDOW_FAILED: &str = "Autostart: gagal membuka jendela";
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn outcome_started_names_the_instance() {
+        let line = outcome_started("vk-auto");
+        assert!(line.contains(OUTCOME_STARTED));
+        assert!(line.contains("vk-auto"));
+    }
+
+    #[test]
+    fn outcome_failed_names_the_instance_and_carries_the_detail() {
+        let line = outcome_failed("vk-blocked", "[DBL-1005] port dipakai");
+        assert!(line.contains(OUTCOME_FAILED));
+        assert!(line.contains("vk-blocked"));
+        assert!(line.contains("[DBL-1005]"));
+    }
+
+    #[test]
+    fn mode_and_gui_messages_are_non_empty() {
+        for text in [
+            MODE_EXIT_NO_INSTANCES,
+            MODE_HEADLESS_KEEP,
+            OUTCOME_STARTED,
+            OUTCOME_FAILED,
+            GUI_TRAY_ONLY,
+            GUI_WINDOW_OPENED,
+            GUI_WINDOW_FAILED,
+        ] {
+            assert!(!text.is_empty());
+        }
+    }
+}
