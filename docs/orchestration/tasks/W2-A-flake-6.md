@@ -2,6 +2,23 @@
 
 New branch from `main` AFTER the W2-A flake branch (`rezkycodes/w2-flaky-instance`) is merged (the reviewer merges it first; check `git log main --oneline | head` for the merge before you start). Rules `docs/orchestration/tasks/_COMMON-RULES.md` incl. 11-14. Same worktree as before is fine (`git checkout -b rezkycodes/w2-flaky-instance-2 main`).
 
+## Item 0 (URGENT, do this FIRST, its own commit, report it before the rest): `dblocal stop` is refused as busy by the process' own startup reconciliation
+
+Found by the reviewer with the REAL binary on merged main (`e604687`), not by any test. Setup: a valkey instance created with `dblocal create`, then in a loop `dblocal start x; dblocal stop x` (two separate CLI processes), isolated `DBLOCAL_HOME`.
+
+- baseline binary (`700da45`, before your fixes): `stop` 40 of 40 ok, 0 refusals.
+- merged main binary (`e604687`): `stop` refused with `[DBL-1004] Tindakan itu tidak bisa dilakukan pada status instance saat ini.` 9 of 20, then 15 of 20 (it gets worse under load). Same machine, same instance, same sequence.
+
+Cause (read it, confirm it): `LocalService::new` spawns `reconcile_on_startup` (auto_start). Since round 5 the third phase holds a `lock_if_idle` guard for every row that holds a process (Starting/Running/Stopping) across the probe AND the persist. A one-shot CLI process issues its command within milliseconds of construction, so `stop_instance` calls `lock_instance`, finds the guard held by reconciliation and returns `InvalidTransition { from: "busy" }`. The refusal I asked for in round 5 ("an operation that arrives meanwhile is refused as busy, which is the right answer during reconciliation") is right for a real in-flight USER operation and wrong for reconciliation: the CLI user did nothing wrong and the instance is not busy in any way they can see. The GUI has the same race (a tray click right after launch). `start` of a stopped row is not affected (phase 3 skips it), `stop`, `restart`, `delete`, `change_port`, `set_autostart` on a running row are.
+
+Required behaviour: an operation that arrives while STARTUP RECONCILIATION holds that instance's guard waits for reconciliation to finish with that instance (bounded: the reconciliation probe is already bounded, so a few seconds at most; then the old refusal), instead of failing. A guard held by a real in-flight operation still refuses as busy exactly as before, and reconciliation still must not touch a row an in-flight operation owns (your round 5 tests stay green). Pick the design (for example: `Ops::lock_instance` distinguishes a reconciliation guard and waits on it; or the service entry points await a `reconciled` signal with a timeout; the CLI-only variant "construct with auto_start false and run reconciliation to completion before the command" fixes only the CLI, so it is not enough on its own because the GUI shares the race) and say why.
+
+1. Red first: a deterministic test with your `on_reconcile` hook pausing reconciliation while it holds the guard of a live-identity Running row; call `stop_instance` from another thread; release the hook; the stop must succeed and the row end `Stopped`. Paste the red output on `main`.
+2. Fix. Keep the R1 tests green (reconciliation vs a real in-flight stop/start).
+3. Mutation: remove the wait -> the new test red; restored, clean `git status --short`.
+4. Real binary, in the same worktree, with `cargo build -p dblocal-cli --bin dblocal` into the GUI target and an isolated `DBLOCAL_HOME` (copy the valkey tarball from `~/.cache/dblocal-dev/` into `$DBLOCAL_HOME/downloads/`): 40 iterations of `dblocal start x; dblocal stop x`, 0 refusals, and again with `taskset -c 0-1` plus 4 `yes` burners (load makes it worse). Paste the counts. Clean up every engine process afterwards (`pgrep -x valkey-server`).
+5. `cargo xtask ci` does NOT run `cli_e2e`/`service_e2e`; run them under the e2e lock on your final head (`DBLOCAL_E2E=1 ... --ignored`) and paste the result lines. I did not run them on main after round 5, so tell me if anything else fails.
+
 ## Evidence (reviewer, 2026-11-22/23, private copy of the lib test binary, `RUST_TEST_THREADS=16 taskset -c 0-3`, whole lib x25)
 
 - branch head `fb1aff5` (your round 5): 1 failure in 25: `instance::tests::safety::reconciliation_adopts_a_live_process_and_clears_a_dead_one`, `safety.rs:315` "a dead identity is cleared on reconciliation". Default threads: 20/20.
