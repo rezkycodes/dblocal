@@ -855,3 +855,112 @@ fn mysql_84_deep_socket_path_falls_back_and_cleans_up() {
         actual_sock.display()
     );
 }
+
+#[test]
+#[ignore = "e2e: requires cached MySQL tarball; run with DBLOCAL_E2E_MYSQL=1 under flock"]
+fn mysql_84_deep_socket_restart_after_volatile_dirs_disappear() {
+    require_e2e();
+    let cache = cache_dir();
+    let archive = cache.join(MYSQL_ARCHIVE);
+    assert!(archive.is_file(), "missing {}", archive.display());
+    let tmp = tempfile::tempdir().expect("tempdir");
+    extract_tar_xz(&archive, tmp.path());
+    let rt = mysql_runtime(tmp.path());
+    let port = 42017u16;
+    require_port_free(port);
+
+    let deep_base = tmp.path().join("d".repeat(90)).join("e".repeat(90));
+    fs::create_dir_all(&deep_base).expect("deep base");
+    let inst = deep_base.join("inst");
+    let data = inst.join("data");
+    let logs = inst.join("logs");
+    let run = inst.join("run");
+    fs::create_dir_all(&logs).unwrap();
+    fs::create_dir_all(&run).unwrap();
+    let preferred = run.join(format!("mysqld-{port}.sock"));
+    assert!(
+        preferred.as_os_str().as_encoded_bytes().len() > 120,
+        "test setup must create a deep preferred socket path"
+    );
+
+    let pw = "deep-restart-pw";
+    MysqlAdapter
+        .initialize(&init_ctx(&rt, &data, port, AuthMode::Password, Some(pw)))
+        .expect("initialize mysql deep socket");
+    let cnf = run.join("my.cnf");
+    let actual_sock = socket_path_from_my_cnf(&cnf);
+    assert_ne!(actual_sock, preferred, "deep path must use fallback socket");
+    let fallback_dir = actual_sock.parent().expect("fallback dir").to_path_buf();
+    let private_tmpdir = run.join("tmp");
+
+    let mut guard = mysql_start(&rt, &data, &logs, &run, port, pw);
+    assert!(
+        wait_tcp(port, Duration::from_secs(30)),
+        "mysql did not listen; log:\n{}",
+        read_log_tail(&logs.join("error.log"), 120)
+    );
+    let ctx = run_ctx(&rt, &data, &logs, &run, port, AuthMode::Password, Some(pw));
+    assert!(matches!(
+        MysqlAdapter.health_check(&ctx).expect("health"),
+        dblocal_core::engine::Health::Ready
+    ));
+    MysqlAdapter.shutdown(&ctx).expect("shutdown");
+    if let Some(mut c) = guard.0.take() {
+        let _ = c.wait();
+    }
+    assert!(wait_tcp_gone(port, Duration::from_secs(30)));
+
+    // A reboot wipes /run/user/<uid> and /tmp, and a restored backup may lose
+    // run/tmp. Both are volatile: the start path must rebuild them.
+    assert!(
+        actual_sock.as_os_str().as_encoded_bytes().len() <= 60,
+        "fallback socket should live in a short volatile directory: {}",
+        actual_sock.display()
+    );
+    fs::remove_dir_all(&fallback_dir).expect("remove fallback dir");
+    fs::remove_dir_all(&private_tmpdir).expect("remove private tmpdir");
+    assert!(!fallback_dir.exists());
+    assert!(!private_tmpdir.exists());
+
+    // The service calls prepare, then builds the spawn command.
+    dblocal_core::engine::mysql_prepare_run(&ctx).expect("prepare recreates volatile dirs");
+    assert!(fallback_dir.is_dir(), "fallback dir must be recreated");
+    assert!(private_tmpdir.is_dir(), "private tmpdir must be recreated");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        for dir in [&fallback_dir, &private_tmpdir] {
+            let meta = fs::symlink_metadata(dir).expect("meta");
+            assert_eq!(meta.uid(), nix::unistd::geteuid().as_raw());
+            assert_eq!(meta.mode() & 0o777, 0o700, "{} must be 0700", dir.display());
+        }
+    }
+
+    let cmd = MysqlAdapter.spawn_command(&ctx);
+    let mut c = Command::new(cmd.get_program());
+    c.args(cmd.get_args());
+    c.stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    let mut guard2 = KillOnDrop(Some(c.spawn().expect("spawn mysqld")), "mysqld-restart");
+    assert!(
+        wait_tcp(port, Duration::from_secs(30)),
+        "mysql did not restart after the volatile dirs were rebuilt; log:\n{}",
+        read_log_tail(&logs.join("error.log"), 120)
+    );
+    assert!(matches!(
+        MysqlAdapter.health_check(&ctx).expect("health restart"),
+        dblocal_core::engine::Health::Ready
+    ));
+    let out = mysql_client(&rt, port, pw, "SELECT 1;");
+    assert!(
+        out.status.success(),
+        "tcp login after restart failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    MysqlAdapter.shutdown(&ctx).expect("shutdown restart");
+    if let Some(mut c) = guard2.0.take() {
+        let _ = c.wait();
+    }
+    assert!(wait_tcp_gone(port, Duration::from_secs(30)));
+}
