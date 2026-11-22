@@ -8,7 +8,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use std::fs;
-use std::path::PathBuf;
+use std::path::Path;
 use std::time::SystemTime;
 
 use crate::model::{
@@ -39,7 +39,7 @@ fn instance_at(engine: EngineKey, name: &str, port: u16) -> Instance {
     )
 }
 
-fn write_my_cnf(dir: &PathBuf, port: u16, socket: &PathBuf) {
+fn write_my_cnf(dir: &Path, port: u16, socket: &Path) {
     fs::create_dir_all(dir).expect("dir");
     let body = format!(
         "[mysqld]\nbind-address=127.0.0.1\nport={port}\n\

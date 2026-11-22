@@ -350,20 +350,6 @@ mod tests {
                 sizes,
             }
         }
-
-        fn with_fixture(mut self, name: &str, url: &str) -> Self {
-            let base = format!("{}/tests/fixtures", env!("CARGO_MANIFEST_DIR"));
-            let body = std::fs::read_to_string(format!("{base}/{name}")).expect("fixture");
-            self.text.insert(url.to_owned(), body);
-            self
-        }
-
-        fn with_binary(mut self, name: &str, url: &str) -> Self {
-            let base = format!("{}/tests/fixtures", env!("CARGO_MANIFEST_DIR"));
-            let body = std::fs::read(format!("{base}/{name}")).expect("fixture");
-            self.bytes.insert(url.to_owned(), body);
-            self
-        }
     }
 
     impl Source for FixtureSource {
@@ -593,13 +579,6 @@ mod tests {
                 "strip prefix must be the real archive root: {:?}",
                 artifact.strip_prefix
             );
-        }
-    }
-
-    impl FixtureSource {
-        fn with_text(mut self, url: &str, body: impl Into<String>) -> Self {
-            self.text.insert(url.to_owned(), body.into());
-            self
         }
     }
 }

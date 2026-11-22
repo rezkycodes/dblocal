@@ -103,8 +103,13 @@ fn run_engine_case(
     let uri = harness.uri(&id).expose().to_owned();
     let mut client = MyClient::connect(&uri).expect("connect with the service URI");
     assert_eq!(client.query_i64("SELECT 1").expect("SELECT 1"), 1);
+    // The URI carries no database, so create and use one explicitly.
     client
-        .batch("CREATE TABLE IF NOT EXISTS e2e (v INT); INSERT INTO e2e VALUES (7);")
+        .batch(
+            "CREATE DATABASE IF NOT EXISTS dblocal_e2e; \
+             CREATE TABLE IF NOT EXISTS dblocal_e2e.e2e (v INT); \
+             INSERT INTO dblocal_e2e.e2e VALUES (7);",
+        )
         .expect("create and insert");
 
     // change_port while stopped: the engine must later bind the NEW port.
@@ -149,7 +154,9 @@ fn run_engine_case(
     );
     let mut client = MyClient::connect(&uri).expect("connect on the new port");
     assert_eq!(
-        client.query_i64("SELECT v FROM e2e").expect("read the row"),
+        client
+            .query_i64("SELECT v FROM dblocal_e2e.e2e")
+            .expect("read the row"),
         7,
         "the inserted row must survive a stop/change_port/start"
     );
