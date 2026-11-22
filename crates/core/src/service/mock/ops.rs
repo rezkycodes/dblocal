@@ -718,4 +718,78 @@ impl DblService for MockService {
     fn subscribe(&self) -> broadcast::Receiver<ServiceEvent> {
         lock(&self.inner).tx.subscribe()
     }
+
+    // --- Database & user administration (F-DBU) -----------------------------
+
+    fn list_databases(
+        &self,
+        id: &InstanceId,
+    ) -> crate::service::ServiceResult<Vec<crate::admin::DatabaseInfo>> {
+        super::admin::list_databases(&self.inner, id)
+    }
+
+    fn create_database(&self, id: &InstanceId, name: &str) -> crate::service::ServiceResult<()> {
+        super::admin::create_database(&self.inner, id, name)
+    }
+
+    fn drop_database(
+        &self,
+        id: &InstanceId,
+        name: &str,
+        force: bool,
+    ) -> crate::service::ServiceResult<()> {
+        super::admin::drop_database(&self.inner, id, name, force)
+    }
+
+    fn list_users(
+        &self,
+        id: &InstanceId,
+    ) -> crate::service::ServiceResult<Vec<crate::admin::UserInfo>> {
+        super::admin::list_users(&self.inner, id)
+    }
+
+    fn create_user(
+        &self,
+        id: &InstanceId,
+        name: &str,
+        db: &str,
+        level: crate::admin::PrivilegeLevel,
+    ) -> crate::service::ServiceResult<SecretString> {
+        super::admin::create_user(&self.inner, id, name, db, level)
+    }
+
+    fn reset_superuser_password(
+        &self,
+        id: &InstanceId,
+    ) -> crate::service::ServiceResult<SecretString> {
+        super::admin::reset_superuser_password(&self.inner, id)
+    }
+
+    // --- Updates (F-PKG-05) -------------------------------------------------
+
+    fn check_update(&self) -> crate::service::ServiceResult<crate::service::UpdateStatus> {
+        super::update::check_update(&self.inner)
+    }
+
+    fn apply_update(&self) -> crate::service::ServiceResult<()> {
+        super::update::apply_update(&self.inner)
+    }
+
+    // --- Open in client (F-OPN) ---------------------------------------------
+
+    fn detect_clients(
+        &self,
+        refresh: bool,
+    ) -> crate::service::ServiceResult<Vec<crate::clients::DetectedClient>> {
+        super::clients_mock::detect(&self.inner, refresh)
+    }
+
+    fn open_in_client(
+        &self,
+        id: &InstanceId,
+        client: crate::clients::ClientKind,
+        dry_run: bool,
+    ) -> crate::service::ServiceResult<crate::clients::LaunchPlan> {
+        super::clients_mock::open(&self.inner, id, client, dry_run)
+    }
 }

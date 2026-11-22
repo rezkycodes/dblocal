@@ -4,7 +4,9 @@
 //! and engine adapters into one `DblService`. Design notes live in
 //! `docs/architecture/service.md`.
 
+mod admin_ops;
 mod catalog_ops;
+mod clients_ops;
 mod create;
 mod delete;
 mod helpers;
@@ -18,6 +20,7 @@ mod service;
 mod start;
 mod stop;
 mod supervisor;
+mod update_ops;
 
 pub use service::{
     LocalService, ProcessTerminator, RuntimeSource, SecretAccess, ServiceOptions, Terminator,

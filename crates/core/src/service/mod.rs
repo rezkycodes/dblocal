@@ -24,8 +24,63 @@ use crate::model::{
 };
 use crate::secret::SecretString;
 
+pub use crate::admin::{DatabaseInfo, PrivilegeLevel, UserInfo};
+pub use crate::clients::{ClientKind, DetectedClient, LaunchPlan};
 pub use error::UserFacingError;
 pub use view::{CatalogView, EngineEntry, FailureInfo, InstanceView, VersionEntry};
+
+/// Result of a service call that must keep its module-local stable `DBL-xxxx`
+/// code.
+///
+/// The lifecycle calls above return [`crate::error::Result`], whose variants own
+/// fixed codes. The admin, update and client calls delegate to modules that own
+/// their own code ranges (`DBL-81xx`, `DBL-80xx`, `DBL-83xx`); returning
+/// [`UserFacingError`] keeps those codes instead of flattening them into
+/// `DblError`'s generic ones.
+pub type ServiceResult<T> = std::result::Result<T, UserFacingError>;
+
+/// Builds the "not available in this build" default for a front-end that has
+/// not implemented a newer method.
+fn not_implemented<T>() -> ServiceResult<T> {
+    Err(UserFacingError::new(
+        crate::error::CODE_NOT_IMPLEMENTED,
+        crate::strings::ERR_NOT_IMPLEMENTED,
+    ))
+}
+
+/// One newer release, as a front-end renders it.
+///
+/// Immutable value type: no secrets and no paths from release JSON, only the
+/// bounded fields the UI shows.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AvailableUpdateView {
+    /// Semantic version of the release.
+    pub version: String,
+    /// Release tag as GitHub reports it.
+    pub tag: String,
+    /// Sanitized, bounded release notes.
+    pub release_notes: String,
+    /// Platform-matching asset name, for diagnostics.
+    pub asset_name: String,
+    /// Declared asset size in bytes.
+    pub size_bytes: u64,
+    /// Whether this install can self-update (`InstallKind::can_self_update`).
+    pub can_self_update: bool,
+}
+
+/// Answer to "is there a newer DBLocal?" — the read model of `F-PKG-05` AC1.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UpdateStatus {
+    /// The running version that was compared.
+    pub current: String,
+    /// The newer release, when one is available.
+    pub available: Option<AvailableUpdateView>,
+    /// How this binary was installed, which decides whether applying is allowed.
+    pub install_kind: crate::update::InstallKind,
+    /// Where the user must update instead, when self-update is refused
+    /// (`F-PKG-05` AC2).
+    pub package_manager_hint: Option<String>,
+}
 
 /// Identifier of a long-running operation, such as an install or a start.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -165,6 +220,25 @@ pub enum ServiceEvent {
         /// Appended lines, oldest first.
         lines: Vec<String>,
     },
+    /// The list of databases or users for one instance changed, so the
+    /// Databases tab (`F-DBU-01` AC2) re-reads it.
+    ///
+    /// Emitted after a create/drop database, a created user or a reset that
+    /// changed the superuser credential. It carries no rows: the consumer
+    /// re-reads through [`DblService::list_databases`] / [`DblService::list_users`],
+    /// so a password can never ride an event.
+    AdminChanged {
+        /// Instance whose admin view is stale.
+        id: InstanceId,
+    },
+    /// An update check finished and the result is ready to render (`F-PKG-05`).
+    UpdateChecked {
+        /// Newer version, or `None` when the running version is current.
+        version: Option<String>,
+        /// Whether this install may self-update; when false the UI points at the
+        /// package manager instead.
+        can_self_update: bool,
+    },
 }
 
 /// The only surface the GUI and the CLI use.
@@ -229,6 +303,101 @@ pub trait DblService: Send + Sync + 'static {
     /// was never watched is a no-op. This is the smallest API that satisfies
     /// `F-LOG-01` AC1 without the UI polling.
     fn watch_logs(&self, id: &InstanceId, enabled: bool) -> Result<()>;
+
+    // --- Database & user administration (F-DBU-01..03) ----------------------
+
+    /// Lists a running PostgreSQL instance's databases with owner and size.
+    ///
+    /// Engines without a database/user model — MySQL and MariaDB until their
+    /// executor lands, and Valkey in v1 — return a typed "not supported for this
+    /// engine yet" error, never an empty list.
+    fn list_databases(&self, id: &InstanceId) -> ServiceResult<Vec<DatabaseInfo>> {
+        let _ = id;
+        not_implemented()
+    }
+
+    /// Creates a database with UTF-8 encoding (`F-DBU-01` AC2).
+    fn create_database(&self, id: &InstanceId, name: &str) -> ServiceResult<()> {
+        let _ = (id, name);
+        not_implemented()
+    }
+
+    /// Drops a database. `force == false` refuses while a session is connected.
+    fn drop_database(&self, id: &InstanceId, name: &str, force: bool) -> ServiceResult<()> {
+        let _ = (id, name, force);
+        not_implemented()
+    }
+
+    /// Lists login-capable roles of a running PostgreSQL instance.
+    fn list_users(&self, id: &InstanceId) -> ServiceResult<Vec<UserInfo>> {
+        let _ = id;
+        not_implemented()
+    }
+
+    /// Creates a login role at `level` on `db` and returns its password exactly
+    /// once (`F-DBU-02` AC2). The service never stores this password; the caller
+    /// shows it once and discards it.
+    fn create_user(
+        &self,
+        id: &InstanceId,
+        name: &str,
+        db: &str,
+        level: PrivilegeLevel,
+    ) -> ServiceResult<SecretString> {
+        let _ = (id, name, db, level);
+        not_implemented()
+    }
+
+    /// Resets the superuser password, persists it, and returns the new value
+    /// once (`F-DBU-03`). On any failure the old password still works and the
+    /// stored credential is unchanged (`F-DBU-03` AC2).
+    fn reset_superuser_password(&self, id: &InstanceId) -> ServiceResult<SecretString> {
+        let _ = id;
+        not_implemented()
+    }
+
+    // --- Updates (F-PKG-05) -------------------------------------------------
+
+    /// Checks GitHub Releases for a newer version, only when the caller asks.
+    ///
+    /// There is no timer and no startup check; the caller decides when to call
+    /// this. The result carries the [`crate::update::InstallKind`] so a
+    /// package-manager install can be pointed at its manager (`F-PKG-05` AC2).
+    fn check_update(&self) -> ServiceResult<UpdateStatus> {
+        not_implemented()
+    }
+
+    /// Downloads, verifies and applies an available update. Refused for an
+    /// install kind that a package manager owns.
+    fn apply_update(&self) -> ServiceResult<()> {
+        not_implemented()
+    }
+
+    // --- Open in external client (F-OPN-01..02) -----------------------------
+
+    /// The clients detected on this machine, cached for the process.
+    ///
+    /// `refresh` re-runs detection and replaces the cache, which is how the
+    /// "Open in…" menu picks up an app installed after launch.
+    fn detect_clients(&self, refresh: bool) -> ServiceResult<Vec<DetectedClient>> {
+        let _ = refresh;
+        not_implemented()
+    }
+
+    /// Opens `client` against `target`, returning the plan it used.
+    ///
+    /// `dry_run` returns the plan without launching, for `--dry-run`. The
+    /// password is only ever placed in a private launcher script, never in the
+    /// plan's argv/URL/command string.
+    fn open_in_client(
+        &self,
+        id: &InstanceId,
+        client: ClientKind,
+        dry_run: bool,
+    ) -> ServiceResult<LaunchPlan> {
+        let _ = (id, client, dry_run);
+        not_implemented()
+    }
 
     /// Lists every installed runtime.
     fn list_runtimes(&self) -> Result<Vec<Runtime>>;

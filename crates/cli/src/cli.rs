@@ -118,6 +118,116 @@ pub enum Command {
         #[arg(long, default_value_t = crate::consts::DEFAULT_LOG_LINES)]
         lines: usize,
     },
+    /// Mengelola database pada satu instance (F-DBU-01).
+    Db {
+        #[command(subcommand)]
+        command: DbCommand,
+    },
+    /// Mengelola user database pada satu instance (F-DBU-02).
+    User {
+        #[command(subcommand)]
+        command: UserCommand,
+    },
+    /// Mengganti password superuser satu instance (F-DBU-03).
+    Password {
+        #[command(subcommand)]
+        command: PasswordCommand,
+    },
+    /// Memeriksa dan memasang pembaruan DBLocal (F-PKG-05).
+    Update {
+        #[command(subcommand)]
+        command: UpdateCommand,
+    },
+    /// Membuka instance di client eksternal (F-OPN).
+    Open {
+        /// Nama instance.
+        instance: String,
+        /// Client yang dibuka: psql, mysql, mariadb, valkey-cli, redis-cli,
+        /// tableplus, dbeaver, atau dbdelve.
+        #[arg(long)]
+        client: String,
+        /// Cetak rencana peluncuran tanpa menjalankan client.
+        #[arg(long = "dry-run")]
+        dry_run: bool,
+    },
+}
+
+/// `dblocal db ...` subcommands.
+#[derive(Debug, Subcommand)]
+pub enum DbCommand {
+    /// Menampilkan daftar database.
+    List {
+        /// Nama instance.
+        instance: String,
+        /// Cetak JSON yang bisa dipipe.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Membuat database baru.
+    Create {
+        /// Nama instance.
+        instance: String,
+        /// Nama database.
+        name: String,
+    },
+    /// Menghapus database. Wajib konfirmasi ulang nama (F-DBU-01 AC3).
+    Drop {
+        /// Nama instance.
+        instance: String,
+        /// Nama database.
+        name: String,
+        /// Lewati konfirmasi.
+        #[arg(long)]
+        yes: bool,
+        /// Ketik ulang nama database di sini; harus sama dengan `name`.
+        #[arg(long)]
+        confirm: Option<String>,
+    },
+}
+
+/// `dblocal user ...` subcommands.
+#[derive(Debug, Subcommand)]
+pub enum UserCommand {
+    /// Membuat user dengan tingkat hak tertentu.
+    Create {
+        /// Nama instance.
+        instance: String,
+        /// Nama user.
+        name: String,
+        /// Database tujuan GRANT.
+        #[arg(long)]
+        db: String,
+        /// Tingkat hak: `ro` (read-only) atau `rw` (read-write).
+        #[arg(long)]
+        level: String,
+    },
+}
+
+/// `dblocal password ...` subcommands.
+#[derive(Debug, Subcommand)]
+pub enum PasswordCommand {
+    /// Mengganti password superuser; URI baru dicetak sekali ke stdout.
+    Reset {
+        /// Nama instance.
+        instance: String,
+    },
+}
+
+/// `dblocal update ...` subcommands.
+#[derive(Debug, Subcommand)]
+pub enum UpdateCommand {
+    /// Memeriksa apakah ada versi lebih baru.
+    Check {
+        /// Cetak JSON yang bisa dipipe.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Mengunduh, memverifikasi, dan memasang pembaruan.
+    Apply {
+        /// Lewati konfirmasi.
+        #[arg(long)]
+        yes: bool,
+    },
 }
 
 /// Entry point used by `main`; returns the process exit code.
@@ -304,6 +414,27 @@ mod tests {
             &["delete", "app", "--yes", "--purge"],
             &["logs", "app", "--follow"],
             &["logs", "app", "--lines", "50"],
+            &["db", "list", "app"],
+            &["db", "list", "app", "--json"],
+            &["db", "create", "app", "app_db"],
+            &["db", "drop", "app", "app_db", "--yes"],
+            &["db", "drop", "app", "app_db", "--confirm", "app_db"],
+            &[
+                "user",
+                "create",
+                "app",
+                "report_user",
+                "--db",
+                "app_db",
+                "--level",
+                "ro",
+            ],
+            &["password", "reset", "app"],
+            &["update", "check"],
+            &["update", "check", "--json"],
+            &["update", "apply", "--yes"],
+            &["open", "app", "--client", "tableplus"],
+            &["open", "app", "--client", "psql", "--dry-run"],
         ];
         for args in cases {
             parse(args).unwrap_or_else(|err| panic!("{args:?}: {err}"));

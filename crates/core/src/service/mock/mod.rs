@@ -6,10 +6,13 @@
 
 #![cfg(feature = "mock")]
 
+mod admin;
 mod catalog;
+mod clients_mock;
 mod clock;
 pub mod demo;
 mod ops;
+mod update;
 pub(crate) mod uri;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
@@ -19,6 +22,7 @@ use std::time::{Duration, SystemTime};
 use tokio::sync::broadcast;
 
 use crate::DblError;
+use crate::admin::{DatabaseInfo, UserInfo};
 use crate::model::{
     ArchivedData, AuthMode, CatalogStatus, CredentialBackend, EngineKey, Instance, InstanceEvent,
     InstanceId, InstanceSpec, InstanceStatus, StartFailure,
@@ -26,6 +30,7 @@ use crate::model::{
 use crate::platform::{Arch, Os};
 use crate::secret::SecretString;
 use crate::service::{CatalogView, FailureInfo, InstanceView, OperationId, ServiceEvent};
+use crate::update::InstallKind;
 
 use clock::Deterministic;
 
@@ -128,6 +133,12 @@ struct Inner {
     catalog_status: CatalogStatus,
     next_op: u64,
     failures: VecDeque<ScriptedFailure>,
+    /// Admin view, per instance (`F-DBU`).
+    databases: HashMap<InstanceId, Vec<DatabaseInfo>>,
+    users: HashMap<InstanceId, Vec<UserInfo>>,
+    /// Update state: running version and an optional install-kind override.
+    current_version: semver::Version,
+    install_kind: Option<InstallKind>,
 }
 
 impl Inner {
@@ -152,6 +163,11 @@ impl Inner {
             catalog_status: CatalogStatus::Fresh,
             next_op: 1,
             failures: VecDeque::new(),
+            databases: HashMap::new(),
+            users: HashMap::new(),
+            current_version: semver::Version::parse(env!("CARGO_PKG_VERSION"))
+                .unwrap_or_else(|_| semver::Version::new(0, 0, 0)),
+            install_kind: None,
         }
     }
 
@@ -334,6 +350,16 @@ impl MockService {
     /// Queues a scripted failure consumed by the next matching operation.
     pub fn push_failure(&self, failure: ScriptedFailure) {
         lock(&self.inner).failures.push_back(failure);
+    }
+
+    /// Sets the install kind the update mock reports (`F-PKG-05` AC2).
+    pub fn set_install_kind(&self, kind: InstallKind) {
+        lock(&self.inner).install_kind = Some(kind);
+    }
+
+    /// Sets the running version the update mock compares against.
+    pub fn set_current_version(&self, version: semver::Version) {
+        lock(&self.inner).current_version = version;
     }
 
     /// Seeds an instance in `status` for demos/tests and emits a change event.
