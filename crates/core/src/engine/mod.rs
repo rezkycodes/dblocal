@@ -14,8 +14,8 @@ mod valkey;
 pub use mysql::{
     Handshake as MysqlHandshake, MysqlAdapter, my_cnf_path,
     parse_handshake_payload as parse_mysql_handshake_payload, pidfile_path as mysql_pidfile_path,
-    read_handshake as read_mysql_handshake,
-    socket_path as mysql_socket_path, validate_socket_path_len as validate_mysql_socket_path_len,
+    read_handshake as read_mysql_handshake, socket_path as mysql_socket_path,
+    validate_socket_path_len as validate_mysql_socket_path_len,
 };
 pub use postgres::{
     PostgresAdapter, PostmasterIdentity, SocketDir as PostgresSocketDir,
