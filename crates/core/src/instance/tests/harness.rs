@@ -891,7 +891,14 @@ fn wait_for_finished(
         // The operation may have finished before this receiver subscribed; its
         // `OperationFinished` is then lost to the broadcast. Completion is still
         // observable through the registry, so stop waiting once it reports done.
+        //
+        // `finish_operation` broadcasts before recording the registry entry, so a
+        // receiver that is subscribed (the normal case here) finds the event in its
+        // channel by the time the registry says finished. Drain once more before
+        // returning so that ordering actually pays off instead of racing the
+        // registry read against the final `try_recv`.
         if is_finished() {
+            drain(receiver, &mut collected);
             return collected;
         }
         assert!(
@@ -900,6 +907,21 @@ fn wait_for_finished(
             describe(&collected)
         );
         std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+/// Drains every currently-available event into `collected`.
+fn drain(
+    receiver: &mut tokio::sync::broadcast::Receiver<ServiceEvent>,
+    collected: &mut Vec<ServiceEvent>,
+) {
+    loop {
+        match receiver.try_recv() {
+            Ok(event) => collected.push(event),
+            Err(tokio::sync::broadcast::error::TryRecvError::Empty) => return,
+            Err(tokio::sync::broadcast::error::TryRecvError::Lagged(_)) => continue,
+            Err(tokio::sync::broadcast::error::TryRecvError::Closed) => return,
+        }
     }
 }
 
