@@ -11,6 +11,9 @@ mod background;
 mod bg_service_tests;
 pub mod bootstrap;
 #[cfg(test)]
+#[path = "app/bootstrap_r3_tests.rs"]
+mod bootstrap_r3_tests;
+#[cfg(test)]
 #[path = "app/bootstrap_tests.rs"]
 mod bootstrap_tests;
 mod components;
