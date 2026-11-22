@@ -115,6 +115,8 @@ pub struct Workspace {
     home_size_bytes: Option<u64>,
     /// DBLocal home root for status bar display.
     home_root: std::path::PathBuf,
+    /// The user's home directory, computed once for path abbreviation.
+    home_dir: Option<std::path::PathBuf>,
     home_size_in_flight: bool,
     home_size_dirty: bool,
     home_size_last: Option<Instant>,
@@ -261,6 +263,7 @@ impl Workspace {
             home_root: dblocal_core::paths::DblPaths::from_env()
                 .map(|p| p.root().to_path_buf())
                 .unwrap_or_else(|_| std::path::PathBuf::from("~/.dblocal")),
+            home_dir: workspace_api::home_dir_from_env(),
             home_size_in_flight: false,
             home_size_dirty: false,
             home_size_last: None,

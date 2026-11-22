@@ -265,14 +265,19 @@ pub fn abbreviate_home(path: &std::path::Path, home: Option<&std::path::Path>) -
 }
 
 /// Engine log file path, derived from the real home root (R9).
-pub fn engine_log_path(home_root: &std::path::Path, name: &str) -> String {
-    home_root
-        .join("instances")
-        .join(name)
-        .join("logs")
-        .join("engine.log")
-        .to_string_lossy()
-        .into_owned()
+pub fn engine_log_path(
+    home_root: &std::path::Path,
+    home: Option<&std::path::Path>,
+    name: &str,
+) -> String {
+    abbreviate_home(
+        &home_root
+            .join("instances")
+            .join(name)
+            .join("logs")
+            .join("engine.log"),
+        home,
+    )
 }
 
 pub fn format_bytes_id(bytes: u64) -> String {
@@ -327,13 +332,11 @@ pub fn header_subtitle(view: &InstanceView) -> String {
 }
 
 /// Data directory of an instance, derived from the real home root (R9).
-pub fn data_dir(home_root: &std::path::Path, name: &str) -> String {
-    home_root
-        .join("instances")
-        .join(name)
-        .join("data")
-        .to_string_lossy()
-        .into_owned()
+///
+/// `$HOME`-relative paths are abbreviated the same way the status bar is, so
+/// the card never prints a path the user does not have.
+pub fn data_dir(home_root: &std::path::Path, home: Option<&std::path::Path>, name: &str) -> String {
+    abbreviate_home(&home_root.join("instances").join(name).join("data"), home)
 }
 
 /// Credential reference shown for an instance (`dblocal:<name>`).

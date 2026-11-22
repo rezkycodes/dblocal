@@ -298,9 +298,13 @@ impl Workspace {
             ))
             .child(kv(
                 strings::UI_OVERVIEW_DATA_DIR,
-                Label::new(format::data_dir(self.home_root(), &view.name))
-                    .font_family(theme.mono_font_family.clone())
-                    .truncate(),
+                Label::new(format::data_dir(
+                    self.home_root(),
+                    self.home_dir(),
+                    &view.name,
+                ))
+                .font_family(theme.mono_font_family.clone())
+                .truncate(),
                 theme,
             ))
             .child(kv(strings::UI_OVERVIEW_DATA_SIZE, Label::new(size), theme))

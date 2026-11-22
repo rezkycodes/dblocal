@@ -15,7 +15,9 @@ use crate::format::{self, PaletteAction};
 
 use super::{ActiveDownload, CreateForm, InnerTab, UriView, Workspace};
 
-fn dirs_next_home() -> Option<std::path::PathBuf> {
+/// The user's home directory as the platform reports it, read once at
+/// construction so a render never touches the environment (R9).
+pub(crate) fn home_dir_from_env() -> Option<std::path::PathBuf> {
     std::env::var_os("HOME")
         .or_else(|| std::env::var_os("USERPROFILE"))
         .map(std::path::PathBuf::from)
@@ -365,7 +367,12 @@ impl Workspace {
     }
 
     pub(crate) fn home_display(&self) -> String {
-        crate::format::abbreviate_home(&self.home_root, dirs_next_home().as_deref())
+        crate::format::abbreviate_home(&self.home_root, self.home_dir.as_deref())
+    }
+
+    /// The user's home directory, for abbreviating instance paths (R9).
+    pub(crate) fn home_dir(&self) -> Option<&std::path::Path> {
+        self.home_dir.as_deref()
     }
 
     pub(crate) fn home_root(&self) -> &std::path::Path {
