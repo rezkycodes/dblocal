@@ -29,6 +29,12 @@ pub use valkey::{
     read_pidfile, sync_port as sync_valkey_port,
 };
 
+/// The MySQL adapter's start preparation, as an associated-function style entry
+/// used by the start dispatch (`instance/start.rs::prepare`).
+pub fn mysql_prepare_run(ctx: &RunContext) -> Result<()> {
+    MysqlAdapter.prepare_run(ctx)
+}
+
 use std::path::PathBuf;
 use std::process::Command;
 
@@ -226,6 +232,15 @@ pub trait EngineAdapter: Send + Sync {
     /// Optional Phase 2 admin operations.
     fn admin_ops(&self) -> Option<&dyn AdminOps> {
         None
+    }
+
+    /// Recreates engine-owned runtime state before every start.
+    ///
+    /// The start path calls this on every start so volatile directories that a
+    /// previous run may have lost (tempfiles root, fallback unix socket dir) are
+    /// rebuilt. Returns the engine error when the state cannot be rebuilt.
+    fn prepare_run(&self, _ctx: &RunContext) -> Result<()> {
+        Ok(())
     }
 }
 

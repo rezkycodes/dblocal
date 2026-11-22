@@ -34,6 +34,10 @@ impl EngineAdapter for MysqlAdapter {
         EngineKey::Mysql
     }
 
+    fn prepare_run(&self, ctx: &RunContext) -> Result<()> {
+        prepare_runtime_dirs_for_start(&ctx.run_dir, ctx.port.get())
+    }
+
     fn initialize(&self, ctx: &InitContext) -> Result<()> {
         let run_dir = sibling_dir(&ctx.data_dir, consts::DIR_RUN);
         let logs_dir = sibling_dir(&ctx.data_dir, consts::DIR_LOGS);
