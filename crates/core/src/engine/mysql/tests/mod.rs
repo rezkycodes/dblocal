@@ -4,6 +4,7 @@ use crate::model::Port;
 use sha2::Digest;
 
 mod core;
+mod port_sync;
 mod prepare;
 mod process;
 mod socket_cleanup;

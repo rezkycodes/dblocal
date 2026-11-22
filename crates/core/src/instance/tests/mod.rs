@@ -11,6 +11,7 @@ mod harness;
 mod harness_fakes;
 mod lifecycle;
 mod mutations;
+mod port_sync;
 mod races;
 mod recovery;
 mod safety;

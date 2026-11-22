@@ -288,7 +288,12 @@ pub(crate) fn sync_instance_port(paths: &DblPaths, instance: &Instance) -> Resul
                 crate::engine::sync_mariadb_port(&paths.data_dir(name), port)?;
             }
         }
-        EngineKey::Mysql => {}
+        EngineKey::Mysql => {
+            let conf = paths.run_dir(name).join("my.cnf");
+            if conf.exists() {
+                crate::engine::sync_mysql_port(&paths.run_dir(name), port)?;
+            }
+        }
     }
     Ok(())
 }

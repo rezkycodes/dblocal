@@ -492,7 +492,10 @@ pub fn my_cnf_path(run_dir: &Path) -> PathBuf {
 }
 
 pub fn log_path(logs_dir: &Path) -> PathBuf {
-    logs_dir.join("error.log")
+    // The service's log viewer and `failure_tail(log_file_for(..))` both read
+    // `logs/mysql.log`; `log-error` must point at that same file or a start
+    // failure would be diagnosed from an empty tail (finding 7).
+    logs_dir.join("mysql.log")
 }
 
 pub fn pidfile_path(run_dir: &Path) -> PathBuf {
@@ -520,6 +523,46 @@ pub use socket::{resolve_socket_path, socket_path, socket_path_limit, validate_s
 
 pub fn prepare_run(ctx: &RunContext) -> Result<()> {
     prepare_runtime_dirs_for_start(&ctx.run_dir, ctx.port.get())
+}
+
+/// Rewrites the managed `port`/`socket` directives in `my.cnf`.
+///
+/// `my.cnf` is written once by `initialize`; after `change_port` the store and
+/// the config disagreed, so the next start bound the old port (finding 6, the
+/// same defect class W2-F fixed for PostgreSQL and Valkey). Atomic and
+/// idempotent; fails if the config is missing or has no `port` directive, and
+/// never writes a partial file.
+pub fn sync_port(run_dir: &Path, port: u16) -> Result<()> {
+    let path = my_cnf_path(run_dir);
+    let contents = fs::read_to_string(&path).map_err(|e| DblError::Engine {
+        reason: format!("cannot read {}: {e}", path.display()),
+    })?;
+    // Recompute the socket exactly as `initialize` would, so a long-home
+    // fallback socket keeps working after the port changes.
+    let instance_dir = run_dir.parent().unwrap_or(run_dir);
+    let socket = resolve_socket_path(run_dir, port, instance_dir)?;
+    validate_socket_path_len(&socket)?;
+
+    let mut replaced_port = false;
+    let mut out = String::with_capacity(contents.len() + 32);
+    for line in contents.lines() {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with("port=") || trimmed.starts_with("port =") {
+            let _ = writeln!(out, "port={port}");
+            replaced_port = true;
+        } else if trimmed.starts_with("socket=") || trimmed.starts_with("socket =") {
+            let _ = writeln!(out, "socket={}", socket.display());
+        } else {
+            out.push_str(line);
+            out.push('\n');
+        }
+    }
+    if !replaced_port {
+        return Err(DblError::Engine {
+            reason: format!("{} has no `port` directive to rewrite", path.display()),
+        });
+    }
+    write_private_config_atomic(&path, &out)
 }
 
 pub fn sibling_dir(data_dir: &Path, leaf: &str) -> PathBuf {

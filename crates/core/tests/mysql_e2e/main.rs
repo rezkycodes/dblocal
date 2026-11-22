@@ -63,7 +63,7 @@ fn mysql_84_full_cycle() {
     assert!(
         wait_tcp(port, Duration::from_secs(30)),
         "mysql did not listen; log:\n{}",
-        read_log_tail(&logs.join("error.log"), 120)
+        read_log_tail(&logs.join("mysql.log"), 120)
     );
     let pid = guard.0.as_ref().unwrap().id();
     assert_only_instance_loopback_port(pid, port);
@@ -145,7 +145,7 @@ fn mysql_84_full_cycle() {
         wait_tcp_gone(port, Duration::from_secs(30)),
         "port still listening"
     );
-    let log = read_log_tail(&logs.join("error.log"), 40);
+    let log = read_log_tail(&logs.join("mysql.log"), 40);
     assert!(
         log.contains("Shutdown complete"),
         "log missing Shutdown complete:\n{log}"
@@ -156,7 +156,7 @@ fn mysql_84_full_cycle() {
     assert!(
         wait_tcp(port, Duration::from_secs(30)),
         "restart did not listen: {}",
-        read_log_tail(&logs.join("error.log"), 80)
+        read_log_tail(&logs.join("mysql.log"), 80)
     );
     let h2 = MysqlAdapter.health_check(&ctx).expect("health restart");
     assert!(matches!(h2, dblocal_core::engine::Health::Ready));
@@ -212,12 +212,12 @@ fn mysql_84_two_instances_side_by_side() {
     assert!(
         wait_tcp(port_a, Duration::from_secs(30)),
         "a not listening: {}",
-        read_log_tail(&la.join("error.log"), 80)
+        read_log_tail(&la.join("mysql.log"), 80)
     );
     assert!(
         wait_tcp(port_b, Duration::from_secs(30)),
         "b not listening: {}",
-        read_log_tail(&lb.join("error.log"), 80)
+        read_log_tail(&lb.join("mysql.log"), 80)
     );
     assert_only_instance_loopback_port(ga.0.as_ref().unwrap().id(), port_a);
     assert_only_instance_loopback_port(gb.0.as_ref().unwrap().id(), port_b);
@@ -277,7 +277,7 @@ fn mysql_84_spawn_argv_has_no_password_canary() {
     assert!(
         wait_tcp(port, Duration::from_secs(30)),
         "listen: {}",
-        read_log_tail(&logs.join("error.log"), 80)
+        read_log_tail(&logs.join("mysql.log"), 80)
     );
     // argv check is done in mysql_start; also check /proc/cmdline of the process.
     let pid = guard.0.as_ref().unwrap().id();
@@ -389,7 +389,7 @@ fn mysql_84_no_password_cycle() {
     assert!(
         wait_tcp(port, Duration::from_secs(30)),
         "mysql did not listen; log:\n{}",
-        read_log_tail(&logs.join("error.log"), 120)
+        read_log_tail(&logs.join("mysql.log"), 120)
     );
     let h = MysqlAdapter.health_check(&ctx).expect("health");
     assert!(matches!(h, dblocal_core::engine::Health::Ready));
@@ -451,7 +451,7 @@ fn mysql_84_hostile_password_works_and_never_reaches_a_file() {
     assert!(
         wait_tcp(port, Duration::from_secs(30)),
         "mysql did not listen; log:\n{}",
-        read_log_tail(&logs.join("error.log"), 120)
+        read_log_tail(&logs.join("mysql.log"), 120)
     );
     let ctx = run_ctx(&rt, &data, &logs, &run, port, AuthMode::Password, Some(pw));
 
@@ -587,7 +587,7 @@ fn mysql_84_deep_socket_path_falls_back_and_cleans_up() {
     assert!(
         wait_tcp(port, Duration::from_secs(30)),
         "mysql did not listen; log:\n{}",
-        read_log_tail(&logs.join("error.log"), 120)
+        read_log_tail(&logs.join("mysql.log"), 120)
     );
     let ctx = run_ctx(&rt, &data, &logs, &run, port, AuthMode::Password, Some(pw));
     let h = MysqlAdapter.health_check(&ctx).expect("health");
@@ -655,7 +655,7 @@ fn mysql_84_deep_socket_restart_after_volatile_dirs_disappear() {
     assert!(
         wait_tcp(port, Duration::from_secs(30)),
         "mysql did not listen; log:\n{}",
-        read_log_tail(&logs.join("error.log"), 120)
+        read_log_tail(&logs.join("mysql.log"), 120)
     );
     let ctx = run_ctx(&rt, &data, &logs, &run, port, AuthMode::Password, Some(pw));
     assert!(matches!(
@@ -704,7 +704,7 @@ fn mysql_84_deep_socket_restart_after_volatile_dirs_disappear() {
     assert!(
         wait_tcp(port, Duration::from_secs(30)),
         "mysql did not restart after the volatile dirs were rebuilt; log:\n{}",
-        read_log_tail(&logs.join("error.log"), 120)
+        read_log_tail(&logs.join("mysql.log"), 120)
     );
     assert!(matches!(
         MysqlAdapter.health_check(&ctx).expect("health restart"),
