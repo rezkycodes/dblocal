@@ -758,6 +758,79 @@ fn resolve_socket_path(data_dir: &Path, port: u16) -> PathBuf {
 
 #[test]
 #[ignore = "e2e: requires cached MariaDB 11.8 tarball; run with DBLOCAL_E2E=1 under flock $HOME/.cache/dblocal-e2e.lock"]
+fn mariadb_118_restart_after_volatile_dirs_removed() {
+    require_e2e();
+    let tmp = tempfile::tempdir().expect("tmp");
+    let rt = setup_runtime(tmp.path());
+    let port = 43122u16;
+    require_port_free(port);
+
+    let inst = tmp.path().join("volatile");
+    let data = inst.join("data");
+    let logs = inst.join("logs");
+    let mut run = inst.join("run");
+    for _ in 0..8 {
+        run = run.join("very_long_directory_name_for_socket_path_test");
+    }
+    fs::create_dir_all(&logs).unwrap();
+    fs::create_dir_all(&run).unwrap();
+    fs::create_dir_all(&data).unwrap();
+    let pw = "e2e-volatile";
+
+    MariaDbAdapter
+        .initialize(&init_ctx(&rt, &data, port, AuthMode::Password, Some(pw)))
+        .expect("init");
+    let mut g = start_mariadb(&rt, &data, &logs, &run, port, AuthMode::Password, Some(pw));
+    assert!(wait_tcp(port, Duration::from_secs(30)), "listen");
+    MariaDbAdapter
+        .shutdown(&run_ctx(
+            &rt,
+            &data,
+            &logs,
+            &run,
+            port,
+            AuthMode::Password,
+            Some(pw),
+        ))
+        .expect("shutdown");
+    let _ = g.0.take().map(|mut c| c.wait());
+    assert!(wait_tcp_gone(port, Duration::from_secs(30)));
+
+    let sock = resolve_socket_path(&data, port);
+    let fallback_dir = sock.parent().expect("socket dir");
+    let natural_dir = data.parent().expect("inst").join("run");
+    assert_ne!(
+        fallback_dir, natural_dir,
+        "test must exercise fallback socket dir"
+    );
+    fs::remove_dir_all(fallback_dir).expect("remove fallback dir");
+    let tmpdir = natural_dir.join("tmp");
+    fs::remove_dir_all(&tmpdir).expect("remove tmpdir");
+
+    let run_ctx_v = run_ctx(&rt, &data, &logs, &run, port, AuthMode::Password, Some(pw));
+    dblocal_core::engine::prepare_mariadb_run(&run_ctx_v).expect("prepare_run");
+    let mut g2 = start_mariadb(&rt, &data, &logs, &run, port, AuthMode::Password, Some(pw));
+    assert!(wait_tcp(port, Duration::from_secs(30)), "restart listen");
+    let who = sql_query(&rt, port, "root", Some(pw), "SELECT 1;");
+    assert_eq!(who, "1");
+    MariaDbAdapter
+        .shutdown(&run_ctx(
+            &rt,
+            &data,
+            &logs,
+            &run,
+            port,
+            AuthMode::Password,
+            Some(pw),
+        ))
+        .expect("shutdown2");
+    let _ = g2.0.take().map(|mut c| c.wait());
+    assert!(wait_tcp_gone(port, Duration::from_secs(30)));
+    eprintln!("mariadb volatile dir restart OK");
+}
+
+#[test]
+#[ignore = "e2e: requires cached MariaDB 11.8 tarball; run with DBLOCAL_E2E=1 under flock $HOME/.cache/dblocal-e2e.lock"]
 fn mariadb_118_shared_tmpdir_isolated() {
     require_e2e();
     let rt = setup_runtime(Path::new("."));

@@ -246,6 +246,65 @@ fn clean_stale_tmpdir(dir: &Path) -> Result<()> {
     Ok(())
 }
 
+fn read_config_socket_path(data_dir: &Path) -> Result<PathBuf> {
+    let path = config_path(data_dir);
+    let contents = fs::read_to_string(&path).map_err(|e| DblError::Engine {
+        reason: format!("cannot read {}: {e}", path.display()),
+    })?;
+    for line in contents.lines() {
+        let trimmed = line.trim_start();
+        let value = trimmed
+            .strip_prefix("socket=")
+            .or_else(|| trimmed.strip_prefix("socket ="));
+        let Some(value) = value else { continue };
+        let value = value.trim();
+        if !value.is_empty() {
+            return Ok(PathBuf::from(value));
+        }
+    }
+    Err(DblError::Engine {
+        reason: format!("{} has no `socket` directive", path.display()),
+    })
+}
+
+/// Prepares volatile runtime directories before every start.
+pub fn prepare_run(ctx: &RunContext) -> Result<()> {
+    let tmp = tmpdir_path(&ctx.data_dir);
+    ensure_private_tmpdir(&tmp)?;
+
+    let socket = read_config_socket_path(&ctx.data_dir)?;
+    let socket_dir = socket.parent().ok_or_else(|| DblError::Engine {
+        reason: format!("socket path {} has no parent", socket.display()),
+    })?;
+    let natural_dir = sibling_dir(&ctx.data_dir, consts::DIR_RUN);
+    if socket_dir != natural_dir {
+        socket::ensure_secure_runtime_dir(socket_dir)?;
+    } else {
+        crate::fsutil::ensure_private_dir(socket_dir).map_err(|e| DblError::Engine {
+            reason: format!("cannot create run directory {}: {e}", socket_dir.display()),
+        })?;
+    }
+    if socket.exists() {
+        let meta = fs::symlink_metadata(&socket).map_err(|e| DblError::Engine {
+            reason: format!("cannot inspect socket {}: {e}", socket.display()),
+        })?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::FileTypeExt;
+            if meta.file_type().is_socket() {
+                fs::remove_file(&socket).map_err(|e| DblError::Engine {
+                    reason: format!("cannot remove stale socket {}: {e}", socket.display()),
+                })?;
+            }
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = meta;
+        }
+    }
+    Ok(())
+}
+
 fn write_private_config(path: &Path, contents: &str) -> Result<()> {
     crate::fsutil::write_private_file_atomic(path, contents.as_bytes()).map_err(|e| {
         DblError::Engine {

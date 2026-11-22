@@ -11,7 +11,9 @@ mod postgres;
 pub mod uri;
 mod valkey;
 
-pub use mariadb::{MariaDbAdapter, sync_port as sync_mariadb_port};
+pub use mariadb::{
+    MariaDbAdapter, prepare_run as prepare_mariadb_run, sync_port as sync_mariadb_port,
+};
 pub use postgres::{
     PostgresAdapter, PostmasterIdentity, SocketDir as PostgresSocketDir,
     choose_socket_dir as choose_postgres_socket_dir,
