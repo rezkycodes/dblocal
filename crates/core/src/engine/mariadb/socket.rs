@@ -141,27 +141,10 @@ fn current_euid() -> u32 {
 pub(super) fn ensure_secure_runtime_dir(dir: &Path) -> Result<()> {
     #[cfg(unix)]
     {
-        use std::os::unix::fs::MetadataExt;
+        use std::io::ErrorKind;
+        use std::os::unix::fs::DirBuilderExt;
         if dir.exists() {
-            let meta = fs::symlink_metadata(dir).map_err(|e| DblError::Engine {
-                reason: format!("cannot inspect socket dir {}: {e}", dir.display()),
-            })?;
-            if meta.file_type().is_symlink() || !meta.is_dir() {
-                return Err(DblError::Engine {
-                    reason: format!("socket dir {} is not a real directory", dir.display()),
-                });
-            }
-            if meta.uid() != current_euid() {
-                return Err(DblError::Engine {
-                    reason: format!("socket dir {} has wrong owner", dir.display()),
-                });
-            }
-            let mode = meta.mode() & 0o777;
-            if mode != 0o700 {
-                return Err(DblError::Engine {
-                    reason: format!("socket dir {} has insecure mode {:o}", dir.display(), mode),
-                });
-            }
+            verify_private_dir(dir)?;
             return Ok(());
         }
         if let Some(parent) = dir.parent() {
@@ -169,23 +152,18 @@ pub(super) fn ensure_secure_runtime_dir(dir: &Path) -> Result<()> {
                 reason: format!("cannot create parent {}: {e}", parent.display()),
             })?;
         }
-        use std::os::unix::fs::DirBuilderExt;
-        std::fs::DirBuilder::new()
-            .mode(0o700)
-            .create(dir)
-            .map_err(|e| DblError::Engine {
-                reason: format!("cannot create socket dir {}: {e}", dir.display()),
-            })?;
-        // Re-verify after creation to catch races/symlink replacement.
-        let meta = fs::symlink_metadata(dir).map_err(|e| DblError::Engine {
-            reason: format!("cannot inspect socket dir {}: {e}", dir.display()),
-        })?;
-        if meta.uid() != current_euid() || (meta.mode() & 0o777) != 0o700 || !meta.is_dir() {
-            return Err(DblError::Engine {
-                reason: format!("socket dir {} failed security verification", dir.display()),
-            });
+        match std::fs::DirBuilder::new().mode(0o700).create(dir) {
+            Ok(()) => {}
+            // Another instance/process created it between `exists` and `create`.
+            Err(e) if e.kind() == ErrorKind::AlreadyExists => {}
+            Err(e) => {
+                return Err(DblError::Engine {
+                    reason: format!("cannot create socket dir {}: {e}", dir.display()),
+                });
+            }
         }
-        Ok(())
+        // Re-verify after creation to catch races/symlink replacement.
+        verify_private_dir(dir)
     }
     #[cfg(not(unix))]
     {
@@ -194,6 +172,31 @@ pub(super) fn ensure_secure_runtime_dir(dir: &Path) -> Result<()> {
         })?;
         Ok(())
     }
+}
+
+#[cfg(unix)]
+fn verify_private_dir(dir: &Path) -> Result<()> {
+    use std::os::unix::fs::MetadataExt;
+    let meta = fs::symlink_metadata(dir).map_err(|e| DblError::Engine {
+        reason: format!("cannot inspect socket dir {}: {e}", dir.display()),
+    })?;
+    if meta.file_type().is_symlink() || !meta.is_dir() {
+        return Err(DblError::Engine {
+            reason: format!("socket dir {} is not a real directory", dir.display()),
+        });
+    }
+    if meta.uid() != current_euid() {
+        return Err(DblError::Engine {
+            reason: format!("socket dir {} has wrong owner", dir.display()),
+        });
+    }
+    let mode = meta.mode() & 0o777;
+    if mode != 0o700 {
+        return Err(DblError::Engine {
+            reason: format!("socket dir {} has insecure mode {:o}", dir.display(), mode),
+        });
+    }
+    Ok(())
 }
 
 /// Returns the sibling run dir for a data dir.
