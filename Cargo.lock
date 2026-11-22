@@ -1586,6 +1586,10 @@ dependencies = [
  "clap",
  "dblocal-core",
  "dblocal-gui",
+ "redis",
+ "serde_json",
+ "tempfile",
+ "tokio",
 ]
 
 [[package]]
@@ -1599,6 +1603,7 @@ dependencies = [
  "mysql_async",
  "nix",
  "percent-encoding",
+ "postgres-protocol",
  "rand 0.10.4",
  "redis",
  "reqwest",

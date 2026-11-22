@@ -1,0 +1,37 @@
+# W3-B2 — MariaDB engine adapter (F-ENG-02), Linux first, real binaries
+
+Branch `w3-mariadb` from `main`. Read, in this order: `docs/orchestration/tasks/_COMMON-RULES.md` (rules 11-13 matter: every claim is pasted output; real-engine runs go under `flock -w 3600 $HOME/.cache/dblocal-e2e.lock`; never end a turn to wait, `ask` and continue), `AGENTS.md`, `docs/architecture/CONTRACT.md`, `docs/architecture/engines.md` (how the PostgreSQL and Valkey adapters are built; copy their shape), PRD `F-ENG-02` (and `F-ENG-01` for the sibling), `F-INS-02..03`, `F-LOG-02`, `F-CRD-02/03`, D-16, D-17, D-24, and `docs/spikes/engines/README.md` (C-05) plus `upstream-sources.md` (the MariaDB section: REST API `downloads.mariadb.org/rest-api`, SHA-256 published, Linux x86_64 and Windows x86_64 only). The adapter today is a stub (`StubAdapter` in `engine/mod.rs`, empty `engine/mariadb.rs`).
+
+## Goal
+
+A real `EngineAdapter` for MariaDB (an LTS line, for example 11.8 and 11.4; take the versions from the REST API): initialise, start command, protocol health check, graceful shutdown, connection URI, start-failure diagnosis. It must work through the existing `LocalService` unchanged. MySQL is a SEPARATE worker's task (W3-B1, branch `w3-mysql`): do not touch `engine/mysql.rs`. The two engines must coexist (F-ENG-02 AC2): canonical ports 3306 vs 3307 and never a shared data directory; both adapters will be tested together after merge.
+
+## You own
+
+`crates/core/src/engine/mariadb.rs`, `engine/mariadb/**`, the `EngineKey::Mariadb` arm of `adapter_for` in `engine/mod.rs` (one line plus its test; the `Mysql` arm is the other worker's), `docs/spikes/engines/mariadb.md` (new, real findings), `docs/architecture/engines.md` (a MariaDB section only; expect a trivial merge conflict with W3-B1 in that file and keep both sections). Not the catalog (`catalog/**`, `xtask/**`): a follow-up wave enables real MariaDB artifacts there. If you need a trait change, use `ask`.
+
+## Step 0: a short spike on the real binary (commit its notes first)
+
+Download the Linux x86_64 generic binary tarball of the MariaDB LTS line through the REST API (`downloads.mariadb.org/rest-api/mariadb/<version>/`), cache it under `$HOME/.cache/dblocal-dev/` (outside the repo), verify the SHA-256 the API publishes and say how you checked. On the real binary record in `docs/spikes/engines/mysql.md`: layout and `strip_prefix`, glibc floor (`readelf -V`), required host libraries (`ldd`), which binaries it contains (`mariadbd`, `mariadb-install-db`, `mariadb-admin`, `mariadb`, and the `mysqld`/`mysql` compatibility names), `mariadb-install-db --auth-root-authentication-method=normal` output and time, what the root account looks like afterwards (unix_socket plugin or native password, empty password?), every listener the server opens (an instance must listen ONLY on its own `port` at `127.0.0.1`; prove with `ss -ltnp`), the socket path length limit, shutdown by SIGTERM vs by SQL, how a wrong data directory, a busy port, a bad `my.cnf` and a permission error look in the log (verbatim texts, they feed the diagnosis table).
+
+## Deliverables (follow the shape of `engine/postgres.rs` and `engine/valkey.rs`)
+
+- `initialize`: `mariadb-install-db --datadir=<dir> --auth-root-authentication-method=normal` (plus whatever flags the spike shows are needed, for example `--basedir`, `--skip-test-db`, `--user` when run as root), then set the superuser password (or keep none for `AuthMode::None`) WITHOUT putting it in argv, a file other than 0600, or a log: use a one-shot init file (`--init-file`, 0600, deleted at once) or a protocol connection from the adapter, whichever the spike shows works; `my.cnf` written 0600 with `bind-address=127.0.0.1`, `port`, `datadir`, a SHORT `socket` path (check the 107-byte limit at create and start time), `pid-file`, `log-error`, `skip-name-resolve`. Remove a half-built data directory on failure and keep the raw output.
+- `spawn_command`: `mariadbd --defaults-file=<my.cnf>`; never a password in argv or env of the server. `.exe` on Windows through the existing helper (Windows and macOS are written but UNVERIFIED here; say so).
+- `health_check`: a real MariaDB protocol handshake (parse the server greeting packet, protocol version 10, noting the MariaDB-specific version string, and treat an authentication challenge as `Ready`, like the other adapters), with a connect timeout; never trust a process check or an exit code. A crate (`mysql_async`, `mysql`) is allowed only if `cargo deny check` accepts it (licence GPL-3.0-only compatible); otherwise a small hand-written reader with tests. Justify the choice in `engines.md`.
+- `shutdown`: graceful, bounded by `consts::STOP_GRACE_SECS`, returns a precise outcome; SIGTERM-and-wait is acceptable if the spike shows `mariadbd` exits cleanly on it (verify the log says "Shutdown complete"); otherwise SQL `SHUTDOWN`.
+- `connection_uri`: `mysql://user:pw@127.0.0.1:port/` (the scheme is what MariaDB clients accept; confirm with the `mariadb` client) for `Uri` and the `.env` block for `DotEnv`, RFC 3986 userinfo encoding (`uri.rs` already has the shapes: extend only if the real client disagrees); `connection_uri_no_password` already exists in the trait.
+- `diagnose_start_failure(log_tail, exit_code)`: port in use, wrong data directory version (a MariaDB data directory opened by another major, and a MySQL one opened by MariaDB), permission denied, bad configuration, socket path too long, disk full, using the REAL texts from the spike as table-driven tests; unknown keeps the raw tail.
+- Never log or format a password; a canary test scans every error and the spawned command.
+
+## Tests
+
+Unit: config rendering (exact text), argv/env construction (no password anywhere), URI encoding with `@:/?#[]%`, space and non-ASCII, handshake parser with captured real greeting bytes (store them as test fixtures) plus truncated, oversized and hostile packets, every diagnosis text. Integration against the REAL tarball (extract from the cache into a temp dir, gate with an env var and `#[ignore]` like W1-F's, ports **43000-43999 only**): init, start, health, a login with the `mysql` client or your own connection using the superuser password, wrong password rejected, stop, restart, data survives, two instances side by side (two MariaDB majors if both are cached, and a second instance on another port), and the `ss -ltnp` check that only the instance's own port listens. Run them yourself under the machine lock and paste the summaries three times; leave no process, directory or listener behind (a leak scan like `crates/core/tests/support` has).
+
+## Mutation checks (red output pasted, restored, `git status --short` clean)
+
+password into argv; `bind-address` made `0.0.0.0`; `--auth-root-authentication-method=normal` removed; socket path length check removed; init-file left on disk; handshake accepting any bytes; diagnosis table row removed. Each must fail a NAMED test.
+
+## Bar
+
+`cargo fmt --all -- --check`, `cargo clippy -p dblocal-core --all-targets -- -D warnings`, `cargo test -p dblocal-core --lib engine` x20, `cargo deny check`, `cargo xtask ci`, coverage with `CARGO_LLVM_COV_TARGET_DIR=$HOME/.cache/dblocal-target-cov-w3b2` (delete afterwards; every file >= 80% lines, pure logic >= 90%), all pasted. The report lists exactly what is unverified (macOS, Windows, aarch64 which upstream does not publish, other glibc). `worker_done` only with pasted evidence; otherwise `ask` and continue.

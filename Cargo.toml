@@ -23,6 +23,7 @@ liblzma = "0.4"
 mysql_async = "0.37"
 nix = { version = "0.32", features = ["signal", "process"] }
 percent-encoding = "2"
+postgres-protocol = "0.6"
 rand = "0.10"
 redis = "1.8"
 reqwest = { version = "0.13", default-features = false, features = ["rustls", "stream", "json"] }

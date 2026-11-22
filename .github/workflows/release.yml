@@ -24,9 +24,13 @@ jobs:
           - os: ubuntu-24.04
             target: linux-x86_64
             rust_target: x86_64-unknown-linux-gnu
+            deb_arch: amd64
+            rpm_arch: x86_64
           - os: ubuntu-24.04-arm
             target: linux-aarch64
             rust_target: aarch64-unknown-linux-gnu
+            deb_arch: arm64
+            rpm_arch: aarch64
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -75,11 +79,100 @@ jobs:
           rm -rf "$out/stage"
           ls -lh "$out"
 
+      - name: Upload Linux binary for package jobs
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: bin-${{ matrix.target }}
+          path: target/${{ matrix.rust_target }}/release/dblocal
+          if-no-files-found: error
+
       - name: Upload Linux artifacts
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: dist-${{ matrix.target }}
           path: dist/${{ matrix.target }}/*
+          if-no-files-found: error
+
+  package-linux:
+    name: package (${{ matrix.package }}-${{ matrix.arch }})
+    runs-on: ubuntu-24.04
+    needs: build-linux
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - package: deb
+            arch: amd64
+            target: linux-x86_64
+          - package: deb
+            arch: arm64
+            target: linux-aarch64
+          - package: rpm
+            arch: x86_64
+            target: linux-x86_64
+          - package: rpm
+            arch: aarch64
+            target: linux-aarch64
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Download prebuilt Linux binary
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: bin-${{ matrix.target }}
+          path: dist/bin/${{ matrix.target }}
+
+      - name: Prepare binary
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x "dist/bin/${{ matrix.target }}/dblocal"
+          ls -lh "dist/bin/${{ matrix.target }}/dblocal"
+
+      - name: Log binary ELF identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          readelf -h "dist/bin/${{ matrix.target }}/dblocal" | sed -n '1,20p'
+
+      - name: Build .deb
+        if: matrix.package == 'deb'
+        shell: bash
+        env:
+          DBLOCAL_BIN: dist/bin/${{ matrix.target }}/dblocal
+        run: |
+          set -euo pipefail
+          bash packaging/deb/build-deb.sh \
+            --version "${GITHUB_REF_NAME}" \
+            --arch "${{ matrix.arch }}" \
+            --output "dist/pkg"
+
+      - name: Install rpmbuild
+        if: matrix.package == 'rpm'
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends rpm
+
+      - name: Build .rpm
+        if: matrix.package == 'rpm'
+        shell: bash
+        env:
+          DBLOCAL_BIN: dist/bin/${{ matrix.target }}/dblocal
+        run: |
+          set -euo pipefail
+          bash packaging/rpm/build-rpm.sh \
+            --version "${GITHUB_REF_NAME}" \
+            --arch "${{ matrix.arch }}" \
+            --output "dist/pkg"
+
+      - name: Upload package artifact
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: dist-${{ matrix.package }}-${{ matrix.arch }}
+          path: dist/pkg/*
           if-no-files-found: error
 
   build-macos-arch:
@@ -306,6 +399,13 @@ jobs:
           rm -rf dist/windows-x86_64/stage
           ls -lh dist/windows-x86_64
 
+      - name: Upload Windows binary for MSI job
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: bin-windows-x86_64
+          path: target/x86_64-pc-windows-msvc/release/dblocal.exe
+          if-no-files-found: error
+
       - name: Upload Windows artifact
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -313,13 +413,54 @@ jobs:
           path: dist/windows-x86_64/dblocal-*-windows-x86_64.zip
           if-no-files-found: error
 
+  package-msi:
+    name: package (msi-windows-x86_64)
+    runs-on: windows-latest
+    needs: build-windows
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Download prebuilt Windows binary
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: bin-windows-x86_64
+          path: dist/bin/windows-x86_64
+
+      - name: Install WiX Toolset v3
+        shell: pwsh
+        run: |
+          choco install wixtoolset -y --no-progress
+          $wixBin = Join-Path ${env:WIX} "bin"
+          if (-not (Test-Path $wixBin)) { throw "WiX bin not found at $wixBin" }
+          echo $wixBin | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Build .msi
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $version = "${{ github.ref_name }}"
+          $exe = "dist/bin/windows-x86_64/dblocal.exe"
+          if (-not (Test-Path $exe)) { throw "Expected binary not found: $exe" }
+          ./packaging/msi/build-msi.ps1 -Version $version -DblocalExe $exe -OutDir dist/msi
+          Get-ChildItem dist/msi
+
+      - name: Upload MSI artifact
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: dist-msi-windows-x86_64
+          path: dist/msi/dblocal-*-windows-x86_64.msi
+          if-no-files-found: error
+
   release:
     name: Checksums, provenance and release
     runs-on: ubuntu-24.04
     needs:
       - build-linux
+      - package-linux
       - build-macos-universal
       - build-windows
+      - package-msi
     steps:
       - name: Download all artifacts
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
@@ -384,11 +525,12 @@ jobs:
           body: |
             ## DBLocal ${{ github.ref_name }}
 
-            Phase 1 release artifacts: `.AppImage` and `.tar.gz` (Linux x86_64/aarch64), `.dmg` (macOS universal), `.zip` (Windows x86_64), plus `checksums.txt` and GitHub build provenance attestations.
+            Release artifacts: `.AppImage` and `.tar.gz` (Linux x86_64/aarch64), `.deb` and `.rpm` (Linux x86_64/aarch64), `.dmg` (macOS universal), `.zip` and `.msi` (Windows x86_64), plus `checksums.txt` and GitHub build provenance attestations.
 
-            - **Windows (v1):** unsigned. Expect a SmartScreen "Unknown publisher" prompt — see `docs/install/windows-smartscreen.md` and verify checksums before running.
+            - **Windows:** `.zip` and `.msi` are unsigned in v1. Expect SmartScreen "Unknown publisher" — see `docs/install/windows-smartscreen.md` and verify checksums before running/installing.
             - **macOS:** signed + notarized with Apple Developer ID when secrets are configured; otherwise an unsigned `.dmg` is produced with a loud workflow warning (D-20).
-            - **Phase 2 packages** (`.deb`, `.rpm`, `.msi`) are not built by this workflow; see `docs/release/RELEASING.md`.
+            - **Linux packages:** `.deb`/`.rpm` install only under `/usr`; uninstall keeps `~/.dblocal` user data (F-PKG-04).
+            - **MSI:** per-user install by default (no elevation). Uninstall keeps `%USERPROFILE%\.dblocal`.
 
             Verify integrity before installing:
             ```sh

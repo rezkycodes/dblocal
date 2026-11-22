@@ -1,0 +1,153 @@
+//! Launch execution through an injected spawner.
+
+use std::path::PathBuf;
+use std::process::Command;
+
+use super::error::{ClientError, ClientResult};
+
+use super::plan::LaunchPlan;
+use super::terminal::{
+    materialize_launcher, materialize_launcher_in, substitute_script_placeholder,
+};
+
+/// Executes a prepared launch plan.
+///
+/// Implementations must not log secret env values or temp file contents.
+pub trait Spawner: Send + Sync {
+    /// Spawns the plan. Returns after the child has been started.
+    fn spawn(&self, plan: &LaunchPlan) -> ClientResult<()>;
+}
+
+/// Spawner that uses `std::process::Command`.
+#[derive(Debug, Default, Clone)]
+pub struct SystemSpawner {
+    launcher_dir: Option<PathBuf>,
+}
+
+impl SystemSpawner {
+    pub fn with_launcher_dir(dir: impl Into<PathBuf>) -> Self {
+        Self {
+            launcher_dir: Some(dir.into()),
+        }
+    }
+
+    fn materialize_temp_file(&self, plan: &LaunchPlan) -> ClientResult<Option<PathBuf>> {
+        let Some(temp) = plan.temp_file() else {
+            return Ok(None);
+        };
+        let os = if cfg!(target_os = "macos") {
+            super::plan::OsKind::Macos
+        } else if cfg!(target_os = "windows") {
+            super::plan::OsKind::Windows
+        } else {
+            super::plan::OsKind::Linux
+        };
+        if let Some(dir) = &self.launcher_dir {
+            materialize_launcher_in(dir, temp).map(Some)
+        } else {
+            materialize_launcher(temp, os).map(Some)
+        }
+    }
+}
+
+impl Spawner for SystemSpawner {
+    fn spawn(&self, plan: &LaunchPlan) -> ClientResult<()> {
+        if let Some(required) = plan.required_path()
+            && !required.exists()
+        {
+            return Err(ClientError::ClientNotFound {
+                name: required.display().to_string(),
+            });
+        }
+        let script_path = self.materialize_temp_file(plan)?;
+        let mut cmd = build_command(plan, script_path.as_deref());
+        let mut child = match cmd.spawn() {
+            Ok(c) => c,
+            Err(err) => {
+                if let Some(ref sp) = script_path {
+                    let _ = std::fs::remove_file(sp);
+                }
+                return Err(spawn_error(plan, &err));
+            }
+        };
+        std::thread::Builder::new()
+            .name("dblocal-client-wait".to_owned())
+            .spawn(move || {
+                let _ = child.wait();
+            })
+            .map_err(|e| ClientError::LaunchFailed {
+                reason: e.kind().to_string(),
+            })?;
+        Ok(())
+    }
+}
+
+fn build_command(plan: &LaunchPlan, script_path: Option<&std::path::Path>) -> Command {
+    let mut cmd = Command::new(plan.program());
+    for arg in plan.argv() {
+        match script_path {
+            Some(sp) => cmd.arg(substitute_script_placeholder(arg, sp)),
+            None => cmd.arg(arg),
+        };
+    }
+    for env in plan.env() {
+        cmd.env(env.name(), env.value().expose());
+    }
+    cmd.stdin(std::process::Stdio::null());
+    cmd.stdout(std::process::Stdio::null());
+    cmd.stderr(std::process::Stdio::null());
+    cmd
+}
+
+fn spawn_error(plan: &LaunchPlan, err: &std::io::Error) -> ClientError {
+    if err.kind() == std::io::ErrorKind::NotFound {
+        ClientError::ClientNotFound {
+            name: plan.program().display().to_string(),
+        }
+    } else {
+        ClientError::LaunchFailed {
+            reason: err.kind().to_string(),
+        }
+    }
+}
+
+/// Runs a plan through the provided spawner.
+pub fn run(plan: &LaunchPlan, spawner: &dyn Spawner) -> ClientResult<()> {
+    spawner.spawn(plan)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::clients::{ClientError, LaunchEnv, LaunchPlan};
+    use crate::secret::SecretString;
+
+    struct NoopSpawner;
+
+    impl Spawner for NoopSpawner {
+        fn spawn(&self, _plan: &LaunchPlan) -> crate::clients::ClientResult<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn run_delegates_to_spawner() {
+        let plan = LaunchPlan::new(
+            PathBuf::from("true"),
+            vec![],
+            vec![LaunchEnv::new("A", SecretString::from("b"))],
+            None,
+            None,
+            None,
+        );
+        run(&plan, &NoopSpawner).expect("noop");
+    }
+
+    #[test]
+    fn missing_required_client_returns_not_found() {
+        let plan = LaunchPlan::new("missing-client", vec![], vec![], None, None, None)
+            .with_required_path("/tmp/definitely-missing-dblocal-client");
+        let err = SystemSpawner::default().spawn(&plan).unwrap_err();
+        assert!(matches!(err, ClientError::ClientNotFound { .. }), "{err:?}");
+    }
+}

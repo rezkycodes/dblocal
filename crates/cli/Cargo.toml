@@ -14,6 +14,13 @@ anyhow = { workspace = true }
 clap = { workspace = true }
 dblocal-core = { workspace = true }
 dblocal-gui = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true, features = ["signal"] }
+
+[dev-dependencies]
+dblocal-core = { workspace = true, features = ["mock"] }
+redis = { workspace = true }
+tempfile = { workspace = true }
 
 [lints]
 workspace = true

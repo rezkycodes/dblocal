@@ -179,6 +179,8 @@ fn change_port_is_refused_while_running() {
 
 #[test]
 fn change_port_rewrites_postgres_config_and_start_repairs_stale_config() {
+    // M10: exercise the real managed-block branch written by configure_after_init,
+    // not a hand-made legacy config.
     let h = Harness::new(EngineKey::Postgresql);
     let port = test_port();
     let spec = h.spec("pgcfg", EngineKey::Postgresql, port);
@@ -190,22 +192,95 @@ fn change_port_rewrites_postgres_config_and_start_repairs_stale_config() {
         .expect("instance");
     let id = inst.id().clone();
     let name = crate::model::InstanceName::new("pgcfg").expect("name");
-    let conf = h.paths.data_dir(&name).join("postgresql.conf");
-    std::fs::write(&conf, "# user\nmax_connections = 42\nport = {port}\nlisten_addresses = '127.0.0.1'\nunix_socket_directories = '/tmp/s'\n").expect("write conf");
+    let data_dir = h.paths.data_dir(&name);
+    let run_dir = h.paths.run_dir(&name);
+    std::fs::create_dir_all(&data_dir).expect("data dir");
+    std::fs::create_dir_all(&run_dir).expect("run dir");
+    let conf = data_dir.join("postgresql.conf");
+
+    // Seed a realistic initdb-shaped base config, including a user override
+    // OUTSIDE the managed block (`port = 5433` and a commented listen line).
+    // The managed-block branch must replace only the block and leave every
+    // surrounding user line byte-identical; the legacy in-place scanner would
+    // rewrite the user's `port = 5433` too and leave two `port` lines, which is
+    // exactly what this test now distinguishes (M10 survived before: with no
+    // user `port` line the two paths produced the same bytes).
+    let base =
+        "# initdb base\nmax_connections = 42\nport = 5433\n#listen_addresses = 'localhost'\n";
+    std::fs::write(&conf, base).expect("base conf");
+    let ctx = crate::engine::InitContext {
+        instance_name: "pgcfg".into(),
+        runtime_dir: h.paths.runtimes_dir(),
+        data_dir: data_dir.clone(),
+        port: crate::model::Port::new(port).expect("port"),
+        superuser: "postgres".into(),
+        auth: crate::model::AuthMode::None,
+        password: None,
+    };
+    let socket = crate::engine::choose_postgres_socket_dir(&run_dir.join("sock"), port);
+    crate::engine::configure_postgres_after_init(&ctx, &socket).expect("configure_after_init");
+    let configured = std::fs::read_to_string(&conf).expect("configured");
+    assert!(
+        configured.starts_with(base),
+        "the seeded base must survive as-is"
+    );
+    assert!(configured.contains("# DBLocal managed settings"));
+    assert!(configured.contains(&format!("port = {port}")));
 
     let free = crate::model::Port::new(test_port()).expect("port");
-    h.service.change_port(&id, free).expect("change port");
+    crate::engine::sync_postgres_port(&data_dir, &run_dir, free.get()).expect("sync_port");
     let text = std::fs::read_to_string(&conf).expect("read conf");
-    assert!(text.contains(&format!("port = {}", free.get())));
-    assert!(!text.contains(&format!("port = {port}")));
-    assert!(
-        text.contains("max_connections = 42"),
-        "other settings preserved: {text}"
+    let before_block = text
+        .split(
+            "# DBLocal managed settings
+",
+        )
+        .next()
+        .expect("prefix");
+    assert_eq!(
+        before_block,
+        format!("{base}\n"),
+        "content before the managed block must be byte-identical afterwards"
     );
+    assert_eq!(
+        text.matches(
+            "# DBLocal managed settings
+"
+        )
+        .count(),
+        1,
+        "exactly one managed block start"
+    );
+    assert_eq!(
+        text.matches("# DBLocal managed settings end").count(),
+        1,
+        "exactly one managed block end"
+    );
+    // Exactly one `port = <new>` line: the block's. The user override above
+    // stays at 5433, so a legacy rewrite that touched it would make this two.
+    assert_eq!(
+        text.matches(&format!("port = {}", free.get())).count(),
+        1,
+        "the new port appears in exactly one place: {text}"
+    );
+    assert!(
+        text.contains("port = 5433"),
+        "the user override outside the block must not be rewritten: {text}"
+    );
+    assert!(text.contains("listen_addresses = '127.0.0.1'"));
+    assert!(!text.contains(&format!("port = {port}\n")));
 
-    // Simulate crash between config rewrite and start: stale config port.
-    let stale = text.replace(&format!("port = {}", free.get()), "port = 1");
+    // Idempotent: a second call is a no-op.
+    crate::engine::sync_postgres_port(&data_dir, &run_dir, free.get()).expect("sync again");
+    let again = std::fs::read_to_string(&conf).expect("read again");
+    assert_eq!(text, again, "second sync_port must be a no-op");
+
+    // Start repairs a stale config (crash between config rewrite and store update).
+    let stale = again.replace(&format!("port = {}", free.get()), "port = 1");
     std::fs::write(&conf, stale).expect("write stale");
+    h.service
+        .change_port(&id, free)
+        .expect("change port updates store");
     start_and_wait(&h, &id);
     let repaired = std::fs::read_to_string(&conf).expect("read repaired");
     assert!(
@@ -238,6 +313,34 @@ fn change_port_rewrites_valkey_config() {
     assert!(text.contains(&format!("port {}", free.get())));
     assert!(!text.contains(&format!("port {port}\n")));
     assert!(text.contains("# keep"));
+}
+
+#[test]
+fn change_port_legacy_postgres_layout_rewrites_correctly() {
+    // M10: keep one legacy-layout test, correctly built with format!.
+    let h = Harness::new(EngineKey::Postgresql);
+    let port = test_port();
+    let spec = h.spec("pglegacy", EngineKey::Postgresql, port);
+    h.create(spec);
+    let inst = h
+        .instances()
+        .into_iter()
+        .find(|i| i.name().as_str() == "pglegacy")
+        .expect("instance");
+    let id = inst.id().clone();
+    let name = crate::model::InstanceName::new("pglegacy").expect("name");
+    let conf = h.paths.data_dir(&name).join("postgresql.conf");
+    let legacy = format!(
+        "# user\nmax_connections = 42\nport = {port}\nlisten_addresses = '127.0.0.1'\nunix_socket_directories = '/tmp/s'\n"
+    );
+    std::fs::write(&conf, legacy).expect("write conf");
+
+    let free = crate::model::Port::new(test_port()).expect("port");
+    h.service.change_port(&id, free).expect("change port");
+    let text = std::fs::read_to_string(&conf).expect("read conf");
+    assert!(text.contains(&format!("port = {}", free.get())));
+    assert!(!text.contains(&format!("port = {port}\n")));
+    assert!(text.contains("max_connections = 42"));
 }
 
 #[test]
@@ -388,4 +491,185 @@ fn a_stop_still_runs_when_the_credential_cannot_be_read() {
         h.terminator.calls.load(std::sync::atomic::Ordering::SeqCst) >= 1,
         "the process layer was still asked to stop it"
     );
+}
+
+#[test]
+fn change_port_config_rewrite_failure_leaves_store_and_file_unchanged_postgres() {
+    // Item 5: if the config rewrite fails, the store port and the config file must
+    // remain unchanged. We force failure by making postgresql.conf a directory.
+    let h = Harness::new(EngineKey::Postgresql);
+    let port = test_port();
+    let spec = h.spec("pgfail", EngineKey::Postgresql, port);
+    h.create(spec);
+    let inst = h
+        .instances()
+        .into_iter()
+        .find(|i| i.name().as_str() == "pgfail")
+        .expect("instance");
+    let id = inst.id().clone();
+    let name = crate::model::InstanceName::new("pgfail").expect("name");
+    let conf = h.paths.data_dir(&name).join("postgresql.conf");
+    std::fs::create_dir_all(&conf).expect("make conf a directory to force rewrite failure");
+
+    let before = h.instance(&id).expect("row").port();
+    let free = crate::model::Port::new(test_port()).expect("port");
+    let err = h
+        .service
+        .change_port(&id, free)
+        .expect_err("rewrite must fail");
+    assert!(
+        matches!(
+            err,
+            crate::DblError::Engine { .. } | crate::DblError::Io { .. }
+        ),
+        "expected typed engine/io error, got {err:?}"
+    );
+    let after = h.instance(&id).expect("row").port();
+    assert_eq!(
+        after, before,
+        "store port must be unchanged on rewrite failure"
+    );
+    assert!(
+        conf.is_dir(),
+        "config path must remain the directory we created"
+    );
+}
+
+#[test]
+fn change_port_config_rewrite_failure_leaves_store_and_file_unchanged_valkey() {
+    let h = Harness::new(EngineKey::Valkey);
+    let port = test_port();
+    let spec = h.spec("vkfail", EngineKey::Valkey, port);
+    h.create(spec);
+    let inst = h
+        .instances()
+        .into_iter()
+        .find(|i| i.name().as_str() == "vkfail")
+        .expect("instance");
+    let id = inst.id().clone();
+    let name = crate::model::InstanceName::new("vkfail").expect("name");
+    let conf = h.paths.run_dir(&name).join("valkey.conf");
+    std::fs::create_dir_all(&conf).expect("make conf a directory to force rewrite failure");
+
+    let before = h.instance(&id).expect("row").port();
+    let free = crate::model::Port::new(test_port()).expect("port");
+    let err = h
+        .service
+        .change_port(&id, free)
+        .expect_err("rewrite must fail");
+    assert!(
+        matches!(
+            err,
+            crate::DblError::Engine { .. } | crate::DblError::Io { .. }
+        ),
+        "expected typed engine/io error, got {err:?}"
+    );
+    let after = h.instance(&id).expect("row").port();
+    assert_eq!(
+        after, before,
+        "store port must be unchanged on rewrite failure"
+    );
+    assert!(
+        conf.is_dir(),
+        "config path must remain the directory we created"
+    );
+}
+
+#[test]
+fn start_repairs_config_rewritten_but_store_not_updated_postgres() {
+    // Item 5 crash simulation: config rewritten to new port, store not updated.
+    // start() must sync config from the store (source of truth) before spawning.
+    let h = Harness::new(EngineKey::Postgresql);
+    let port = test_port();
+    let spec = h.spec("pgcrash", EngineKey::Postgresql, port);
+    h.create(spec);
+    let inst = h
+        .instances()
+        .into_iter()
+        .find(|i| i.name().as_str() == "pgcrash")
+        .expect("instance");
+    let id = inst.id().clone();
+    let name = crate::model::InstanceName::new("pgcrash").expect("name");
+    let data_dir = h.paths.data_dir(&name);
+    let run_dir = h.paths.run_dir(&name);
+    std::fs::create_dir_all(&data_dir).expect("data");
+    std::fs::create_dir_all(&run_dir).expect("run");
+    let conf = data_dir.join("postgresql.conf");
+    std::fs::write(
+        &conf,
+        "# base\n# DBLocal managed settings\nlisten_addresses = '127.0.0.1'\nport = 1\nunix_socket_directories = ''\n# DBLocal managed settings end\n",
+    )
+    .expect("write stale wrong-port conf");
+
+    // Store still has original port; start must repair config to store port.
+    start_and_wait(&h, &id);
+    let repaired = std::fs::read_to_string(&conf).expect("read");
+    assert!(
+        repaired.contains(&format!("port = {port}")),
+        "start must repair config from store port: {repaired}"
+    );
+    assert!(
+        !repaired.contains("port = 1\n"),
+        "stale port must be gone: {repaired}"
+    );
+}
+
+#[test]
+fn start_repairs_config_rewritten_but_store_not_updated_valkey() {
+    // Item 5 crash simulation for Valkey.
+    let h = Harness::new(EngineKey::Valkey);
+    let port = test_port();
+    let spec = h.spec("vkcrash", EngineKey::Valkey, port);
+    h.create(spec);
+    let inst = h
+        .instances()
+        .into_iter()
+        .find(|i| i.name().as_str() == "vkcrash")
+        .expect("instance");
+    let id = inst.id().clone();
+    let name = crate::model::InstanceName::new("vkcrash").expect("name");
+    let run_dir = h.paths.run_dir(&name);
+    std::fs::create_dir_all(&run_dir).expect("run");
+    let conf = run_dir.join("valkey.conf");
+    std::fs::write(&conf, "bind 127.0.0.1\nport 1\n# keep\n").expect("write stale conf");
+
+    start_and_wait(&h, &id);
+    let repaired = std::fs::read_to_string(&conf).expect("read");
+    assert!(
+        repaired.contains(&format!("port {port}\n")),
+        "start must repair config from store port: {repaired}"
+    );
+    assert!(
+        !repaired.contains("port 1\n"),
+        "stale port must be gone: {repaired}"
+    );
+}
+
+#[test]
+fn change_port_check_then_act_window_is_documented() {
+    // Item 9: there is a pre-existing check-then-act window in change_port. It checks
+    // holds_process()/port availability then writes; a concurrent start from another
+    // process can interleave. We do not redesign it. This test documents the current
+    // single-process behaviour: once a row is Running, change_port is refused by
+    // holds_process(), which is the guard the service relies on. Cross-process TOCTOU
+    // remains possible because port probing and config rewrite are not atomic with the
+    // store CAS; a store compare-and-set on port+status could cover it in a future
+    // redesign.
+    let h = Harness::new(EngineKey::Postgresql);
+    let port = test_port();
+    let spec = h.spec("toctou", EngineKey::Postgresql, port);
+    h.create(spec);
+    let inst = h
+        .instances()
+        .into_iter()
+        .find(|i| i.name().as_str() == "toctou")
+        .expect("instance");
+    let id = inst.id().clone();
+    start_and_wait(&h, &id);
+    let free = crate::model::Port::new(test_port()).expect("port");
+    let err = h
+        .service
+        .change_port(&id, free)
+        .expect_err("running instance refused");
+    assert_eq!(err.code(), crate::error::CODE_INVALID_TRANSITION);
 }

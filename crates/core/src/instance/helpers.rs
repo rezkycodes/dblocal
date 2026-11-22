@@ -287,17 +287,12 @@ pub(crate) fn sync_instance_port(paths: &DblPaths, instance: &Instance) -> Resul
     Ok(())
 }
 
-/// Best-effort private directory creation (0700 on Unix). Used for instance
-/// layout directories that hold data, sockets, logs or secrets.
+/// Creates/tightens a private directory (0700 on Unix) for instance layout/data.
+///
+/// Existing directories are tightened so a permissive pre-existing directory cannot
+/// leak local access.
 pub(crate) fn ensure_private_dir(path: &Path) -> Result<()> {
-    std::fs::create_dir_all(path).map_err(|source| DblError::Io { source })?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))
-            .map_err(|source| DblError::Io { source })?;
-    }
-    Ok(())
+    crate::fsutil::ensure_private_dir(path).map_err(|source| DblError::Io { source })
 }
 
 /// Tightens the instance-layout root directories to 0700 on Unix.
@@ -315,6 +310,50 @@ pub(crate) fn ensure_private_layout(paths: &DblPaths) -> Result<()> {
         ensure_private_dir(&dir)?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
+    use super::*;
+    use tempfile::tempdir;
+
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
+
+    #[cfg(unix)]
+    fn mode(path: &Path) -> u32 {
+        std::fs::metadata(path).expect("meta").permissions().mode() & 0o777
+    }
+
+    /// M7: creating a private dir under a deliberately permissive parent must
+    /// produce a 0700 leaf, regardless of process umask.
+    #[cfg(unix)]
+    #[test]
+    fn ensure_private_dir_creates_0700_leaf_under_permissive_parent() {
+        let root = tempdir().expect("tmp");
+        let parent = root.path().join("permissive");
+        std::fs::create_dir_all(&parent).expect("parent");
+        std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+        let leaf = parent.join("secret");
+        ensure_private_dir(&leaf).expect("ensure");
+        assert!(leaf.is_dir());
+        assert_eq!(mode(&leaf), 0o700, "leaf must be 0700");
+        assert_eq!(mode(&parent), 0o755, "parent mode must be unchanged");
+    }
+
+    /// M7: a pre-existing 0755 directory is tightened to 0700.
+    #[cfg(unix)]
+    #[test]
+    fn ensure_private_dir_tightens_existing_0755_directory() {
+        let root = tempdir().expect("tmp");
+        let dir = root.path().join("existing");
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+        ensure_private_dir(&dir).expect("tighten");
+        assert_eq!(mode(&dir), 0o700);
+    }
 }
 
 pub(crate) fn runtime_dir_for(paths: &DblPaths, engine: EngineKey, version: &str) -> PathBuf {
