@@ -28,6 +28,154 @@ pub fn report_error(err_out: &mut dyn Write, err: &DblError) -> u8 {
     code_for(err)
 }
 
+/// Reports a [`UserFacingError`] that already carries its module-local code.
+///
+/// The admin, update and client calls keep their own `DBL-8xxx` ranges, so the
+/// CLI prints the code the module chose rather than re-deriving one from
+/// `DblError`.
+pub fn report_facing(err_out: &mut dyn Write, err: &UserFacingError) -> u8 {
+    stderr_line(err_out, &format!("[{}] {}", err.code, err.message));
+    code_for_facing(err)
+}
+
+/// Exit code for a module-local error, keyed on its code.
+///
+/// `DBL-81xx` (admin) validation failures are bad arguments; `DBL-8301` (a
+/// client disappeared) maps to not-found; an update that cannot apply or an
+/// engine-backed admin failure is a general error.
+pub fn code_for_facing(err: &UserFacingError) -> u8 {
+    let number = err
+        .code
+        .strip_prefix("DBL-")
+        .and_then(|digits| digits.parse::<u16>().ok());
+    match number {
+        Some(8101..=8111) => EXIT_BAD_ARGS,
+        Some(8301) => EXIT_NOT_FOUND,
+        Some(8303) => EXIT_BAD_ARGS,
+        Some(8300) => EXIT_BAD_ARGS,
+        _ => EXIT_GENERAL,
+    }
+}
+
+/// One JSON array of `{name, owner, size_bytes}` for `db list --json`.
+pub fn format_databases_json(databases: &[dblocal_core::service::DatabaseInfo]) -> String {
+    let items: Vec<serde_json::Value> = databases
+        .iter()
+        .map(|db| {
+            serde_json::json!({
+                "name": db.name(),
+                "owner": db.owner(),
+                "size_bytes": db.size_bytes(),
+            })
+        })
+        .collect();
+    serde_json::Value::Array(items).to_string()
+}
+
+/// Aligned table of databases: NAME, OWNER, SIZE.
+///
+/// Plain text on every stream; `db list` has no colour option, matching `list`.
+pub fn format_database_table(databases: &[dblocal_core::service::DatabaseInfo]) -> String {
+    let headers = ["NAME", "OWNER", "SIZE"];
+    let rows: Vec<[String; 3]> = databases
+        .iter()
+        .map(|db| {
+            [
+                db.name().to_owned(),
+                db.owner().to_owned(),
+                human_size(db.size_bytes()),
+            ]
+        })
+        .collect();
+    let mut widths = headers.map(str::len);
+    for row in &rows {
+        for (i, cell) in row.iter().enumerate() {
+            widths[i] = widths[i].max(cell.len());
+        }
+    }
+    let mut out = String::new();
+    push_row3(&mut out, &headers.map(str::to_owned), &widths);
+    for row in &rows {
+        push_row3(&mut out, row, &widths);
+    }
+    while out.ends_with('\n') {
+        out.pop();
+    }
+    out
+}
+
+fn push_row3(out: &mut String, row: &[String; 3], widths: &[usize; 3]) {
+    for (i, cell) in row.iter().enumerate() {
+        if i > 0 {
+            out.push_str("  ");
+        }
+        out.push_str(cell);
+        if i < row.len() - 1 {
+            for _ in 0..widths[i].saturating_sub(cell.len()) {
+                out.push(' ');
+            }
+        }
+    }
+    out.push('\n');
+}
+
+/// A byte count as `MB`/`KB`/`B`, rounded, for the size column.
+fn human_size(bytes: i64) -> String {
+    let bytes = bytes.max(0) as u64;
+    const MIB: u64 = 1024 * 1024;
+    const KIB: u64 = 1024;
+    if bytes >= MIB {
+        format!("{} MB", bytes / MIB)
+    } else if bytes >= KIB {
+        format!("{} KB", bytes / KIB)
+    } else {
+        format!("{bytes} B")
+    }
+}
+
+/// One JSON line describing an update check, for `update check --json`.
+pub fn format_update_json(status: &dblocal_core::service::UpdateStatus) -> String {
+    let available = status.available.as_ref().map(|available| {
+        serde_json::json!({
+            "version": available.version,
+            "tag": available.tag,
+            "asset_name": available.asset_name,
+            "size_bytes": available.size_bytes,
+        })
+    });
+    serde_json::json!({
+        "current": status.current,
+        "available": available,
+        "can_self_update": status.install_kind.can_self_update(),
+        "package_manager_hint": status.package_manager_hint,
+    })
+    .to_string()
+}
+
+/// Renders a launch plan without any secret.
+///
+/// `--dry-run` prints this: the program, argv, and (when present) the URL and the
+/// secure launcher's presence. The password never appears because it only lives
+/// inside the launcher script the spawner materialises.
+pub fn format_launch_plan(plan: &dblocal_core::clients::LaunchPlan) -> String {
+    let mut out = format!("program: {}", plan.program().display());
+    if !plan.argv().is_empty() {
+        out.push_str("\nargs:");
+        for arg in plan.argv() {
+            out.push(' ');
+            out.push_str(arg);
+        }
+    }
+    if let Some(url) = plan.url() {
+        out.push_str("\nurl: ");
+        out.push_str(url);
+    }
+    if plan.temp_file().is_some() {
+        out.push_str("\nlauncher: script privat (0600, dihapus saat dijalankan)");
+    }
+    out
+}
+
 pub fn code_for(err: &DblError) -> u8 {
     match err {
         DblError::NotFound { .. } => EXIT_NOT_FOUND,

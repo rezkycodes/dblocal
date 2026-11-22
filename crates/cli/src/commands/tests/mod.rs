@@ -14,6 +14,7 @@
 mod inspect;
 mod lifecycle;
 mod races;
+mod service_admin;
 mod statuses;
 
 use dblocal_core::model::{

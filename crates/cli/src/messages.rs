@@ -89,3 +89,41 @@ pub fn stage_line(stage: &str) -> String {
 pub fn code_line(code: &str, message: &str) -> String {
     format!("[{code}] {message}")
 }
+
+// --- Database, user, password, update, open (W4-A) ---------------------------
+
+/// A database was created.
+pub const MSG_DB_CREATED: &str = "Database dibuat.";
+/// A database was dropped.
+pub const MSG_DB_DROPPED: &str = "Database dihapus.";
+/// A login role was created.
+pub const MSG_USER_CREATED: &str = "User dibuat. Simpan password ini; hanya ditampilkan sekali:";
+/// The superuser password was reset; the new URI is printed once.
+pub const MSG_PASSWORD_RESET: &str = "Password superuser diganti. URI baru (ditampilkan sekali):";
+/// No newer release is available.
+pub const MSG_UPDATE_UP_TO_DATE: &str = "DBLocal sudah versi terbaru.";
+/// An update is available; `{}` is the version.
+pub const MSG_UPDATE_AVAILABLE: &str = "Versi baru tersedia:";
+/// The update was applied.
+pub const MSG_UPDATE_APPLIED: &str = "Pembaruan dipasang.";
+/// The install is package-manager owned, so self-update is refused.
+pub const MSG_UPDATE_PACKAGE_MANAGER: &str =
+    "Pembaruan otomatis tidak tersedia; perbarui lewat package manager.";
+/// The client was launched.
+pub const MSG_CLIENT_OPENED: &str = "Client dibuka.";
+/// The dry run printed the plan instead of launching.
+pub const MSG_CLIENT_DRY_RUN: &str = "Rencana peluncuran (belum dijalankan):";
+/// `update apply` requires `--yes` on a non-interactive session.
+pub const ERR_UPDATE_NEEDS_YES: &str =
+    "Pemasangan pembaruan memerlukan --yes pada sesi non-interaktif.";
+/// The `--confirm` value did not match the database name.
+pub const ERR_DB_CONFIRM_MISMATCH: &str = "Penghapusan dibatalkan: nama database tidak cocok.";
+/// `db drop` needs `--yes` or a matching `--confirm` on a non-interactive session.
+pub const ERR_DB_NEEDS_CONFIRM: &str =
+    "Penghapusan database memerlukan --yes atau --confirm <nama>.";
+/// The `--level` value was neither `ro` nor `rw`.
+pub const ERR_BAD_LEVEL: &str = "Tingkat hak harus `ro` atau `rw`.";
+/// The `--client` value named no known client.
+pub const ERR_UNKNOWN_CLIENT: &str = "Client tidak dikenal.";
+/// Prompt for the typed database-name confirmation.
+pub const PROMPT_DB_CONFIRM: &str = "Ketik nama database untuk konfirmasi penghapusan: ";
