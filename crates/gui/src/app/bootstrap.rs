@@ -53,10 +53,6 @@ impl AppRuntime {
             .unwrap_or_else(|| flume::unbounded().1)
     }
 
-    pub fn restore_tray_actions(&mut self, rx: flume::Receiver<crate::tray::TrayAction>) {
-        self.tray_actions = Some(rx);
-    }
-
     pub fn refresh_tray(&mut self, views: &[dblocal_core::service::InstanceView]) -> bool {
         self.tray.refresh(views)
     }
@@ -80,15 +76,64 @@ pub fn run_with_service(service: Arc<dyn DblService>) -> dblocal_core::Result<()
 
             let runtime = AppRuntime::new(service);
             let tray_available = runtime.tray_available();
+            let service_for_tray = runtime.service.clone();
             cx.set_global(runtime);
-            // Keep the process alive when the last window closes if a tray is
-            // present; on Linux cx.hide() is not implemented so closing the window
-            // must not quit the app.
             cx.set_quit_mode(if tray_available {
                 QuitMode::Explicit
             } else {
                 QuitMode::LastWindowClosed
             });
+
+            // App-level tray refresh: keeps tray menu current even with no window.
+            let tray_rx = crate::service_bridge::spawn_bridge(service_for_tray.clone());
+            let service_for_actions = service_for_tray.clone();
+            cx.spawn(async move |cx: &mut gpui_kit::AsyncApp| {
+                while let Ok(event) = tray_rx.recv_async().await {
+                    let should_refresh = matches!(
+                        event,
+                        crate::service_bridge::UiEvent::InstanceChanged(_)
+                            | crate::service_bridge::UiEvent::InstanceRemoved(_)
+                            | crate::service_bridge::UiEvent::Resync
+                            | crate::service_bridge::UiEvent::CatalogUpdated
+                    );
+                    if should_refresh {
+                        let svc = service_for_tray.clone();
+                        let views = cx
+                            .background_spawn(async move { svc.list_instances().unwrap_or_default() })
+                            .await;
+                        let _ = cx.update(|cx| {
+                            if cx.has_global::<AppRuntime>() {
+                                cx.update_global::<AppRuntime, _>(|runtime, _| {
+                                    runtime.refresh_tray(&views);
+                                });
+                            }
+                        });
+                    }
+                    if matches!(event, crate::service_bridge::UiEvent::Closed) {
+                        break;
+                    }
+                }
+            })
+            .detach();
+
+            // App-level tray action pump: forward to workspace when open, else handle.
+            let actions_rx = {
+                let runtime = cx.global_mut::<AppRuntime>();
+                runtime.take_tray_actions()
+            };
+            cx.spawn(async move |cx: &mut gpui_kit::AsyncApp| {
+                while let Ok(action) = actions_rx.recv_async().await {
+                    let _ = cx.update(|cx| {
+                        let ws = cx.try_global::<AppRuntime>().and_then(|r| r.workspace.clone());
+                        if let Some(ws) = ws {
+                            ws.update(cx, |this, cx| this.apply_tray_action(action, cx));
+                        } else {
+                            handle_app_tray_action(action, &service_for_actions, cx);
+                        }
+                    });
+                }
+            })
+            .detach();
 
             if let Err(err) = open_main_window(cx) {
                 tracing::error!("could not open the main window: {err:#}");
@@ -98,11 +143,25 @@ pub fn run_with_service(service: Arc<dyn DblService>) -> dblocal_core::Result<()
     Ok(())
 }
 
+/// Decision: with a tray present, closing the window should close it and keep
+/// the process alive; without a tray, the quit flow handles the close.
+pub fn window_close_should_close(has_tray: bool) -> bool {
+    has_tray
+}
+
+/// Decision: if a main window already exists, focus it instead of opening a
+/// second one.
+pub fn should_focus_existing_main_window(has_main_window: bool) -> bool {
+    has_main_window
+}
+
 pub(crate) fn open_main_window(cx: &mut App) -> anyhow::Result<WindowHandle<Root>> {
     // Focus existing window if one is already open.
     if let Some(handle) = cx.try_global::<AppRuntime>().and_then(|r| r.main_window) {
-        let _ = handle.update(cx, |_, window, _| window.activate_window());
-        return Ok(handle);
+        if should_focus_existing_main_window(true) {
+            let _ = handle.update(cx, |_, window, _| window.activate_window());
+            return Ok(handle);
+        }
     }
 
     let bounds = gpui_kit::Bounds::centered(None, size(px(1280.), px(820.)), cx);
@@ -126,7 +185,7 @@ pub(crate) fn open_main_window(cx: &mut App) -> anyhow::Result<WindowHandle<Root
                     this.handle_window_close_request(cx);
                 });
                 let has_tray = cx.try_global::<AppRuntime>().is_some_and(|r| r.tray_available());
-                if has_tray {
+                if window_close_should_close(has_tray) {
                     clear_main_window(cx);
                     return true;
                 }
@@ -142,6 +201,50 @@ pub(crate) fn open_main_window(cx: &mut App) -> anyhow::Result<WindowHandle<Root
     });
     cx.activate(true);
     Ok(handle)
+}
+
+fn handle_app_tray_action(
+    action: crate::tray::TrayAction,
+    service: &Arc<dyn DblService>,
+    cx: &mut App,
+) {
+    match action {
+        crate::tray::TrayAction::OpenWindow => {
+            let _ = open_main_window(cx);
+        }
+        crate::tray::TrayAction::Quit => {
+            let ws = cx.try_global::<AppRuntime>().and_then(|r| r.workspace.clone());
+            if let Some(ws) = ws {
+                ws.update(cx, |this, cx| this.request_quit(cx));
+            } else {
+                if let Ok(_handle) = open_main_window(cx) {
+                    if let Some(ws) = cx.try_global::<AppRuntime>().and_then(|r| r.workspace.clone()) {
+                        ws.update(cx, |this, cx| this.request_quit(cx));
+                    }
+                } else {
+                    cx.quit();
+                }
+            }
+        }
+        crate::tray::TrayAction::Start(id) => {
+            if let Ok(id) = id.parse::<dblocal_core::model::InstanceId>() {
+                let svc = service.clone();
+                cx.background_spawn(async move {
+                    let _ = svc.start_instance(&id);
+                })
+                .detach();
+            }
+        }
+        crate::tray::TrayAction::Stop(id) => {
+            if let Ok(id) = id.parse::<dblocal_core::model::InstanceId>() {
+                let svc = service.clone();
+                cx.background_spawn(async move {
+                    let _ = svc.stop_instance(&id);
+                })
+                .detach();
+            }
+        }
+    }
 }
 
 pub(crate) fn clear_main_window(cx: &mut App) {
@@ -171,5 +274,17 @@ mod tests {
         assert!(appearance_is_dark(WindowAppearance::VibrantDark));
         assert!(!appearance_is_dark(WindowAppearance::Light));
         assert!(!appearance_is_dark(WindowAppearance::VibrantLight));
+    }
+
+    #[test]
+    fn window_close_decision_is_tray_aware() {
+        assert!(window_close_should_close(true));
+        assert!(!window_close_should_close(false));
+    }
+
+    #[test]
+    fn existing_window_is_focused_not_duplicated() {
+        assert!(should_focus_existing_main_window(true));
+        assert!(!should_focus_existing_main_window(false));
     }
 }

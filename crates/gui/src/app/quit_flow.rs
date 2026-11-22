@@ -186,18 +186,12 @@ impl Workspace {
         }
     }
 
-    /// Release tray pump receiver back to app runtime so a reopened window can
-    /// receive tray actions. The service bridge stays alive at app level.
+    /// Detach this workspace when its window closes. The app-level tray pump
+    /// keeps handling tray actions.
     pub(crate) fn detach_from_app_runtime(&mut self, cx: &mut Context<Self>) {
         self._tray_task = None;
-        let actions = self.tray_actions.clone();
         cx.defer(move |cx| {
-            if cx.has_global::<crate::app::bootstrap::AppRuntime>() {
-                cx.update_global::<crate::app::bootstrap::AppRuntime, _>(|runtime, _| {
-                    runtime.restore_tray_actions(actions);
-                });
-                crate::app::bootstrap::clear_main_window(cx);
-            }
+            crate::app::bootstrap::clear_main_window(cx);
         });
     }
 

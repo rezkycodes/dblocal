@@ -114,6 +114,40 @@ fn entry_for_view(view: &InstanceView) -> TrayMenuEntry {
     }
 }
 
+/// ARGB32 status-dot icon bytes for SNI menu items (Q5.1).
+///
+/// Pure function: returns a filled circle in the status colour, transparent
+/// background. The caller can pass it to ksni as `icon_data`.
+pub fn status_dot_argb(status: InstanceStatus, size: u32) -> Vec<u8> {
+    let [r, g, b, a] = status_dot_rgba(status);
+    let mut data = Vec::with_capacity((size * size * 4) as usize);
+    let center = size as f32 / 2.0;
+    let radius = (size as f32 / 2.0) - 1.0;
+    for y in 0..size {
+        for x in 0..size {
+            let dx = x as f32 + 0.5 - center;
+            let dy = y as f32 + 0.5 - center;
+            let inside = dx * dx + dy * dy <= radius * radius;
+            if inside {
+                // ARGB32, network byte order
+                data.extend_from_slice(&[a, r, g, b]);
+            } else {
+                data.extend_from_slice(&[0, 0, 0, 0]);
+            }
+        }
+    }
+    data
+}
+
+fn status_dot_rgba(status: InstanceStatus) -> [u8; 4] {
+    match format::status_glyph(status) {
+        format::StatusGlyph::Running => [0x59, 0xa8, 0x69, 0xff], // green
+        format::StatusGlyph::Stopped => [0x8a, 0x8f, 0x98, 0xff], // grey
+        format::StatusGlyph::Failed => [0xe0, 0x6c, 0x75, 0xff],  // red
+        format::StatusGlyph::Busy => [0xe5, 0xc0, 0x7b, 0xff],    // amber
+    }
+}
+
 fn action_verb(status: InstanceStatus) -> Option<&'static str> {
     if format::can_start(status) {
         Some(strings::UI_START)
@@ -283,6 +317,13 @@ mod linux {
         }
         fn icon_name(&self) -> String {
             "utilities-terminal-symbolic".to_owned()
+        }
+        fn icon_pixmap(&self) -> Vec<ksni::Icon> {
+            vec![ksni::Icon {
+                width: 22,
+                height: 22,
+                data: status_dot_argb(InstanceStatus::Stopped, 22),
+            }]
         }
         fn tool_tip(&self) -> ksni::ToolTip {
             ksni::ToolTip {
@@ -464,5 +505,18 @@ mod tests {
         let mut handle = TrayHandle::unavailable();
         assert!(!handle.is_available());
         assert!(!handle.refresh(&[]));
+    }
+
+    #[test]
+    fn status_dot_argb_has_correct_size_and_transparency() {
+        let data = status_dot_argb(InstanceStatus::Running, 16);
+        assert_eq!(data.len(), 16 * 16 * 4);
+        // corner pixel should be transparent
+        assert_eq!(&data[0..4], &[0, 0, 0, 0]);
+        // center pixel should be green-ish (ARGB)
+        let center = (8 * 16 + 8) * 4;
+        let px = &data[center..center + 4];
+        assert_eq!(px[0], 0xff); // alpha
+        assert_eq!(px[2], 0xa8); // green channel in ARGB [a,r,g,b]
     }
 }

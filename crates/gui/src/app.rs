@@ -131,6 +131,7 @@ pub struct Workspace {
     last_failure_mirror: Option<UserFacingError>,
     toast: Option<SharedString>,
     tray: TrayHandle,
+    #[allow(dead_code)]
     tray_actions: flume::Receiver<TrayAction>,
     tray_available_cached: bool,
     tray_note_shown: bool,
@@ -226,7 +227,7 @@ impl Workspace {
         };
         workspace.startup_load(cx);
         workspace.start_event_pump(cx);
-        workspace.start_tray_pump(cx);
+        // Tray actions are pumped at app level and forwarded to the workspace.
         workspace
     }
 

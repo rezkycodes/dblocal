@@ -764,3 +764,24 @@ fn placeholder_layouts_match_the_prototype_structure() {
     assert_eq!(placeholder_phase_label(PlaceholderTab::Databases), "2");
     assert_eq!(placeholder_phase_label(PlaceholderTab::Config), "3");
 }
+
+#[test]
+fn abbreviate_home_replaces_prefix() {
+    let home = std::path::Path::new("/home/alice");
+    assert_eq!(
+        abbreviate_home(std::path::Path::new("/home/alice/.dblocal"), Some(home)),
+        "~/.dblocal"
+    );
+    assert_eq!(
+        abbreviate_home(std::path::Path::new("/home/alice"), Some(home)),
+        "~"
+    );
+    assert_eq!(
+        abbreviate_home(std::path::Path::new("/var/lib/dblocal"), Some(home)),
+        "/var/lib/dblocal"
+    );
+    assert_eq!(
+        abbreviate_home(std::path::Path::new("/var/lib/dblocal"), None),
+        "/var/lib/dblocal"
+    );
+}

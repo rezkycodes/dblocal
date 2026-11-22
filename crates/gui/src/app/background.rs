@@ -149,6 +149,7 @@ impl Workspace {
         self._event_task = Some(task);
     }
 
+    #[allow(dead_code)]
     pub(crate) fn start_tray_pump(&mut self, cx: &mut Context<Self>) {
         let actions = self.tray_actions.clone();
         let task = cx.spawn(async move |this, cx| {
