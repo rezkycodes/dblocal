@@ -91,7 +91,6 @@ pub use create_submit::{CreateDraft, SubmitError, Submitted};
 /// The main workspace entity.
 pub struct Workspace {
     service: Arc<dyn DblService>,
-    events: flume::Receiver<UiEvent>,
     state: ShellState,
     catalog: CatalogView,
     /// Installed runtimes, re-read after a create finishes.
@@ -166,7 +165,6 @@ pub struct Workspace {
 /// readable call per concern instead of an eight-argument function.
 struct Parts {
     service: Arc<dyn DblService>,
-    events: flume::Receiver<UiEvent>,
     tray_available: bool,
     command_state: Entity<CommandState>,
     filter_input: Entity<InputState>,
@@ -176,21 +174,16 @@ struct Parts {
 impl Workspace {
     /// Builds a live workspace attached to the app-level runtime.
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let (service, events, tray_available) = {
+        let (service, tray_available) = {
             let runtime = cx.global::<crate::app::bootstrap::AppRuntime>();
-            (
-                runtime.service.clone(),
-                runtime.events.clone(),
-                runtime.tray_available(),
-            )
+            (runtime.service.clone(), runtime.tray_available())
         };
-        Self::build_live(service, events, tray_available, window, cx)
+        Self::build_live(service, tray_available, window, cx)
     }
 
     /// Live constructor wired to an existing service/bridge.
     fn build_live(
         service: Arc<dyn DblService>,
-        events: flume::Receiver<UiEvent>,
         tray_available: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -202,14 +195,15 @@ impl Workspace {
         cx.observe(&filter_input, |_, _, cx| cx.notify()).detach();
         let mut workspace = Self::assemble(Parts {
             service,
-            events,
             tray_available,
             command_state,
             filter_input,
             focus_handle,
         });
         workspace.startup_load(cx);
-        workspace.start_event_pump(cx);
+        // No per-window event pump: the app-level loop is the single consumer of
+        // the one bridge and forwards each event here (R3). Two pumps on one
+        // flume channel would split the stream between them.
         workspace
     }
 
@@ -219,8 +213,6 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let (tx, rx) = flume::unbounded::<UiEvent>();
-        drop(tx);
         let focus_handle = cx.focus_handle();
         let command_state = cx.new(|cx| CommandState::new(window, cx));
         let filter_input = cx
@@ -228,7 +220,6 @@ impl Workspace {
         cx.observe(&filter_input, |_, _, cx| cx.notify()).detach();
         let mut workspace = Self::assemble(Parts {
             service,
-            events: rx,
             tray_available: false,
             command_state,
             filter_input,
@@ -248,7 +239,6 @@ impl Workspace {
         };
         Self {
             service: parts.service,
-            events: parts.events,
             tray_available: parts.tray_available,
             tray_note_shown: !parts.tray_available,
             tray_note,

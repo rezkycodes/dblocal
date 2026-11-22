@@ -15,8 +15,6 @@ use dblocal_core::service::CatalogView;
 use dblocal_core::strings;
 use gpui_kit::{AppContext as _, BorrowAppContext, Context, Task};
 
-use crate::service_bridge::UiEvent;
-
 use super::Workspace;
 
 pub(crate) fn dir_size_bytes(path: &std::path::Path) -> u64 {
@@ -186,23 +184,6 @@ impl Workspace {
                 strings::UI_TRAY_UNAVAILABLE_NOTE,
             ));
         }
-    }
-
-    pub(crate) fn start_event_pump(&mut self, cx: &mut Context<Self>) {
-        let events = self.events.clone();
-        let task = cx.spawn(async move |this, cx| {
-            while let Ok(event) = events.recv_async().await {
-                let closed = matches!(event, UiEvent::Closed);
-                let _ = this.update(cx, |workspace, cx| {
-                    workspace.apply_event_with_cx(event, cx);
-                    cx.notify();
-                });
-                if closed {
-                    break;
-                }
-            }
-        });
-        self._event_task = Some(task);
     }
 
     /// Re-reads the catalog in the background (after `CatalogUpdated`).
@@ -415,23 +396,36 @@ mod tests {
         std::fs::remove_dir_all(&root).ok();
     }
 
-    /// A close event ends the event pump; it must not spin afterwards.
+    /// R3: the app-level loop ends on `Closed` and consumes the single bridge.
     #[gpui_kit::test]
-    fn event_pump_stops_on_closed(cx: &mut TestAppContext) {
-        let (view, _service, cx) = quiet(cx);
+    fn app_event_loop_stops_on_closed(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+        cx.update(crate::theme::init);
+        let service = QuietService::three();
+        let svc: Arc<dyn DblService> = Arc::new(service);
         let (sender, receiver) = flume::unbounded::<crate::service_bridge::UiEvent>();
-        // `new_preview` never starts the pump, so this is the only one.
-        view.update(cx, |this, cx| {
-            this.events = receiver.clone();
-            this.start_event_pump(cx);
+        let runtime = crate::app::bootstrap::AppRuntime::new_for_test(
+            svc,
+            crate::tray::TrayHandle::unavailable(),
+            receiver.clone(),
+        );
+        cx.update(|cx| {
+            cx.set_global(runtime);
+            crate::app::bootstrap::start_app_event_loop(cx);
         });
         sender
             .send(crate::service_bridge::UiEvent::Closed)
             .expect("send closed");
-        cx.run_until_parked();
+        for _ in 0..50 {
+            cx.run_until_parked();
+            if receiver.is_disconnected() || receiver.is_empty() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
         assert!(
-            receiver.is_disconnected() || receiver.is_empty(),
-            "the event pump kept running after Closed"
+            receiver.is_empty(),
+            "R3: the app loop kept the closed channel busy"
         );
     }
 }
