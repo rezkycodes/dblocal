@@ -343,6 +343,78 @@ mod tests {
         assert!(catalog.engines.is_empty());
     }
 
+    /// R7: `dir_size_bytes` must not follow symlinks, neither a parent loop nor
+    /// a big file outside the home.
+    #[test]
+    fn dir_size_ignores_symlinks() {
+        let root = std::env::temp_dir().join(format!(
+            "dblocal-size-{}",
+            std::process::id() as u64
+                ^ std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_nanos() as u64)
+                    .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(root.join("instances/pg1/data")).expect("dir");
+        std::fs::write(root.join("instances/pg1/data/real.bin"), vec![0u8; 1024]).expect("write");
+        // A loop back to the home root.
+        std::os::unix::fs::symlink(&root, root.join("instances/pg1/data/loop")).expect("loop");
+        // A big file outside the home.
+        let outside = std::env::temp_dir().join(format!("dblocal-big-{}", std::process::id()));
+        std::fs::write(&outside, vec![0u8; 8 * 1024 * 1024]).expect("big");
+        std::os::unix::fs::symlink(&outside, root.join("instances/big-link")).expect("link");
+
+        let size = super::dir_size_bytes(&root);
+        assert_eq!(size, 1024, "R7: symlinks must not be counted: {size}");
+
+        std::fs::remove_file(root.join("instances/pg1/data/loop")).ok();
+        std::fs::remove_file(root.join("instances/big-link")).ok();
+        std::fs::remove_file(&outside).ok();
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// R7: a finished operation refreshes the bar's size after a write.
+    #[gpui_kit::test]
+    fn operation_finished_refreshes_the_home_size(cx: &mut TestAppContext) {
+        let root = std::env::temp_dir().join(format!(
+            "dblocal-refresh-{}",
+            std::process::id() as u64
+                ^ std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_nanos() as u64)
+                    .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&root).expect("dir");
+        cx.update(gpui_kit::init);
+        cx.update(crate::theme::init);
+        let service = QuietService::three();
+        let svc: Arc<dyn DblService> = Arc::new(service.clone());
+        let (view, cx) = cx.add_window_view(|window, cx| {
+            let mut workspace = Workspace::new_preview(svc, window, cx);
+            workspace.home_root = root.clone();
+            workspace.home_size_last = None;
+            workspace
+        });
+        cx.run_until_parked();
+        std::fs::write(root.join("new-instance.bin"), vec![0u8; 2048]).expect("write");
+        view.update(cx, |this, cx| {
+            this.apply_event_with_cx(
+                crate::service_bridge::UiEvent::OperationFinished {
+                    id: dblocal_core::service::OperationId::new("op-done"),
+                    result: Ok(()),
+                },
+                cx,
+            );
+        });
+        cx.run_until_parked();
+        assert_eq!(
+            view.read_with(cx, |this, _| this.total_home_size()),
+            Some(2048),
+            "R7: the bar must show the new size after an operation"
+        );
+        std::fs::remove_dir_all(&root).ok();
+    }
+
     /// A close event ends the event pump; it must not spin afterwards.
     #[gpui_kit::test]
     fn event_pump_stops_on_closed(cx: &mut TestAppContext) {
