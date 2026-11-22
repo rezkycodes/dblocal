@@ -231,7 +231,16 @@ fn parse_releases_response(response: &FetchResponse) -> UpdateResult<Vec<GhRelea
         if looks_rate_limited(response.status, &reason) {
             return Err(UpdateError::RateLimited { reason });
         }
-        return Err(UpdateError::Network {
+        // A 403 that is not a rate limit is a source problem (repository private
+        // or gone), not a connection problem: the request reached GitHub.
+        return Err(UpdateError::SourceNotFound {
+            reason: format!("GitHub API mengembalikan status {}", response.status),
+        });
+    }
+    if response.status == 404 {
+        // The repository named in the release source does not exist or is not
+        // public; reporting "check your connection" would be wrong.
+        return Err(UpdateError::SourceNotFound {
             reason: format!("GitHub API mengembalikan status {}", response.status),
         });
     }

@@ -45,3 +45,5 @@ pub const ERR_ROLLBACK: &str =
     "Terjadi kegagalan saat memulihkan password lama. Periksa kredensial server secara manual.";
 /// `DBL-8115`: the operating system RNG failed.
 pub const ERR_PASSWORD_GENERATE: &str = "Password baru tidak dapat dibuat.";
+/// `DBL-8117`: the instance has no password, so admin cannot authenticate.
+pub const ERR_NO_PASSWORD: &str = "Instance ini dibuat tanpa password, jadi pengelolaan database memerlukan instance yang dibuat dengan password.";

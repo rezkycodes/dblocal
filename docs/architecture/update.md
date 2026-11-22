@@ -177,6 +177,7 @@ not executed here.
 | `DBL-8008` | Install kind cannot self-update. |
 | `DBL-8009` | No matching asset for platform. |
 | `DBL-8010` | Apply/smoke-check failure; rollback attempted. |
+| `DBL-8011` | Release source (GitHub repository) missing or not public (HTTP 404, or 403 that is not a rate limit). Distinct from `DBL-8004`: the request reached GitHub. |
 
 ## Security invariants
 
