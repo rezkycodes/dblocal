@@ -5,6 +5,7 @@
 //! first action, then execs the client.
 
 use std::ffi::OsString;
+use std::io;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
@@ -396,7 +397,10 @@ fn sweep_old_scripts(dir: &Path) -> ClientResult<()> {
 /// Writes a launcher script atomically, never reusing an existing name.
 ///
 /// Writes to a temp sibling, fsyncs, then hard-links into place so `create_new`
-/// semantics are preserved while avoiding ETXTBSY from an inherited write fd.
+/// semantics are preserved. Atomic rename alone does not prevent ETXTBSY when a
+/// forked child inherits the temp write fd; the hard-link + create-new pattern
+/// avoids reusing the temp inode as the executable path. If hard links are not
+/// supported by the filesystem, falls back to `create_new` with the same contents.
 pub fn write_script_file(dir: &Path, temp: &TempFile) -> ClientResult<PathBuf> {
     let path = dir.join(temp.name_hint());
     write_script_file_create_new(&path, temp.contents().expose().as_bytes(), temp.mode()).map_err(
@@ -423,6 +427,10 @@ fn write_script_file_create_new(path: &Path, contents: &[u8], mode: u32) -> std:
             let _ = std::fs::remove_file(&tmp);
             Ok(())
         }
+        Err(e) if hard_link_unsupported(&e) => {
+            let _ = std::fs::remove_file(&tmp);
+            write_script_file_fallback_create_new(path, contents, mode)
+        }
         Err(e) => {
             let _ = std::fs::remove_file(&tmp);
             Err(e)
@@ -430,7 +438,79 @@ fn write_script_file_create_new(path: &Path, contents: &[u8], mode: u32) -> std:
     }
 }
 
+fn hard_link_unsupported(err: &io::Error) -> bool {
+    if matches!(
+        err.kind(),
+        io::ErrorKind::Unsupported | io::ErrorKind::PermissionDenied
+    ) {
+        return true;
+    }
+    match err.raw_os_error() {
+        // EXDEV, EPERM, ENOTSUP/EOPNOTSUPP (linux 95, macos 45/102)
+        Some(18) | Some(1) | Some(95) | Some(45) | Some(102) => true,
+        _ => false,
+    }
+}
+
+fn write_script_file_fallback_create_new(
+    path: &Path,
+    contents: &[u8],
+    mode: u32,
+) -> io::Result<()> {
+    let mut opts = std::fs::OpenOptions::new();
+    opts.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(mode);
+    }
+    #[cfg(not(unix))]
+    let _ = mode;
+    let mut file = opts.open(path)?;
+    use std::io::Write;
+    if let Err(e) = file.write_all(contents).and_then(|_| file.sync_all()) {
+        let _ = std::fs::remove_file(path);
+        return Err(e);
+    }
+    Ok(())
+}
+
 /// Substitute the script placeholder in an argv element.
 pub fn substitute_script_placeholder(value: &str, script_path: &Path) -> String {
     value.replace(SCRIPT_PLACEHOLDER, &script_path.to_string_lossy())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    #[test]
+    fn hard_link_fallback_create_new_writes_file() {
+        let dir = tempdir().expect("dir");
+        let path = dir.path().join("script.sh");
+        write_script_file_fallback_create_new(&path, b"#!/bin/sh\nexit 0\n", 0o700)
+            .expect("fallback write");
+        let got = std::fs::read(&path).expect("read");
+        assert_eq!(got, b"#!/bin/sh\nexit 0\n");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&path).expect("meta").permissions().mode() & 0o777;
+            assert_eq!(mode, 0o700);
+        }
+        let err = write_script_file_fallback_create_new(&path, b"second", 0o700)
+            .expect_err("create_new must reject existing path");
+        assert_eq!(err.kind(), std::io::ErrorKind::AlreadyExists);
+    }
+
+    #[test]
+    fn hard_link_unsupported_errors_are_detected() {
+        let err = io::Error::from_raw_os_error(18); // EXDEV
+        assert!(hard_link_unsupported(&err));
+        let err = io::Error::from(io::ErrorKind::Unsupported);
+        assert!(hard_link_unsupported(&err));
+        let err = io::Error::from(io::ErrorKind::AlreadyExists);
+        assert!(!hard_link_unsupported(&err));
+    }
 }

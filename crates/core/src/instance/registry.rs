@@ -8,7 +8,7 @@ use crate::DblError;
 use crate::download::CancellationToken;
 use crate::error::Result;
 use crate::model::InstanceId;
-use crate::service::OperationId;
+use crate::service::{OperationId, UserFacingError};
 
 /// How many finished-operation ids are retained.
 ///
@@ -17,6 +17,9 @@ use crate::service::OperationId;
 /// long ago, so a small window is plenty; the cap stops a long-lived process from
 /// growing one entry per operation forever.
 pub const FINISHED_HISTORY: usize = 1024;
+
+/// Outcome of a finished operation, kept so a late subscriber can still observe it.
+pub type OperationOutcome = std::result::Result<(), UserFacingError>;
 
 /// Operation ids and per-instance exclusivity.
 #[derive(Clone, Debug, Default)]
@@ -36,8 +39,9 @@ struct OpsInner {
     /// waiting forever on an event it never saw. Bounded to the most recent
     /// [`FINISHED_HISTORY`] ids: a `VecDeque` in insertion order evicts the oldest
     /// when a new one arrives, so a process that runs for a week does not retain
-    /// one id per operation.
-    finished: Mutex<VecDeque<OperationId>>,
+    /// one id per operation. The outcome is stored alongside the id so a consumer
+    /// that missed the broadcast can still observe success or failure.
+    finished: Mutex<VecDeque<(OperationId, OperationOutcome)>>,
 }
 
 impl Ops {
@@ -105,18 +109,19 @@ impl Ops {
 
     /// Records that an operation finished and drops its cancellation token.
     ///
-    /// Idempotent: a repeated `finish` for the same id must not append a second
-    /// copy, because that would evict a still-recent operation from the window
-    /// early.
-    pub fn finish(&self, id: &OperationId) {
+    /// Stores the final outcome so a consumer that missed the broadcast can still
+    /// observe success or failure. Idempotent: a repeated `finish` for the same id
+    /// must not append a second copy, because that would evict a still-recent
+    /// operation from the window early.
+    pub fn finish(&self, id: &OperationId, result: OperationOutcome) {
         if let Ok(mut cancels) = self.inner.cancels.lock() {
             cancels.remove(id);
         }
         if let Ok(mut finished) = self.inner.finished.lock() {
-            if finished.contains(id) {
+            if finished.iter().any(|(finished_id, _)| finished_id == id) {
                 return;
             }
-            finished.push_back(id.clone());
+            finished.push_back((id.clone(), result));
             // Evict the oldest beyond the window: a consumer only ever asks
             // about an operation it just missed, so old ids are worthless and
             // must not accumulate.
@@ -133,11 +138,23 @@ impl Ops {
     /// an event that will never be re-delivered.
     #[cfg_attr(not(test), allow(dead_code))]
     pub fn is_finished(&self, id: &OperationId) -> bool {
-        self.inner
-            .finished
-            .lock()
-            .map(|finished| finished.contains(id))
-            .unwrap_or(false)
+        self.operation_result(id).is_some()
+    }
+
+    /// Returns the final outcome of `id` when it finished inside the retained
+    /// window.
+    ///
+    /// This is the durable completion path for callers that may have missed the
+    /// `OperationFinished` broadcast (a late subscriber, or a harness running
+    /// under load where broadcast lag dropped the event). Presence means the
+    /// operation completed; the contained `Result` tells whether it succeeded.
+    pub fn operation_result(&self, id: &OperationId) -> Option<OperationOutcome> {
+        self.inner.finished.lock().ok().and_then(|finished| {
+            finished
+                .iter()
+                .rev()
+                .find_map(|(finished_id, result)| (finished_id == id).then(|| result.clone()))
+        })
     }
 
     /// How many finished-operation ids are currently retained, for the bound
@@ -185,7 +202,7 @@ mod tests {
         let mut ids = Vec::with_capacity(total);
         for _ in 0..total {
             let id = ops.next_id();
-            ops.finish(&id);
+            ops.finish(&id, Ok(()));
             ids.push(id);
         }
 
@@ -214,13 +231,29 @@ mod tests {
     fn finishing_twice_does_not_double_count() {
         let ops = Ops::new();
         let id = ops.next_id();
-        ops.finish(&id);
-        ops.finish(&id);
+        ops.finish(&id, Ok(()));
+        ops.finish(&id, Ok(()));
         assert!(ops.is_finished(&id));
         assert_eq!(
             ops.finished_len(),
             1,
             "a repeated finish must not append a second copy that could evict a live id"
         );
+    }
+
+    #[test]
+    fn a_missed_broadcast_still_yields_the_result() {
+        let ops = Ops::new();
+        let ok = ops.next_id();
+        ops.finish(&ok, Ok(()));
+        assert_eq!(ops.operation_result(&ok), Some(Ok(())));
+
+        let err = ops.next_id();
+        let failure = crate::service::UserFacingError::new(
+            crate::error::CODE_ENGINE,
+            crate::strings::ERR_ENGINE,
+        );
+        ops.finish(&err, Err(failure.clone()));
+        assert_eq!(ops.operation_result(&err), Some(Err(failure)));
     }
 }

@@ -37,9 +37,12 @@ pub fn write_private_file_atomic(path: &Path, contents: &[u8]) -> io::Result<()>
 
 /// Atomically writes an executable file with mode `0755` on Unix.
 ///
-/// Uses the same temp-write-fsync-rename pattern as [`write_private_file_atomic`], so
-/// the final path never has an open write descriptor. That prevents ETXTBSY when a
-/// concurrent fork in the same process inherits the temporary write fd.
+/// Uses the same temp-write-fsync-rename pattern as [`write_private_file_atomic`].
+/// Atomic rename does **not** by itself prevent ETXTBSY: the busy state belongs to
+/// the inode, and a forked child that inherited the temp file's write fd keeps it
+/// open until it execs, regardless of the file's name. Callers that may exec the
+/// file from a process that also forks should combine atomic writes with a bounded
+/// ETXTBSY retry on spawn (see [`output_retrying_text_file_busy`]).
 pub fn write_executable_file_atomic(path: &Path, contents: &[u8]) -> io::Result<()> {
     write_file_atomic(path, contents, 0o755)
 }

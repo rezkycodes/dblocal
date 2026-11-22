@@ -129,6 +129,12 @@ pub(crate) fn emit_stage(inner: &Inner, op: &OperationId, stage: OperationStage)
 }
 
 /// Emits `Failed`/`Done` and then exactly one `OperationFinished`.
+///
+/// The outcome is recorded in the operation registry **before** the broadcast.
+/// A consumer that misses the event (a late subscriber, or broadcast lag under
+/// load) can still observe the terminal result through
+/// [`crate::instance::registry::Ops::operation_result`], so completion is never
+/// signalled only by a best-effort channel.
 pub(crate) fn finish_operation(inner: &Inner, op: &OperationId, result: OpResult<()>) {
     let rendered = match &result {
         Ok(()) => {
@@ -144,11 +150,11 @@ pub(crate) fn finish_operation(inner: &Inner, op: &OperationId, result: OpResult
             Err(facing)
         }
     };
+    inner.ops.finish(op, rendered.clone());
     inner.emit(ServiceEvent::OperationFinished {
         id: op.clone(),
         result: rendered,
     });
-    inner.ops.finish(op);
 }
 
 /// Loads an instance or reports a typed `NotFound`.

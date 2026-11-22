@@ -130,7 +130,7 @@ fn run_crash_point(mode: DeleteMode, point: CrashPoint) {
     }
 
     // App restart: reconciliation must finish this safely.
-    let restarted = super::harness::restart_with(
+    let (restarted, _startup) = super::harness::restart_with(
         &h.paths,
         Arc::clone(&h.procs),
         Arc::clone(&h.terminator),
@@ -302,14 +302,12 @@ fn a_reconciled_interrupted_create_leaves_nothing_behind() {
         .transition_status(&id, InstanceStatus::Stopped, InstanceStatus::Initializing)
         .expect("initializing");
 
-    let restarted = super::harness::restart_with(
+    let (restarted, mut startup_receiver) = super::harness::restart_with(
         &h.paths,
         Arc::clone(&h.procs),
         Arc::clone(&h.terminator),
         Arc::clone(&h.secrets),
     );
-    // Subscribe after the restart so the reconciliation events are observable.
-    let mut receiver = restarted.receiver();
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
     while restarted.instance(&id).is_some() {
         assert!(
@@ -331,10 +329,19 @@ fn a_reconciled_interrupted_create_leaves_nothing_behind() {
         "the credential pointer is gone"
     );
 
-    // One of the events the restart emitted must be the removal.
-    let removal_seen = std::iter::from_fn(|| receiver.try_recv().ok())
-        .any(|event| super::harness::removed_for(&[event], &id));
-    assert!(removal_seen, "reconciliation emits InstanceRemoved");
+    // Subscribe-before-startup is the contract: `restart_with` returns a receiver
+    // created before reconciliation began, so the removal event is observable even
+    // when reconciliation wins the race. `InstanceRemoved` is also durable in the
+    // sense that the row is gone; assert both.
+    let removal_seen = super::harness::wait_for_removed(
+        &mut startup_receiver,
+        &id,
+        std::time::Duration::from_secs(30),
+    );
+    assert!(
+        removal_seen,
+        "reconciliation emits InstanceRemoved for {id}; the row is gone but no removal event arrived before timeout"
+    );
 }
 
 #[test]

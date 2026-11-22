@@ -24,6 +24,29 @@ pub use super::harness_fakes::{
     FailAt, FakeProcs, FakeSecrets, FakeTerminator, GatedProbe, ScriptedAdapter,
 };
 
+/// Terminal result of one operation, paired with the events the receiver saw.
+///
+/// `result` comes from the durable operation registry when the broadcast event
+/// was missed under load, so callers never need to treat a missing
+/// `OperationFinished` event as "maybe still running" when the registry says done.
+#[derive(Clone, Debug)]
+pub struct OperationRun {
+    pub events: Vec<ServiceEvent>,
+    pub result: Option<std::result::Result<(), crate::service::UserFacingError>>,
+}
+
+impl OperationRun {
+    /// The durable terminal result.
+    pub fn result(&self) -> Option<std::result::Result<(), crate::service::UserFacingError>> {
+        self.result.clone()
+    }
+
+    /// Whether this run ended with a terminal error.
+    pub fn is_err(&self) -> bool {
+        matches!(self.result, Some(Err(_)))
+    }
+}
+
 /// A fully wired service over a temp home plus every fake it uses.
 pub struct Harness {
     pub dir: TempDir,
@@ -127,39 +150,47 @@ impl Harness {
     }
 
     /// Subscribes, calls `start` (which returns an `OperationId`), then waits
-    /// for that operation's events.
+    /// for that operation's terminal result.
     ///
     /// This is the safe way to observe an operation that may finish before the
     /// caller could subscribe: the receiver exists before the call, so no event
-    /// is missed.
+    /// is missed, and the durable registry result covers broadcast lag under load.
     pub fn run_call(
         &self,
         start: impl FnOnce() -> crate::Result<crate::service::OperationId>,
-    ) -> (crate::service::OperationId, Vec<ServiceEvent>) {
+    ) -> (crate::service::OperationId, OperationRun) {
         let mut receiver = self.receiver();
         let op = start().expect("operation start");
-        let events = self.run_on(&mut receiver, op.clone());
-        (op, events)
+        let run = self.run_on(&mut receiver, op.clone());
+        (op, run)
     }
 
-    /// Waits for one operation to finish, returning every event it produced.
-    pub fn run(&self, op: crate::service::OperationId) -> Vec<ServiceEvent> {
-        let mut receiver = self.receiver();
-        wait_for_finished(&mut receiver, &op, || {
-            self.service.is_operation_finished(&op)
-        })
-    }
-
-    /// Waits for `op` on an existing receiver, returning every event it produced.
+    /// Waits for `op` on an existing receiver, returning collected events and the
+    /// durable terminal result.
+    ///
+    /// There is intentionally no `run(op)` that subscribes after the fact: that
+    /// shape drops the `OperationFinished` broadcast when the operation wins the
+    /// race, which made tests weaken their assertions under load. Use
+    /// [`Self::run_call`] when starting an operation, or create a receiver before
+    /// the operation starts and pass it here.
     pub fn run_on(
         &self,
         receiver: &mut tokio::sync::broadcast::Receiver<ServiceEvent>,
         op: crate::service::OperationId,
-    ) -> Vec<ServiceEvent> {
-        let finished = self.service.is_operation_finished(&op);
-        wait_for_finished(receiver, &op, || {
-            finished || self.service.is_operation_finished(&op)
-        })
+    ) -> OperationRun {
+        let events = wait_for_finished(receiver, &op, || self.service.is_operation_finished(&op));
+        let result = self
+            .operation_result(&op)
+            .or_else(|| finished_result(&events, &op));
+        OperationRun { events, result }
+    }
+
+    /// Durable terminal result of `op`, when it finished inside the retained window.
+    pub fn operation_result(
+        &self,
+        op: &crate::service::OperationId,
+    ) -> Option<std::result::Result<(), crate::service::UserFacingError>> {
+        self.service.operation_result(op)
     }
 
     /// Waits until `predicate` holds for the stored instance.
@@ -203,7 +234,7 @@ impl Harness {
         // opened afterwards misses every event.
         let mut receiver = self.receiver();
         let op = self.service.create_instance(spec).expect("create");
-        self.run_on(&mut receiver, op)
+        self.run_on(&mut receiver, op).events
     }
 
     /// Number of instances currently watched for live logs.
@@ -297,6 +328,7 @@ impl Harness {
             os: Some(crate::platform::Os::Linux),
             arch: Some(crate::platform::Arch::X86_64),
             host_glibc: Some((2, 39)),
+            auto_start: Some(false),
             ..ServiceOptions::default()
         };
         tweak(&mut options);
@@ -307,6 +339,9 @@ impl Harness {
         std::fs::create_dir_all(runtime_dir.join("bin")).expect("runtime bin");
 
         let service = LocalService::new(paths.clone(), options).expect("service");
+        let startup_receiver = service.subscribe();
+        service.start_background();
+        drop(startup_receiver);
         Harness {
             dir,
             paths,
@@ -344,13 +379,15 @@ pub fn second_service(
     // would make a start fail on a credential it "cannot find", which is a
     // harness artefact, not a defect.
     let terminator = Arc::new(FakeTerminator::new(Arc::clone(&procs)));
-    build_over_shared(paths, procs, terminator, secrets)
+    let (harness, _startup) = build_over_shared(paths, procs, terminator, secrets);
+    harness
 }
 
 /// A fresh service over an existing home, sharing the process table so a live
 /// engine recorded before the "restart" is still visible afterwards.
 pub fn restart(paths: &DblPaths, procs: Arc<FakeProcs>) -> Harness {
-    build_over(paths, procs)
+    let (harness, _startup) = build_over(paths, procs);
+    harness
 }
 
 /// Restarts over the same home, **consuming** the old harness.
@@ -388,7 +425,7 @@ pub fn restart_owned_with(old: Harness, prepare: impl FnOnce(&DblPaths)) -> Harn
     // aborts the parked task, so after this the old service is provably inert.
     std::thread::sleep(Duration::from_millis(120));
     prepare(&paths);
-    build(
+    let (harness, _startup) = build(
         dir,
         paths,
         procs,
@@ -396,18 +433,23 @@ pub fn restart_owned_with(old: Harness, prepare: impl FnOnce(&DblPaths)) -> Harn
         secrets,
         Duration::from_millis(60),
         None,
-    )
+    );
+    harness
 }
 
 /// A fresh service over an existing home that also shares the terminator and
 /// secret backends of the original, so a test can inspect or script them after
 /// the restart.
+///
+/// Subscribes **before** reconciliation starts, so startup events (notably
+/// `InstanceRemoved` from an interrupted create) are observable. The receiver is
+/// returned alongside the harness; callers that do not care can drop it.
 pub fn restart_with(
     paths: &DblPaths,
     procs: Arc<FakeProcs>,
     terminator: Arc<FakeTerminator>,
     secrets: Arc<FakeSecrets>,
-) -> Harness {
+) -> (Harness, tokio::sync::broadcast::Receiver<ServiceEvent>) {
     build_over_shared(paths, procs, terminator, secrets)
 }
 
@@ -419,7 +461,8 @@ pub fn fast_supervisor(poll: Duration) -> Harness {
     let procs = Arc::new(FakeProcs::new());
     let terminator = Arc::new(FakeTerminator::new(Arc::clone(&procs)));
     let secrets = Arc::new(FakeSecrets::new());
-    build(dir, paths, procs, terminator, secrets, poll, None)
+    let (harness, _startup) = build(dir, paths, procs, terminator, secrets, poll, None);
+    harness
 }
 
 /// A harness whose reconciliation and supervisor use `gated` as the probe, while
@@ -439,7 +482,7 @@ pub fn with_gated_probe(
     let terminator = Arc::new(FakeTerminator::new(Arc::clone(&procs)));
     let secrets = Arc::new(FakeSecrets::new());
     let _ = engine;
-    build(
+    let (harness, _startup) = build(
         dir,
         paths,
         procs,
@@ -447,12 +490,16 @@ pub fn with_gated_probe(
         secrets,
         poll,
         Some(gated as Arc<dyn ProcessProbe + Send + Sync>),
-    )
+    );
+    harness
 }
 
 /// Builds a harness whose state tree is `paths` and whose process table is
 /// `procs`.
-fn build_over(paths: &DblPaths, procs: Arc<FakeProcs>) -> Harness {
+fn build_over(
+    paths: &DblPaths,
+    procs: Arc<FakeProcs>,
+) -> (Harness, tokio::sync::broadcast::Receiver<ServiceEvent>) {
     let terminator = Arc::new(FakeTerminator::new(Arc::clone(&procs)));
     let secrets = Arc::new(FakeSecrets::new());
     build_over_shared(paths, procs, terminator, secrets)
@@ -463,7 +510,7 @@ fn build_over_shared(
     procs: Arc<FakeProcs>,
     terminator: Arc<FakeTerminator>,
     secrets: Arc<FakeSecrets>,
-) -> Harness {
+) -> (Harness, tokio::sync::broadcast::Receiver<ServiceEvent>) {
     build(
         tempfile::tempdir().expect("tempdir"),
         paths.clone(),
@@ -480,6 +527,10 @@ fn build_over_shared(
 /// `probe` overrides the process probe for the reconciliation and supervisor
 /// paths (a gated probe, for a deterministic race); the fake spawn still uses
 /// `procs` so identities and spawns stay in one table.
+///
+/// A receiver is subscribed **before** `start_background()` so startup
+/// reconciliation events are observable. Every harness variant returns it; most
+/// tests ignore it and subscribe their own receiver when they need one.
 fn build(
     dir: TempDir,
     paths: DblPaths,
@@ -488,7 +539,7 @@ fn build(
     secrets: Arc<FakeSecrets>,
     status_poll: Duration,
     probe: Option<Arc<dyn ProcessProbe + Send + Sync>>,
-) -> Harness {
+) -> (Harness, tokio::sync::broadcast::Receiver<ServiceEvent>) {
     let adapter = Arc::new(ScriptedAdapter::new(EngineKey::Postgresql));
     let busy_ports = Arc::new(Mutex::new(Vec::new()));
 
@@ -514,6 +565,7 @@ fn build(
         os: Some(crate::platform::Os::Linux),
         arch: Some(crate::platform::Arch::X86_64),
         host_glibc: Some((2, 39)),
+        auto_start: Some(false),
         ..ServiceOptions::default()
     };
 
@@ -524,7 +576,9 @@ fn build(
     std::fs::create_dir_all(runtime_dir.join("bin")).expect("runtime bin");
 
     let service = LocalService::new(paths.clone(), options).expect("service");
-    Harness {
+    let startup_receiver = service.subscribe();
+    service.start_background();
+    let harness = Harness {
         dir,
         paths,
         adapter,
@@ -534,7 +588,8 @@ fn build(
         service,
         events: Mutex::new(Vec::new()),
         busy_ports,
-    }
+    };
+    (harness, startup_receiver)
 }
 
 /// Clone wrapper so the factory can hand out the same scripted adapter behind a
@@ -702,6 +757,25 @@ fn wait_for_finished(
     }
 }
 
+fn row_gone_diagnostic(store: &Store, id: &InstanceId) -> String {
+    let row = match store.get_instance(id) {
+        Ok(row) => row,
+        Err(err) => return format!("store read failed: {err}"),
+    };
+    let Some(instance) = row else {
+        return "row is gone".to_owned();
+    };
+    let marker = super::super::delete::IN_FLIGHT_MARKER;
+    let marker_path = instance.name().as_str().to_owned();
+    format!(
+        "status={:?} pid={:?} started_at={:?} exe={:?} instance_name={marker_path} marker={marker}",
+        instance.status(),
+        instance.pid(),
+        instance.process_started_at(),
+        instance.process_exe(),
+    )
+}
+
 /// Waits until `id` is gone, with a deadline. Shared by recovery tests.
 pub fn wait_until_row_gone(h: &Harness, id: &InstanceId, round: usize) {
     // Generous: the whole instance suite runs many services (each with a
@@ -714,7 +788,8 @@ pub fn wait_until_row_gone(h: &Harness, id: &InstanceId, round: usize) {
         }
         assert!(
             std::time::Instant::now() < deadline,
-            "round {round}: the row was never removed"
+            "round {round}: the row was never removed; {}",
+            row_gone_diagnostic(&h.store(), id)
         );
         std::thread::sleep(Duration::from_millis(20));
     }
@@ -737,8 +812,31 @@ pub fn wait_for_row_gone(paths: &DblPaths, id: &InstanceId, round: usize) {
         }
         assert!(
             std::time::Instant::now() < deadline,
-            "round {round}: the row was never removed"
+            "round {round}: the row was never removed; {}",
+            row_gone_diagnostic(&store, id)
         );
         std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+/// Waits for an `InstanceRemoved` event for `id`, returning false on timeout.
+pub fn wait_for_removed(
+    receiver: &mut tokio::sync::broadcast::Receiver<ServiceEvent>,
+    id: &InstanceId,
+    timeout: Duration,
+) -> bool {
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        match receiver.try_recv() {
+            Ok(event) if removed_for(std::slice::from_ref(&event), id) => return true,
+            Ok(_) => continue,
+            Err(tokio::sync::broadcast::error::TryRecvError::Empty) => {}
+            Err(tokio::sync::broadcast::error::TryRecvError::Lagged(_)) => continue,
+            Err(tokio::sync::broadcast::error::TryRecvError::Closed) => return false,
+        }
+        if std::time::Instant::now() >= deadline {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(10));
     }
 }

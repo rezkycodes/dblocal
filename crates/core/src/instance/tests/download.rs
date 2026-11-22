@@ -141,9 +141,10 @@ fn create_downloads_verifies_and_extracts_a_real_archive() {
     // Subscribe before the call, or the first (`queued`) stage can be missed.
     let mut receiver = h.receiver();
     let op = h.service.create_instance(spec).expect("create");
-    let events = h.run_on(&mut receiver, op.clone());
+    let run = h.run_on(&mut receiver, op.clone());
+    let events = &run.events;
 
-    let stages = super::harness::stages(&events);
+    let stages = super::harness::stages(events);
     assert_eq!(stages.first(), Some(&"queued"), "{stages:?}");
     assert!(
         stages.contains(&"downloading"),
@@ -161,10 +162,7 @@ fn create_downloads_verifies_and_extracts_a_real_archive() {
         panic!("extract stage emitted: {stages:?}\n{debug:#?}");
     }
     assert_eq!(stages.last(), Some(&"done"), "{stages:?}");
-    assert!(matches!(
-        super::harness::finished_result(&events, &op),
-        Some(Ok(()))
-    ));
+    assert!(matches!(run.result(), Some(Ok(()))));
     assert!(
         hits.load(Ordering::SeqCst) >= 1,
         "the server was asked once"
@@ -199,8 +197,8 @@ fn a_wrong_checksum_fails_and_leaves_no_runtime() {
     let h = harness_with_source(url, wrong, body.len() as u64, EngineKey::Postgresql);
     let port = test_port();
     let spec = h.spec("bad-hash", EngineKey::Postgresql, port);
-    let (op, events) = h.run_call(|| h.service.create_instance(spec));
-    match super::harness::finished_result(&events, &op) {
+    let (_op, run) = h.run_call(|| h.service.create_instance(spec));
+    match run.result() {
         Some(Err(error)) => assert_eq!(error.code, crate::error::CODE_CHECKSUM_MISMATCH),
         other => panic!("expected a checksum mismatch, got {other:?}"),
     }
@@ -230,8 +228,8 @@ fn cancelling_mid_download_stops_the_create() {
     // Let the download begin (the server trickles), then cancel.
     std::thread::sleep(Duration::from_millis(400));
     h.service.cancel_operation(&op).expect("cancel");
-    let events = h.run_on(&mut receiver, op.clone());
-    match super::harness::finished_result(&events, &op) {
+    let run = h.run_on(&mut receiver, op.clone());
+    match run.result() {
         Some(Err(error)) => assert_eq!(error.code, crate::error::CODE_CANCELLED),
         other => panic!("expected a cancellation, got {other:?}"),
     }

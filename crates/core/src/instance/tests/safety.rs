@@ -319,8 +319,8 @@ fn the_supervisor_notices_a_killed_process() {
     h.create(spec);
     let instance = h.instances().into_iter().next().expect("instance");
     let id = instance.id().clone();
-    let op = h.service.start_instance(&id).expect("start");
-    h.run(op);
+    let (_op, run) = h.run_call(|| h.service.start_instance(&id));
+    assert!(matches!(run.result(), Some(Ok(()))));
     h.wait_for_status(&id, InstanceStatus::Running);
 
     let running = h.instance(&id).expect("running");
