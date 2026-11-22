@@ -172,22 +172,29 @@ fn run_with_service_mode(
 }
 
 fn handle_login_autostart(service: Arc<dyn DblService>, tray_available: bool, cx: &mut App) {
-    // Start the flagged instances and observe each one via the shared pass, so
-    // the tray/window shows `running` or `failed` with no modal dialog (D1/D4).
-    start_flagged_instances(service.clone(), cx);
-
     // D4: a working tray means no window (AC3). Without a tray the window is the
     // only UI, so open it (the PRD F-TRY-01 AC3 fallback) — never leave an
-    // invisible process that nothing can quit.
+    // invisible process that nothing can quit. The decision is written to stderr
+    // so a login-mode run leaves a trace in the journal (`journalctl --user -u
+    // dblocal`) before any tracing subscriber is installed.
     match dblocal_core::autostart::decide_gui_presentation(tray_available) {
-        dblocal_core::autostart::GuiPresentation::TrayOnly => {}
-        dblocal_core::autostart::GuiPresentation::Window => {
-            if let Err(err) = open_main_window(cx) {
-                tracing::error!("could not open the login-mode window: {err:#}");
+        dblocal_core::autostart::GuiPresentation::TrayOnly => {
+            eprintln!("{}", dblocal_core::autostart::messages::GUI_TRAY_ONLY);
+        }
+        dblocal_core::autostart::GuiPresentation::Window => match open_main_window(cx) {
+            Ok(_) => eprintln!("{}", dblocal_core::autostart::messages::GUI_WINDOW_OPENED),
+            Err(err) => {
+                eprintln!(
+                    "{}: {err:#}",
+                    dblocal_core::autostart::messages::GUI_WINDOW_FAILED
+                );
                 request_app_quit(cx);
             }
-        }
+        },
     }
+
+    // Start flagged instances and observe each via the shared pass (D1).
+    start_flagged_instances(service, cx);
 }
 
 fn start_flagged_instances(service: Arc<dyn DblService>, cx: &mut App) {

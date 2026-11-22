@@ -37,3 +37,10 @@ pub fn outcome_started(name: &str) -> String {
 pub fn outcome_failed(name: &str, detail: &str) -> String {
     format!("{OUTCOME_FAILED}: {name} — {detail}")
 }
+
+/// GUI login mode: a tray host accepted the icon, so there is no window (AC3).
+pub const GUI_TRAY_ONLY: &str = "Autostart: tray aktif, tanpa jendela.";
+/// GUI login mode: no tray host, so the main window was opened (D4 fallback).
+pub const GUI_WINDOW_OPENED: &str = "Autostart: tray tidak tersedia, jendela dibuka.";
+/// GUI login mode: the window could not be opened.
+pub const GUI_WINDOW_FAILED: &str = "Autostart: gagal membuka jendela";
