@@ -849,20 +849,49 @@ fn mariadb_two_instances_side_by_side() {
     require_e2e();
     let cache = cache_dir();
     let a118 = cache.join(MDB118_ARCHIVE);
-    let a114 = cache.join(MDB114_ARCHIVE);
     assert!(a118.is_file(), "missing {}", a118.display());
 
-    let tmp = tempfile::tempdir().expect("tmp");
-    let rt118 = setup_runtime(tmp.path());
+    let rt118 = setup_runtime(Path::new("."));
 
     let port1 = 43106u16;
     let port2 = 43107u16;
     require_port_free(port1);
     require_port_free(port2);
 
+    let pw = "e2e-side";
+    for round in 0..5 {
+        let mut handles = Vec::new();
+        for idx in 0..2 {
+            let rt = rt118.clone();
+            let port = if idx == 0 { port1 } else { port2 };
+            handles.push(thread::spawn(move || {
+                let tmp = tempfile::tempdir().expect("tmp");
+                let base = tmp.path().join(format!("r{round}-i{idx}"));
+                fs::create_dir_all(&base).expect("base");
+                let (_i, d, l, r) = mk_instance(&base, "s");
+                MariaDbAdapter
+                    .initialize(&init_ctx(&rt, &d, port, AuthMode::Password, Some(pw)))
+                    .expect("init");
+                let mut g = start_mariadb(&rt, &d, &l, &r, port, AuthMode::Password, Some(pw));
+                assert!(
+                    wait_tcp(port, Duration::from_secs(30)),
+                    "listen r{round} i{idx}"
+                );
+                MariaDbAdapter
+                    .shutdown(&run_ctx(&rt, &d, &l, &r, port, AuthMode::Password, Some(pw)))
+                    .expect("shutdown");
+                let _ = g.0.take().map(|mut c| c.wait());
+                assert!(wait_tcp_gone(port, Duration::from_secs(30)));
+            }));
+        }
+        for h in handles {
+            h.join().expect("round thread");
+        }
+    }
+
+    let tmp = tempfile::tempdir().expect("tmp");
     let (_i1, d1, l1, r1) = mk_instance(tmp.path(), "s1");
     let (_i2, d2, l2, r2) = mk_instance(tmp.path(), "s2");
-    let pw = "e2e-side";
 
     MariaDbAdapter
         .initialize(&init_ctx(&rt118, &d1, port1, AuthMode::Password, Some(pw)))
