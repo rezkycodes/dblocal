@@ -683,3 +683,61 @@ fn change_port_check_then_act_window_is_documented() {
         .expect_err("running instance refused");
     assert_eq!(err.code(), crate::error::CODE_INVALID_TRANSITION);
 }
+
+/// Item 5(a): `finish_operation` must put `OperationFinished` in the channel
+/// **before** it records the durable registry result.
+///
+/// A consumer may stop polling the registry the moment it reports "finished" and
+/// then drain its channel; it must find the terminal event. The reviewer's
+/// mutation — record in the registry, then broadcast — stayed green because no
+/// test observed the order.
+///
+/// `on_finish_recorded` runs immediately after the registry write and owns the
+/// receiver, so it drains at exactly that instant. In the fixed order the broadcast
+/// has already happened, so it finds the event; with the pre-fix order it runs
+/// before the broadcast and finds nothing. Deterministic, no polling.
+#[test]
+fn a_finished_operation_is_already_in_the_channel_when_the_registry_says_so() {
+    let h = Harness::new(EngineKey::Postgresql);
+    let port = test_port();
+    let spec = h.spec("finish-order", EngineKey::Postgresql, port);
+    let root = h.paths.root().to_path_buf();
+
+    // Subscribe before the create, so the hook's receiver is the one that would see
+    // the terminal event.
+    let mut receiver = h.receiver();
+    let result: Arc<std::sync::Mutex<Option<bool>>> = Arc::new(std::sync::Mutex::new(None));
+    let result_hook = Arc::clone(&result);
+    super::super::helpers::on_finish_recorded(&root, move |_inner, op| {
+        let op = op.clone();
+        let mut found = false;
+        loop {
+            match receiver.try_recv() {
+                Ok(ServiceEvent::OperationFinished { id, .. }) if id == op => {
+                    found = true;
+                    break;
+                }
+                Ok(_) => {}
+                Err(tokio::sync::broadcast::error::TryRecvError::Empty) => break,
+                Err(tokio::sync::broadcast::error::TryRecvError::Lagged(_)) => continue,
+                Err(tokio::sync::broadcast::error::TryRecvError::Closed) => break,
+            }
+        }
+        *result_hook.lock().expect("result") = Some(found);
+    });
+
+    let (_op, run) = h.run_call(|| h.service.create_instance(spec));
+    assert!(
+        matches!(run.result(), Some(Ok(()))),
+        "create: {:?}",
+        run.result()
+    );
+
+    let found =
+        (*result.lock().expect("result")).expect("the finish hook must have run for this create");
+    assert!(
+        found,
+        "the registry reported the operation finished before the channel held \
+         OperationFinished: finish_operation must broadcast before recording"
+    );
+}

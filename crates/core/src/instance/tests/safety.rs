@@ -458,3 +458,60 @@ fn a_corrupt_row_cannot_delete_outside_the_home() {
     assert_eq!(err.code(), crate::error::CODE_UNSAFE_ARCHIVE);
     assert!(outside.exists(), "outside data must survive");
 }
+
+/// Item 5(b): two deletes of the same instance, in one process, must use distinct
+/// marker nonces, so the loser's marker `Drop` can never remove the winner's.
+///
+/// The reviewer's mutation — `format!("{}-{}", std::process::id(), id.as_str())`,
+/// a nonce per (process, instance) — stayed green because no test compared two
+/// real nonces. This drives two services over one home deleting the same id and
+/// requires the recorded nonces to differ; it fails for any per-(process,instance)
+/// nonce regardless of how many services exist.
+#[test]
+fn two_deletes_of_one_instance_use_distinct_marker_nonces() {
+    let h = Harness::new(EngineKey::Postgresql);
+    let port = test_port();
+    let spec = h.spec("nonce-race", EngineKey::Postgresql, port);
+    // Insert the row directly, consuming no operation id, so both services allocate
+    // their first operation id (`op-1`) for the delete and a nonce built from the
+    // operation id alone would be identical across the two services.
+    let id = crate::model::InstanceId::new();
+    let row = crate::model::Instance::new(
+        &spec,
+        id.clone(),
+        InstanceStatus::Stopped,
+        std::time::SystemTime::now(),
+    );
+    h.store().insert_instance(&row).expect("insert row");
+    let second =
+        super::harness::second_service(&h.paths, Arc::clone(&h.procs), Arc::clone(&h.secrets));
+
+    // Both issue a delete of the same id; one wins the CAS, the other is refused,
+    // but both wrote a marker first (that ordering is deliberate).
+    let barrier = Arc::new(std::sync::Barrier::new(2));
+    let a_svc = h.service.clone();
+    let b_svc = second.service.clone();
+    let a_barrier = Arc::clone(&barrier);
+    let b_barrier = Arc::clone(&barrier);
+    let a_id = id.clone();
+    let b_id = id.clone();
+    let a = std::thread::spawn(move || {
+        a_barrier.wait();
+        a_svc.delete_instance(&a_id, DeleteMode::ArchiveData)
+    });
+    let b = std::thread::spawn(move || {
+        b_barrier.wait();
+        b_svc.delete_instance(&b_id, DeleteMode::ArchiveData)
+    });
+    let _ = a.join().expect("first thread");
+    let _ = b.join().expect("second thread");
+
+    let mut nonces = super::super::delete::take_delete_nonces(h.paths.root(), &id);
+    nonces.sort();
+    nonces.dedup();
+    assert_eq!(
+        nonces.len(),
+        2,
+        "two deletes of one instance must produce two distinct marker nonces, got {nonces:?}"
+    );
+}
