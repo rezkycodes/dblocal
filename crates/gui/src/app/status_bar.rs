@@ -22,12 +22,11 @@ use gpui_kit::assets::IconName;
 pub(super) fn render(workspace: &Workspace, cx: &mut Context<Workspace>) -> impl IntoElement {
     let theme = cx.theme().clone();
     let counts = workspace.counts();
-    let total_bytes: u64 = workspace
-        .instances()
-        .iter()
-        .filter_map(|view| workspace.data_size(&view.id))
-        .sum();
-    let total = format::format_bytes_id(total_bytes);
+    let total = workspace
+        .total_home_size()
+        .map(format::format_bytes_id)
+        .unwrap_or_else(|| strings::UI_VALUE_UNKNOWN.to_owned());
+    let data_dir = workspace.home_display();
     let backend = credential_backend_label(workspace);
     let platform = format::platform_label(std::env::consts::OS, std::env::consts::ARCH);
 
@@ -64,7 +63,7 @@ pub(super) fn render(workspace: &Workspace, cx: &mut Context<Workspace>) -> impl
                 .gap_1p5()
                 .child(icon(IconName::HardDrive, 13.0, theme.muted_foreground))
                 .child(
-                    Label::new(format!("~/.dblocal · {total}"))
+                    Label::new(format!("{data_dir} · {total}"))
                         .font_family(theme.mono_font_family.clone()),
                 ),
         )

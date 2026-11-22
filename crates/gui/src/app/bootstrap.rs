@@ -23,6 +23,7 @@ pub struct AppRuntime {
     tray_actions: Option<flume::Receiver<crate::tray::TrayAction>>,
     pub events: flume::Receiver<crate::service_bridge::UiEvent>,
     pub main_window: Option<WindowHandle<Root>>,
+    pub workspace: Option<gpui_kit::Entity<Workspace>>,
 }
 
 impl Global for AppRuntime {}
@@ -38,6 +39,7 @@ impl AppRuntime {
             tray_actions: Some(tray_start.actions),
             events,
             main_window: None,
+            workspace: None,
         }
     }
 
@@ -114,6 +116,9 @@ pub(crate) fn open_main_window(cx: &mut App) -> anyhow::Result<WindowHandle<Root
 
     let handle = cx.open_window(options, move |window, cx| {
         let workspace = cx.new(|cx| Workspace::new(window, cx));
+        cx.update_global::<AppRuntime, _>(|runtime, _| {
+            runtime.workspace = Some(workspace.clone());
+        });
         let weak = workspace.downgrade();
         window.on_window_should_close(cx, move |_window, cx| {
             if let Some(workspace) = weak.upgrade() {
@@ -122,9 +127,10 @@ pub(crate) fn open_main_window(cx: &mut App) -> anyhow::Result<WindowHandle<Root
                 });
                 let has_tray = cx.try_global::<AppRuntime>().is_some_and(|r| r.tray_available());
                 if has_tray {
-                    return true; // close window; process stays alive (QuitMode::Explicit)
+                    clear_main_window(cx);
+                    return true;
                 }
-                return false; // quit flow decides
+                return false;
             }
             true
         });
@@ -142,6 +148,7 @@ pub(crate) fn clear_main_window(cx: &mut App) {
     if cx.has_global::<AppRuntime>() {
         cx.update_global::<AppRuntime, _>(|runtime, _| {
             runtime.main_window = None;
+            runtime.workspace = None;
         });
     }
 }

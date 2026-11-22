@@ -113,6 +113,10 @@ pub struct Workspace {
     dotenv_cache: HashMap<InstanceId, dblocal_core::secret::SecretString>,
     /// Cached port suggestions for fix banners.
     port_suggestions: HashMap<InstanceId, u16>,
+    /// Total DBLocal home size in bytes, computed in background.
+    home_size_bytes: Option<u64>,
+    /// DBLocal home root for status bar display.
+    home_root: std::path::PathBuf,
     create: Option<CreateForm>,
     delete_target: Option<InstanceId>,
     delete_name_input: Option<Entity<InputState>>,
@@ -288,6 +292,10 @@ impl Workspace {
             data_sizes: HashMap::new(),
             dotenv_cache: HashMap::new(),
             port_suggestions: HashMap::new(),
+            home_size_bytes: None,
+            home_root: dblocal_core::paths::DblPaths::from_env()
+                .map(|p| p.root().to_path_buf())
+                .unwrap_or_else(|_| std::path::PathBuf::from("~/.dblocal")),
             create: None,
             delete_target: None,
             delete_name_input: None,

@@ -15,6 +15,12 @@ use crate::format::{self, PaletteAction};
 
 use super::{ActiveDownload, CreateForm, InnerTab, UriView, Workspace};
 
+fn dirs_next_home() -> Option<std::path::PathBuf> {
+    std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(std::path::PathBuf::from)
+}
+
 impl Workspace {
     /// Selects a centre-pane tab and loads that instance's own state.
     pub(crate) fn select_tab(&mut self, index: usize, cx: &mut Context<Self>) {
@@ -369,6 +375,14 @@ impl Workspace {
 
     pub(crate) fn tray_note(&self) -> Option<SharedString> {
         self.tray_note.clone()
+    }
+
+    pub(crate) fn total_home_size(&self) -> Option<u64> {
+        self.home_size_bytes
+    }
+
+    pub(crate) fn home_display(&self) -> String {
+        crate::format::abbreviate_home(&self.home_root, dirs_next_home().as_deref())
     }
 
     #[allow(dead_code)]

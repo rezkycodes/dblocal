@@ -34,11 +34,14 @@ use super::components::{engine_badge, icon, status_glyph, status_pill};
 use super::state::InnerTab;
 
 impl Workspace {
-    /// The centre pane: welcome screen, or the selected instance's tab.
+    /// The centre pane: welcome screen, select-instance prompt, or a tab.
     pub(crate) fn render_center(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme().clone();
         if self.tabs.is_empty() {
-            return self.render_welcome(&theme, cx).into_any_element();
+            if self.instances().is_empty() {
+                return self.render_welcome(&theme, cx).into_any_element();
+            }
+            return self.render_select_instance(&theme).into_any_element();
         }
 
         v_flex()
@@ -83,6 +86,31 @@ impl Workspace {
                     .on_click(cx.listener(|this, _, window, cx| {
                         this.open_new_instance(window, cx);
                     })),
+            )
+    }
+
+    /// Instances exist but none is selected: prompt to pick one.
+    fn render_select_instance(&self, theme: &Theme) -> impl IntoElement {
+        div()
+            .id("select-instance")
+            .flex_1()
+            .h_full()
+            .min_w_0()
+            .bg(theme.background)
+            .flex()
+            .flex_col()
+            .items_center()
+            .justify_center()
+            .gap_2()
+            .child(
+                Label::new(strings::UI_SELECT_INSTANCE_TITLE)
+                    .text_xl()
+                    .font_weight(gpui_kit::FontWeight::SEMIBOLD),
+            )
+            .child(
+                Label::new(strings::UI_SELECT_INSTANCE_SUBTITLE)
+                    .text_sm()
+                    .text_color(theme.muted_foreground),
             )
     }
 

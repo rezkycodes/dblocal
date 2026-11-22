@@ -18,6 +18,27 @@ use crate::service_bridge::UiEvent;
 
 use super::{ShellState, Workspace};
 
+fn dir_size_bytes(path: &std::path::Path) -> u64 {
+    let mut total = 0u64;
+    let mut stack = vec![path.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let Ok(meta) = entry.metadata() else {
+                continue;
+            };
+            if meta.is_dir() {
+                stack.push(entry.path());
+            } else {
+                total = total.saturating_add(meta.len());
+            }
+        }
+    }
+    total
+}
+
 impl Workspace {
     /// Runs `work` on the background executor and applies its result on the GPUI
     /// thread. This is the only path a service call may take from the UI.
@@ -68,16 +89,15 @@ impl Workspace {
         });
     }
 
-    /// First read after construction: list, catalog and runtimes, then a catalog
-    /// refresh that is *not* awaited (F-CAT-01/02: an offline start still shows
-    /// the bundled catalog and the offline banner, never an empty screen).
+    /// First read after construction: list, catalog and runtimes. The catalog
+    /// refresh runs in its own background task so the UI receives the local state
+    /// before a slow/offline refresh returns (F-CAT-01/02).
     pub(crate) fn startup_load(&mut self, cx: &mut Context<Self>) {
         let service = self.service.clone();
         self.bg(cx, move || {
             let instances = service.list_instances().ok();
             let catalog = service.catalog().ok();
             let runtimes = service.list_runtimes().ok();
-            let _ = service.refresh_catalog(false);
             move |this: &mut Workspace, cx: &mut Context<Workspace>| {
                 if let Some(instances) = instances {
                     this.state.replace_instances(instances);
@@ -89,6 +109,24 @@ impl Workspace {
                     this.runtimes = runtimes;
                 }
                 this.refresh_tray(cx);
+                cx.notify();
+            }
+        });
+        let service = self.service.clone();
+        self.bg(cx, move || {
+            let _ = service.refresh_catalog(false);
+            move |_: &mut Workspace, _: &mut Context<Workspace>| {}
+        });
+        self.refresh_home_size_bg(cx);
+    }
+
+    /// Recompute the total DBLocal home size in the background.
+    pub(crate) fn refresh_home_size_bg(&mut self, cx: &mut Context<Self>) {
+        let root = self.home_root.clone();
+        self.bg(cx, move || {
+            let size = dir_size_bytes(&root);
+            move |this: &mut Workspace, cx: &mut Context<Workspace>| {
+                this.home_size_bytes = Some(size);
                 cx.notify();
             }
         });

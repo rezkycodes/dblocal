@@ -250,6 +250,19 @@ pub fn format_bytes(bytes: u64) -> String {
 ///
 /// `7.5 MB` becomes `7,5 MB`, so a size reads as a sentence rather than a
 /// machine figure.
+/// Abbreviate a path by replacing the home prefix with `~`.
+pub fn abbreviate_home(path: &std::path::Path, home: Option<&std::path::Path>) -> String {
+    if let Some(home) = home
+        && let Ok(rest) = path.strip_prefix(home)
+    {
+        if rest.as_os_str().is_empty() {
+            return "~".to_owned();
+        }
+        return format!("~/{}", rest.display());
+    }
+    path.display().to_string()
+}
+
 pub fn format_bytes_id(bytes: u64) -> String {
     format_bytes(bytes).replace('.', ",")
 }
