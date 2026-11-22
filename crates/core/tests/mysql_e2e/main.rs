@@ -675,10 +675,7 @@ fn mysql_84_deep_socket_restart_after_volatile_dirs_disappear() {
     let cnf = run.join("my.cnf");
     let actual_sock = socket_path_from_my_cnf(&cnf);
     assert_ne!(actual_sock, preferred, "deep path must use fallback socket");
-    let shared_fallback_dir = actual_sock
-        .parent()
-        .expect("fallback dir")
-        .to_path_buf();
+    let shared_fallback_dir = actual_sock.parent().expect("fallback dir").to_path_buf();
     let private_tmpdir = run.join("tmp");
 
     let mut guard = mysql_start(&rt, &data, &logs, &run, port, pw);

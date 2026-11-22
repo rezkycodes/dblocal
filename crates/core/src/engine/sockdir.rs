@@ -460,7 +460,10 @@ fn strip_inline_comment(value: &str) -> &str {
 
 fn unquote(value: &str) -> &str {
     for quote in ['"', '\''] {
-        if let Some(inner) = value.strip_prefix(quote).and_then(|v| v.strip_suffix(quote)) {
+        if let Some(inner) = value
+            .strip_prefix(quote)
+            .and_then(|v| v.strip_suffix(quote))
+        {
             return inner;
         }
     }

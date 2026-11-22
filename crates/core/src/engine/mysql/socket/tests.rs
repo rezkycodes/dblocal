@@ -81,7 +81,11 @@ fn validate_socket_path_len_accepts_at_limit_and_rejects_one_over() {
 fn socket_path_from_my_cnf_reads_the_directive() {
     let dir = tempfile::tempdir().expect("tmp");
     let cnf = dir.path().join("my.cnf");
-    fs::write(&cnf, "[mysqld]\n socket = /tmp/dblocal-1/m42000-abcd.sock \n").expect("write");
+    fs::write(
+        &cnf,
+        "[mysqld]\n socket = /tmp/dblocal-1/m42000-abcd.sock \n",
+    )
+    .expect("write");
     assert_eq!(
         socket_path_from_my_cnf(&cnf),
         Some(PathBuf::from("/tmp/dblocal-1/m42000-abcd.sock"))
@@ -120,7 +124,10 @@ fn cleanup_from_my_cnf_skips_foreign_socket_and_removes_a_verified_one() {
         Some(xdg.as_os_str().to_os_string()),
         uid(),
     );
-    assert!(!sock.exists(), "the verified fallback socket must be removed");
+    assert!(
+        !sock.exists(),
+        "the verified fallback socket must be removed"
+    );
 }
 
 #[test]
@@ -166,8 +173,11 @@ fn prepare_run_removes_a_stale_socket_and_refuses_a_regular_file() {
     let fb = private(&xdg.join("dblocal"));
     let sock = fb.join("m42121-abc123def456.sock");
     bind_socket(&sock);
-    fs::write(run_dir.join("my.cnf"), format!("[mysqld]\nsocket={}\n", sock.display()))
-        .expect("cnf");
+    fs::write(
+        run_dir.join("my.cnf"),
+        format!("[mysqld]\nsocket={}\n", sock.display()),
+    )
+    .expect("cnf");
 
     prepare_runtime_dirs_for_start_with_env(
         &run_dir,
@@ -200,8 +210,11 @@ fn prepare_run_refuses_a_symlinked_or_loose_fallback_dir() {
     let target = private(&dir.path().join("target"));
     symlink(&target, xdg.join("dblocal")).expect("symlink");
     let sock = xdg.join("dblocal").join("m42122-abc123def456.sock");
-    fs::write(run_dir.join("my.cnf"), format!("[mysqld]\nsocket={}\n", sock.display()))
-        .expect("cnf");
+    fs::write(
+        run_dir.join("my.cnf"),
+        format!("[mysqld]\nsocket={}\n", sock.display()),
+    )
+    .expect("cnf");
     let err = prepare_runtime_dirs_for_start_with_env(
         &run_dir,
         42122,
@@ -216,8 +229,11 @@ fn prepare_run_refuses_a_symlinked_or_loose_fallback_dir() {
     fs::create_dir_all(&loose).expect("loose");
     fs::set_permissions(&loose, fs::Permissions::from_mode(0o755)).expect("chmod");
     let sock = loose.join("m42122-abc123def456.sock");
-    fs::write(run_dir.join("my.cnf"), format!("[mysqld]\nsocket={}\n", sock.display()))
-        .expect("cnf");
+    fs::write(
+        run_dir.join("my.cnf"),
+        format!("[mysqld]\nsocket={}\n", sock.display()),
+    )
+    .expect("cnf");
     let err = prepare_runtime_dirs_for_start_with_env(
         &run_dir,
         42122,
@@ -239,12 +255,15 @@ fn prepare_run_rejects_a_socket_outside_the_fallback_dirs() {
     let run_dir = dir.path().join("run");
     fs::create_dir_all(&run_dir).expect("run");
     let sock = dir.path().join("stray.sock");
-    fs::write(run_dir.join("my.cnf"), format!("[mysqld]\nsocket={}\n", sock.display()))
-        .expect("cnf");
-    let err =
-        prepare_runtime_dirs_for_start_with_env(&run_dir, 42221, None, uid()).unwrap_err();
+    fs::write(
+        run_dir.join("my.cnf"),
+        format!("[mysqld]\nsocket={}\n", sock.display()),
+    )
+    .expect("cnf");
+    let err = prepare_runtime_dirs_for_start_with_env(&run_dir, 42221, None, uid()).unwrap_err();
     assert!(
-        err.to_string().contains("not an allowed fallback socket path"),
+        err.to_string()
+            .contains("not an allowed fallback socket path"),
         "{err}"
     );
 }
@@ -259,8 +278,7 @@ fn prepare_run_errors_when_the_tmpdir_cannot_be_created() {
     let run_dir = dir.path().join("run");
     fs::create_dir_all(&run_dir).expect("run");
     fs::write(run_dir.join("tmp"), b"x").expect("a file where the tmpdir must be");
-    let err =
-        prepare_runtime_dirs_for_start_with_env(&run_dir, 42214, None, uid()).unwrap_err();
+    let err = prepare_runtime_dirs_for_start_with_env(&run_dir, 42214, None, uid()).unwrap_err();
     assert!(
         err.to_string().contains("cannot prepare private tmpdir"),
         "{err}"

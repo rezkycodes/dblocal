@@ -25,7 +25,13 @@ pub fn socket_path(run_dir: &Path, port: u16) -> PathBuf {
 /// Resolves the socket path for `my.cnf`, falling back to a short directory
 /// when `<run_dir>/mysqld-<port>.sock` does not fit.
 pub fn resolve_socket_path(run_dir: &Path, port: u16, instance_dir: &Path) -> Result<PathBuf> {
-    resolve_socket_path_with_env(run_dir, port, instance_dir, std::env::var_os("XDG_RUNTIME_DIR"), sockdir::current_uid())
+    resolve_socket_path_with_env(
+        run_dir,
+        port,
+        instance_dir,
+        std::env::var_os("XDG_RUNTIME_DIR"),
+        sockdir::current_uid(),
+    )
 }
 
 pub(in crate::engine::mysql) fn resolve_socket_path_with_env(

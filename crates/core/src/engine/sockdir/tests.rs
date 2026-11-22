@@ -13,7 +13,11 @@ fn uid() -> u32 {
 }
 
 fn mode(path: &Path) -> u32 {
-    fs::symlink_metadata(path).expect("meta").permissions().mode() & 0o777
+    fs::symlink_metadata(path)
+        .expect("meta")
+        .permissions()
+        .mode()
+        & 0o777
 }
 
 fn private(dir: &Path) -> PathBuf {
@@ -70,7 +74,10 @@ fn fallback_candidates_are_a_pure_function_of_xdg_and_uid() {
     );
 
     // Same inputs, same answer; a different uid changes only the /tmp leaf.
-    assert_eq!(set, fallback_dir_candidates(Some(OsString::from("/run/user/4242")), 4242));
+    assert_eq!(
+        set,
+        fallback_dir_candidates(Some(OsString::from("/run/user/4242")), 4242)
+    );
     assert_eq!(
         fallback_dir_candidates(None, 7),
         vec![PathBuf::from("/tmp/dblocal-7")]
@@ -114,13 +121,34 @@ fn fallback_socket_name_is_m_port_dash_twelve_hex() {
 
 #[test]
 fn fallback_socket_name_validation_is_strict() {
-    assert!(is_fallback_socket_name_for_port("m42000-abcdef012345.sock", 42000));
-    assert!(!is_fallback_socket_name_for_port("m42001-abcdef012345.sock", 42000));
-    assert!(!is_fallback_socket_name_for_port("m42000-abcdef01234.sock", 42000));
-    assert!(!is_fallback_socket_name_for_port("m42000-abcdef0123456.sock", 42000));
-    assert!(!is_fallback_socket_name_for_port("other-abcdef012345.sock", 42000));
-    assert!(!is_fallback_socket_name_for_port("m42000-abcdef012345.socket", 42000));
-    assert!(!is_fallback_socket_name_for_port("m42000-abcdef01234z.sock", 42000));
+    assert!(is_fallback_socket_name_for_port(
+        "m42000-abcdef012345.sock",
+        42000
+    ));
+    assert!(!is_fallback_socket_name_for_port(
+        "m42001-abcdef012345.sock",
+        42000
+    ));
+    assert!(!is_fallback_socket_name_for_port(
+        "m42000-abcdef01234.sock",
+        42000
+    ));
+    assert!(!is_fallback_socket_name_for_port(
+        "m42000-abcdef0123456.sock",
+        42000
+    ));
+    assert!(!is_fallback_socket_name_for_port(
+        "other-abcdef012345.sock",
+        42000
+    ));
+    assert!(!is_fallback_socket_name_for_port(
+        "m42000-abcdef012345.socket",
+        42000
+    ));
+    assert!(!is_fallback_socket_name_for_port(
+        "m42000-abcdef01234z.sock",
+        42000
+    ));
     assert!(!is_fallback_socket_name_for_port("", 42000));
 }
 
@@ -233,7 +261,10 @@ fn resolve_error_names_every_candidate_and_both_lengths() {
                 reason.contains(&format!("{} bytes", path_len(&natural))),
                 "{reason}"
             );
-            assert!(reason.contains(&socket_path_limit().to_string()), "{reason}");
+            assert!(
+                reason.contains(&socket_path_limit().to_string()),
+                "{reason}"
+            );
         }
         other => panic!("unexpected: {other:?}"),
     }
@@ -338,7 +369,10 @@ fn verify_secure_dir_refuses_a_foreign_uid() {
 fn verify_secure_dir_reports_a_missing_directory() {
     let dir = tempdir().expect("tmp");
     let err = verify_secure_dir(&dir.path().join("nope"), uid()).expect_err("missing");
-    assert!(err.to_string().contains("cannot inspect private dir"), "{err}");
+    assert!(
+        err.to_string().contains("cannot inspect private dir"),
+        "{err}"
+    );
 }
 
 #[test]
@@ -486,7 +520,12 @@ fn cleanup_tolerates_a_vanished_path_and_a_path_without_a_name() {
     assert!(!vanished.exists());
 
     // No parent and no file name: not a fallback socket, so nothing to do.
-    assert!(!is_allowed_fallback_socket(Path::new("/"), 42234, None, uid()));
+    assert!(!is_allowed_fallback_socket(
+        Path::new("/"),
+        42234,
+        None,
+        uid()
+    ));
     cleanup_socket(Path::new("/"), 42234, None, uid());
 }
 
@@ -505,7 +544,10 @@ fn cleanup_from_config_skips_a_foreign_socket_and_removes_a_verified_one() {
     bind_socket(&sock);
     fs::write(&cnf, format!("[mysqld]\nsocket={}\n", sock.display())).expect("cnf2");
     cleanup_socket_from_config(&cnf, 42215, Some(xdg), uid());
-    assert!(!sock.exists(), "the verified fallback socket must be removed");
+    assert!(
+        !sock.exists(),
+        "the verified fallback socket must be removed"
+    );
 
     // No socket directive: a no-op.
     fs::write(&cnf, "[mysqld]\nport=42232\n").expect("cnf3");
@@ -518,9 +560,18 @@ fn cleanup_from_config_skips_a_foreign_socket_and_removes_a_verified_one() {
 
 #[test]
 fn parse_directive_handles_absent_empty_spaces_comments_and_quotes() {
-    assert_eq!(parse_directive("[mysqld]\nport=42000\n# socket=/tmp/x.sock\n", "socket"), None);
-    assert_eq!(parse_directive("[mysqld]\nsocket=\nport=42000\n", "socket"), None);
-    assert_eq!(parse_directive("[mysqld]\n;socket=/tmp/x.sock\n", "socket"), None);
+    assert_eq!(
+        parse_directive("[mysqld]\nport=42000\n# socket=/tmp/x.sock\n", "socket"),
+        None
+    );
+    assert_eq!(
+        parse_directive("[mysqld]\nsocket=\nport=42000\n", "socket"),
+        None
+    );
+    assert_eq!(
+        parse_directive("[mysqld]\n;socket=/tmp/x.sock\n", "socket"),
+        None
+    );
     assert_eq!(
         parse_directive("[mysqld]\n socket = /tmp/dblocal-1/m1.sock \n", "socket"),
         Some("/tmp/dblocal-1/m1.sock".to_owned())
@@ -530,7 +581,10 @@ fn parse_directive_handles_absent_empty_spaces_comments_and_quotes() {
         Some("/tmp/dblocal-1/m1.sock".to_owned())
     );
     assert_eq!(
-        parse_directive("[mysqld]\nsocket=/tmp/a b/m1.sock # trailing note\n", "socket"),
+        parse_directive(
+            "[mysqld]\nsocket=/tmp/a b/m1.sock # trailing note\n",
+            "socket"
+        ),
         Some("/tmp/a b/m1.sock".to_owned())
     );
     assert_eq!(
@@ -547,7 +601,10 @@ fn parse_directive_handles_absent_empty_spaces_comments_and_quotes() {
         Some("/run/x/tmp".to_owned())
     );
     // A key that is only a prefix of another key must not match.
-    assert_eq!(parse_directive("[mysqld]\nsocket_path=/tmp/x\n", "socket"), None);
+    assert_eq!(
+        parse_directive("[mysqld]\nsocket_path=/tmp/x\n", "socket"),
+        None
+    );
     // Lines without `=` are ignored.
     assert_eq!(parse_directive("[mysqld]\nsocket\n", "socket"), None);
     // The first declaration wins.
@@ -561,14 +618,21 @@ fn parse_directive_handles_absent_empty_spaces_comments_and_quotes() {
 fn read_directive_reads_a_file_and_treats_a_missing_file_as_no_key() {
     let dir = tempdir().expect("tmp");
     let cnf = dir.path().join("my.cnf");
-    fs::write(&cnf, "[mysqld]\nsocket=/tmp/dblocal-1/m1.sock\ntmpdir=/run/tmp\n").expect("write");
+    fs::write(
+        &cnf,
+        "[mysqld]\nsocket=/tmp/dblocal-1/m1.sock\ntmpdir=/run/tmp\n",
+    )
+    .expect("write");
     assert_eq!(
         read_directive(&cnf, "socket"),
         Some("/tmp/dblocal-1/m1.sock".to_owned())
     );
     assert_eq!(read_directive(&cnf, "tmpdir"), Some("/run/tmp".to_owned()));
     assert_eq!(read_directive(&cnf, "port"), None);
-    assert_eq!(read_directive(&dir.path().join("missing.cnf"), "socket"), None);
+    assert_eq!(
+        read_directive(&dir.path().join("missing.cnf"), "socket"),
+        None
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -688,13 +752,7 @@ fn prepare_run_refuses_a_symlinked_or_loose_fallback_dir() {
     fs::write(&l.config, format!("[mysqld]\nsocket={}\n", sock.display())).expect("cnf");
     let err = prepare_run(&spec(
         &l,
-        Some(
-            l._dir
-                .path()
-                .join("loose-xdg")
-                .as_os_str()
-                .to_os_string(),
-        ),
+        Some(l._dir.path().join("loose-xdg").as_os_str().to_os_string()),
     ))
     .expect_err("wrong mode");
     assert!(err.to_string().contains("0700"), "{err}");
@@ -709,7 +767,11 @@ fn prepare_run_rejects_a_socket_name_that_is_not_for_this_port() {
     let sock = private_dir.join("mariadb-42200-aabb.sock");
     fs::write(&l.config, format!("[mysqld]\nsocket={}\n", sock.display())).expect("cnf");
     let err = prepare_run(&spec(&l, None)).expect_err("foreign socket name");
-    assert!(err.to_string().contains("not an allowed fallback socket path"), "{err}");
+    assert!(
+        err.to_string()
+            .contains("not an allowed fallback socket path"),
+        "{err}"
+    );
     assert!(!sock.exists());
 }
 
@@ -741,7 +803,10 @@ fn prepare_run_skips_a_missing_config_and_rejects_one_without_socket() {
 
     fs::write(&l.config, "[mysqld]\nport=42200\n").expect("cnf");
     let err = prepare_run(&spec(&l, None)).expect_err("no socket directive");
-    assert!(err.to_string().contains("has no `socket` directive"), "{err}");
+    assert!(
+        err.to_string().contains("has no `socket` directive"),
+        "{err}"
+    );
 }
 
 #[test]
@@ -749,7 +814,10 @@ fn prepare_run_errors_when_the_tmpdir_cannot_be_created() {
     let l = layout();
     fs::write(&l.tmpdir, b"x").expect("a regular file where the tmpdir must be");
     let err = prepare_run(&spec(&l, None)).expect_err("tmpdir is a file");
-    assert!(err.to_string().contains("cannot prepare private tmpdir"), "{err}");
+    assert!(
+        err.to_string().contains("cannot prepare private tmpdir"),
+        "{err}"
+    );
 }
 
 #[test]
@@ -779,7 +847,10 @@ fn prepare_run_errors_when_the_tmpdir_cannot_be_listed() {
     )
     .expect("cnf");
     let err = prepare_run(&spec(&l, None)).expect_err("tmpdir is a file");
-    assert!(err.to_string().contains("cannot prepare private tmpdir"), "{err}");
+    assert!(
+        err.to_string().contains("cannot prepare private tmpdir"),
+        "{err}"
+    );
 }
 
 #[test]
