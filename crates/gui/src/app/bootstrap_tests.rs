@@ -406,6 +406,13 @@ fn service_calls_before_close(cx: &mut TestAppContext) -> bool {
 
 /// R3: a window opened after a burst of events reads the service, it does
 /// not replay the dropped backlog.
+///
+/// The events are fed from the scheduler thread (`cx.update`) on purpose: the
+/// deterministic test scheduler rejects wakes from the real bridge thread, so
+/// feeding them from `dblocal-service-bridge` would make this test flaky under
+/// load rather than prove anything (see `tray_latency` for the same reason).
+/// The real bridge's single-subscription count is pinned separately by
+/// `app_creates_exactly_one_bridge`.
 #[gpui_kit::test]
 fn window_opened_after_a_burst_reads_the_service(cx: &mut TestAppContext) {
     cx.update(gpui_kit::init);
@@ -414,18 +421,21 @@ fn window_opened_after_a_burst_reads_the_service(cx: &mut TestAppContext) {
         "pg-live",
         InstanceStatus::Running,
     )]));
-    let runtime = AppRuntime::new_for_test_with_bridge(
-        service.clone(),
-        crate::tray::TrayHandle::unavailable(),
-    );
+    let svc: Arc<dyn DblService> = service.clone();
+    let (sender, receiver) = flume::unbounded::<crate::service_bridge::UiEvent>();
+    let runtime = AppRuntime::new_for_test(svc, crate::tray::TrayHandle::unavailable(), receiver);
     cx.update(|cx| {
         cx.set_global(QuitLedger::default());
         cx.set_global(runtime);
         start_app_loops(cx);
     });
     for _ in 0..10_000 {
-        let _ = service.tx.send(ServiceEvent::InstanceChanged {
-            view: CountingService::view("noise", InstanceStatus::Stopped),
+        let event = crate::service_bridge::UiEvent::InstanceChanged(CountingService::view(
+            "noise",
+            InstanceStatus::Stopped,
+        ));
+        cx.update(|_cx| {
+            let _ = sender.send(event);
         });
     }
     for _ in 0..30 {
@@ -567,41 +577,59 @@ fn tray_start_failure_is_logged(cx: &mut TestAppContext) {
     );
 }
 
-/// R3: the app-level loop is the only consumer, and one bridge is made.
+/// R3: `AppRuntime` opens exactly one bridge (`subscribe` is called once), so
+/// the app loop is its only consumer. Plain `#[test]`: the bridge thread is
+/// real but nothing awaits its flume channel here, so the deterministic GPUI
+/// scheduler is never woken from that thread.
+#[test]
+fn app_creates_exactly_one_bridge() {
+    let service = Arc::new(CountingService::new(vec![]));
+    let svc: Arc<dyn DblService> = service.clone();
+    let _runtime =
+        AppRuntime::new_for_test_with_bridge(svc, crate::tray::TrayHandle::unavailable());
+    assert_eq!(
+        service.subscribe_calls.load(Ordering::SeqCst),
+        1,
+        "R3: AppRuntime must subscribe once, not one bridge per consumer"
+    );
+}
+
+/// R3: the app-level loop drains the channel with no window open, so nothing
+/// piles up while the window stays closed (a tray-resident app can sit there
+/// for days). Events are fed from the scheduler thread on purpose: the
+/// deterministic test scheduler rejects wakes from the bridge thread, which
+/// would make this test flaky under load rather than prove anything.
 #[gpui_kit::test]
-fn app_uses_exactly_one_bridge_and_drops_events_with_no_window(cx: &mut TestAppContext) {
+fn app_loop_drops_events_with_no_window(cx: &mut TestAppContext) {
     cx.update(gpui_kit::init);
     cx.update(crate::theme::init);
     let service = Arc::new(CountingService::new(vec![]));
     let svc: Arc<dyn DblService> = service.clone();
-    let runtime = AppRuntime::new_for_test_with_bridge(svc, crate::tray::TrayHandle::unavailable());
-    let observed = runtime.events.clone();
+    let (sender, receiver) = flume::unbounded::<crate::service_bridge::UiEvent>();
+    let runtime = AppRuntime::new_for_test(svc, crate::tray::TrayHandle::unavailable(), receiver);
     cx.update(|cx| {
         cx.set_global(QuitLedger::default());
         cx.set_global(runtime);
         start_app_loops(cx);
     });
-    for _ in 0..10_000 {
-        let _ = service.tx.send(ServiceEvent::CatalogUpdated {
-            status: dblocal_core::model::CatalogStatus::Fresh,
+    const BURST: usize = 10_000;
+    for _ in 0..BURST {
+        let event = crate::service_bridge::UiEvent::CatalogUpdated;
+        cx.update(|_cx| {
+            let _ = sender.send(event);
         });
     }
     for _ in 0..50 {
         cx.run_until_parked();
-        if observed.len() <= 1 {
+        if sender.len() == 0 {
             break;
         }
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
     assert_eq!(
-        service.subscribe_calls.load(Ordering::SeqCst),
-        1,
-        "R3: the app-level loop must not create a second bridge"
-    );
-    assert!(
-        observed.len() <= 4,
-        "R3: {} events accumulated with no window open",
-        observed.len()
+        sender.len(),
+        0,
+        "R3: the single consumer must drain all {BURST} events with no window open"
     );
     let has_workspace = cx.update(|cx| cx.global::<AppRuntime>().workspace.is_some());
     assert!(!has_workspace, "R3: no window was opened");
