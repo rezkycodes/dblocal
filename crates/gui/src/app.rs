@@ -10,6 +10,9 @@ mod background;
 #[cfg(test)]
 mod bg_service_tests;
 pub mod bootstrap;
+#[cfg(test)]
+#[path = "app/bootstrap_tests.rs"]
+mod bootstrap_tests;
 mod components;
 mod create_dialog;
 mod create_submit;
@@ -22,6 +25,9 @@ mod instance_actions_tests;
 mod palette;
 mod preview;
 mod quit_flow;
+#[cfg(test)]
+#[path = "app/quit_flow_tests.rs"]
+mod quit_flow_tests;
 mod screens;
 mod state;
 mod status_bar;
@@ -35,6 +41,7 @@ mod title_bar;
 #[cfg(test)]
 #[path = "app/tray_latency.rs"]
 mod tray_latency;
+mod tray_paths;
 mod workspace_api;
 
 use std::collections::{HashMap, HashSet};
