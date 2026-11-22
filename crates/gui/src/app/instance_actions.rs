@@ -189,11 +189,15 @@ impl Workspace {
 
     pub(crate) fn report_error(&mut self, err: &dblocal_core::DblError) {
         let facing = UserFacingError::from(err);
+        self.report_user_facing_error(&facing);
+    }
+
+    pub(crate) fn report_user_facing_error(&mut self, err: &UserFacingError) {
         self.toast = Some(SharedString::from(format!(
             "{} — {}",
-            facing.code, facing.message
+            err.code, err.message
         )));
-        self.last_failure_mirror = Some(facing);
+        self.last_failure_mirror = Some(err.clone());
     }
 
     pub(crate) fn copy_uri(
@@ -476,7 +480,7 @@ impl Workspace {
         let _ = window;
     }
 
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub(crate) fn open_delete_dialog(
         &mut self,
         id: InstanceId,

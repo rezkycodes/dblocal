@@ -114,10 +114,9 @@ fn entry_for_view(view: &InstanceView) -> TrayMenuEntry {
     }
 }
 
-/// ARGB32 status-dot icon bytes for SNI menu items (Q5.1).
+/// ARGB32 status-dot icon bytes for SNI menu items (R8/F-TRY-01).
 ///
-/// Pure function: returns a filled circle in the status colour, transparent
-/// background. The caller can pass it to ksni as `icon_data`.
+/// Network byte order: `[a, r, g, b]` per pixel.
 pub fn status_dot_argb(status: InstanceStatus, size: u32) -> Vec<u8> {
     let [r, g, b, a] = status_dot_rgba(status);
     let mut data = Vec::with_capacity((size * size * 4) as usize);
@@ -129,7 +128,6 @@ pub fn status_dot_argb(status: InstanceStatus, size: u32) -> Vec<u8> {
             let dy = y as f32 + 0.5 - center;
             let inside = dx * dx + dy * dy <= radius * radius;
             if inside {
-                // ARGB32, network byte order
                 data.extend_from_slice(&[a, r, g, b]);
             } else {
                 data.extend_from_slice(&[0, 0, 0, 0]);
@@ -146,6 +144,27 @@ fn status_dot_rgba(status: InstanceStatus) -> [u8; 4] {
         format::StatusGlyph::Failed => [0xe0, 0x6c, 0x75, 0xff],  // red
         format::StatusGlyph::Busy => [0xe5, 0xc0, 0x7b, 0xff],    // amber
     }
+}
+
+/// Aggregate tray status: any failed => red, any running/busy => green, else grey.
+pub fn aggregate_tray_status(views: &[InstanceView]) -> InstanceStatus {
+    if views.iter().any(|v| v.status == InstanceStatus::Failed) {
+        return InstanceStatus::Failed;
+    }
+    if views.iter().any(|v| {
+        matches!(
+            v.status,
+            InstanceStatus::Running
+                | InstanceStatus::Starting
+                | InstanceStatus::Stopping
+                | InstanceStatus::Provisioning
+                | InstanceStatus::Initializing
+                | InstanceStatus::Deleting
+        )
+    }) {
+        return InstanceStatus::Running;
+    }
+    InstanceStatus::Stopped
 }
 
 fn action_verb(status: InstanceStatus) -> Option<&'static str> {
@@ -188,9 +207,14 @@ impl StatusLabel for InstanceView {
 /// call the service directly.
 pub trait TrayBackend: Send {
     /// Refreshes the visible menu. Returns `true` when the tray is live.
-    fn refresh(&mut self, model: &TrayMenuModel) -> bool;
+    fn refresh(&mut self, model: &TrayMenuModel, views: &[InstanceView]) -> bool;
     /// Whether a tray host is present.
     fn is_available(&self) -> bool;
+    /// Subscribe to tray actions. Default: disconnected receiver.
+    fn subscribe_actions(&self) -> flume::Receiver<TrayAction> {
+        let (_tx, rx) = flume::unbounded();
+        rx
+    }
 }
 
 /// No tray host: every operation is a no-op.
@@ -198,7 +222,7 @@ pub trait TrayBackend: Send {
 pub struct NoTray;
 
 impl TrayBackend for NoTray {
-    fn refresh(&mut self, _model: &TrayMenuModel) -> bool {
+    fn refresh(&mut self, _model: &TrayMenuModel, _views: &[InstanceView]) -> bool {
         false
     }
     fn is_available(&self) -> bool {
@@ -225,12 +249,17 @@ impl TrayHandle {
     /// Refreshes the menu model. Returns whether a tray is present.
     pub fn refresh(&mut self, views: &[InstanceView]) -> bool {
         let model = TrayMenuModel::from_views(views);
-        self.backend.refresh(&model)
+        self.backend.refresh(&model, views)
     }
 
     /// Whether a tray host is present.
     pub fn is_available(&self) -> bool {
         self.backend.is_available()
+    }
+
+    /// Subscribe to tray action events.
+    pub fn subscribe_actions(&self) -> flume::Receiver<TrayAction> {
+        self.backend.subscribe_actions()
     }
 }
 
@@ -305,7 +334,32 @@ mod linux {
 
     struct DblocalTray {
         model: Arc<Mutex<TrayMenuModel>>,
+        views: Arc<Mutex<Vec<InstanceView>>>,
         tx: flume::Sender<TrayAction>,
+    }
+
+    impl DblocalTray {
+        fn model_views(&self, _model: &TrayMenuModel) -> Vec<InstanceView> {
+            self.views.lock().unwrap_or_else(|p| p.into_inner()).clone()
+        }
+    }
+
+    fn entry_icon_data(entry: &TrayMenuEntry, size: u32) -> Vec<u8> {
+        let status = entry_status(entry);
+        status_dot_argb(status, size)
+    }
+
+    fn entry_status(entry: &TrayMenuEntry) -> InstanceStatus {
+        let label = entry.label.as_str();
+        if label.starts_with('●') {
+            InstanceStatus::Running
+        } else if label.starts_with('▲') {
+            InstanceStatus::Failed
+        } else if label.starts_with('◐') {
+            InstanceStatus::Starting
+        } else {
+            InstanceStatus::Stopped
+        }
     }
 
     impl Tray for DblocalTray {
@@ -316,13 +370,15 @@ mod linux {
             strings::APP_NAME.to_owned()
         }
         fn icon_name(&self) -> String {
-            "utilities-terminal-symbolic".to_owned()
+            String::new()
         }
         fn icon_pixmap(&self) -> Vec<ksni::Icon> {
+            let model = self.model.lock().unwrap_or_else(|p| p.into_inner()).clone();
+            let status = aggregate_tray_status(&self.model_views(&model));
             vec![ksni::Icon {
                 width: 22,
                 height: 22,
-                data: status_dot_argb(InstanceStatus::Stopped, 22),
+                data: status_dot_argb(status, 22),
             }]
         }
         fn tool_tip(&self) -> ksni::ToolTip {
@@ -332,55 +388,59 @@ mod linux {
                 ..Default::default()
             }
         }
+
         fn menu(&self) -> Vec<MenuItem<Self>> {
-            let model = self.model.lock().unwrap_or_else(|p| p.into_inner()).clone();
-            let mut items: Vec<MenuItem<Self>> = Vec::new();
-            for entry in &model.instances {
-                let action = entry.action.clone();
-                let enabled = entry.enabled;
-                let label = entry.label.clone();
-                let tx = self.tx.clone();
-                items.push(MenuItem::Standard(StandardItem {
-                    label,
-                    enabled,
-                    activate: Box::new(move |_| {
-                        let _ = tx.send(action.clone());
-                    }),
-                    ..Default::default()
-                }));
-            }
-            if !model.instances.is_empty() {
-                items.push(MenuItem::Separator);
-            }
-            let open_action = model.open.action.clone();
-            let tx_open = self.tx.clone();
+        let model = self.model.lock().unwrap_or_else(|p| p.into_inner()).clone();
+        let mut items: Vec<MenuItem<Self>> = Vec::new();
+        for entry in &model.instances {
+            let action = entry.action.clone();
+            let enabled = entry.enabled;
+            let label = entry.label.clone();
+            let tx = self.tx.clone();
+            let icon_data = entry_icon_data(entry, 16);
             items.push(MenuItem::Standard(StandardItem {
-                label: model.open.label,
+                label,
+                enabled,
+                icon_data,
                 activate: Box::new(move |_| {
-                    let _ = tx_open.send(open_action.clone());
+                    let _ = tx.send(action.clone());
                 }),
                 ..Default::default()
             }));
-            let quit_action = model.quit.action.clone();
-            let tx_quit = self.tx.clone();
-            items.push(MenuItem::Standard(StandardItem {
-                label: model.quit.label,
-                activate: Box::new(move |_| {
-                    let _ = tx_quit.send(quit_action.clone());
-                }),
-                ..Default::default()
-            }));
-            items
         }
+        if !model.instances.is_empty() {
+            items.push(MenuItem::Separator);
+        }
+        let open_action = model.open.action.clone();
+        let tx_open = self.tx.clone();
+        items.push(MenuItem::Standard(StandardItem {
+            label: model.open.label,
+            activate: Box::new(move |_| {
+                let _ = tx_open.send(open_action.clone());
+            }),
+            ..Default::default()
+        }));
+        let quit_action = model.quit.action.clone();
+        let tx_quit = self.tx.clone();
+        items.push(MenuItem::Standard(StandardItem {
+            label: model.quit.label,
+            activate: Box::new(move |_| {
+                let _ = tx_quit.send(quit_action.clone());
+            }),
+            ..Default::default()
+        }));
+        items
+    }
     }
 
     struct KsniBackend {
         handle: ksni::blocking::Handle<DblocalTray>,
         available: bool,
+        actions: flume::Receiver<TrayAction>,
     }
 
     impl TrayBackend for KsniBackend {
-        fn refresh(&mut self, model: &TrayMenuModel) -> bool {
+        fn refresh(&mut self, model: &TrayMenuModel, views: &[InstanceView]) -> bool {
             if !self.available {
                 return false;
             }
@@ -388,19 +448,27 @@ mod linux {
                 if let Ok(mut m) = tray.model.lock() {
                     *m = model.clone();
                 }
+                if let Ok(mut v) = tray.views.lock() {
+                    *v = views.to_vec();
+                }
             });
             true
         }
         fn is_available(&self) -> bool {
             self.available
         }
+        fn subscribe_actions(&self) -> flume::Receiver<TrayAction> {
+            self.actions.clone()
+        }
     }
 
     pub fn start() -> TrayStartup {
         let (tx, rx) = flume::unbounded();
         let model = Arc::new(Mutex::new(TrayMenuModel::from_views(&[])));
+        let views = Arc::new(Mutex::new(Vec::new()));
         let tray = DblocalTray {
             model,
+            views,
             tx: tx.clone(),
         };
         match tray.assume_sni_available(false).spawn() {
@@ -408,6 +476,7 @@ mod linux {
                 handle: TrayHandle::new(Box::new(KsniBackend {
                     handle,
                     available: true,
+                    actions: rx.clone(),
                 })),
                 actions: rx,
                 sender: tx,

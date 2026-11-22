@@ -10,13 +10,13 @@ use std::sync::atomic::Ordering;
 
 use dblocal_core::model::CatalogStatus;
 use dblocal_core::model::InstanceId;
-use dblocal_core::service::{CatalogView, InstanceView};
+use dblocal_core::service::CatalogView;
 use dblocal_core::strings;
 use gpui_kit::{AppContext as _, BorrowAppContext, Context, Task};
 
 use crate::service_bridge::UiEvent;
 
-use super::{ShellState, Workspace};
+use super::Workspace;
 
 fn dir_size_bytes(path: &std::path::Path) -> u64 {
     let mut total = 0u64;
@@ -26,12 +26,18 @@ fn dir_size_bytes(path: &std::path::Path) -> u64 {
             continue;
         };
         for entry in entries.flatten() {
-            let Ok(meta) = entry.metadata() else {
+            let Ok(file_type) = entry.file_type() else {
                 continue;
             };
-            if meta.is_dir() {
+            if file_type.is_symlink() {
+                continue;
+            }
+            if file_type.is_dir() {
                 stack.push(entry.path());
-            } else {
+            } else if file_type.is_file() {
+                let Ok(meta) = entry.metadata() else {
+                    continue;
+                };
                 total = total.saturating_add(meta.len());
             }
         }
@@ -132,6 +138,24 @@ impl Workspace {
         });
     }
 
+    /// Refresh tray from the live workspace's view list.
+    pub(crate) fn refresh_tray(&mut self, cx: &mut gpui_kit::Context<Self>) {
+        let available = if cx.has_global::<crate::app::bootstrap::AppRuntime>() {
+            cx.update_global::<crate::app::bootstrap::AppRuntime, _>(|runtime, _| {
+                runtime.refresh_tray(&self.state.instances)
+            })
+        } else {
+            self.tray_available
+        };
+        self.tray_available = available;
+        if !available && !self.tray_note_shown {
+            self.tray_note_shown = true;
+            self.tray_note = Some(gpui_kit::SharedString::from(
+                strings::UI_TRAY_UNAVAILABLE_NOTE,
+            ));
+        }
+    }
+
     pub(crate) fn start_event_pump(&mut self, cx: &mut Context<Self>) {
         let events = self.events.clone();
         let task = cx.spawn(async move |this, cx| {
@@ -147,39 +171,6 @@ impl Workspace {
             }
         });
         self._event_task = Some(task);
-    }
-
-    #[allow(dead_code)]
-    pub(crate) fn start_tray_pump(&mut self, cx: &mut Context<Self>) {
-        let actions = self.tray_actions.clone();
-        let task = cx.spawn(async move |this, cx| {
-            while let Ok(action) = actions.recv_async().await {
-                let _ = this.update(cx, |workspace, cx| {
-                    workspace.apply_tray_action(action, cx);
-                    cx.notify();
-                });
-            }
-        });
-        self._tray_task = Some(task);
-    }
-
-    /// Refreshes the tray menu from current views; records the note once when no
-    /// host exists (F-TRY-01 AC3). Tray ownership lives in the app runtime.
-    pub(crate) fn refresh_tray(&mut self, cx: &mut gpui_kit::Context<Self>) {
-        let available = if cx.has_global::<crate::app::bootstrap::AppRuntime>() {
-            cx.update_global::<crate::app::bootstrap::AppRuntime, _>(|runtime, _| {
-                runtime.refresh_tray(&self.state.instances)
-            })
-        } else {
-            self.tray.refresh(&self.state.instances)
-        };
-        let available = available || self.tray_available_cached;
-        if !available && !self.tray_note_shown {
-            self.tray_note_shown = true;
-            self.tray_note = Some(gpui_kit::SharedString::from(
-                strings::UI_TRAY_UNAVAILABLE_NOTE,
-            ));
-        }
     }
 
     /// Re-reads the catalog in the background (after `CatalogUpdated`).
@@ -214,7 +205,7 @@ impl Workspace {
     }
 
     /// Seeds the first frame from an `InstanceView` list (previews and tests).
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub(crate) fn seed_state(&mut self, instances: Vec<InstanceView>) {
         self.state = ShellState {
             instances,

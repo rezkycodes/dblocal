@@ -258,9 +258,21 @@ pub fn abbreviate_home(path: &std::path::Path, home: Option<&std::path::Path>) -
         if rest.as_os_str().is_empty() {
             return "~".to_owned();
         }
-        return format!("~/{}", rest.display());
+        let rest = rest.to_string_lossy().replace('\\', "/");
+        return format!("~/{rest}");
     }
-    path.display().to_string()
+    path.to_string_lossy().into_owned()
+}
+
+/// Engine log file path, derived from the real home root (R9).
+pub fn engine_log_path(home_root: &std::path::Path, name: &str) -> String {
+    home_root
+        .join("instances")
+        .join(name)
+        .join("logs")
+        .join("engine.log")
+        .to_string_lossy()
+        .into_owned()
 }
 
 pub fn format_bytes_id(bytes: u64) -> String {
@@ -314,9 +326,14 @@ pub fn header_subtitle(view: &InstanceView) -> String {
     )
 }
 
-/// Data directory of an instance, as the UI prints it.
-pub fn data_dir(name: &str) -> String {
-    format!("~/.dblocal/instances/{name}/data")
+/// Data directory of an instance, derived from the real home root (R9).
+pub fn data_dir(home_root: &std::path::Path, name: &str) -> String {
+    home_root
+        .join("instances")
+        .join(name)
+        .join("data")
+        .to_string_lossy()
+        .into_owned()
 }
 
 /// Credential reference shown for an instance (`dblocal:<name>`).

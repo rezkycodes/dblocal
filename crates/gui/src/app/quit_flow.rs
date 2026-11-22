@@ -51,6 +51,16 @@ impl Workspace {
 
     pub(crate) fn request_quit(&mut self, cx: &mut Context<Self>) {
         let running = running_instance_ids(&self.state.instances);
+        self.request_quit_with(running, cx);
+    }
+
+    /// Request quit with a precomputed running list (R1: tray quit without
+    /// window loads instances from service before opening the window).
+    pub(crate) fn request_quit_with(
+        &mut self,
+        running: Vec<InstanceId>,
+        cx: &mut Context<Self>,
+    ) {
         let action = self.quit.apply(QuitEvent::QuitRequested { running });
         self.handle_quit_action(action, cx);
     }
@@ -63,6 +73,7 @@ impl Workspace {
             }
             QuitAction::StopInstances(ids) => {
                 self.quit_stops.clear();
+                self.quit_stop_buffer.clear();
                 self.arm_quit_timeout(cx);
                 for id in ids {
                     let service = self.service.clone();
@@ -72,7 +83,15 @@ impl Workspace {
                         move |this: &mut Workspace, cx: &mut Context<Workspace>| {
                             match result {
                                 Ok(op) => {
-                                    this.quit_stops.insert(op, iid);
+                                    if let Some(ok) = this.quit_stop_buffer.remove(&op) {
+                                        let action = this.quit.apply(QuitEvent::StopFinished {
+                                            id: iid,
+                                            ok,
+                                        });
+                                        this.handle_quit_action(action, cx);
+                                    } else {
+                                        this.quit_stops.insert(op, iid);
+                                    }
                                 }
                                 Err(err) => {
                                     this.report_error(&err);
@@ -90,6 +109,7 @@ impl Workspace {
             }
             QuitAction::Exit => {
                 self.quit_stops.clear();
+                self.quit_stop_buffer.clear();
                 self.quit_timeout_task = None;
                 cx.quit();
             }
@@ -113,6 +133,7 @@ impl Workspace {
     fn maybe_clear_quit_stops(&mut self) {
         if !matches!(self.quit.state(), QuitState::StoppingAll { .. }) {
             self.quit_stops.clear();
+            self.quit_stop_buffer.clear();
             self.quit_timeout_task = None;
         }
     }
@@ -126,6 +147,9 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         let Some(id) = self.quit_stops.remove(op) else {
+            if matches!(self.quit.state(), QuitState::StoppingAll { .. }) {
+                self.quit_stop_buffer.insert(op.clone(), ok);
+            }
             return;
         };
         if !matches!(self.quit.state(), QuitState::StoppingAll { .. }) {
@@ -191,7 +215,7 @@ impl Workspace {
     /// Detach this workspace when its window closes. The app-level tray pump
     /// keeps handling tray actions.
     pub(crate) fn detach_from_app_runtime(&mut self, cx: &mut Context<Self>) {
-        self._tray_task = None;
+        self._event_task = None;
         cx.defer(move |cx| {
             crate::app::bootstrap::clear_main_window(cx);
         });
@@ -328,7 +352,11 @@ mod glue_tests {
         let svc: Arc<dyn DblService> = Arc::new(service.clone());
         let (view, cx) = cx.add_window_view(|window, cx| {
             let mut workspace = Workspace::new_preview(svc, window, cx);
-            workspace.tray = crate::tray::TrayHandle::unavailable();
+            workspace.tray_available = false;
+            workspace.tray_note_shown = true;
+            workspace.tray_note = Some(gpui_kit::SharedString::from(
+                dblocal_core::strings::UI_TRAY_UNAVAILABLE_NOTE,
+            ));
             workspace
         });
         cx.run_until_parked();

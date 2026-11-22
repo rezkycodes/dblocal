@@ -4,7 +4,6 @@
 //! Rendering only. The groups, the filter and the runtime rows all come from
 //! [`crate::format`], so the decisions are unit-tested without a window.
 
-use dblocal_core::model::EngineKey;
 use dblocal_core::strings;
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::Button;
@@ -248,6 +247,3 @@ impl Workspace {
     }
 }
 
-/// Unused import guard: `EngineKey` names the group type in the signature.
-#[allow(dead_code)]
-fn _engine(_: EngineKey) {}

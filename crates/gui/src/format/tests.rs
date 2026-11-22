@@ -264,7 +264,10 @@ fn detail_values_name_the_engine_and_mark_the_canonical_port() {
     assert!(is_canonical_port(&v));
     let off = view("app2", EngineKey::Postgresql, InstanceStatus::Running, 5433);
     assert!(!is_canonical_port(&off));
-    assert_eq!(data_dir("app"), "~/.dblocal/instances/app/data");
+    assert_eq!(
+        data_dir(std::path::Path::new("/home/u/.dblocal"), "app"),
+        "/home/u/.dblocal/instances/app/data"
+    );
     assert_eq!(credential_ref("app"), "dblocal:app");
 }
 

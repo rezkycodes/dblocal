@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use dblocal_core::model::InstanceStatus;
 use dblocal_core::service::DblService;
-use gpui_kit::{Context, Window};
+use gpui_kit::{AppContext as _, Context, Window};
 
 use super::{InnerTab, Workspace};
 
@@ -248,7 +248,17 @@ impl Workspace {
             .first()
             .map(|view| view.id.clone())
         {
-            workspace.open_delete_dialog(id, window, cx);
+            let name_input = cx.new(|cx| {
+                gpui_kit::component::input::InputState::new(window, cx)
+                    .placeholder(dblocal_core::strings::UI_DELETE_NAME_PLACEHOLDER.to_owned())
+            });
+            workspace.delete_target = Some(id.clone());
+            workspace.delete_mode = dblocal_core::model::DeleteMode::ArchiveData;
+            workspace.delete_name_input = Some(name_input);
+            workspace.delete_size = workspace
+                .service
+                .data_size(&id)
+                .unwrap_or(0);
         }
         workspace
     }
@@ -311,7 +321,8 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) -> Self {
         let mut workspace = Self::preview(service, window, cx);
-        workspace.tray = crate::tray::TrayHandle::unavailable();
+        workspace.tray_available = false;
+        workspace.tray_note_shown = true;
         workspace.tray_note = Some(gpui_kit::SharedString::from(
             dblocal_core::strings::UI_TRAY_UNAVAILABLE_NOTE,
         ));
@@ -336,8 +347,6 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) -> Self {
         let mut workspace = Self::preview(service, window, cx);
-        workspace.set_catalog_status_for_preview(dblocal_core::model::CatalogStatus::Stale);
-        // Startup bg load may overwrite; pin it again.
         workspace.catalog.status = dblocal_core::model::CatalogStatus::Stale;
         workspace.catalog.banner = Some(dblocal_core::strings::CATALOG_STALE.to_owned());
         workspace

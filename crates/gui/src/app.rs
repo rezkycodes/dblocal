@@ -56,7 +56,6 @@ use gpui_kit::{
 use crate::logs::LogStore;
 use crate::quit::QuitMachine;
 use crate::service_bridge::UiEvent;
-use crate::tray::{TrayAction, TrayHandle};
 
 pub use actions::{ROOT_CONTEXT, modifier_label, palette_hint};
 pub use bootstrap::{appearance_is_dark, run_with_service};
@@ -132,16 +131,15 @@ pub struct Workspace {
     command_state: Entity<CommandState>,
     last_failure_mirror: Option<UserFacingError>,
     toast: Option<SharedString>,
-    tray: TrayHandle,
-    #[allow(dead_code)]
-    tray_actions: flume::Receiver<TrayAction>,
-    tray_available_cached: bool,
+    tray_available: bool,
     tray_note_shown: bool,
     tray_note: Option<SharedString>,
     quit: QuitMachine,
     /// Stop operations issued by the quit flow: operation id -> instance id.
     /// A stop is finished only when `OperationFinished` arrives for it.
     quit_stops: HashMap<OperationId, InstanceId>,
+    /// Outcomes that arrived before the stop was registered (R2).
+    quit_stop_buffer: HashMap<OperationId, bool>,
     /// Wall-clock bound for quit-stop completion; injectable for tests.
     quit_stop_timeout: Duration,
     /// Task that fires the quit timeout.
@@ -164,7 +162,6 @@ pub struct Workspace {
     tray_needs_refresh: bool,
     _appearance: Option<Subscription>,
     _event_task: Option<Task<()>>,
-    _tray_task: Option<Task<()>>,
 }
 
 /// The owned pieces `Workspace::assemble` takes, so the constructor stays one
@@ -172,7 +169,7 @@ pub struct Workspace {
 struct Parts {
     service: Arc<dyn DblService>,
     events: flume::Receiver<UiEvent>,
-    tray_start: crate::tray::TrayStartup,
+    tray_available: bool,
     command_state: Entity<CommandState>,
     filter_input: Entity<InputState>,
     focus_handle: FocusHandle,
@@ -181,22 +178,21 @@ struct Parts {
 impl Workspace {
     /// Builds a live workspace attached to the app-level runtime.
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let (service, events, tray_actions, tray_available) = {
-            let runtime = cx.global_mut::<crate::app::bootstrap::AppRuntime>();
-            let service = runtime.service.clone();
-            let events = runtime.events.clone();
-            let tray_actions = runtime.take_tray_actions();
-            let tray_available = runtime.tray_available();
-            (service, events, tray_actions, tray_available)
+        let (service, events, tray_available) = {
+            let runtime = cx.global::<crate::app::bootstrap::AppRuntime>();
+            (
+                runtime.service.clone(),
+                runtime.events.clone(),
+                runtime.tray_available(),
+            )
         };
-        Self::build_live(service, events, tray_actions, tray_available, window, cx)
+        Self::build_live(service, events, tray_available, window, cx)
     }
 
-    /// Live constructor wired to an existing service/bridge/tray.
+    /// Live constructor wired to an existing service/bridge.
     fn build_live(
         service: Arc<dyn DblService>,
         events: flume::Receiver<UiEvent>,
-        tray_actions: flume::Receiver<TrayAction>,
         tray_available: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -206,30 +202,16 @@ impl Workspace {
         let filter_input = cx
             .new(|cx| InputState::new(window, cx).placeholder(strings::UI_DOCK_FILTER.to_owned()));
         cx.observe(&filter_input, |_, _, cx| cx.notify()).detach();
-        let tray_start = crate::tray::TrayStartup {
-            handle: crate::tray::TrayHandle::unavailable(),
-            actions: tray_actions,
-            sender: flume::unbounded().0,
-            backend_name: if tray_available { "app" } else { "none" },
-        };
         let mut workspace = Self::assemble(Parts {
             service,
             events,
-            tray_start,
+            tray_available,
             command_state,
             filter_input,
             focus_handle,
         });
-        workspace.tray_available_cached = tray_available;
-        workspace.tray_note_shown = !tray_available;
-        workspace.tray_note = if tray_available {
-            None
-        } else {
-            Some(SharedString::from(strings::UI_TRAY_UNAVAILABLE_NOTE))
-        };
         workspace.startup_load(cx);
         workspace.start_event_pump(cx);
-        // Tray actions are pumped at app level and forwarded to the workspace.
         workspace
     }
 
@@ -241,22 +223,15 @@ impl Workspace {
     ) -> Self {
         let (tx, rx) = flume::unbounded::<UiEvent>();
         drop(tx);
-        let (_atx, arx) = flume::unbounded::<TrayAction>();
         let focus_handle = cx.focus_handle();
         let command_state = cx.new(|cx| CommandState::new(window, cx));
         let filter_input = cx
             .new(|cx| InputState::new(window, cx).placeholder(strings::UI_DOCK_FILTER.to_owned()));
         cx.observe(&filter_input, |_, _, cx| cx.notify()).detach();
-        let tray_start = crate::tray::TrayStartup {
-            handle: crate::tray::TrayHandle::unavailable(),
-            actions: arx,
-            sender: flume::unbounded().0,
-            backend_name: "none",
-        };
         let mut workspace = Self::assemble(Parts {
             service,
             events: rx,
-            tray_start,
+            tray_available: false,
             command_state,
             filter_input,
             focus_handle,
@@ -268,8 +243,7 @@ impl Workspace {
 
     /// The freshly built, unmoved pieces `assemble` needs.
     fn assemble(parts: Parts) -> Self {
-        let tray_available = parts.tray_start.handle.is_available();
-        let tray_note = if tray_available {
+        let tray_note = if parts.tray_available {
             None
         } else {
             Some(SharedString::from(strings::UI_TRAY_UNAVAILABLE_NOTE))
@@ -277,10 +251,8 @@ impl Workspace {
         Self {
             service: parts.service,
             events: parts.events,
-            tray: parts.tray_start.handle,
-            tray_actions: parts.tray_start.actions,
-            tray_available_cached: tray_available,
-            tray_note_shown: !tray_available,
+            tray_available: parts.tray_available,
+            tray_note_shown: !parts.tray_available,
             tray_note,
             command_state: parts.command_state,
             filter_input: Some(parts.filter_input),
@@ -311,6 +283,7 @@ impl Workspace {
             toast: None,
             quit: QuitMachine::new(),
             quit_stops: HashMap::new(),
+            quit_stop_buffer: HashMap::new(),
             quit_stop_timeout: crate::quit::QUIT_STOP_TIMEOUT,
             quit_timeout_task: None,
             version: env!("CARGO_PKG_VERSION"),
@@ -323,7 +296,6 @@ impl Workspace {
             tray_needs_refresh: false,
             _appearance: None,
             _event_task: None,
-            _tray_task: None,
         }
     }
 
@@ -396,13 +368,8 @@ impl Workspace {
                 // Quit-stop completion is driven by the finished operation, never
                 // by request acceptance. The actual state transition is applied in
                 // `apply_event_with_cx` where we have `cx`.
-                // Refresh in background; don't block event pump.
             }
-            UiEvent::CatalogUpdated => {
-                // Catalog fetch is cheap; read in bg next tick via flag not needed:
-                // schedule a bg read by setting a toast? No. Use service.catalog() in bg.
-                // We'll handle by marking dirty; simplest: just refresh on next frame.
-            }
+            UiEvent::CatalogUpdated => {}
             UiEvent::LogLines { instance, lines } => {
                 if let Ok(id) = instance.parse::<InstanceId>() {
                     self.state.on_log_lines(&mut self.logs, &id, lines);
@@ -417,17 +384,10 @@ impl Workspace {
                 self.forget_instance(&id);
                 self.tray_needs_refresh = true;
             }
-            UiEvent::StopForced(id) => {
+            UiEvent::StopForced(_id) => {
                 self.toast = Some(SharedString::from(strings::UI_TOAST_STOP_FORCED));
-                let service = self.service.clone();
-                let lid = id.clone();
-                // fire-and-forget log reload; can't call self.bg here (no cx) but
-                // the event pump will refresh via next events; keep simple.
-                let _ = (service, lid);
             }
-            UiEvent::Resync => {
-                // Resync handled by caller with cx via schedule_resync flag.
-            }
+            UiEvent::Resync => {}
             UiEvent::Closed => {}
         }
     }
@@ -444,6 +404,7 @@ impl Workspace {
             _ => None,
         };
         let finished = quit_stop_finished.is_some();
+        let removed = removed_id.is_some();
         self.apply_event(event);
         if self.tray_needs_refresh {
             self.tray_needs_refresh = false;
@@ -464,6 +425,9 @@ impl Workspace {
         }
         if needs_resync || finished {
             self.refresh_instances_bg(cx);
+        }
+        if finished || removed {
+            self.refresh_home_size_bg(cx);
         }
     }
 

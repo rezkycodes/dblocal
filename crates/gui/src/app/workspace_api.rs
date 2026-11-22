@@ -86,7 +86,7 @@ impl Workspace {
         self.palette_query.clear();
     }
 
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub(crate) fn palette_is_open(&self) -> bool {
         self.palette_open
     }
@@ -226,7 +226,7 @@ impl Workspace {
     }
 
     /// Overrides the cached catalog status for preview renders.
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub(crate) fn set_catalog_status_for_preview(
         &mut self,
         status: dblocal_core::model::CatalogStatus,
@@ -370,7 +370,7 @@ impl Workspace {
     }
 
     pub(crate) fn tray_available(&self) -> bool {
-        self.tray_available_cached || self.tray.is_available()
+        self.tray_available
     }
 
     pub(crate) fn tray_note(&self) -> Option<SharedString> {
@@ -385,7 +385,11 @@ impl Workspace {
         crate::format::abbreviate_home(&self.home_root, dirs_next_home().as_deref())
     }
 
-    #[allow(dead_code)]
+    pub(crate) fn home_root(&self) -> &std::path::Path {
+        &self.home_root
+    }
+
+    #[cfg(test)]
     pub(crate) fn quit_machine(&self) -> &crate::quit::QuitMachine {
         &self.quit
     }
