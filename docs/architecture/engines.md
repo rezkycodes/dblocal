@@ -178,6 +178,79 @@ Spike refs: README C-03, C-10..C-12, `docs/spikes/engines/valkey.md`.
     range, missing `dir`); `Can't open or create append-only dir ...: Not a directory`;
     and anything unrecognized.
 
+## MariaDB (`engine::mariadb`)
+
+Spike refs: `docs/spikes/engines/mariadb.md` (W3-B2, 2026-11-22), MariaDB REST
+API `downloads.mariadb.org/rest-api/mariadb/<version>/`. Verified LTS builds:
+11.8.10 and 11.4.14, Linux x86_64 `linux-systemd` tarballs, SHA-256 matched the
+REST API `checksum.sha256sum`.
+
+- **Layout.** Top-level `mariadb-<ver>-linux-systemd-x86_64/` with `bin/`,
+  `scripts/`, `lib/`, `share/`. Strip the top-level dir. `mariadbd` is the
+  canonical server binary; `mysqld` is a compat name. `mariadb-install-db` lives
+  in `scripts/` (shell script), not `bin/`.
+
+- **Host deps.** `mariadbd` needs glibc >= 2.28 and links `libcrypt.so.1` on the
+  probed build. Fedora 44 provides `libcrypt.so.2` (XCRYPT_2.0) which satisfies
+  the required symbol, but the soname differs; a host without `libcrypt.so.1`
+  will fail to exec. The adapter reports loader/exec failures as
+  `BinaryMissing`/engine error through the normal start-failure path; packaging
+  should preflight this.
+
+- **Initialize (`mariadb-install-db`):** runs
+  `scripts/mariadb-install-db --datadir=<dir> --basedir=<runtime>
+  --auth-root-authentication-method=normal --skip-test-db`.
+  On failure the data dir is removed and raw output is returned. It writes the
+  DBLocal-managed `my.cnf` (0600) with `bind-address=127.0.0.1`, `port`,
+  `datadir`, `basedir`, a short socket path `run/mariadb-<port>.sock`,
+  `pid-file`, `log-error`, `skip-name-resolve`. No password in config.
+
+- **Password bootstrap (`AuthMode::Password`).** After install-db, the adapter
+  writes a 0600 one-shot init file containing `ALTER USER ... IDENTIFIED BY ...;
+  FLUSH PRIVILEGES; SHUTDOWN;`, starts `mariadbd --defaults-file=... --init-file=...`,
+  waits for it to exit within `START_TIMEOUT_SECS`, then deletes the init file
+  on both success and failure. The password never appears in argv, env, or logs;
+  init-file contents are not logged. On failure the data dir is removed.
+
+- **Start command:** `bin/mariadbd --defaults-file=<data_dir>/my.cnf` with
+  stdin null. No password in argv/env; `MYSQL_PWD` and `MYSQL_TCP_PORT` are
+  removed from the environment.
+
+- **Health:** TCP connect to `127.0.0.1:<port>`, read the MySQL/MariaDB packet
+  header + greeting payload, parse protocol version 10. A valid greeting
+  (including MariaDB version string like `11.8.10-MariaDB`) means
+  `Health::Ready`. A protocol error packet is treated as Ready because the
+  server spoke the protocol. Connect/read failures are engine errors. No
+  `mysqladmin ping` exit-code trust.
+
+- **Shutdown:** read `data_dir/mariadbd.pid`, send `SIGTERM`, wait up to
+  `STOP_GRACE_SECS` for the PID to disappear. The spike showed SIGTERM produces
+  `Normal shutdown` / `Shutdown complete`; the bounded wait returns a clear
+  engine error on timeout so the service can escalate.
+
+- **Connection values:**
+  - `UriFormat::Uri`: `mysql://<user>:<enc_pw>@127.0.0.1:<port>/`
+  - `UriFormat::DotEnv`: `DATABASE_URL`, `DB_HOST`, `DB_PORT`, `DB_DATABASE=`
+    (empty, MariaDB/MySQL has no mandatory default db in URI), `DB_USERNAME`,
+    `DB_PASSWORD` when present. Uses `uri.rs` percent-encoding.
+
+- **Diagnosis (substring markers, raw tail kept by caller):**
+  - `PortInUse`: `Address already in use`, `Can't start server: Bind on TCP/IP
+    port`, `Do you already have another server running on port`.
+  - `DataDirVersionMismatch`: explicit incompatible-data markers, including
+    MySQL 8.4 datadir opened by MariaDB (`ib_logfile0 was not found` +
+    `Unknown/unsupported storage engine: InnoDB` / `Plugin 'InnoDB' registration
+    as a STORAGE ENGINE failed`). Cross-major MariaDB dirs that InnoDB upgrades
+    silently are not misclassified.
+  - `PermissionDenied`: real `Permission denied`.
+  - `BinaryMissing`: exec `Exec format error` or missing mariadbd/install-db.
+  - `Unknown`: socket path too long, bad config/unknown variable, missing data
+    dir / `Can't change dir to`, disk full, and anything unrecognized.
+
+- **Socket path limit.** AF_UNIX `sun_path` is 107 bytes. The adapter validates
+  the socket path before writing config/start; over-limit is a typed
+  `InvalidInput` (config rewrite also validates).
+
 ## Host glibc detection (`engine::glibc`, C-03)
 
 Valkey Linux binaries are not self-contained. `jammy` requires `GLIBC_2.34`,
@@ -217,3 +290,12 @@ Valkey Linux binaries are not self-contained. `jammy` requires `GLIBC_2.34`,
   host; if unavailable it falls back to the preference chain which resolves to
   `C`, matching the spike's "fallback `C.utf8`, then `C`" intent. The runtime's
   bundled environment is not probed directly.
+- **MariaDB cross-major dirs (W3-B2 spike):** opening a MariaDB 11.4 datadir
+  with 11.8 and the reverse both reached "ready for connections" on the probed
+  builds (InnoDB tolerated the format). The adapter therefore only reports
+  `DataDirVersionMismatch` for explicit incompatibility markers (including the
+  real MySQL 8.4-on-MariaDB InnoDB failure), never for a silent/ambiguous case.
+- **MariaDB host libcrypt (W3-B2 spike):** the 11.8.10/11.4.14 Linux tarballs
+  link `libcrypt.so.1`; Fedora 44 ships `libcrypt.so.2` (XCRYPT_2.0) with the
+  required symbol but a different soname. The adapter does not bundle or shim the
+  library; exec/loader failures surface through the normal start-failure path.
