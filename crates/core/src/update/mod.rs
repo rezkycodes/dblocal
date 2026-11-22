@@ -26,8 +26,8 @@ pub use download::{
 pub use error::{
     CODE_UPDATE_APPLY_FAILED, CODE_UPDATE_ASSET_MISSING, CODE_UPDATE_CHECKSUM,
     CODE_UPDATE_DOWNGRADE, CODE_UPDATE_MALFORMED, CODE_UPDATE_NETWORK, CODE_UPDATE_RATE_LIMITED,
-    CODE_UPDATE_UNSUPPORTED_KIND, CODE_UPDATE_UP_TO_DATE, CODE_UPDATE_VERIFY_FAILED, UpdateError,
-    UpdateResult,
+    CODE_UPDATE_SOURCE_NOT_FOUND, CODE_UPDATE_UNSUPPORTED_KIND, CODE_UPDATE_UP_TO_DATE,
+    CODE_UPDATE_VERIFY_FAILED, UpdateError, UpdateResult,
 };
 pub use install::{
     InstallPlan, InstallStep, apply, cleanup_backup, plan_install, restore_backup, smoke_check,

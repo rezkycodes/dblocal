@@ -24,6 +24,11 @@ pub const CODE_UPDATE_UNSUPPORTED_KIND: &str = "DBL-8008";
 pub const CODE_UPDATE_ASSET_MISSING: &str = "DBL-8009";
 /// Stable code: update apply/install failed.
 pub const CODE_UPDATE_APPLY_FAILED: &str = "DBL-8010";
+/// Stable code: the release source (repository) is missing or not public.
+///
+/// Distinguished from [`CODE_UPDATE_NETWORK`]: the request reached GitHub and was
+/// answered with 404/403, so the connection is fine and the source is wrong.
+pub const CODE_UPDATE_SOURCE_NOT_FOUND: &str = "DBL-8011";
 
 /// Result alias for update operations.
 pub type UpdateResult<T> = std::result::Result<T, UpdateError>;
@@ -52,6 +57,8 @@ pub enum UpdateError {
     AssetMissing { reason: String },
     /// Applying an update plan failed.
     ApplyFailed { reason: String },
+    /// The release source (GitHub repository) does not exist or is not public.
+    SourceNotFound { reason: String },
 }
 
 impl UpdateError {
@@ -67,6 +74,7 @@ impl UpdateError {
             Self::UnsupportedInstallKind { .. } => CODE_UPDATE_UNSUPPORTED_KIND,
             Self::AssetMissing { .. } => CODE_UPDATE_ASSET_MISSING,
             Self::ApplyFailed { .. } => CODE_UPDATE_APPLY_FAILED,
+            Self::SourceNotFound { .. } => CODE_UPDATE_SOURCE_NOT_FOUND,
         }
     }
 
@@ -99,6 +107,9 @@ impl UpdateError {
                 "Gagal memasang pembaruan. Versi sebelumnya dipulihkan bila memungkinkan."
                     .to_owned()
             }
+            Self::SourceNotFound { .. } => {
+                "Sumber rilis pembaruan tidak ditemukan atau tidak publik.".to_owned()
+            }
         }
     }
 
@@ -119,6 +130,7 @@ impl UpdateError {
             | Self::UnsupportedInstallKind { reason }
             | Self::AssetMissing { reason }
             | Self::ApplyFailed { reason } => reason,
+            Self::SourceNotFound { reason } => reason,
         }
     }
 }
@@ -154,6 +166,10 @@ impl From<UpdateError> for DblError {
             },
             UpdateError::AssetMissing { reason } => DblError::NotFound {
                 kind: "update_asset",
+                name: reason.clone(),
+            },
+            UpdateError::SourceNotFound { reason } => DblError::NotFound {
+                kind: "update_source",
                 name: reason.clone(),
             },
             UpdateError::ApplyFailed { reason } => DblError::Io {

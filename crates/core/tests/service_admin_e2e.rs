@@ -387,6 +387,35 @@ fn read_write_user_can_insert_through_the_service() {
 
 #[test]
 #[ignore = "e2e: real PostgreSQL; run with DBLOCAL_E2E=1 cargo xtask e2e"]
+fn create_user_in_a_missing_database_reports_database_not_found() {
+    require_e2e();
+    let fixture = Fixture::new("dblocal-w4a-nodb-");
+
+    // F2: the server is up, so a missing target database must be DBL-8105, not
+    // DBL-8100 "server unreachable".
+    let err = fixture
+        .service
+        .create_user(&fixture.id, "u9", "nosuchdb", PrivilegeLevel::ReadOnly)
+        .expect_err("missing database");
+    assert_eq!(
+        err.code,
+        dblocal_core::admin::error::CODE_DATABASE_NOT_FOUND,
+        "a missing database is not a connect failure"
+    );
+    assert_ne!(err.code, dblocal_core::admin::error::CODE_CONNECT);
+
+    // No role was left behind: the existence check runs before the create.
+    let sql = superuser(&fixture);
+    assert_eq!(
+        sql.count("SELECT count(*) FROM pg_roles WHERE rolname = 'u9'")
+            .expect("role count"),
+        0,
+        "no role may be created when the database is missing"
+    );
+}
+
+#[test]
+#[ignore = "e2e: real PostgreSQL; run with DBLOCAL_E2E=1 cargo xtask e2e"]
 fn password_reset_updates_engine_credential_and_uri() {
     require_e2e();
     let fixture = Fixture::new("dblocal-w4a-reset-");

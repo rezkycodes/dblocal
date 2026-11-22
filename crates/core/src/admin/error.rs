@@ -49,6 +49,13 @@ pub const CODE_ROLLBACK: &str = "DBL-8114";
 pub const CODE_PASSWORD_GENERATE: &str = "DBL-8115";
 /// Code for [`AdminError::AuthFailed`].
 pub const CODE_AUTH_FAILED: &str = "DBL-8116";
+/// Code for [`AdminError::NoPassword`].
+///
+/// Distinct from [`CODE_UNSUPPORTED`]: the engine is PostgreSQL (supported), but
+/// this instance was created without a password, so there is no credential to
+/// authenticate an admin session with. The fix is a different instance, not a
+/// later engine adapter.
+pub const CODE_NO_PASSWORD: &str = "DBL-8117";
 
 /// Why an identifier was rejected. Static: it never echoes the rejected value.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -170,6 +177,9 @@ pub enum AdminError {
     RollbackFailed(RollbackState),
     /// The operating system RNG failed while generating a password.
     PasswordGenerate,
+    /// The instance was created without a password, so admin needs a different
+    /// instance (`F-DBU`); the engine itself is supported.
+    NoPassword,
 }
 
 impl AdminError {
@@ -193,6 +203,7 @@ impl AdminError {
             Self::CredentialStore => CODE_CREDENTIAL_STORE,
             Self::RollbackFailed(_) => CODE_ROLLBACK,
             Self::PasswordGenerate => CODE_PASSWORD_GENERATE,
+            Self::NoPassword => CODE_NO_PASSWORD,
         }
     }
 
@@ -217,6 +228,7 @@ impl AdminError {
             Self::CredentialStore => messages::ERR_CREDENTIAL_STORE,
             Self::RollbackFailed(_) => messages::ERR_ROLLBACK,
             Self::PasswordGenerate => messages::ERR_PASSWORD_GENERATE,
+            Self::NoPassword => messages::ERR_NO_PASSWORD,
         }
     }
 
@@ -250,6 +262,7 @@ impl AdminError {
             Self::CredentialStore => "credential store refused the password",
             Self::RollbackFailed(_) => "rollback failed, state inconsistent",
             Self::PasswordGenerate => "password generation failed",
+            Self::NoPassword => "instance has no password",
         }
     }
 }
@@ -304,6 +317,7 @@ mod tests {
                 rollback_failed: true,
             }),
             AdminError::PasswordGenerate,
+            AdminError::NoPassword,
         ]
     }
 
@@ -354,6 +368,7 @@ mod tests {
             CODE_CREDENTIAL_STORE,
             CODE_ROLLBACK,
             CODE_PASSWORD_GENERATE,
+            CODE_NO_PASSWORD,
         ];
         for code in declared {
             assert!(
@@ -384,6 +399,7 @@ mod tests {
             CODE_CREDENTIAL_STORE,
             CODE_ROLLBACK,
             CODE_PASSWORD_GENERATE,
+            CODE_NO_PASSWORD,
         ]
         .iter()
         .map(|code| code_number(code).expect("well formed"))
