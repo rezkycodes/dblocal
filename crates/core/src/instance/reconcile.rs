@@ -15,56 +15,37 @@ use crate::process::reconcile::{ReconcileRecord, reconcile};
 use super::helpers::{db_async, emit_changed, identity_of};
 use super::service::Inner;
 
-/// Hooks a test can park around the row listing, so the "the create finished
-/// while we were listing" interleaving is forced deterministically instead of
-/// waiting for it under load.
+/// Test-only hooks around one reconciliation pass, keyed by state root, so the
+/// "the create finished while we were listing" interleaving is forced
+/// deterministically instead of waiting for it under load.
 #[cfg(test)]
 type ListHook = Box<dyn FnOnce(&Arc<Inner>) + Send>;
 
 #[cfg(test)]
-type DoneHook = (String, std::sync::mpsc::Sender<()>);
-
-#[cfg(test)]
-type PairHook = (String, Option<ListHook>, Option<ListHook>);
-
-/// When a test wants to know reconciliation finished, it parks a sender here and
-/// the end of `reconcile_on_startup` fires it.
-#[cfg(test)]
-fn done_hooks() -> &'static std::sync::Mutex<Vec<DoneHook>> {
-    static DONE: std::sync::OnceLock<std::sync::Mutex<Vec<DoneHook>>> = std::sync::OnceLock::new();
-    DONE.get_or_init(|| std::sync::Mutex::new(Vec::new()))
-}
-
-/// Asks to be told when reconciliation for `root` finishes.
-#[cfg(test)]
-pub(crate) fn on_reconcile_done(root: &std::path::Path) -> std::sync::mpsc::Receiver<()> {
-    let root = root.display().to_string();
-    let (tx, rx) = std::sync::mpsc::channel();
-    done_hooks().lock().expect("done hooks").push((root, tx));
-    rx
+#[derive(Default)]
+struct Hooks {
+    before_list: Option<ListHook>,
+    after_list: Option<ListHook>,
+    done: Option<std::sync::mpsc::Sender<()>>,
 }
 
 #[cfg(test)]
-fn fire_done(inner: &Arc<Inner>) {
-    let root = inner.paths.root().display().to_string();
-    let sender = done_hooks().lock().ok().and_then(|mut hooks| {
-        hooks
-            .iter()
-            .position(|(seen, _)| seen == &root)
-            .map(|index| hooks.remove(index).1)
-    });
-    if let Some(sender) = sender {
-        let _ = sender.send(());
-    }
-}
-
-#[cfg(not(test))]
-fn fire_done(_: &Arc<Inner>) {}
-
-#[cfg(test)]
-fn hooks() -> &'static std::sync::Mutex<Vec<PairHook>> {
-    static HOOKS: std::sync::OnceLock<std::sync::Mutex<Vec<PairHook>>> = std::sync::OnceLock::new();
+fn hook_table() -> &'static std::sync::Mutex<Vec<(String, Hooks)>> {
+    static HOOKS: std::sync::OnceLock<std::sync::Mutex<Vec<(String, Hooks)>>> =
+        std::sync::OnceLock::new();
     HOOKS.get_or_init(|| std::sync::Mutex::new(Vec::new()))
+}
+
+/// Runs `edit` on the hooks registered for `root`, creating the entry if needed.
+#[cfg(test)]
+fn edit_hooks(root: &str, edit: impl FnOnce(&mut Hooks)) {
+    let mut table = hook_table().lock().expect("hooks");
+    if !table.iter().any(|(seen, _)| seen == root) {
+        table.push((root.to_owned(), Hooks::default()));
+    }
+    if let Some((_, hooks)) = table.iter_mut().find(|(seen, _)| seen == root) {
+        edit(hooks);
+    }
 }
 
 /// Registers `before` to run just before reconciliation lists the rows and
@@ -75,38 +56,53 @@ pub(crate) fn on_reconcile(
     before: impl FnOnce(&Arc<Inner>) + Send + 'static,
     after: impl FnOnce(&Arc<Inner>) + Send + 'static,
 ) {
-    let root = root.display().to_string();
-    hooks()
-        .lock()
-        .expect("hooks")
-        .push((root, Some(Box::new(before)), Some(Box::new(after))));
+    edit_hooks(&root.display().to_string(), |hooks| {
+        hooks.before_list = Some(Box::new(before));
+        hooks.after_list = Some(Box::new(after));
+    });
 }
 
+/// Asks to be told when reconciliation for `root` finishes.
 #[cfg(test)]
-fn take_hook(inner: &Arc<Inner>, after: bool) -> Option<ListHook> {
-    let root = inner.paths.root().display().to_string();
-    let mut hooks = hooks().lock().ok()?;
-    let index = hooks.iter().position(|(seen, _, _)| seen == &root)?;
-    let slot = if after {
-        &mut hooks[index].2
-    } else {
-        &mut hooks[index].1
-    };
-    slot.take()
+pub(crate) fn on_reconcile_done(root: &std::path::Path) -> std::sync::mpsc::Receiver<()> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    edit_hooks(&root.display().to_string(), |hooks| hooks.done = Some(tx));
+    rx
 }
 
 #[cfg(test)]
 fn run_before_list(inner: &Arc<Inner>) {
-    if let Some(hook) = take_hook(inner, false) {
+    let root = inner.paths.root().display().to_string();
+    let hook = edit_hooks_capture(&root, |hooks| hooks.before_list.take());
+    if let Some(hook) = hook {
         hook(inner);
     }
 }
 
 #[cfg(test)]
 fn run_after_list(inner: &Arc<Inner>) {
-    if let Some(hook) = take_hook(inner, true) {
+    let root = inner.paths.root().display().to_string();
+    let hook = edit_hooks_capture(&root, |hooks| hooks.after_list.take());
+    if let Some(hook) = hook {
         hook(inner);
     }
+}
+
+#[cfg(test)]
+fn fire_done(inner: &Arc<Inner>) {
+    let root = inner.paths.root().display().to_string();
+    let sender = edit_hooks_capture(&root, |hooks| hooks.done.take());
+    if let Some(sender) = sender {
+        let _ = sender.send(());
+    }
+}
+
+/// Runs `take` on the hooks for `root` and returns the value it removed.
+#[cfg(test)]
+fn edit_hooks_capture<T>(root: &str, take: impl FnOnce(&mut Hooks) -> Option<T>) -> Option<T> {
+    let mut table = hook_table().lock().ok()?;
+    let (_, hooks) = table.iter_mut().find(|(seen, _)| seen == root)?;
+    take(hooks)
 }
 
 #[cfg(not(test))]
@@ -114,6 +110,9 @@ fn run_before_list(_: &Arc<Inner>) {}
 
 #[cfg(not(test))]
 fn run_after_list(_: &Arc<Inner>) {}
+
+#[cfg(not(test))]
+fn fire_done(_: &Arc<Inner>) {}
 
 pub(crate) async fn reconcile_on_startup(inner: Arc<Inner>) {
     run_before_list(&inner);
