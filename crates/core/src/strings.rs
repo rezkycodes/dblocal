@@ -82,7 +82,8 @@ pub const UI_CREATE_FIRST: &str = "Buat instance pertama Anda";
 /// Shown when instances exist but no tab is open.
 pub const UI_SELECT_INSTANCE_TITLE: &str = "Pilih instance";
 /// Subtitle for the select-instance empty state.
-pub const UI_SELECT_INSTANCE_SUBTITLE: &str = "Pilih instance dari panel kiri untuk melihat detail.";
+pub const UI_SELECT_INSTANCE_SUBTITLE: &str =
+    "Pilih instance dari panel kiri untuk melihat detail.";
 /// Instances panel header.
 pub const UI_INSTANCES: &str = "INSTANCE";
 /// Instances panel footer button.

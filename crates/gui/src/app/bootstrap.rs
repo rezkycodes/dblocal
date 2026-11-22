@@ -99,9 +99,11 @@ pub fn run_with_service(service: Arc<dyn DblService>) -> dblocal_core::Result<()
                     if should_refresh {
                         let svc = service_for_tray.clone();
                         let views = cx
-                            .background_spawn(async move { svc.list_instances().unwrap_or_default() })
+                            .background_spawn(
+                                async move { svc.list_instances().unwrap_or_default() },
+                            )
                             .await;
-                        let _ = cx.update(|cx| {
+                        cx.update(|cx| {
                             if cx.has_global::<AppRuntime>() {
                                 cx.update_global::<AppRuntime, _>(|runtime, _| {
                                     runtime.refresh_tray(&views);
@@ -123,8 +125,10 @@ pub fn run_with_service(service: Arc<dyn DblService>) -> dblocal_core::Result<()
             };
             cx.spawn(async move |cx: &mut gpui_kit::AsyncApp| {
                 while let Ok(action) = actions_rx.recv_async().await {
-                    let _ = cx.update(|cx| {
-                        let ws = cx.try_global::<AppRuntime>().and_then(|r| r.workspace.clone());
+                    cx.update(|cx| {
+                        let ws = cx
+                            .try_global::<AppRuntime>()
+                            .and_then(|r| r.workspace.clone());
                         if let Some(ws) = ws {
                             ws.update(cx, |this, cx| this.apply_tray_action(action, cx));
                         } else {
@@ -157,11 +161,11 @@ pub fn should_focus_existing_main_window(has_main_window: bool) -> bool {
 
 pub(crate) fn open_main_window(cx: &mut App) -> anyhow::Result<WindowHandle<Root>> {
     // Focus existing window if one is already open.
-    if let Some(handle) = cx.try_global::<AppRuntime>().and_then(|r| r.main_window) {
-        if should_focus_existing_main_window(true) {
-            let _ = handle.update(cx, |_, window, _| window.activate_window());
-            return Ok(handle);
-        }
+    if let Some(handle) = cx.try_global::<AppRuntime>().and_then(|r| r.main_window)
+        && should_focus_existing_main_window(true)
+    {
+        let _ = handle.update(cx, |_, window, _| window.activate_window());
+        return Ok(handle);
     }
 
     let bounds = gpui_kit::Bounds::centered(None, size(px(1280.), px(820.)), cx);
@@ -184,7 +188,9 @@ pub(crate) fn open_main_window(cx: &mut App) -> anyhow::Result<WindowHandle<Root
                 workspace.update(cx, |this, cx| {
                     this.handle_window_close_request(cx);
                 });
-                let has_tray = cx.try_global::<AppRuntime>().is_some_and(|r| r.tray_available());
+                let has_tray = cx
+                    .try_global::<AppRuntime>()
+                    .is_some_and(|r| r.tray_available());
                 if window_close_should_close(has_tray) {
                     clear_main_window(cx);
                     return true;
@@ -213,12 +219,17 @@ fn handle_app_tray_action(
             let _ = open_main_window(cx);
         }
         crate::tray::TrayAction::Quit => {
-            let ws = cx.try_global::<AppRuntime>().and_then(|r| r.workspace.clone());
+            let ws = cx
+                .try_global::<AppRuntime>()
+                .and_then(|r| r.workspace.clone());
             if let Some(ws) = ws {
                 ws.update(cx, |this, cx| this.request_quit(cx));
             } else {
                 if let Ok(_handle) = open_main_window(cx) {
-                    if let Some(ws) = cx.try_global::<AppRuntime>().and_then(|r| r.workspace.clone()) {
+                    if let Some(ws) = cx
+                        .try_global::<AppRuntime>()
+                        .and_then(|r| r.workspace.clone())
+                    {
                         ws.update(cx, |this, cx| this.request_quit(cx));
                     }
                 } else {

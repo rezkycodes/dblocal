@@ -319,12 +319,7 @@ mod tests {
         m.apply(QuitEvent::StopFinished { id: b, ok: true });
         let action = m.apply(QuitEvent::Timeout);
         assert_eq!(action, QuitAction::ShowDialog);
-        assert_eq!(
-            m.state(),
-            &QuitState::StopFailed {
-                failed: vec![a]
-            }
-        );
+        assert_eq!(m.state(), &QuitState::StopFailed { failed: vec![a] });
     }
 
     #[test]
@@ -332,9 +327,7 @@ mod tests {
         let mut m = QuitMachine::new();
         assert_eq!(m.apply(QuitEvent::Timeout), QuitAction::None);
         let a = id(1);
-        m.apply(QuitEvent::QuitRequested {
-            running: vec![a],
-        });
+        m.apply(QuitEvent::QuitRequested { running: vec![a] });
         assert_eq!(m.apply(QuitEvent::Timeout), QuitAction::None);
     }
 }

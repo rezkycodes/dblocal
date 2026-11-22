@@ -207,6 +207,7 @@ fn is_main_thread() -> bool {
     std::thread::current().name() == Some("main")
 }
 
+#[cfg(test)]
 fn has_display() -> bool {
     display_available_for_os(
         std::env::consts::OS,

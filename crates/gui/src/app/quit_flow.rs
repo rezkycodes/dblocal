@@ -4,6 +4,7 @@
 //! module is the thin GPUI glue that turns its actions into service calls and
 //! window operations.
 
+#[cfg(test)]
 use std::time::Duration;
 
 use dblocal_core::model::InstanceId;
@@ -75,8 +76,9 @@ impl Workspace {
                                 }
                                 Err(err) => {
                                     this.report_error(&err);
-                                    let action =
-                                        this.quit.apply(QuitEvent::StopFinished { id: iid, ok: false });
+                                    let action = this
+                                        .quit
+                                        .apply(QuitEvent::StopFinished { id: iid, ok: false });
                                     this.handle_quit_action(action, cx);
                                 }
                             }
@@ -405,7 +407,8 @@ mod glue_tests {
             "request acceptance must not transition to Done"
         );
         // Simulate time passing after acceptance, but no OperationFinished.
-        cx.executor().advance_clock(std::time::Duration::from_millis(300));
+        cx.executor()
+            .advance_clock(std::time::Duration::from_millis(300));
         cx.run_until_parked();
         assert!(
             matches!(
@@ -418,7 +421,10 @@ mod glue_tests {
         for op in ops {
             view.update(cx, |this, cx| {
                 this.apply_event_with_cx(
-                    crate::service_bridge::UiEvent::OperationFinished { id: op, result: Ok(()) },
+                    crate::service_bridge::UiEvent::OperationFinished {
+                        id: op,
+                        result: Ok(()),
+                    },
                     cx,
                 )
             });
@@ -469,7 +475,9 @@ mod glue_tests {
     #[gpui_kit::test]
     fn stop_all_timeout_moves_to_stop_failed(cx: &mut TestAppContext) {
         let (view, _service, cx) = fixture(cx);
-        view.update(cx, |this, _cx| this.set_quit_stop_timeout(std::time::Duration::from_millis(20)));
+        view.update(cx, |this, _cx| {
+            this.set_quit_stop_timeout(std::time::Duration::from_millis(20))
+        });
         view.update(cx, |this, cx| this.request_quit(cx));
         cx.run_until_parked();
         view.update(cx, |this, cx| this.quit_stop_all(cx));
@@ -484,7 +492,8 @@ mod glue_tests {
             view.read_with(cx, |this, _| this.quit_machine().state().clone()),
             QuitState::StoppingAll { .. }
         ));
-        cx.executor().advance_clock(std::time::Duration::from_millis(30));
+        cx.executor()
+            .advance_clock(std::time::Duration::from_millis(30));
         cx.run_until_parked();
         assert!(matches!(
             view.read_with(cx, |this, _| this.quit_machine().state().clone()),

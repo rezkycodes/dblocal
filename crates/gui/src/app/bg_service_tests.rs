@@ -155,8 +155,8 @@ impl DblService for SlowService {
 
 #[gpui_kit::test]
 fn startup_refresh_catalog_does_not_block_instance_list(cx: &mut TestAppContext) {
-    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::time::Duration;
 
     #[derive(Clone)]
@@ -178,30 +178,116 @@ fn startup_refresh_catalog_does_not_block_instance_list(cx: &mut TestAppContext)
                 engines: Vec::new(),
             })
         }
-        fn refresh_catalog(&self, _force: bool) -> dblocal_core::Result<dblocal_core::service::OperationId> {
+        fn refresh_catalog(
+            &self,
+            _force: bool,
+        ) -> dblocal_core::Result<dblocal_core::service::OperationId> {
             self.refresh_started.store(true, Ordering::SeqCst);
             std::thread::sleep(Duration::from_secs(2));
             self.refresh_done.store(true, Ordering::SeqCst);
             Ok(dblocal_core::service::OperationId::new("op-refresh"))
         }
-        fn validate_spec(&self, _spec: &dblocal_core::model::InstanceSpec) -> dblocal_core::Result<()> { Ok(()) }
-        fn suggest_port(&self, _engine: dblocal_core::model::EngineKey) -> dblocal_core::Result<dblocal_core::model::Port> { dblocal_core::model::Port::new(5433) }
-        fn create_instance(&self, _spec: dblocal_core::model::InstanceSpec) -> dblocal_core::Result<dblocal_core::service::OperationId> { Ok(dblocal_core::service::OperationId::new("op")) }
-        fn start_instance(&self, _id: &dblocal_core::model::InstanceId) -> dblocal_core::Result<dblocal_core::service::OperationId> { Ok(dblocal_core::service::OperationId::new("op")) }
-        fn stop_instance(&self, _id: &dblocal_core::model::InstanceId) -> dblocal_core::Result<dblocal_core::service::OperationId> { Ok(dblocal_core::service::OperationId::new("op")) }
-        fn delete_instance(&self, _id: &dblocal_core::model::InstanceId, _mode: dblocal_core::model::DeleteMode) -> dblocal_core::Result<dblocal_core::service::OperationId> { Ok(dblocal_core::service::OperationId::new("op")) }
-        fn change_port(&self, _id: &dblocal_core::model::InstanceId, _port: dblocal_core::model::Port) -> dblocal_core::Result<()> { Ok(()) }
-        fn data_size(&self, _id: &dblocal_core::model::InstanceId) -> dblocal_core::Result<u64> { Ok(0) }
-        fn set_autostart(&self, _id: &dblocal_core::model::InstanceId, _enabled: bool) -> dblocal_core::Result<()> { Ok(()) }
-        fn cancel_operation(&self, _id: &dblocal_core::service::OperationId) -> dblocal_core::Result<()> { Ok(()) }
-        fn connection_uri(&self, _id: &dblocal_core::model::InstanceId, _format: dblocal_core::service::UriFormat) -> dblocal_core::Result<dblocal_core::secret::SecretString> { Ok(dblocal_core::secret::SecretString::new("postgres://localhost")) }
-        fn tail_logs(&self, _id: &dblocal_core::model::InstanceId, _lines: usize) -> dblocal_core::Result<Vec<String>> { Ok(vec![]) }
-        fn watch_logs(&self, _id: &dblocal_core::model::InstanceId, _watch: bool) -> dblocal_core::Result<()> { Ok(()) }
-        fn list_runtimes(&self) -> dblocal_core::Result<Vec<dblocal_core::model::Runtime>> { Ok(vec![]) }
-        fn remove_runtime(&self, _id: &str) -> dblocal_core::Result<()> { Ok(()) }
-        fn list_archives(&self) -> dblocal_core::Result<Vec<dblocal_core::model::ArchivedData>> { Ok(vec![]) }
-        fn purge_archive(&self, _id: &str) -> dblocal_core::Result<()> { Ok(()) }
-        fn subscribe(&self) -> tokio::sync::broadcast::Receiver<dblocal_core::service::ServiceEvent> { let (_tx, rx) = tokio::sync::broadcast::channel(1); rx }
+        fn validate_spec(
+            &self,
+            _spec: &dblocal_core::model::InstanceSpec,
+        ) -> dblocal_core::Result<()> {
+            Ok(())
+        }
+        fn suggest_port(
+            &self,
+            _engine: dblocal_core::model::EngineKey,
+        ) -> dblocal_core::Result<dblocal_core::model::Port> {
+            dblocal_core::model::Port::new(5433)
+        }
+        fn create_instance(
+            &self,
+            _spec: dblocal_core::model::InstanceSpec,
+        ) -> dblocal_core::Result<dblocal_core::service::OperationId> {
+            Ok(dblocal_core::service::OperationId::new("op"))
+        }
+        fn start_instance(
+            &self,
+            _id: &dblocal_core::model::InstanceId,
+        ) -> dblocal_core::Result<dblocal_core::service::OperationId> {
+            Ok(dblocal_core::service::OperationId::new("op"))
+        }
+        fn stop_instance(
+            &self,
+            _id: &dblocal_core::model::InstanceId,
+        ) -> dblocal_core::Result<dblocal_core::service::OperationId> {
+            Ok(dblocal_core::service::OperationId::new("op"))
+        }
+        fn delete_instance(
+            &self,
+            _id: &dblocal_core::model::InstanceId,
+            _mode: dblocal_core::model::DeleteMode,
+        ) -> dblocal_core::Result<dblocal_core::service::OperationId> {
+            Ok(dblocal_core::service::OperationId::new("op"))
+        }
+        fn change_port(
+            &self,
+            _id: &dblocal_core::model::InstanceId,
+            _port: dblocal_core::model::Port,
+        ) -> dblocal_core::Result<()> {
+            Ok(())
+        }
+        fn data_size(&self, _id: &dblocal_core::model::InstanceId) -> dblocal_core::Result<u64> {
+            Ok(0)
+        }
+        fn set_autostart(
+            &self,
+            _id: &dblocal_core::model::InstanceId,
+            _enabled: bool,
+        ) -> dblocal_core::Result<()> {
+            Ok(())
+        }
+        fn cancel_operation(
+            &self,
+            _id: &dblocal_core::service::OperationId,
+        ) -> dblocal_core::Result<()> {
+            Ok(())
+        }
+        fn connection_uri(
+            &self,
+            _id: &dblocal_core::model::InstanceId,
+            _format: dblocal_core::service::UriFormat,
+        ) -> dblocal_core::Result<dblocal_core::secret::SecretString> {
+            Ok(dblocal_core::secret::SecretString::new(
+                "postgres://localhost",
+            ))
+        }
+        fn tail_logs(
+            &self,
+            _id: &dblocal_core::model::InstanceId,
+            _lines: usize,
+        ) -> dblocal_core::Result<Vec<String>> {
+            Ok(vec![])
+        }
+        fn watch_logs(
+            &self,
+            _id: &dblocal_core::model::InstanceId,
+            _watch: bool,
+        ) -> dblocal_core::Result<()> {
+            Ok(())
+        }
+        fn list_runtimes(&self) -> dblocal_core::Result<Vec<dblocal_core::model::Runtime>> {
+            Ok(vec![])
+        }
+        fn remove_runtime(&self, _id: &str) -> dblocal_core::Result<()> {
+            Ok(())
+        }
+        fn list_archives(&self) -> dblocal_core::Result<Vec<dblocal_core::model::ArchivedData>> {
+            Ok(vec![])
+        }
+        fn purge_archive(&self, _id: &str) -> dblocal_core::Result<()> {
+            Ok(())
+        }
+        fn subscribe(
+            &self,
+        ) -> tokio::sync::broadcast::Receiver<dblocal_core::service::ServiceEvent> {
+            let (_tx, rx) = tokio::sync::broadcast::channel(1);
+            rx
+        }
     }
 
     cx.update(gpui_kit::init);
@@ -223,7 +309,10 @@ fn startup_refresh_catalog_does_not_block_instance_list(cx: &mut TestAppContext)
         }
         std::thread::sleep(Duration::from_millis(10));
     }
-    assert!(svc.list_calls.load(Ordering::SeqCst) > 0, "instances listed");
+    assert!(
+        svc.list_calls.load(Ordering::SeqCst) > 0,
+        "instances listed"
+    );
     // refresh_catalog runs in its own bg task (not the same closure as list reads).
     for _ in 0..300 {
         cx2.run_until_parked();
@@ -232,7 +321,10 @@ fn startup_refresh_catalog_does_not_block_instance_list(cx: &mut TestAppContext)
         }
         std::thread::sleep(Duration::from_millis(10));
     }
-    assert!(svc.refresh_started.load(Ordering::SeqCst), "refresh started separately");
+    assert!(
+        svc.refresh_started.load(Ordering::SeqCst),
+        "refresh started separately"
+    );
 }
 
 #[gpui_kit::test]
@@ -243,7 +335,8 @@ fn slow_service_calls_do_not_block_gpui(cx: &mut TestAppContext) {
     let calls = service.calls.clone();
     let svc: Arc<dyn DblService> = service.clone();
 
-    let (view, _cx_handle) = cx.add_window_view(|window, cx| Workspace::new_preview(svc, window, cx));
+    let (view, _cx_handle) =
+        cx.add_window_view(|window, cx| Workspace::new_preview(svc, window, cx));
     cx.run_until_parked();
 
     let start = Instant::now();

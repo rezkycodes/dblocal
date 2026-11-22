@@ -9,7 +9,7 @@ mod actions;
 mod background;
 #[cfg(test)]
 mod bg_service_tests;
-mod bootstrap;
+pub mod bootstrap;
 mod components;
 mod create_dialog;
 mod create_submit;
@@ -43,12 +43,14 @@ use std::sync::atomic::AtomicUsize;
 use std::time::{Duration, Instant};
 
 use dblocal_core::model::{AuthMode, DeleteMode, EngineKey, InstanceId, Port, Runtime};
-use dblocal_core::service::{CatalogView, DblService, InstanceView, OperationId, UriFormat, UserFacingError};
+use dblocal_core::service::{
+    CatalogView, DblService, InstanceView, OperationId, UriFormat, UserFacingError,
+};
 use dblocal_core::strings;
 use gpui_kit::component::{ActiveTheme, command::CommandState, h_flex, input::InputState};
 use gpui_kit::{
-    App, AppContext as _, Context, Entity, FocusHandle, Focusable, IntoElement,
-    ParentElement, Render, SharedString, Subscription, Task, Window, div, prelude::*,
+    App, AppContext as _, Context, Entity, FocusHandle, Focusable, IntoElement, ParentElement,
+    Render, SharedString, Subscription, Task, Window, div, prelude::*,
 };
 
 use crate::logs::LogStore;
@@ -324,7 +326,6 @@ impl Workspace {
             _tray_task: None,
         }
     }
-
 
     /// Preview/test constructor: synchronous reads, no bg startup.
     pub fn new_preview(
