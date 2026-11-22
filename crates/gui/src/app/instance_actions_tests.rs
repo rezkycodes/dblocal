@@ -508,3 +508,118 @@ fn palette_actions_reach_the_same_handlers(cx: &mut TestAppContext) {
     });
     assert!(!view.read_with(cx, |this, _| this.palette_is_open()));
 }
+
+/// The thin action wrappers the dialogs and docks call.
+#[gpui_kit::test]
+fn dialog_action_wrappers_route_to_their_handlers(cx: &mut TestAppContext) {
+    let (view, service, cx) = fixture(cx);
+    let id = service.id_with(InstanceStatus::Stopped);
+
+    // demo_content / set_palette_open / close_modals_action.
+    assert!(!view.read_with(cx, |this, _| this.demo_content()));
+    view.update(cx, |this, _| this.set_palette_open(true));
+    assert!(view.read_with(cx, |this, _| this.palette_is_open()));
+    view.update(cx, |this, _| this.close_modals_action());
+    assert!(!view.read_with(cx, |this, _| this.palette_is_open()));
+
+    // Create dialog wrappers: open, choose engine/version/auth, cancel.
+    view.update_in(cx, |this, window, cx| {
+        this.open_new_instance(window, cx);
+        this.choose_engine_action(EngineKey::Mysql, window, cx);
+        this.choose_version_action("8.0".to_owned(), window, cx);
+        this.choose_auth_action(dblocal_core::model::AuthMode::None);
+    });
+    cx.run_until_parked();
+    let form = view
+        .read_with(cx, |this, _| this.create_form().cloned())
+        .expect("the create dialog is open");
+    assert_eq!(form.engine, EngineKey::Mysql);
+    assert_eq!(form.version, "8.0");
+    assert_eq!(form.auth, dblocal_core::model::AuthMode::None);
+    view.update(cx, |this, _| this.cancel_create_action());
+    assert!(view.read_with(cx, |this, _| this.create_form().is_none()));
+
+    // submit_create_action with an empty name is rejected and re-opens the form.
+    view.update_in(cx, |this, window, cx| {
+        this.open_new_instance(window, cx);
+        if let Some(form) = this.create.as_mut() {
+            form.version = "17.4".to_owned();
+        }
+        this.set_create_field_texts("", "", window, cx);
+        this.submit_create_action(window, cx);
+    });
+    cx.run_until_parked();
+    assert!(view.read_with(cx, |this, _| this.create_form().is_some()));
+    assert!(view.read_with(cx, |this, _| this.toast_text().is_some()));
+    view.update(cx, |this, _| this.cancel_create_action());
+
+    // The delete dialog wrappers: cancel by closing every modal.
+    view.update_in(cx, |this, window, cx| {
+        this.open_delete_dialog(id.clone(), window, cx)
+    });
+    cx.run_until_parked();
+    assert!(
+        view.read_with(cx, |this, cx| this.delete_target_name(cx))
+            .is_some()
+    );
+    view.update(cx, |this, _| this.close_modals_action());
+    assert!(
+        view.read_with(cx, |this, cx| this.delete_target_name(cx))
+            .is_none()
+    );
+}
+
+/// `move_to_port_and_start` validates the port and then changes and starts.
+#[gpui_kit::test]
+fn move_to_port_and_start_rejects_a_privileged_port(cx: &mut TestAppContext) {
+    let (view, service, cx) = fixture(cx);
+    let id = service.id_with(InstanceStatus::Failed);
+    view.update(cx, |this, cx| this.move_to_port_and_start(&id, 80, cx));
+    cx.run_until_parked();
+    assert_eq!(
+        view.read_with(cx, |this, _| this.toast_text())
+            .as_deref()
+            .map(ToString::to_string),
+        Some(dblocal_core::strings::UI_VALIDATE_PORT_LOW.to_owned())
+    );
+    let before = service.calls();
+    view.update(cx, |this, cx| this.move_to_port_and_start(&id, 5500, cx));
+    cx.run_until_parked();
+    assert!(
+        service.calls() > before,
+        "a valid port must reach the service"
+    );
+}
+
+/// The dock's engine groups collapse and expand independently.
+#[gpui_kit::test]
+fn engine_groups_collapse_and_expand(cx: &mut TestAppContext) {
+    let (view, _service, cx) = fixture(cx);
+    assert!(!view.read_with(cx, |this, _| this.is_collapsed(EngineKey::Postgresql)));
+    view.update(cx, |this, _| this.toggle_collapsed(EngineKey::Postgresql));
+    assert!(view.read_with(cx, |this, _| this.is_collapsed(EngineKey::Postgresql)));
+    assert!(!view.read_with(cx, |this, _| this.is_collapsed(EngineKey::Mysql)));
+    view.update(cx, |this, _| this.toggle_collapsed(EngineKey::Postgresql));
+    assert!(!view.read_with(cx, |this, _| this.is_collapsed(EngineKey::Postgresql)));
+}
+
+/// Unparsable palette values are ignored rather than panicking.
+#[gpui_kit::test]
+fn palette_actions_with_bad_ids_are_ignored(cx: &mut TestAppContext) {
+    let (view, service, cx) = fixture(cx);
+    let before = service.calls();
+    view.update(cx, |this, _| {
+        this.palette_open = true;
+        this.palette_query = "zzz-tidak-ada".to_owned();
+    });
+    let actions = view.read_with(cx, |this, _| this.palette_actions());
+    assert!(
+        actions.is_empty(),
+        "no instance matches the query: {actions:?}"
+    );
+    view.update_in(cx, |this, window, cx| {
+        this.run_palette_action(0, window, cx)
+    });
+    cx.run_until_parked();
+    assert_eq!(service.calls(), before);
+}
