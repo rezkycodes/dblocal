@@ -289,7 +289,7 @@ fn bootstrap_credentials(ctx: &InitContext, run_dir: &Path, logs_dir: &Path) -> 
         }
         std::thread::sleep(Duration::from_millis(consts::HEALTH_CHECK_POLL_MS));
     }
-    let _ = fs::remove_file(&init_path);
+    cleanup_init_file(&init_path);
     shutdown_res
 }
 
@@ -418,6 +418,10 @@ pub fn socket_path(run_dir: &Path, port: u16) -> PathBuf {
 
 fn init_file_path(run_dir: &Path) -> PathBuf {
     run_dir.join(INIT_FILE_NAME)
+}
+
+fn cleanup_init_file(path: &Path) {
+    let _ = fs::remove_file(path);
 }
 
 pub fn sibling_dir(data_dir: &Path, leaf: &str) -> PathBuf {
@@ -907,6 +911,15 @@ mod tests {
         ]
     }
 
+    #[test]
+    fn cleanup_init_file_removes_one_shot_sql() {
+        let dir = tempfile::tempdir().expect("tmp");
+        let p = dir.path().join("dblocal-init.sql");
+        fs::write(&p, "ALTER USER root@localhost IDENTIFIED BY 'x';").expect("write");
+        assert!(p.exists());
+        cleanup_init_file(&p);
+        assert!(!p.exists(), "init file must be removed");
+    }
     #[test]
     fn diagnose_real_spike_texts() {
         for (text, expected) in diag_cases() {
