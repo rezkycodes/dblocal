@@ -291,7 +291,13 @@ pub(crate) fn sync_instance_port(paths: &DblPaths, instance: &Instance) -> Resul
                 crate::engine::sync_valkey_port(&paths.run_dir(name), port)?;
             }
         }
-        EngineKey::Mysql | EngineKey::Mariadb => {}
+        EngineKey::Mariadb => {
+            let conf = paths.data_dir(name).join("my.cnf");
+            if conf.exists() {
+                crate::engine::sync_mariadb_port(&paths.data_dir(name), port)?;
+            }
+        }
+        EngineKey::Mysql => {}
     }
     Ok(())
 }
