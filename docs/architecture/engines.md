@@ -199,13 +199,18 @@ REST API `checksum.sha256sum`.
   Fedora, `libcrypt1`/`libxcrypt-compat` as appropriate on Debian/Arch. Do not
   install packages automatically.
 
+- **Not verified on this host.** MariaDB 11.4 side-by-side is a *printed skip*
+  when the host cannot load the 11.4 binary (`libcrypt.so.1` version mismatch);
+  macOS and Windows behaviour (including the `ps` fallback identity check and
+  AF_UNIX path limits) is implemented but unverified; aarch64 is unverified.
+
 - **Initialize (`mariadb-install-db`):** runs
   `scripts/mariadb-install-db --datadir=<dir> --basedir=<runtime>
   --auth-root-authentication-method=normal --skip-test-db`.
   On failure the data dir is removed and raw output is returned. It writes the
   DBLocal-managed `my.cnf` (0600) with `bind-address=127.0.0.1`, `port`,
-  `datadir`, `basedir`, a socket path, `pid-file`, `log-error`, `skip-name-resolve`.
-  No password in config.
+  `datadir`, `basedir`, a socket path, `pid-file`, `log-error`, `tmpdir`,
+  `skip-name-resolve`. No password in config.
 
 - **Socket path fallback (C-09 analogue).** AF_UNIX `sun_path` is 107 bytes on
   Linux and 103 bytes on macOS/BSD. The natural path is
@@ -219,15 +224,34 @@ REST API `checksum.sha256sum`.
 
 - **Password bootstrap (`AuthMode::Password`).** After install-db, the adapter
   writes a 0600 one-shot init file containing `ALTER USER ... IDENTIFIED BY ...;
-  FLUSH PRIVILEGES; SHUTDOWN;`, starts `mariadbd --defaults-file=... --init-file=...`,
-  waits for it to exit within `START_TIMEOUT_SECS`, then deletes the init file
-  on both success and failure. The SQL literal escapes backslashes, single quotes
-  and control chars. The password never appears in argv, env, or logs; init-file
-  contents are not logged. On failure the data dir is removed.
+  FLUSH PRIVILEGES; SHUTDOWN;`, starts
+  `mariadbd --defaults-file=... --init-file=... --skip-networking`, waits for it
+  to exit within `START_TIMEOUT_SECS`, then deletes the init file on both success
+  and failure. `--skip-networking` is required: until the init file runs,
+  `root@127.0.0.1` has an empty password, so binding the instance TCP port would
+  expose it to any local user for the whole bootstrap, and any foreign listener
+  on that port would make initialization fail. The init file and its `SHUTDOWN`
+  only need the unix socket from `my.cnf`. The SQL literal escapes backslashes,
+  single quotes and control chars. The password never appears in argv, env, or
+  logs; init-file contents are not logged. On failure the data dir is removed.
 
 - **Start command:** `bin/mariadbd --defaults-file=<data_dir>/my.cnf` with
   stdin null. No password in argv/env; `MYSQL_PWD` and `MYSQL_TCP_PORT` are
-  removed from the environment.
+  removed from the environment. `TMPDIR` is set to the instance's private
+  tmpdir (`<instance>/run/tmp`) for the start command, `mariadb-install-db` and
+  the bootstrap server. The instance tmpdir is created 0700, owned by the
+  current euid, never a symlink, and stale contents are removed before every
+  initialize/start (MariaDB `#sql-temptable*` leftovers would otherwise be
+  shared with the process-wide `/tmp`).
+
+- **`prepare_run` on every start (S5).** `<instance>/run` and
+  `<instance>/run/tmp` are volatile (a reboot or `/tmp` cleanup removes them),
+  and the chosen fallback socket dir can be removed too. The service calls
+  `engine::prepare_mariadb_run` before every spawn: it recreates the instance
+  tmpdir and the socket's parent directory (private 0700, owner-checked,
+  symlink-refused via `socket::ensure_secure_runtime_dir` for the shared
+  per-user fallback) and removes only a stale *socket* file at the configured
+  path, leaving a regular file there alone.
 
 - **Health:** TCP connect to `127.0.0.1:<port>`, read the MySQL/MariaDB packet
   header + greeting payload, parse protocol version 10. A valid greeting
@@ -237,14 +261,25 @@ REST API `checksum.sha256sum`.
   `mysqladmin ping` exit-code trust.
 
 - **Shutdown:** read `data_dir/mariadbd.pid`, verify the PID identity before
-  signalling (Linux: `/proc/<pid>/exe` resolved to the runtime `mariadbd` and
-  cmdline contains this instance's `--datadir` or `--defaults-file`; macOS/BSD:
-  `ps -p <pid> -o command=` best-effort check, documented as unverified), then
-  send `SIGTERM` and wait up to `STOP_GRACE_SECS` for the PID to disappear.
-  Liveness uses `kill(pid,0)` and treats Linux zombie state (`Z`) as dead. A
-  stale/unrelated pid is never signalled; shutdown returns `Ok(())` with a log
-  line. The bounded wait returns a clear engine error on timeout so the service
-  can escalate.
+  signalling. On Linux `/proc/<pid>/exe` must resolve to this runtime's
+  `mariadbd` and `/proc/<pid>/cmdline` must contain this instance's
+  `--datadir` or `--defaults-file`; on macOS/BSD a best-effort
+  `ps -p <pid> -o command=` check runs the same matching (documented as
+  unverified here). The `ps` matcher compares whole tokens after the executable
+  path, so a data dir containing a space (`Application Support`) is handled
+  without tokenising on whitespace: the executable must be a prefix followed by
+  whitespace, and `--datadir=...` / `--defaults-file=...` must be surrounded by
+  whitespace. Then send `SIGTERM` and wait up to `STOP_GRACE_SECS` for the PID
+  to disappear. Liveness uses `kill(pid,0)` and treats Linux zombie state (`Z`)
+  as dead.
+  - `NoSuchProcess` ("gone") and `NotOurs` (a pidfile pid that is not our
+    mariadbd) return `Ok(())` with a log line; a live process is never
+    signalled.
+  - `Unverifiable` (e.g. `/proc/<pid>/exe` or `/proc/<pid>/cmdline` cannot be
+    read) returns an engine error instead of `Ok`: a pid we cannot positively
+    identify must not be reported as stopped.
+  - The bounded wait returns a clear engine error on timeout so the service can
+    escalate.
 
 - **Connection values:**
   - `UriFormat::Uri`: `mysql://<user>:<enc_pw>@127.0.0.1:<port>/`
