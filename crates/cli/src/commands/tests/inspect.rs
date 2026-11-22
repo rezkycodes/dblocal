@@ -195,6 +195,120 @@ fn uri_env_stdout_equals_the_core_dotenv_block() {
     assert_eq!(err, "", "stderr must be empty on success");
 }
 
+/// A no-password instance's `uri` is exit 0 and the no-password shape, exactly.
+///
+/// This is the W3-D round-1 defect pinned at the CLI boundary: the reviewer saw
+/// `dblocal uri` exit 3 (`DBL-1002`) for an instance created with
+/// `--no-password`. The expected strings are written out literally here, so a
+/// service (real or mock) that reintroduces a credential requirement, a colon,
+/// or a `default:` userinfo fails this test rather than agreeing with itself.
+#[test]
+fn uri_of_a_no_password_instance_is_the_no_password_shape() {
+    let cases: &[(EngineKey, u16, &str)] = &[
+        (
+            EngineKey::Postgresql,
+            5432,
+            "postgresql://postgres@127.0.0.1:5432/postgres",
+        ),
+        (EngineKey::Mysql, 3306, "mysql://root@127.0.0.1:3306/"),
+        (EngineKey::Mariadb, 3307, "mysql://root@127.0.0.1:3307/"),
+        (EngineKey::Valkey, 6379, "redis://127.0.0.1:6379/0"),
+    ];
+    for &(engine, port, expected) in cases {
+        let svc = MockService::deterministic();
+        svc.seed_instance(
+            no_password_spec("open", engine, "17.4", port),
+            InstanceStatus::Running,
+        );
+        let (code, out, err) = run_cmd(
+            &svc,
+            &Command::Uri {
+                name: "open".into(),
+                env: false,
+            },
+            false,
+        );
+        assert_eq!(code, EXIT_OK, "{engine:?}: {err}");
+        assert_eq!(out, format!("{expected}\n"), "{engine:?} uri stdout");
+        assert_eq!(err, "", "{engine:?}: stderr must be empty");
+        // The userinfo, if any, carries no colon: `user@` and never `user:@`,
+        // and Valkey has no userinfo at all.
+        let authority = out.split("://").nth(1).unwrap_or("");
+        if let Some((userinfo, _host)) = authority.split_once('@') {
+            assert!(
+                !userinfo.contains(':'),
+                "{engine:?} put a colon in the userinfo: {out}"
+            );
+        } else if engine != EngineKey::Valkey {
+            panic!("{engine:?} should carry userinfo: {out}");
+        }
+        if engine == EngineKey::Valkey {
+            assert!(!out.contains('@'), "{engine:?} printed userinfo: {out}");
+        }
+    }
+}
+
+/// A no-password Valkey `uri --env` has no password key and no empty value.
+#[test]
+fn uri_env_of_a_no_password_instance_has_no_password_line() {
+    let svc = MockService::deterministic();
+    svc.seed_instance(
+        no_password_spec("open", EngineKey::Valkey, "9.2.0", 6379),
+        InstanceStatus::Running,
+    );
+    let (code, out, err) = run_cmd(
+        &svc,
+        &Command::Uri {
+            name: "open".into(),
+            env: true,
+        },
+        false,
+    );
+    assert_eq!(code, EXIT_OK, "{err}");
+    assert_eq!(
+        out, "REDIS_URL=redis://127.0.0.1:6379/0\nREDIS_HOST=127.0.0.1\nREDIS_PORT=6379\n\n",
+        "the .env block must be exactly the no-password block"
+    );
+    assert!(
+        !out.contains("PASSWORD"),
+        "a password key must not appear: {out}"
+    );
+    assert!(!out.contains('@'), "an empty userinfo leaked: {out}");
+}
+
+/// A no-password PostgreSQL `.env` keeps `DATABASE_URL` and omits `DB_PASSWORD`.
+#[test]
+fn postgres_uri_env_without_a_password_has_no_db_password_line() {
+    let svc = MockService::deterministic();
+    svc.seed_instance(
+        no_password_spec("open", EngineKey::Postgresql, "17.4", 5432),
+        InstanceStatus::Running,
+    );
+    let (code, out, err) = run_cmd(
+        &svc,
+        &Command::Uri {
+            name: "open".into(),
+            env: true,
+        },
+        false,
+    );
+    assert_eq!(code, EXIT_OK, "{err}");
+    assert_eq!(
+        out,
+        "DATABASE_URL=postgresql://postgres@127.0.0.1:5432/postgres\n\
+         DB_HOST=127.0.0.1\n\
+         DB_PORT=5432\n\
+         DB_DATABASE=postgres\n\
+         DB_USERNAME=postgres\n\
+         \n",
+        "the .env block must be exactly the no-password block"
+    );
+    assert!(
+        !out.contains("DB_PASSWORD"),
+        "DB_PASSWORD must be omitted: {out}"
+    );
+}
+
 #[test]
 fn start_already_running_prints_sudah_berjalan() {
     let svc = MockService::deterministic();

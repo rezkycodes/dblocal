@@ -26,6 +26,10 @@
 //! Ports come from 20000-29999 only. The guard scans `/proc` on drop (panic
 //! included) and kills only processes whose command line names this temp home
 //! *and* whose executable resolves inside its `runtimes/` tree.
+//!
+//! The two cases share one process and both point `HOME` at their own temp
+//! directory, so [`Home::new`] takes a process-wide lock: they serialize even
+//! when someone runs `cargo test -- --ignored` without `--test-threads=1`.
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 #![allow(unsafe_code)]
@@ -48,15 +52,21 @@ const HOME_PREFIX: &str = "dblocal-e2e-cli-";
 /// Line the follow test appends to the engine log.
 const APPENDED_LINE: &str = "cli-e2e: appended while following";
 
+/// Serializes the cases that repoint `HOME`/`DBLOCAL_HOME` for the process.
+static HOME_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 struct Home {
     dir: TempDir,
     previous_home: Option<std::ffi::OsString>,
     previous_dblocal: Option<std::ffi::OsString>,
     previous_bus: Option<std::ffi::OsString>,
+    /// Held for the whole test so the env-var window is exclusive.
+    _guard: std::sync::MutexGuard<'static, ()>,
 }
 
 impl Home {
     fn new() -> Self {
+        let guard = HOME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let dir = tempfile::Builder::new()
             .prefix(HOME_PREFIX)
             .tempdir()
@@ -64,8 +74,8 @@ impl Home {
         let previous_home = std::env::var_os("HOME");
         let previous_dblocal = std::env::var_os("DBLOCAL_HOME");
         let previous_bus = std::env::var_os("DBUS_SESSION_BUS_ADDRESS");
-        // SAFETY: one ignored test per process (`--test-threads=1`), and the
-        // guard restores these on drop.
+        // SAFETY: `HOME_LOCK` makes this the only thread touching these vars,
+        // and the guard restores them on drop.
         unsafe {
             std::env::set_var("HOME", dir.path());
             std::env::set_var("DBLOCAL_HOME", dir.path());
@@ -78,6 +88,7 @@ impl Home {
             previous_home,
             previous_dblocal,
             previous_bus,
+            _guard: guard,
         }
     }
 
@@ -369,6 +380,86 @@ fn create_started(home: &Home, name: &str, port: u16) {
     assert_eq!(status.trim(), "running");
     assert!(wait_tcp(port, Duration::from_secs(20)));
     assert_uri_is_real(&uri);
+}
+
+/// `create --no-password` and `uri` on a real Valkey (`F-CRD-03`, W2-F2 item 10).
+///
+/// In W3-D round 1 the reviewer saw both commands exit 3 (`DBL-1002`) on the
+/// shipped binary: `instance/read_ops.rs::connection_uri` demanded a stored
+/// credential that a no-password instance never has. This case pins the fixed
+/// shape end to end, on the binary, with the production `redis` client.
+#[test]
+#[ignore = "e2e: network + a real Valkey engine; run with DBLOCAL_E2E=1 cargo xtask e2e"]
+fn no_password_instance_end_to_end() {
+    require_e2e();
+    let home = Home::new();
+    let started = Instant::now();
+
+    let port = reserve_port();
+    let name = "cli-e2e-vk-open";
+    let seeded = seed_cached_runtime(home.path(), "9.2.0");
+    eprintln!("cli_e2e: no-password case, cached valkey runtime seeded: {seeded}");
+
+    // The whole contract for a password-less Valkey, spelled out once.
+    let expected_uri = format!("redis://127.0.0.1:{port}/0");
+    // The builder's `.env` block already ends each line with `\n`; `uri --env`
+    // prints it verbatim through `stdout_line`, which adds the final newline.
+    let expected_env =
+        format!("REDIS_URL={expected_uri}\nREDIS_HOST=127.0.0.1\nREDIS_PORT={port}\n\n");
+
+    let created = ok(
+        &run(&[
+            "create",
+            "--engine",
+            "valkey",
+            "--version",
+            "9.2.0",
+            "--name",
+            name,
+            "--port",
+            &port.to_string(),
+            "--no-password",
+        ]),
+        "create --no-password",
+    );
+    assert_eq!(created, format!("{expected_uri}\n"), "create stdout");
+    // No userinfo at all: no `@`, and so no colon before one either.
+    assert!(!created.contains('@'), "create printed userinfo: {created}");
+
+    let uri_out = ok(&run(&["uri", name]), "uri");
+    assert_eq!(uri_out, format!("{expected_uri}\n"), "uri stdout");
+
+    let env_out = ok(&run(&["uri", name, "--env"]), "uri --env");
+    assert_eq!(env_out, expected_env, "uri --env stdout");
+    assert!(
+        !env_out.contains("PASSWORD"),
+        "env carried a password key: {env_out}"
+    );
+
+    ok(&run(&["start", name, "--timeout", "60"]), "start");
+    let status = ok(&run(&["status", name]), "status");
+    assert_eq!(status.trim(), "running");
+    assert!(wait_tcp(port, Duration::from_secs(20)));
+
+    // The URI works with NO password: the client sends AUTH only if the URI
+    // carries one, so a `PING` here proves the server accepts anonymous work.
+    let mut client = redis::Client::open(expected_uri.as_str())
+        .expect("parse the no-password URI")
+        .get_connection_with_timeout(Duration::from_secs(5))
+        .expect("connect without a password");
+    assert_eq!(client.ping::<String>().expect("PING without AUTH"), "PONG");
+    client
+        .set::<_, _, ()>("cli-e2e:open", "v1")
+        .expect("SET without AUTH");
+
+    ok(&run(&["stop", name]), "stop");
+    assert!(wait_tcp_gone(port, Duration::from_secs(20)));
+    ok(&run(&["delete", name, "--yes"]), "delete --yes");
+
+    eprintln!(
+        "cli_e2e: no-password lifecycle {:.1}s",
+        started.elapsed().as_secs_f64()
+    );
 }
 
 /// The printed URI is real: the production `redis` client accepts it.
