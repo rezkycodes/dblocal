@@ -273,6 +273,19 @@ fn read_config_socket_path(data_dir: &Path) -> Result<PathBuf> {
     })
 }
 
+/// The socket path the instance's `my.cnf` names, or the path `initialize`
+/// would choose when the config does not exist yet.
+///
+/// Admin connects over this socket so the password is never sent over a
+/// plaintext TCP stream and the bootstrap's `root@localhost` account (which
+/// only the socket can reach) is the one used.
+pub fn configured_socket_path(data_dir: &Path, port: u16) -> Result<PathBuf> {
+    if let Ok(socket) = read_config_socket_path(data_dir) {
+        return Ok(socket);
+    }
+    socket::choose_socket_path(data_dir, port)
+}
+
 /// Prepares volatile runtime directories before every start.
 pub fn prepare_run(ctx: &RunContext) -> Result<()> {
     let tmp = tmpdir_path(&ctx.data_dir);

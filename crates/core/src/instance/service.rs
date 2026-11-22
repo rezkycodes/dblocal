@@ -577,7 +577,7 @@ impl LocalService {
             admin_factory: options
                 .admin_factory
                 .clone()
-                .unwrap_or_else(admin_ops::pg_admin_factory),
+                .unwrap_or_else(|| admin_ops::default_admin_factory(inner_paths.clone())),
         });
 
         let service = Self { inner, runtime };

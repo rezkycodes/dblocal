@@ -543,8 +543,7 @@ fn a_no_password_instance_has_no_launch_credential() {
         move |options| {
             options.admin_factory = Some(Arc::new(move |_instance, _password| {
                 let admin = Arc::clone(&admin);
-                Ok(Box::new(SharedAdmin(admin))
-                    as Box<dyn super::super::super::admin_ops::AdminExecutor>)
+                Ok(Box::new(SharedAdmin(admin)) as Box<dyn crate::admin::AdminExecutor>)
             }));
         }
     });
