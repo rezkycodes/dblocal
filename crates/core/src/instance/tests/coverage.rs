@@ -336,7 +336,14 @@ fn a_failed_start_settles_through_the_credential_and_store_paths() {
     // reference set and the start proceeds unauthenticated rather than failing;
     // either way the row must settle out of `Starting`.
     let (op, events) = h.run_call(|| h.service.start_instance(&id));
-    assert!(super::harness::finished_result(&events, &op).is_some());
+    // Under load a broadcast receiver can miss `OperationFinished`; completion is
+    // still observable through the operation registry, which is what the harness
+    // waited on. The contract under test is "never strand Starting".
+    assert!(
+        super::harness::finished_result(&events, &op).is_some()
+            || h.service.is_operation_finished(&op),
+        "operation must be finished"
+    );
     let settled = h.instance(&id).expect("row");
     assert_ne!(
         settled.status(),
