@@ -944,16 +944,23 @@ fn cleanup_fallback_socket_removes_real_socket_with_right_name_and_parent() {
     );
 }
 
-fn _write_fake_bin(dir: &Path, name: &str, script: &str) -> PathBuf {
+fn write_fake_bin(dir: &Path, name: &str, script: &str) -> PathBuf {
     let bin = dir.join("bin");
     fs::create_dir_all(&bin).expect("bin");
     let p = bin.join(name);
-    fs::write(&p, script).expect("write script");
+    // Write to a temp name, chmod it, then rename into place so a concurrent
+    // fork/exec in another test never sees a half-written or write-locked file
+    // ("Text file busy", ETXTBSY).
+    let tmp = bin.join(format!(".{name}.tmp-{}", std::process::id()));
+    let _ = fs::remove_file(&tmp);
+    fs::write(&tmp, script).expect("write script");
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&p, fs::Permissions::from_mode(0o755)).expect("chmod");
+        fs::set_permissions(&tmp, fs::Permissions::from_mode(0o755)).expect("chmod");
     }
+    let _ = fs::remove_file(&p);
+    fs::rename(&tmp, &p).expect("rename script");
     p
 }
 
@@ -961,15 +968,11 @@ fn _write_fake_bin(dir: &Path, name: &str, script: &str) -> PathBuf {
 fn initialize_insecure_command_failure_cleans_up_and_reports_tail() {
     let dir = tempfile::tempdir().expect("tmp");
     let runtime = dir.path().join("rt");
-    let bin = runtime.join("bin");
-    fs::create_dir_all(&bin).expect("bin");
-    let mysqld = bin.join("mysqld");
-    fs::write(&mysqld, "#!/bin/sh\necho 'init boom' >&2\nexit 7\n").expect("script");
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&mysqld, fs::Permissions::from_mode(0o755)).expect("chmod");
-    }
+    let _mysqld = write_fake_bin(
+        &runtime,
+        "mysqld",
+        "#!/bin/sh\necho 'init boom' >&2\nexit 7\n",
+    );
     let data = dir.path().join("inst/data");
     let logs = dir.path().join("inst/logs");
     let run = dir.path().join("inst/run");
@@ -998,30 +1001,12 @@ fn initialize_insecure_command_failure_cleans_up_and_reports_tail() {
 fn initialize_reports_init_err_log_tail() {
     let dir = tempfile::tempdir().expect("tmp");
     let runtime = dir.path().join("rt");
-    let bin = runtime.join("bin");
-    fs::create_dir_all(&bin).expect("bin");
-    let mysqld = bin.join("mysqld");
-    fs::write(
-        &mysqld,
-        "#!/bin/sh\necho 'stderr line' >&2\necho 'log detail' > \"$5\"\nexit 3\n",
-    )
-    .expect("script");
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&mysqld, fs::Permissions::from_mode(0o755)).expect("chmod");
-    }
-    // The script above is simplistic; use a robust one that writes to --log-error arg.
-    fs::write(
-        &mysqld,
+    let _mysqld = write_fake_bin(
+        &runtime,
+        "mysqld",
         "#!/bin/sh\nlog=\nfor a in \"$@\"; do case \"$a\" in --log-error=*) log=\"${a#--log-error=}\" ;; esac; done\necho 'stderr line' >&2\nif [ -n \"$log\" ]; then echo 'log detail' > \"$log\"; fi\nexit 3\n",
-    )
-    .expect("script");
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&mysqld, fs::Permissions::from_mode(0o755)).expect("chmod");
-    }
+    );
+    let _ = &_mysqld;
     let data = dir.path().join("inst/data");
     let logs = dir.path().join("inst/logs");
     let run = dir.path().join("inst/run");
@@ -1045,15 +1030,11 @@ fn initialize_reports_init_err_log_tail() {
 fn shutdown_command_failure_reports_tail_and_cleans_fallback_socket() {
     let dir = tempfile::tempdir().expect("tmp");
     let runtime = dir.path().join("rt");
-    let bin = runtime.join("bin");
-    fs::create_dir_all(&bin).expect("bin");
-    let mysqladmin = bin.join("mysqladmin");
-    fs::write(&mysqladmin, "#!/bin/sh\necho 'shutdown bad' >&2\nexit 9\n").expect("script");
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&mysqladmin, fs::Permissions::from_mode(0o755)).expect("chmod");
-    }
+    let _mysqladmin = write_fake_bin(
+        &runtime,
+        "mysqladmin",
+        "#!/bin/sh\necho 'shutdown bad' >&2\nexit 9\n",
+    );
     let uid = nix::unistd::geteuid().as_raw();
     let fallback_root = ensure_fallback_socket_dir_for(None, uid).expect("fb");
     let socket = fallback_root.join("m42102-abc123def456.sock");
@@ -1339,15 +1320,11 @@ fn shutdown_bootstrap_reports_spawn_and_exit_failure() {
         "{err}"
     );
 
-    let bin = missing.join("bin");
-    fs::create_dir_all(&bin).expect("bin");
-    let admin = bin.join("mysqladmin");
-    fs::write(&admin, "#!/bin/sh\necho 'boot shutdown bad' >&2\nexit 5\n").expect("script");
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&admin, fs::Permissions::from_mode(0o755)).expect("chmod");
-    }
+    let _admin = write_fake_bin(
+        &missing,
+        "mysqladmin",
+        "#!/bin/sh\necho 'boot shutdown bad' >&2\nexit 5\n",
+    );
     let err = shutdown_bootstrap(&missing, 42201, "root", AuthMode::None, None).unwrap_err();
     let msg = err.to_string();
     assert!(msg.contains("bootstrap shutdown failed"), "{msg}");
@@ -1372,15 +1349,11 @@ fn run_initialize_insecure_missing_binary_and_early_exit() {
         "{err}"
     );
 
-    let bin = runtime.join("bin");
-    fs::create_dir_all(&bin).expect("bin");
-    let mysqld = bin.join("mysqld");
-    fs::write(&mysqld, "#!/bin/sh\necho 'init failed hard' >&2\nexit 4\n").expect("script");
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&mysqld, fs::Permissions::from_mode(0o755)).expect("chmod");
-    }
+    let _mysqld = write_fake_bin(
+        &runtime,
+        "mysqld",
+        "#!/bin/sh\necho 'init failed hard' >&2\nexit 4\n",
+    );
     let err = run_initialize_insecure(&ctx, &logs).unwrap_err();
     let msg = err.to_string();
     assert!(msg.contains("--initialize-insecure failed"), "{msg}");
