@@ -101,6 +101,9 @@ Rows depending on the tray and quit flow assume the GUI-wiring task (W2-B) has b
 | SmartScreen first run | Download/run unsigned artifact from release. | SmartScreen "Windows protected your PC" / Unknown publisher may appear; verify checksum before proceeding; "More info" -> "Run anyway" works. | | |
 | High DPI | Run on 125%/150%/200% scaling if available. | Layout readable; no clipped controls; tray/window icons crisp enough. | | |
 | Clean shutdown/no leftovers | Quit app after starting/stopping engines. | No orphan dblocal/engine processes; ports released. | | |
+| Self-update: install kind | Run the update check from the installed MSI build and from a portable zip (when the GUI/CLI exposes it; until then the library `dblocal_core::update` is covered only by Linux tests). | The MSI install is detected as managed by the installer (update offered through a new MSI, not an in-place swap) or as portable, exactly as `docs/architecture/update.md` states; a build tree is detected as `build tree` and updates are disabled. | | |
+| Self-update: swap helper | Only after the update engine is wired into the app: apply an update on a portable install. | The running `dblocal.exe` is replaced through the helper plan (rename away, new file in place, relaunch); a failed smoke run rolls back to the old exe; no leftover `.old` after the next start. | | |
+| Known gap: tray | Start the app on Windows and look at the status bar. | Until task W2-G lands the tray rows above are EXPECTED to fail: the status bar shows the "Tray tidak tersedia" note once and closing the window goes through the quit dialog. Record what you see; do not count it as a regression. | | |
 
 ## SmartScreen / unsigned artifact checks
 
