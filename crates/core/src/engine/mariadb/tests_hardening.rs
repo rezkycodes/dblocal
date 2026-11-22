@@ -376,24 +376,30 @@ fn shutdown_timeout_names_pid() {
     let bin = root.join("bin");
     fs::create_dir_all(&bin).expect("bin");
     let fake = bin.join("mariadbd");
+    // Bounded, not `while true`: even if this test is killed before it can reap the
+    // child, the fake ignores TERM only long enough for the 300 ms shutdown timeout
+    // and its escalation, then exits on its own. A never-ending fake that inherited
+    // the heavy-gate lock fd would keep the machine-wide lock held forever.
     write_fake_script(
         &fake,
-        "#!/bin/sh\ntrap '' TERM\nwhile true; do sleep 1; done\n",
+        "#!/bin/sh\ntrap '' TERM\ni=0\nwhile [ $i -lt 120 ]; do sleep 1; i=$((i+1)); done\n",
     );
     let data = root.join("inst/data");
     let conf = data.join("my.cnf");
     fs::create_dir_all(&data).expect("data");
     fs::write(&conf, "[mysqld]\n").expect("conf");
-    let mut child = retry_etxtbsy(|| {
-        Command::new(&fake)
-            .arg(format!("--defaults-file={}", conf.display()))
-            .arg(format!("--datadir={}", data.display()))
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-    })
-    .expect("spawn");
+    let mut child = super::testutil::ChildGuard::new(
+        retry_etxtbsy(|| {
+            Command::new(&fake)
+                .arg(format!("--defaults-file={}", conf.display()))
+                .arg(format!("--datadir={}", data.display()))
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+        })
+        .expect("spawn"),
+    );
     let pid = child.id();
     std::thread::sleep(Duration::from_millis(100));
     let err = shutdown_verified_pid(pid, PidIdentity::Match, Duration::from_millis(300))
@@ -401,8 +407,8 @@ fn shutdown_timeout_names_pid() {
     let msg = format!("{err:?}");
     assert!(msg.contains(&pid.to_string()));
     assert!(msg.contains("did not exit"));
-    let _ = child.kill();
-    let _ = child.wait();
+    // The guard kills and reaps on drop, so a panic above cannot leak the child.
+    child.reap();
 }
 
 #[cfg(unix)]

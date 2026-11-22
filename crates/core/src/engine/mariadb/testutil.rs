@@ -53,3 +53,41 @@ where
     }
     Err(last.expect("retry budget records the last ETXTBSY error"))
 }
+
+/// A spawned child that is killed and reaped when dropped.
+///
+/// A test that spawns a fake engine and then panics (an assertion, or the whole
+/// test binary being killed by a timeout) used to leave the child running: the
+/// cleanup `child.kill()` at the end of the happy path never runs. A detached fake
+/// that ignores `TERM` then lives forever, and if the test run inherited the file
+/// descriptor of the `flock` guarding the heavy gate, it keeps that machine-wide
+/// lock held with nothing alive to release it. This guard makes the kill happen on
+/// every exit path, and `reap` lets the happy path wait explicitly.
+pub(super) struct ChildGuard {
+    child: std::process::Child,
+}
+
+impl ChildGuard {
+    /// Wraps a freshly spawned child.
+    pub(super) fn new(child: std::process::Child) -> Self {
+        Self { child }
+    }
+
+    /// The child's process id.
+    pub(super) fn id(&self) -> u32 {
+        self.child.id()
+    }
+
+    /// Kills and reaps the child now; the guard's `Drop` then finds it gone.
+    pub(super) fn reap(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+impl Drop for ChildGuard {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
