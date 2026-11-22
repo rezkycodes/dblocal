@@ -4,6 +4,7 @@
 //! probes readiness with a MariaDB/MySQL protocol greeting, shuts down via
 //! SIGTERM (graceful, bounded), and diagnoses start failures from real log text.
 
+#[cfg(test)]
 mod tests;
 
 use std::fmt::Write as _;
@@ -111,17 +112,6 @@ fn config_params(ctx: &InitContext, socket: &Path) -> Result<ConfigParams> {
         pid_file: pidfile_path(&ctx.data_dir),
         log_error: log_error_path(&ctx.data_dir),
     })
-}
-
-fn config_params_run(ctx: &RunContext) -> ConfigParams {
-    ConfigParams {
-        basedir: ctx.runtime_dir.clone(),
-        datadir: ctx.data_dir.clone(),
-        port: ctx.port.get(),
-        socket: socket_path(&ctx.data_dir, ctx.port.get()),
-        pid_file: pidfile_path(&ctx.data_dir),
-        log_error: log_error_path(&ctx.data_dir),
-    }
 }
 
 fn config_path(data_dir: &Path) -> PathBuf {
