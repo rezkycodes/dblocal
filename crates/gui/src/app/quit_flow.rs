@@ -333,6 +333,8 @@ mod glue_tests {
     use gpui_kit::TestAppContext;
 
     use super::Workspace;
+    use dblocal_core::service::OperationId;
+
     use crate::quit::QuitState;
     use crate::tray::TrayAction;
 
@@ -638,6 +640,199 @@ mod glue_tests {
             service.calls() > before,
             "a tray Start must call the service"
         );
+    }
+
+    /// R2 through the production ordering path: `stop_instance` emits
+    /// `OperationFinished` on the real broadcast channel before it returns the
+    /// id, the real `spawn_bridge` forwards it, and the ledger must still make
+    /// the quit complete (no timeout wait).
+    #[test]
+    fn early_finish_through_the_real_bridge_completes_the_ledger() {
+        struct FastStop {
+            tx: tokio::sync::broadcast::Sender<dblocal_core::service::ServiceEvent>,
+        }
+        impl FastStop {
+            fn view() -> dblocal_core::service::InstanceView {
+                use dblocal_core::model::{
+                    AuthMode, EngineKey, InstanceId, InstanceName, InstanceSpec, Port,
+                };
+                let spec = InstanceSpec::new(
+                    InstanceName::new("pg-fast").expect("name"),
+                    EngineKey::Postgresql,
+                    "17.4",
+                    Some(Port::new(5432).expect("port")),
+                    AuthMode::Password,
+                )
+                .expect("spec");
+                let instance = dblocal_core::model::Instance::new(
+                    &spec,
+                    InstanceId::new(),
+                    InstanceStatus::Running,
+                    std::time::SystemTime::UNIX_EPOCH,
+                );
+                dblocal_core::service::InstanceView::from_instance(&instance)
+            }
+        }
+        impl DblService for FastStop {
+            fn stop_instance(
+                &self,
+                _id: &dblocal_core::model::InstanceId,
+            ) -> dblocal_core::Result<OperationId> {
+                let op = OperationId::new("op-fast");
+                self.tx
+                    .send(dblocal_core::service::ServiceEvent::OperationFinished {
+                        id: op.clone(),
+                        result: Ok(()),
+                    })
+                    .expect("broadcast");
+                Ok(op)
+            }
+            fn list_instances(
+                &self,
+            ) -> dblocal_core::Result<Vec<dblocal_core::service::InstanceView>> {
+                Ok(vec![Self::view()])
+            }
+            fn catalog(&self) -> dblocal_core::Result<dblocal_core::service::CatalogView> {
+                Ok(dblocal_core::service::CatalogView {
+                    status: dblocal_core::model::CatalogStatus::Fresh,
+                    banner: None,
+                    engines: Vec::new(),
+                })
+            }
+            fn refresh_catalog(&self, _force: bool) -> dblocal_core::Result<OperationId> {
+                Ok(OperationId::new("op"))
+            }
+            fn validate_spec(
+                &self,
+                _spec: &dblocal_core::model::InstanceSpec,
+            ) -> dblocal_core::Result<()> {
+                Ok(())
+            }
+            fn suggest_port(
+                &self,
+                engine: dblocal_core::model::EngineKey,
+            ) -> dblocal_core::Result<dblocal_core::model::Port> {
+                dblocal_core::model::Port::new(engine.canonical_port())
+            }
+            fn create_instance(
+                &self,
+                _spec: dblocal_core::model::InstanceSpec,
+            ) -> dblocal_core::Result<OperationId> {
+                Ok(OperationId::new("op"))
+            }
+            fn start_instance(
+                &self,
+                _id: &dblocal_core::model::InstanceId,
+            ) -> dblocal_core::Result<OperationId> {
+                Ok(OperationId::new("op"))
+            }
+            fn delete_instance(
+                &self,
+                _id: &dblocal_core::model::InstanceId,
+                _mode: dblocal_core::model::DeleteMode,
+            ) -> dblocal_core::Result<OperationId> {
+                Ok(OperationId::new("op"))
+            }
+            fn change_port(
+                &self,
+                _id: &dblocal_core::model::InstanceId,
+                _port: dblocal_core::model::Port,
+            ) -> dblocal_core::Result<()> {
+                Ok(())
+            }
+            fn data_size(
+                &self,
+                _id: &dblocal_core::model::InstanceId,
+            ) -> dblocal_core::Result<u64> {
+                Ok(0)
+            }
+            fn set_autostart(
+                &self,
+                _id: &dblocal_core::model::InstanceId,
+                _enabled: bool,
+            ) -> dblocal_core::Result<()> {
+                Ok(())
+            }
+            fn cancel_operation(&self, _id: &OperationId) -> dblocal_core::Result<()> {
+                Ok(())
+            }
+            fn connection_uri(
+                &self,
+                _id: &dblocal_core::model::InstanceId,
+                _format: dblocal_core::service::UriFormat,
+            ) -> dblocal_core::Result<dblocal_core::secret::SecretString> {
+                Ok(dblocal_core::secret::SecretString::new("postgres://x"))
+            }
+            fn tail_logs(
+                &self,
+                _id: &dblocal_core::model::InstanceId,
+                _lines: usize,
+            ) -> dblocal_core::Result<Vec<String>> {
+                Ok(Vec::new())
+            }
+            fn watch_logs(
+                &self,
+                _id: &dblocal_core::model::InstanceId,
+                _enabled: bool,
+            ) -> dblocal_core::Result<()> {
+                Ok(())
+            }
+            fn list_runtimes(&self) -> dblocal_core::Result<Vec<dblocal_core::model::Runtime>> {
+                Ok(Vec::new())
+            }
+            fn remove_runtime(&self, _runtime: &str) -> dblocal_core::Result<()> {
+                Ok(())
+            }
+            fn list_archives(
+                &self,
+            ) -> dblocal_core::Result<Vec<dblocal_core::model::ArchivedData>> {
+                Ok(Vec::new())
+            }
+            fn purge_archive(&self, _archive: &str) -> dblocal_core::Result<()> {
+                Ok(())
+            }
+            fn subscribe(
+                &self,
+            ) -> tokio::sync::broadcast::Receiver<dblocal_core::service::ServiceEvent> {
+                self.tx.subscribe()
+            }
+        }
+
+        let (tx, _) = tokio::sync::broadcast::channel(16);
+        let service = Arc::new(FastStop { tx });
+        let shared: Arc<dyn DblService> = service.clone();
+        let rx = crate::service_bridge::spawn_bridge(shared);
+        let instance = FastStop::view().id;
+
+        // The production order: the request emits, then returns its id.
+        let op = service.stop_instance(&instance).expect("stop accepted");
+
+        // The bridge delivers the finish before the registration is applied.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let mut buffered = None;
+        while std::time::Instant::now() < deadline {
+            match rx.recv_timeout(std::time::Duration::from_millis(50)) {
+                Ok(crate::service_bridge::UiEvent::OperationFinished { id, result }) => {
+                    buffered = Some((id, result.is_ok()));
+                    break;
+                }
+                Ok(_) => continue,
+                Err(flume::RecvTimeoutError::Timeout) => continue,
+                Err(flume::RecvTimeoutError::Disconnected) => break,
+            }
+        }
+        let (event_op, ok) = buffered.expect("the bridge must deliver OperationFinished");
+        assert_eq!(event_op, op, "the event names the returned operation");
+
+        let mut ledger = crate::quit::StopLedger::new();
+        assert_eq!(ledger.finished(&event_op, ok), None, "not registered yet");
+        assert_eq!(ledger.early_len(), 1);
+        assert_eq!(
+            ledger.register(op, instance.clone()),
+            Some((instance.clone(), true)),
+            "R2: the real ordering path must resolve to a completion"
+        );
+        assert!(ledger.is_empty());
     }
 
     /// With no tray, closing the window is a quit; with one, it hides.
