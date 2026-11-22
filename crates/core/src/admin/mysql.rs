@@ -37,9 +37,11 @@ use super::sql::{
     grant_privileges_mysql_at, is_mysql_system_schema,
 };
 
-/// The loopback host an admin-managed account is created on. The socket
-/// authenticates as `localhost`, so that is where a managed account lives.
-pub const MANAGED_ACCOUNT_HOST: &str = "localhost";
+/// The host an admin-managed account is created on. A client connecting with the
+/// service URI does so over TCP to `127.0.0.1`, so a managed account lives at
+/// `user@'127.0.0.1'` (not `localhost`, which is the socket account). The admin
+/// connection itself still uses the socket as the superuser.
+pub const MANAGED_ACCOUNT_HOST: &str = "127.0.0.1";
 
 /// Connection description for MySQL/MariaDB admin operations.
 ///
