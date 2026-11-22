@@ -36,8 +36,9 @@ pub use backend::{
     backend_for, quote_posix_single, quote_systemd_exec, quote_windows_reg_command, xml_escape,
 };
 pub use consts::{
-    AUTOSTART_CONCURRENCY, AUTOSTART_FLAG, LOGIN_ITEM_ID, MACOS_LABEL, MACOS_PLIST_FILE,
-    REGISTRY_RUN_KEY, REGISTRY_VALUE, SYSTEMD_UNIT_ARG, SYSTEMD_UNIT_FILE, XDG_DESKTOP_FILE,
+    AUTOSTART_CONCURRENCY, AUTOSTART_FLAG, AUTOSTART_START_MARGIN_SECS, LOGIN_ITEM_ID, MACOS_LABEL,
+    MACOS_PLIST_FILE, REGISTRY_RUN_KEY, REGISTRY_VALUE, SYSTEMD_UNIT_ARG, SYSTEMD_UNIT_FILE,
+    XDG_DESKTOP_FILE,
 };
 pub use error::{
     AutostartError, AutostartResult, CODE_COMMAND_FAILED, CODE_INVALID_EXE, CODE_PLAN_FAILED,
@@ -45,10 +46,10 @@ pub use error::{
 };
 pub use linux::LinuxBackend;
 pub use macos::MacosBackend;
-pub use mode::{AutostartPass, AutostartService, run_pass, start_targets};
+pub use mode::{AutostartPass, AutostartService, run_pass, start_targets, start_wait_bound};
 pub use plan::{
-    AutostartMode, AutostartOutcome, AutostartSummary, AutostartTarget, decide_mode,
-    flagged_targets, should_start_status,
+    AutostartMode, AutostartOutcome, AutostartSummary, AutostartTarget, GuiPresentation,
+    decide_gui_presentation, decide_mode, flagged_targets, should_start_status,
 };
 pub use runner::run_start_targets;
 pub use windows::WindowsBackend;

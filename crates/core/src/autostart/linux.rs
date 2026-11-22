@@ -23,7 +23,10 @@ use super::error::{AutostartError, AutostartResult};
 /// `systemd --user` unit under `$XDG_CONFIG_HOME/systemd/user/`.
 pub struct LinuxBackend {
     unit_path: PathBuf,
-    wants_dir: PathBuf,
+    /// `.wants` directories `enable` may have created a symlink in. `enable`
+    /// uses `graphical-session.target` (D3), but a unit enabled by an older
+    /// build lived under `default.target.wants`, so both are recognised.
+    wants_dirs: Vec<PathBuf>,
     desktop_path: PathBuf,
     runner: Arc<dyn CommandRunner>,
 }
@@ -34,7 +37,10 @@ impl LinuxBackend {
         let user_dir = config_home.join("systemd").join("user");
         Self {
             unit_path: user_dir.join(consts::SYSTEMD_UNIT_FILE),
-            wants_dir: user_dir.join("default.target.wants"),
+            wants_dirs: vec![
+                user_dir.join("graphical-session.target.wants"),
+                user_dir.join("default.target.wants"),
+            ],
             desktop_path: config_home.join("autostart").join(consts::XDG_DESKTOP_FILE),
             runner,
         }
@@ -43,6 +49,11 @@ impl LinuxBackend {
     /// Absolute path of the systemd unit file.
     pub fn unit_path(&self) -> &Path {
         &self.unit_path
+    }
+
+    /// The primary `.wants` directory `enable` targets (graphical session, D3).
+    pub fn wants_dir(&self) -> &Path {
+        &self.wants_dirs[0]
     }
 
     /// Absolute path of the XDG desktop file.
@@ -87,12 +98,22 @@ impl LinuxBackend {
 impl AutostartBackend for LinuxBackend {
     fn enable(&self, item: &LoginItem) -> AutostartResult<LoginItemStatus> {
         if self.has_user_systemd() {
+            // D2: remember what was there before this call so a failed enable can
+            // restore the machine exactly as it was (no half-written unit that
+            // `status` would then report as enabled).
+            let previous_unit = std::fs::read(&self.unit_path).ok();
             self.write_unit(item)?;
             // `daemon-reload` is required before a fresh unit can be enabled;
             // a failure means the unit is not actually registered, so it is
-            // reported rather than swallowed.
-            self.systemctl(&["daemon-reload"])?;
-            self.systemctl(&["enable", consts::SYSTEMD_UNIT_ARG])?;
+            // reported and rolled back rather than swallowed.
+            let reload = self.systemctl(&["daemon-reload"]);
+            let enabled =
+                reload.and_then(|()| self.systemctl(&["enable", consts::SYSTEMD_UNIT_ARG]));
+            if let Err(err) = enabled {
+                self.restore_unit(previous_unit.as_deref());
+                let _ = self.systemctl(&["daemon-reload"]);
+                return Err(err);
+            }
             // A stale desktop entry from an earlier fallback would double-start
             // the app, so it is removed once the unit is in place.
             remove_if_present(&self.desktop_path)?;
@@ -116,7 +137,9 @@ impl AutostartBackend for LinuxBackend {
             // symlink is removed by hand below; a refusal here must not leave a
             // half-removed login item behind.
             let _ = self.systemctl(&["disable", consts::SYSTEMD_UNIT_ARG]);
-            remove_wants_symlink(&self.wants_dir, &self.unit_path);
+            for wants_dir in &self.wants_dirs {
+                remove_wants_symlink(wants_dir, &self.unit_path);
+            }
             remove_if_present(&self.unit_path)?;
             let _ = self.systemctl(&["daemon-reload"]);
         }
@@ -132,10 +155,25 @@ impl AutostartBackend for LinuxBackend {
     }
 
     fn status(&self) -> AutostartResult<LoginItemStatus> {
-        let (enabled, location) = if self.unit_path.exists() {
+        // D2: a unit file alone is not "enabled" — it is a dead file when the
+        // `enable` (or its rollback) never registered it. Count the unit as the
+        // mechanism only when its `default.target.wants`-style symlink exists;
+        // otherwise fall back to the presence of the unit file only to name the
+        // location, but report `enabled: false`.
+        let unit_present = self.unit_path.exists();
+        let unit_enabled = unit_present
+            && self
+                .wants_dirs
+                .iter()
+                .any(|dir| wants_link_exists(dir, &self.unit_path));
+        let (enabled, location) = if unit_enabled {
             (true, self.unit_path.clone())
         } else if self.desktop_path.exists() {
             (true, self.desktop_path.clone())
+        } else if unit_present {
+            // A unit file with no wants symlink: not enabled. Report the path so
+            // the user can see what `disable` will clean up.
+            (false, self.unit_path.clone())
         } else {
             (false, self.unit_path.clone())
         };
@@ -144,11 +182,36 @@ impl AutostartBackend for LinuxBackend {
 }
 
 impl LinuxBackend {
+    /// Restores the unit file to what it was before a failed `enable`.
+    fn restore_unit(&self, previous: Option<&[u8]>) {
+        match previous {
+            Some(bytes) => {
+                let _ = write_file(&self.unit_path, &String::from_utf8_lossy(bytes));
+            }
+            None => {
+                let _ = remove_if_present(&self.unit_path);
+            }
+        }
+    }
+}
+
+impl LinuxBackend {
     fn write_unit(&self, item: &LoginItem) -> AutostartResult<()> {
         let exec = systemd_exec_line(item)?;
+        // D3: bind to the graphical session, not `default.target`. A unit on
+        // `default.target` starts at the first login session, before the
+        // compositor imports `DISPLAY`/`WAYLAND_DISPLAY` into the user manager,
+        // so the app would take the headless path instead of the tray path
+        // (F-AUT-01 AC3). `After=`/`PartOf=` order it with the session, and
+        // `WantedBy=graphical-session.target` pulls it in only once the session
+        // exists. Window managers without systemd session integration (plain
+        // i3/sway) never activate that target, so on those the XDG `.desktop`
+        // fallback is the portable mechanism; see docs/architecture/autostart.md.
         let body = format!(
             "[Unit]\n\
              Description=DBLocal local database manager\n\
+             After=graphical-session.target\n\
+             PartOf=graphical-session.target\n\
              \n\
              [Service]\n\
              Type=simple\n\
@@ -156,7 +219,7 @@ impl LinuxBackend {
              Restart=no\n\
              \n\
              [Install]\n\
-             WantedBy=default.target\n"
+             WantedBy=graphical-session.target\n"
         );
         write_file(&self.unit_path, &body)
     }
@@ -247,7 +310,38 @@ fn remove_if_present(path: &Path) -> AutostartResult<()> {
     }
 }
 
-/// Removes a `default.target.wants` symlink pointing at our unit.
+/// Whether any symlink in `wants_dir` points at `unit_path` (D2).
+///
+/// This is what makes a unit file actually *enabled*: `systemctl --user enable`
+/// creates the `.wants` symlink; a bare unit file left by a failed enable is not
+/// a live login item.
+fn wants_link_exists(wants_dir: &Path, unit_path: &Path) -> bool {
+    let dir = match fs::read_dir(wants_dir) {
+        Ok(dir) => dir,
+        Err(_) => return false,
+    };
+    for entry in dir.flatten() {
+        let path = entry.path();
+        let Ok(meta) = fs::symlink_metadata(&path) else {
+            continue;
+        };
+        if !meta.file_type().is_symlink() {
+            continue;
+        }
+        let Ok(target) = fs::read_link(&path) else {
+            continue;
+        };
+        let points_at_unit = target == unit_path
+            || target.file_name() == unit_path.file_name()
+            || target.ends_with(unit_path.file_name().unwrap_or_default());
+        if points_at_unit {
+            return true;
+        }
+    }
+    false
+}
+
+/// Removes a `.wants` symlink pointing at our unit.
 ///
 /// Only a symlink whose target is our unit file is removed, so no other entry
 /// in that directory can be lost.
@@ -360,7 +454,11 @@ mod tests {
 
         let body = fs::read_to_string(backend.unit_path()).expect("unit written");
         assert!(body.contains("[Service]"));
-        assert!(body.contains("WantedBy=default.target"));
+        // D3: the unit binds to the graphical session, not default.target.
+        assert!(body.contains("WantedBy=graphical-session.target"));
+        assert!(body.contains("After=graphical-session.target"));
+        assert!(body.contains("PartOf=graphical-session.target"));
+        assert!(!body.contains("default.target"));
         assert!(
             body.contains("ExecStart=\""),
             "the exec line must be quoted: {body}"
@@ -462,12 +560,13 @@ mod tests {
         );
         let backend = LinuxBackend::new(dir.path(), &config, runner);
         backend.enable(&item(dir.path())).expect("enable");
-        // Simulate the symlink systemd would create.
-        fs::create_dir_all(&backend.wants_dir).expect("wants dir");
-        let link = backend.wants_dir.join(consts::SYSTEMD_UNIT_FILE);
+        // Simulate the symlink systemd would create under the graphical session.
+        let wants_dir = backend.wants_dir().to_path_buf();
+        fs::create_dir_all(&wants_dir).expect("wants dir");
+        let link = wants_dir.join(consts::SYSTEMD_UNIT_FILE);
         #[cfg(unix)]
         std::os::unix::fs::symlink(backend.unit_path(), &link).expect("symlink");
-        let stray = backend.wants_dir.join("unrelated.service");
+        let stray = wants_dir.join("unrelated.service");
         #[cfg(unix)]
         std::os::unix::fs::symlink("/tmp/other.service", &stray).expect("symlink");
 
@@ -553,6 +652,100 @@ mod tests {
         let backend = LinuxBackend::new(dir.path(), &config, runner);
         let err = backend.enable(&item(dir.path())).expect_err("must fail");
         assert_eq!(err.code(), super::super::error::CODE_COMMAND_FAILED);
+    }
+
+    #[test]
+    fn a_failed_enable_rolls_back_a_newly_written_unit() {
+        // D2: the failing `enable` must not leave a unit file behind, or
+        // `status` would claim the login item exists.
+        let dir = tempdir().expect("tempdir");
+        let config = dir.path().join("config");
+        let runner = Arc::new(
+            FakeRunner::new()
+                .with("systemctl --user show-environment", CommandOutput::ok())
+                .with("systemctl --user daemon-reload", CommandOutput::ok())
+                .with(
+                    "systemctl --user enable dblocal.service",
+                    CommandOutput {
+                        code: 1,
+                        stdout: String::new(),
+                        stderr: "Failed to connect to bus".to_owned(),
+                    },
+                ),
+        );
+        let backend = LinuxBackend::new(dir.path(), &config, runner);
+        let _ = backend.enable(&item(dir.path())).expect_err("must fail");
+        assert!(
+            !backend.unit_path().exists(),
+            "a failed enable left the unit behind"
+        );
+        assert!(
+            !backend.status().expect("status").enabled,
+            "status must not report enabled after a failed enable"
+        );
+    }
+
+    #[test]
+    fn a_failed_enable_restores_a_previously_present_unit() {
+        // D2: if a unit already existed (an earlier good enable), a later failed
+        // enable restores its content instead of deleting it.
+        let dir = tempdir().expect("tempdir");
+        let config = dir.path().join("config");
+        let backend = LinuxBackend::new(dir.path(), &config, Arc::new(FakeRunner::new()));
+        fs::create_dir_all(backend.unit_path().parent().expect("parent")).expect("dir");
+        let previous = "[Unit]\nDescription=previous\n";
+        fs::write(backend.unit_path(), previous).expect("seed unit");
+
+        let runner = Arc::new(
+            FakeRunner::new()
+                .with("systemctl --user show-environment", CommandOutput::ok())
+                .with("systemctl --user daemon-reload", CommandOutput::ok())
+                .with(
+                    "systemctl --user enable dblocal.service",
+                    CommandOutput {
+                        code: 1,
+                        stdout: String::new(),
+                        stderr: "Failed to connect to bus".to_owned(),
+                    },
+                ),
+        );
+        let failing = LinuxBackend::new(dir.path(), &config, runner);
+        let _ = failing.enable(&item(dir.path())).expect_err("must fail");
+        let restored = fs::read_to_string(failing.unit_path()).expect("unit restored");
+        assert_eq!(restored, previous, "the previous unit content must return");
+    }
+
+    #[test]
+    fn status_is_not_enabled_for_a_unit_without_a_wants_symlink() {
+        // D2: a bare unit file (left by a crash or a hand copy) is not enabled.
+        let dir = tempdir().expect("tempdir");
+        let config = dir.path().join("config");
+        let backend = LinuxBackend::new(dir.path(), &config, Arc::new(FakeRunner::new()));
+        fs::create_dir_all(backend.unit_path().parent().expect("parent")).expect("dir");
+        fs::write(backend.unit_path(), "[Unit]\n").expect("unit file");
+        let status = backend.status().expect("status");
+        assert!(
+            !status.enabled,
+            "a unit without a wants symlink is not enabled"
+        );
+        assert_eq!(status.location, backend.unit_path());
+    }
+
+    #[test]
+    fn status_is_enabled_when_the_wants_symlink_exists() {
+        let dir = tempdir().expect("tempdir");
+        let config = dir.path().join("config");
+        let backend = LinuxBackend::new(dir.path(), &config, Arc::new(FakeRunner::new()));
+        fs::create_dir_all(backend.unit_path().parent().expect("parent")).expect("dir");
+        fs::write(backend.unit_path(), "[Unit]\n").expect("unit file");
+        let wants = backend.wants_dir().to_path_buf();
+        fs::create_dir_all(&wants).expect("wants");
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(backend.unit_path(), wants.join(consts::SYSTEMD_UNIT_FILE))
+            .expect("symlink");
+        let status = backend.status().expect("status");
+        assert!(status.enabled);
+        assert_eq!(status.location, backend.unit_path());
     }
 
     #[test]

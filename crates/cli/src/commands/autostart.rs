@@ -9,7 +9,7 @@ use std::io::Write;
 use std::sync::Arc;
 
 use dblocal_core::autostart::{
-    self, AutostartBackend, AutostartError, AutostartMode, CommandRunner, LoginItem, SystemRunner,
+    self, AutostartBackend, AutostartError, CommandRunner, LoginItem, SystemRunner,
 };
 
 use crate::cli::{EXIT_BAD_ARGS, EXIT_GENERAL, EXIT_OK};
@@ -36,21 +36,28 @@ pub fn run_action_with(
     action: &str,
     json: bool,
 ) -> u8 {
+    run_action_with_exe(out, err, backend, action, json, resolve_login_exe)
+}
+
+/// The injectable form with an exe resolver, so D5 can be tested without a
+/// real AppImage.
+pub fn run_action_with_exe(
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+    backend: &dyn AutostartBackend,
+    action: &str,
+    json: bool,
+    resolve_exe: fn() -> Result<std::path::PathBuf, AutostartError>,
+) -> u8 {
     let result = match action {
         "status" => backend.status(),
-        "enable" => {
-            let exe = match std::env::current_exe() {
-                Ok(exe) => exe,
-                Err(_) => {
-                    let e = AutostartError::InvalidExe {
-                        reason: "current executable could not be resolved",
-                    };
-                    let _ = writeln!(err, "[{}] {}", e.code(), e.user_message());
-                    return EXIT_GENERAL;
-                }
-            };
-            LoginItem::for_exe(exe).and_then(|item| backend.enable(&item))
-        }
+        "enable" => match resolve_exe() {
+            Ok(exe) => LoginItem::for_exe(exe).and_then(|item| backend.enable(&item)),
+            Err(e) => {
+                let _ = writeln!(err, "[{}] {}", e.code(), e.user_message());
+                return EXIT_GENERAL;
+            }
+        },
         "disable" => backend.disable(),
         _ => {
             let _ = writeln!(
@@ -167,25 +174,48 @@ pub fn run_login_mode_with(
     }
 }
 
-/// Starts flagged instances and writes the presentation message.
+/// Starts flagged instances, prints one stderr line per instance, and returns
+/// an exit code that reflects the real outcome (D1).
+///
+/// The pass waits for every start to finish (`run_pass`), so this writes the
+/// truth: one line per flagged instance with `started` or a failure carrying its
+/// `DBL-xxxx` code. Exit 0 only when every flagged instance started; any failure
+/// is exit 1, so `systemctl --user status dblocal` shows a failed unit — the
+/// visible failure channel for a login item, which has no modal and no tray.
 fn report_pass(
     service: &Arc<dyn dblocal_core::service::DblService>,
     err: &mut dyn Write,
 ) -> Result<u8, String> {
     let pass = autostart::run_pass(service, false).map_err(|e| e.to_string())?;
-    let (code, message) = headless_outcome(pass.mode);
-    let _ = writeln!(err, "{message}");
-    Ok(code)
-}
 
-/// The exit code and message for a decided mode, pure so it can be tested.
-pub fn headless_outcome(mode: AutostartMode) -> (u8, &'static str) {
-    match mode {
-        AutostartMode::TrayOnly | AutostartMode::HeadlessKeepAlive => {
-            (EXIT_OK, autostart::messages::MODE_HEADLESS_KEEP)
-        }
-        AutostartMode::HeadlessExit => (EXIT_OK, autostart::messages::MODE_EXIT_NO_INSTANCES),
+    // With nothing flagged and no tray there is nothing to run: say so and exit 0.
+    if !pass.summary.has_any_attempt() {
+        let _ = writeln!(err, "{}", autostart::messages::MODE_EXIT_NO_INSTANCES);
+        return Ok(EXIT_OK);
     }
+
+    let mut all_ok = true;
+    for outcome in &pass.summary.outcomes {
+        match &outcome.result {
+            Ok(()) => {
+                let _ = writeln!(
+                    err,
+                    "{}",
+                    autostart::messages::outcome_started(&outcome.target.name)
+                );
+            }
+            Err(detail) => {
+                all_ok = false;
+                let _ = writeln!(
+                    err,
+                    "{}",
+                    autostart::messages::outcome_failed(&outcome.target.name, detail)
+                );
+            }
+        }
+    }
+    let _ = writeln!(err, "{}", autostart::messages::MODE_HEADLESS_KEEP);
+    Ok(if all_ok { EXIT_OK } else { EXIT_GENERAL })
 }
 
 /// True when the process was launched as a login item.
@@ -194,6 +224,34 @@ pub fn headless_outcome(mode: AutostartMode) -> (u8, &'static str) {
 pub fn launched_by_login_item(args: &[OsString]) -> bool {
     args.iter()
         .any(|arg| arg == dblocal_core::autostart::AUTOSTART_FLAG)
+}
+
+/// Resolves the executable a login item should launch (D5).
+///
+/// An AppImage runs from a transient squashfs mount (`/tmp/.mount_...`) that
+/// disappears when the app exits, so a login item pointing at it would be dead.
+/// `$APPIMAGE` names the real file; when it is set and exists it wins, otherwise
+/// this falls back to `current_exe()`.
+pub fn resolve_login_exe() -> Result<std::path::PathBuf, AutostartError> {
+    let appimage = std::env::var_os("APPIMAGE").filter(|value| !value.is_empty());
+    resolve_login_exe_from(appimage.as_deref(), std::env::current_exe().ok())
+}
+
+/// Pure form of [`resolve_login_exe`] with the environment and current exe
+/// injected, so the AppImage branch is tested without a real AppImage.
+pub fn resolve_login_exe_from(
+    appimage: Option<&std::ffi::OsStr>,
+    current_exe: Option<std::path::PathBuf>,
+) -> Result<std::path::PathBuf, AutostartError> {
+    if let Some(raw) = appimage {
+        let path = std::path::PathBuf::from(raw);
+        if path.is_absolute() && path.is_file() {
+            return Ok(path);
+        }
+    }
+    current_exe.ok_or(AutostartError::InvalidExe {
+        reason: "current executable could not be resolved",
+    })
 }
 
 /// The OS for which we are registering.
@@ -403,17 +461,47 @@ mod tests {
     }
 
     #[test]
-    fn headless_outcome_covers_every_mode() {
-        assert_eq!(
-            headless_outcome(AutostartMode::TrayOnly).1,
-            autostart::messages::MODE_HEADLESS_KEEP
+    fn a_pass_with_a_started_instance_exits_zero_and_names_it() {
+        // A flagged instance over a temp store: the pass waits (it is stopped,
+        // so the start request is accepted and the wait observes the outcome).
+        // The exact outcome depends on the engine being installed, so the test
+        // only pins that per-instance lines are written and the exit code is one
+        // of the two documented values — never a silent early return.
+        let home = tempfile::tempdir().expect("tempdir");
+        let paths = dblocal_core::paths::DblPaths::with_root(home.path());
+        let service: Arc<dyn dblocal_core::service::DblService> = Arc::new(
+            dblocal_core::service::LocalService::new(
+                paths,
+                dblocal_core::service::ServiceOptions::default(),
+            )
+            .expect("service"),
         );
-        assert_eq!(
-            headless_outcome(AutostartMode::HeadlessKeepAlive).1,
-            autostart::messages::MODE_HEADLESS_KEEP
+        let mut err: Vec<u8> = Vec::new();
+        let code = report_pass(&service, &mut err).expect("pass");
+        // Empty temp store: nothing flagged -> exit 0 with the no-instances line.
+        assert_eq!(code, EXIT_OK);
+        assert!(
+            String::from_utf8_lossy(&err).contains("Autostart"),
+            "the pass must say what happened: {err:?}"
         );
+    }
+
+    #[test]
+    fn an_empty_pass_exits_zero_with_the_no_instances_message() {
+        let home = tempfile::tempdir().expect("tempdir");
+        let paths = dblocal_core::paths::DblPaths::with_root(home.path());
+        let service: Arc<dyn dblocal_core::service::DblService> = Arc::new(
+            dblocal_core::service::LocalService::new(
+                paths,
+                dblocal_core::service::ServiceOptions::default(),
+            )
+            .expect("service"),
+        );
+        let mut err: Vec<u8> = Vec::new();
+        let code = report_pass(&service, &mut err).expect("pass");
+        assert_eq!(code, EXIT_OK);
         assert_eq!(
-            headless_outcome(AutostartMode::HeadlessExit).1,
+            String::from_utf8_lossy(&err).trim(),
             autostart::messages::MODE_EXIT_NO_INSTANCES
         );
     }
@@ -463,5 +551,49 @@ mod tests {
         let paths = dblocal_core::paths::DblPaths::with_root(home.path());
         let service = build_service_for_paths(paths).expect("service over a temp root");
         assert!(service.list_instances().is_ok());
+    }
+
+    #[test]
+    fn appimage_path_wins_when_it_exists() {
+        // D5: a real AppImage file is preferred over the transient mount path.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let appimage = dir.path().join("DBLocal.AppImage");
+        std::fs::write(&appimage, b"x").expect("appimage file");
+        let mount = std::path::PathBuf::from("/tmp/.mount_abc/usr/bin/dblocal");
+        let resolved = resolve_login_exe_from(Some(appimage.as_os_str()), Some(mount)).expect("ok");
+        assert_eq!(resolved, appimage);
+    }
+
+    #[test]
+    fn current_exe_is_used_without_an_appimage() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let exe = dir.path().join("dblocal");
+        let resolved = resolve_login_exe_from(None, Some(exe.clone())).expect("ok");
+        assert_eq!(resolved, exe);
+    }
+
+    #[test]
+    fn an_appimage_path_that_does_not_exist_falls_back_to_current_exe() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let exe = dir.path().join("dblocal");
+        let missing = dir.path().join("gone.AppImage");
+        let resolved =
+            resolve_login_exe_from(Some(missing.as_os_str()), Some(exe.clone())).expect("ok");
+        assert_eq!(resolved, exe, "a vanished APPIMAGE must not be registered");
+    }
+
+    #[test]
+    fn no_appimage_and_no_current_exe_is_an_invalid_exe_error() {
+        let err = resolve_login_exe_from(None, None).expect_err("must fail");
+        assert_eq!(err.code(), dblocal_core::autostart::CODE_INVALID_EXE);
+    }
+
+    #[test]
+    fn a_relative_appimage_is_ignored() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let exe = dir.path().join("dblocal");
+        let relative = std::ffi::OsStr::new("DBLocal.AppImage");
+        let resolved = resolve_login_exe_from(Some(relative), Some(exe.clone())).expect("ok");
+        assert_eq!(resolved, exe);
     }
 }

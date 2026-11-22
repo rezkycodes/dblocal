@@ -21,6 +21,33 @@ pub enum AutostartMode {
     TrayOnly,
 }
 
+/// How the GUI login-mode process presents itself (D4).
+///
+/// Kept separate from [`AutostartMode`] because the GUI always has a display:
+/// the only question is whether a tray host accepted the icon. When it did not,
+/// the PRD `F-TRY-01` AC3 fallback applies — a full window, never an invisible
+/// process.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GuiPresentation {
+    /// The tray accepted the icon: no window (AC3).
+    TrayOnly,
+    /// No tray host: open the main window (the documented fallback).
+    Window,
+}
+
+/// Decides the GUI presentation for a login-mode launch.
+///
+/// A working tray means no window; without a tray the window is the only UI, so
+/// it is opened rather than leaving an invisible 170 MB process that nothing can
+/// quit (D4).
+pub fn decide_gui_presentation(tray_available: bool) -> GuiPresentation {
+    if tray_available {
+        GuiPresentation::TrayOnly
+    } else {
+        GuiPresentation::Window
+    }
+}
+
 /// Decides how `--autostart` should present itself.
 ///
 /// The tray is preferred; a missing tray is not a reason to pop up a window
@@ -42,8 +69,25 @@ pub fn decide_mode(tray_available: bool, flagged_instances: usize) -> AutostartM
 pub struct AutostartTarget {
     /// Instance id to pass to `DblService::start_instance`.
     pub id: crate::model::InstanceId,
-    /// Instance name, used only for logs and diagnostics.
+    /// Instance name, used for the per-instance stderr line and diagnostics.
     pub name: String,
+    /// Engine, used to pick the start-wait bound (D1).
+    pub engine: crate::model::EngineKey,
+}
+
+impl AutostartTarget {
+    /// Builds a target.
+    pub fn new(
+        id: crate::model::InstanceId,
+        name: impl Into<String>,
+        engine: crate::model::EngineKey,
+    ) -> Self {
+        Self {
+            id,
+            name: name.into(),
+            engine,
+        }
+    }
 }
 
 /// Picks the instances that `--autostart` should start, in a stable order.
@@ -59,6 +103,7 @@ pub fn flagged_targets(views: &[InstanceView]) -> Vec<AutostartTarget> {
         .map(|view| AutostartTarget {
             id: view.id.clone(),
             name: view.name.clone(),
+            engine: view.engine,
         })
         .collect()
 }
@@ -169,6 +214,21 @@ mod tests {
     }
 
     #[test]
+    fn gui_presentation_without_a_tray_opens_a_window() {
+        // D4: no tray means the window is the only UI, never an invisible process.
+        assert_eq!(decide_gui_presentation(true), GuiPresentation::TrayOnly);
+        assert_eq!(decide_gui_presentation(false), GuiPresentation::Window);
+    }
+
+    #[test]
+    fn a_target_carries_its_engine_for_the_wait_bound() {
+        let views = vec![view("vk", InstanceStatus::Stopped, true)];
+        let targets = flagged_targets(&views);
+        assert_eq!(targets.len(), 1);
+        assert_eq!(targets[0].engine, EngineKey::Postgresql);
+    }
+
+    #[test]
     fn headless_with_flagged_instances_keeps_alive() {
         assert_eq!(decide_mode(false, 1), AutostartMode::HeadlessKeepAlive);
         assert_eq!(decide_mode(false, 5), AutostartMode::HeadlessKeepAlive);
@@ -203,18 +263,9 @@ mod tests {
 
     #[test]
     fn summary_counts_failures_independently() {
-        let a = AutostartTarget {
-            id: InstanceId::new(),
-            name: "a".to_owned(),
-        };
-        let b = AutostartTarget {
-            id: InstanceId::new(),
-            name: "b".to_owned(),
-        };
-        let c = AutostartTarget {
-            id: InstanceId::new(),
-            name: "c".to_owned(),
-        };
+        let a = AutostartTarget::new(InstanceId::new(), "a", EngineKey::Postgresql);
+        let b = AutostartTarget::new(InstanceId::new(), "b", EngineKey::Postgresql);
+        let c = AutostartTarget::new(InstanceId::new(), "c", EngineKey::Postgresql);
         let summary = AutostartSummary {
             outcomes: vec![
                 AutostartOutcome::ok(a),

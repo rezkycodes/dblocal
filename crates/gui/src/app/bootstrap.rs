@@ -172,41 +172,25 @@ fn run_with_service_mode(
 }
 
 fn handle_login_autostart(service: Arc<dyn DblService>, tray_available: bool, cx: &mut App) {
-    let decision = dblocal_core::autostart::decide_mode(tray_available, 0);
-    if matches!(decision, dblocal_core::autostart::AutostartMode::TrayOnly) {
-        // Do not open a window: the tray is the UI (F-AUT-01 AC3).
-        start_flagged_instances(service, false, cx);
-        return;
-    }
-    // No tray: decide after we know how many flagged instances can start.
-    let svc = service.clone();
-    cx.spawn(async move |cx: &mut gpui_kit::AsyncApp| {
-        let views = cx
-            .background_spawn({
-                let svc = svc.clone();
-                async move { svc.list_instances().unwrap_or_default() }
-            })
-            .await;
-        let targets = dblocal_core::autostart::flagged_targets(&views);
-        let mode = dblocal_core::autostart::decide_mode(false, targets.len());
-        match mode {
-            dblocal_core::autostart::AutostartMode::HeadlessExit => {
-                tracing::info!(
-                    "{}",
-                    dblocal_core::autostart::messages::MODE_EXIT_NO_INSTANCES
-                );
-                cx.update(request_app_quit);
-            }
-            _ => {
-                tracing::info!("{}", dblocal_core::autostart::messages::MODE_HEADLESS_KEEP);
-                cx.update(|cx| start_flagged_instances(svc, true, cx));
+    // Start the flagged instances and observe each one via the shared pass, so
+    // the tray/window shows `running` or `failed` with no modal dialog (D1/D4).
+    start_flagged_instances(service.clone(), cx);
+
+    // D4: a working tray means no window (AC3). Without a tray the window is the
+    // only UI, so open it (the PRD F-TRY-01 AC3 fallback) — never leave an
+    // invisible process that nothing can quit.
+    match dblocal_core::autostart::decide_gui_presentation(tray_available) {
+        dblocal_core::autostart::GuiPresentation::TrayOnly => {}
+        dblocal_core::autostart::GuiPresentation::Window => {
+            if let Err(err) = open_main_window(cx) {
+                tracing::error!("could not open the login-mode window: {err:#}");
+                request_app_quit(cx);
             }
         }
-    })
-    .detach();
+    }
 }
 
-fn start_flagged_instances(service: Arc<dyn DblService>, _headless: bool, cx: &mut App) {
+fn start_flagged_instances(service: Arc<dyn DblService>, cx: &mut App) {
     let svc = service;
     cx.spawn(async move |cx: &mut gpui_kit::AsyncApp| {
         let views = cx
@@ -219,9 +203,18 @@ fn start_flagged_instances(service: Arc<dyn DblService>, _headless: bool, cx: &m
         if targets.is_empty() {
             return;
         }
+        // `start_targets` waits for every start inside its own workers, so the
+        // browser is not left with rows stuck at `starting` (D1). A failed start
+        // arrives as the ordinary `failed` status the tray and window render.
         let _ = cx
             .background_spawn(async move {
-                let _ = dblocal_core::autostart::start_targets(&svc, &targets);
+                if let Err(err) = dblocal_core::autostart::start_targets(&svc, &targets) {
+                    tracing::warn!(
+                        "autostart pass could not run: [{}] {}",
+                        err.code(),
+                        err.user_message()
+                    );
+                }
             })
             .await;
     })

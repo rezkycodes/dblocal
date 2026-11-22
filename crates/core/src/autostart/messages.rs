@@ -23,3 +23,17 @@ pub const MODE_EXIT_NO_INSTANCES: &str =
 /// `--autostart` ran headless with at least one instance started.
 pub const MODE_HEADLESS_KEEP: &str =
     "Autostart: tray tidak tersedia; instance tetap berjalan tanpa jendela.";
+/// One flagged instance started successfully in the login pass (D1).
+pub const OUTCOME_STARTED: &str = "autostart: instance mulai berjalan";
+/// One flagged instance failed to start; the `DBL-xxxx` code is appended (D1).
+pub const OUTCOME_FAILED: &str = "autostart: instance gagal berjalan";
+
+/// Formats the per-instance success line: `autostart: <name> mulai berjalan`.
+pub fn outcome_started(name: &str) -> String {
+    format!("{OUTCOME_STARTED}: {name}")
+}
+
+/// Formats the per-instance failure line: `autostart: <name> gagal — <code>`.
+pub fn outcome_failed(name: &str, detail: &str) -> String {
+    format!("{OUTCOME_FAILED}: {name} — {detail}")
+}

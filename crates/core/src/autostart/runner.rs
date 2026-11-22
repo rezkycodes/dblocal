@@ -121,10 +121,7 @@ mod tests {
     use crate::model::InstanceId;
 
     fn target(name: &str) -> AutostartTarget {
-        AutostartTarget {
-            id: InstanceId::new(),
-            name: name.to_owned(),
-        }
+        AutostartTarget::new(InstanceId::new(), name, crate::model::EngineKey::Postgresql)
     }
 
     #[test]
