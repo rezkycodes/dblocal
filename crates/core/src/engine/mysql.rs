@@ -510,9 +510,10 @@ pub fn read_handshake(port: u16, timeout: Duration) -> Result<Handshake> {
     let socket_addr = addr.parse().map_err(|e| DblError::Engine {
         reason: format!("invalid mysql address {addr}: {e}"),
     })?;
-    let mut stream = TcpStream::connect_timeout(&socket_addr, timeout).map_err(|e| DblError::Engine {
-        reason: format!("cannot connect to mysql on {addr}: {e}"),
-    })?;
+    let mut stream =
+        TcpStream::connect_timeout(&socket_addr, timeout).map_err(|e| DblError::Engine {
+            reason: format!("cannot connect to mysql on {addr}: {e}"),
+        })?;
     let _ = stream.set_read_timeout(Some(timeout));
     let mut hdr = [0u8; 4];
     stream.read_exact(&mut hdr).map_err(|e| DblError::Engine {
