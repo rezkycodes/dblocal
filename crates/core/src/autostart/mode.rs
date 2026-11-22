@@ -463,4 +463,190 @@ mod tests {
             None
         );
     }
+
+    // --- D1 (gap): the PRODUCTION polling loop `wait_for_running` itself ---
+    //
+    // The tests above cover `classify()` and the trait doubles, which override
+    // `wait_started` directly. Neither exercises the real loop that polls
+    // `list_instances` and sleeps between reads. A mutation that makes
+    // `wait_for_running` return `Ok(())` at once (or never sleep) must turn
+    // these red.
+
+    /// A `DblService` double whose `list_instances` returns a scripted sequence
+    /// of statuses, one per call (the last value repeats once exhausted), and
+    /// counts how many times it was read. Only the read side is meaningful; the
+    /// rest of the surface is inert so the trait object compiles.
+    struct ScriptedService {
+        id: InstanceId,
+        script: std::sync::Mutex<std::collections::VecDeque<InstanceStatus>>,
+        last: std::sync::Mutex<InstanceStatus>,
+        reads: std::sync::atomic::AtomicUsize,
+    }
+
+    impl ScriptedService {
+        fn new(id: InstanceId, script: Vec<InstanceStatus>) -> Self {
+            let last = script.last().copied().unwrap_or(InstanceStatus::Starting);
+            Self {
+                id,
+                script: std::sync::Mutex::new(script.into()),
+                last: std::sync::Mutex::new(last),
+                reads: std::sync::atomic::AtomicUsize::new(0),
+            }
+        }
+
+        fn reads(&self) -> usize {
+            self.reads.load(std::sync::atomic::Ordering::SeqCst)
+        }
+
+        fn view_with(&self, status: InstanceStatus) -> crate::service::InstanceView {
+            let mut v = with_status(view("scripted", true), status);
+            v.id = self.id.clone();
+            v
+        }
+    }
+
+    impl DblService for ScriptedService {
+        fn list_instances(&self) -> crate::Result<Vec<InstanceView>> {
+            self.reads.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let status = {
+                let mut q = self.script.lock().expect("script");
+                let next = q.pop_front().unwrap_or(*self.last.lock().expect("last"));
+                *self.last.lock().expect("last") = next;
+                next
+            };
+            Ok(vec![self.view_with(status)])
+        }
+
+        fn catalog(&self) -> crate::Result<crate::service::CatalogView> {
+            Ok(crate::service::CatalogView {
+                status: crate::model::CatalogStatus::Fresh,
+                banner: None,
+                engines: Vec::new(),
+            })
+        }
+        fn refresh_catalog(&self, _force: bool) -> crate::Result<crate::service::OperationId> {
+            Err(crate::DblError::NotImplemented("test double".into()))
+        }
+        fn validate_spec(&self, _spec: &crate::model::InstanceSpec) -> crate::Result<()> {
+            Ok(())
+        }
+        fn suggest_port(&self, _engine: EngineKey) -> crate::Result<crate::model::Port> {
+            Err(crate::DblError::NotImplemented("test double".into()))
+        }
+        fn create_instance(
+            &self,
+            _spec: crate::model::InstanceSpec,
+        ) -> crate::Result<crate::service::OperationId> {
+            Err(crate::DblError::NotImplemented("test double".into()))
+        }
+        fn start_instance(&self, _id: &InstanceId) -> crate::Result<crate::service::OperationId> {
+            Ok(crate::service::OperationId::new("op-start"))
+        }
+        fn stop_instance(&self, _id: &InstanceId) -> crate::Result<crate::service::OperationId> {
+            Err(crate::DblError::NotImplemented("test double".into()))
+        }
+        fn delete_instance(
+            &self,
+            _id: &InstanceId,
+            _mode: crate::model::DeleteMode,
+        ) -> crate::Result<crate::service::OperationId> {
+            Err(crate::DblError::NotImplemented("test double".into()))
+        }
+        fn change_port(&self, _id: &InstanceId, _port: crate::model::Port) -> crate::Result<()> {
+            Err(crate::DblError::NotImplemented("test double".into()))
+        }
+        fn data_size(&self, _id: &InstanceId) -> crate::Result<u64> {
+            Ok(0)
+        }
+        fn set_autostart(&self, _id: &InstanceId, _enabled: bool) -> crate::Result<()> {
+            Ok(())
+        }
+        fn cancel_operation(&self, _id: &crate::service::OperationId) -> crate::Result<()> {
+            Ok(())
+        }
+        fn connection_uri(
+            &self,
+            _id: &InstanceId,
+            _format: crate::service::UriFormat,
+        ) -> crate::Result<crate::secret::SecretString> {
+            Err(crate::DblError::NotImplemented("test double".into()))
+        }
+        fn tail_logs(&self, _id: &InstanceId, _lines: usize) -> crate::Result<Vec<String>> {
+            Ok(Vec::new())
+        }
+        fn watch_logs(&self, _id: &InstanceId, _enabled: bool) -> crate::Result<()> {
+            Ok(())
+        }
+        fn list_runtimes(&self) -> crate::Result<Vec<crate::model::Runtime>> {
+            Ok(Vec::new())
+        }
+        fn remove_runtime(&self, _runtime: &str) -> crate::Result<()> {
+            Ok(())
+        }
+        fn list_archives(&self) -> crate::Result<Vec<crate::model::ArchivedData>> {
+            Ok(Vec::new())
+        }
+        fn purge_archive(&self, _archive: &str) -> crate::Result<()> {
+            Ok(())
+        }
+        fn subscribe(&self) -> tokio::sync::broadcast::Receiver<crate::service::ServiceEvent> {
+            let (_tx, rx) = tokio::sync::broadcast::channel(1);
+            rx
+        }
+    }
+
+    #[test]
+    fn wait_for_running_polls_until_the_row_is_running() {
+        // starting, starting, then running: the loop must read the store at
+        // least three times and return Ok only after the change. A loop that
+        // returns Ok immediately would read once.
+        let id = InstanceId::new();
+        let service = ScriptedService::new(
+            id.clone(),
+            vec![
+                InstanceStatus::Starting,
+                InstanceStatus::Starting,
+                InstanceStatus::Running,
+            ],
+        );
+        let started = std::time::Instant::now();
+        let result = wait_for_running(&service, &id, Duration::from_secs(30));
+        let elapsed = started.elapsed();
+        assert_eq!(result, Ok(()), "the row reached running");
+        assert!(
+            service.reads() >= 3,
+            "the loop must poll until the row changes, reads={}",
+            service.reads()
+        );
+        // Two full polls before the third read: at least two poll sleeps.
+        let two_polls = Duration::from_millis(consts::AUTOSTART_WAIT_POLL_MS * 2);
+        assert!(
+            elapsed >= two_polls.saturating_sub(Duration::from_millis(50)),
+            "the loop returned in {elapsed:?} without really waiting (expected >= ~{two_polls:?})"
+        );
+    }
+
+    #[test]
+    fn wait_for_running_times_out_when_the_row_never_leaves_starting() {
+        // The row stays `starting`. With a bound shorter than three polls the
+        // loop must give up with the DBL-8401 timeout, after more than one read
+        // and after really waiting.
+        let id = InstanceId::new();
+        let service = ScriptedService::new(id.clone(), vec![InstanceStatus::Starting]);
+        let bound = Duration::from_millis(consts::AUTOSTART_WAIT_POLL_MS + 100);
+        let started = std::time::Instant::now();
+        let result = wait_for_running(&service, &id, bound);
+        let elapsed = started.elapsed();
+        let err = result.expect_err("a row that never reaches running must time out");
+        assert!(err.contains("DBL-8401"), "expected a timeout, got {err}");
+        assert!(
+            service.reads() >= 2,
+            "the loop must poll at least twice before timing out, reads={}",
+            service.reads()
+        );
+        assert!(
+            elapsed >= Duration::from_millis(consts::AUTOSTART_WAIT_POLL_MS),
+            "the timeout fired in {elapsed:?} without polling/sleeping"
+        );
+    }
 }

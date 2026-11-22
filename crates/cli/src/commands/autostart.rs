@@ -596,4 +596,279 @@ mod tests {
         let resolved = resolve_login_exe_from(Some(relative), Some(exe.clone())).expect("ok");
         assert_eq!(resolved, exe);
     }
+
+    // --- D1 (gap): `report_pass` must exit non-zero when a flagged start fails ---
+    //
+    // The reviewer's mutation `if all_ok { EXIT_OK } else { EXIT_GENERAL }` ->
+    // always `EXIT_OK` stayed green: no test drove a *failing* pass through
+    // `report_pass`, only through the pure plan/summary helpers. This test does.
+
+    use dblocal_core::model::{
+        ArchivedData, AuthMode, DeleteMode, EngineKey, Instance, InstanceId, InstanceName,
+        InstanceSpec, InstanceStatus, Port, Runtime,
+    };
+    use dblocal_core::secret::SecretString;
+    use dblocal_core::service::{
+        CatalogView, DblService, InstanceView, OperationId, ServiceEvent, UriFormat,
+    };
+
+    /// A `DblService` double with two flagged instances: `blocked`'s start is
+    /// refused (`PortInUse`) synchronously, `ok`'s start is accepted and its
+    /// row flips to `Running` on the first wait read. Enough to drive
+    /// `report_pass` through one success and one failure deterministically.
+    struct TwoFlaggedService {
+        ok_id: InstanceId,
+        blocked_id: InstanceId,
+        reads: std::sync::atomic::AtomicUsize,
+    }
+
+    impl TwoFlaggedService {
+        fn new() -> Self {
+            Self {
+                ok_id: InstanceId::new(),
+                blocked_id: InstanceId::new(),
+                reads: std::sync::atomic::AtomicUsize::new(0),
+            }
+        }
+
+        fn view(&self, id: &InstanceId, name: &str, status: InstanceStatus) -> InstanceView {
+            let spec = InstanceSpec::new(
+                InstanceName::new(name).expect("name"),
+                EngineKey::Postgresql,
+                "18.0",
+                Some(Port::new(5432).expect("port")),
+                AuthMode::Password,
+            )
+            .expect("spec")
+            .with_autostart(true);
+            let inst = Instance::new(&spec, id.clone(), status, std::time::SystemTime::UNIX_EPOCH);
+            InstanceView::from_instance(&inst)
+        }
+    }
+
+    impl DblService for TwoFlaggedService {
+        fn list_instances(&self) -> dblocal_core::Result<Vec<InstanceView>> {
+            // The first read is `flagged_targets`' source (both stopped); every
+            // later read is a wait poll, where `ok` is running and `blocked` is
+            // failed with the port diagnosis.
+            let n = self.reads.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if n == 0 {
+                Ok(vec![
+                    self.view(&self.ok_id, "auto-ok", InstanceStatus::Stopped),
+                    self.view(&self.blocked_id, "auto-blocked", InstanceStatus::Stopped),
+                ])
+            } else {
+                let mut blocked =
+                    self.view(&self.blocked_id, "auto-blocked", InstanceStatus::Failed);
+                blocked.failure = Some(dblocal_core::service::FailureInfo {
+                    code: "DBL-1005".to_owned(),
+                    message: "Port itu sedang dipakai proses lain.".to_owned(),
+                    diagnosis: dblocal_core::model::StartFailure::PortInUse,
+                    log_tail: Vec::new(),
+                });
+                Ok(vec![
+                    self.view(&self.ok_id, "auto-ok", InstanceStatus::Running),
+                    blocked,
+                ])
+            }
+        }
+
+        fn catalog(&self) -> dblocal_core::Result<CatalogView> {
+            Ok(CatalogView {
+                status: dblocal_core::model::CatalogStatus::Fresh,
+                banner: None,
+                engines: Vec::new(),
+            })
+        }
+        fn refresh_catalog(&self, _force: bool) -> dblocal_core::Result<OperationId> {
+            Err(dblocal_core::DblError::NotImplemented("test double".into()))
+        }
+        fn validate_spec(&self, _spec: &InstanceSpec) -> dblocal_core::Result<()> {
+            Ok(())
+        }
+        fn suggest_port(&self, _engine: EngineKey) -> dblocal_core::Result<Port> {
+            Err(dblocal_core::DblError::NotImplemented("test double".into()))
+        }
+        fn create_instance(&self, _spec: InstanceSpec) -> dblocal_core::Result<OperationId> {
+            Err(dblocal_core::DblError::NotImplemented("test double".into()))
+        }
+        fn start_instance(&self, id: &InstanceId) -> dblocal_core::Result<OperationId> {
+            if id == &self.blocked_id {
+                Err(dblocal_core::DblError::PortInUse { port: 5432 })
+            } else {
+                Ok(OperationId::new("op-start"))
+            }
+        }
+        fn stop_instance(&self, _id: &InstanceId) -> dblocal_core::Result<OperationId> {
+            Err(dblocal_core::DblError::NotImplemented("test double".into()))
+        }
+        fn delete_instance(
+            &self,
+            _id: &InstanceId,
+            _mode: DeleteMode,
+        ) -> dblocal_core::Result<OperationId> {
+            Err(dblocal_core::DblError::NotImplemented("test double".into()))
+        }
+        fn change_port(&self, _id: &InstanceId, _port: Port) -> dblocal_core::Result<()> {
+            Err(dblocal_core::DblError::NotImplemented("test double".into()))
+        }
+        fn data_size(&self, _id: &InstanceId) -> dblocal_core::Result<u64> {
+            Ok(0)
+        }
+        fn set_autostart(&self, _id: &InstanceId, _enabled: bool) -> dblocal_core::Result<()> {
+            Ok(())
+        }
+        fn cancel_operation(&self, _id: &OperationId) -> dblocal_core::Result<()> {
+            Ok(())
+        }
+        fn connection_uri(
+            &self,
+            _id: &InstanceId,
+            _format: UriFormat,
+        ) -> dblocal_core::Result<SecretString> {
+            Err(dblocal_core::DblError::NotImplemented("test double".into()))
+        }
+        fn tail_logs(&self, _id: &InstanceId, _lines: usize) -> dblocal_core::Result<Vec<String>> {
+            Ok(Vec::new())
+        }
+        fn watch_logs(&self, _id: &InstanceId, _enabled: bool) -> dblocal_core::Result<()> {
+            Ok(())
+        }
+        fn list_runtimes(&self) -> dblocal_core::Result<Vec<Runtime>> {
+            Ok(Vec::new())
+        }
+        fn remove_runtime(&self, _runtime: &str) -> dblocal_core::Result<()> {
+            Ok(())
+        }
+        fn list_archives(&self) -> dblocal_core::Result<Vec<ArchivedData>> {
+            Ok(Vec::new())
+        }
+        fn purge_archive(&self, _archive: &str) -> dblocal_core::Result<()> {
+            Ok(())
+        }
+        fn subscribe(&self) -> tokio::sync::broadcast::Receiver<ServiceEvent> {
+            let (_tx, rx) = tokio::sync::broadcast::channel(1);
+            rx
+        }
+    }
+
+    #[test]
+    fn report_pass_exits_non_zero_when_one_flagged_start_fails() {
+        let service: Arc<dyn DblService> = Arc::new(TwoFlaggedService::new());
+        let mut err: Vec<u8> = Vec::new();
+        let code = report_pass(&service, &mut err).expect("pass");
+        let text = String::from_utf8_lossy(&err);
+        // The mutation `always EXIT_OK` must make this fail.
+        assert_eq!(
+            code, EXIT_GENERAL,
+            "a failing flagged start must exit non-zero, stderr={text:?}"
+        );
+        // One line per instance, and the failure carries its DBL code.
+        assert!(
+            text.contains(&dblocal_core::autostart::messages::outcome_started(
+                "auto-ok"
+            )),
+            "the started instance must be named: {text:?}"
+        );
+        assert!(
+            text.contains("auto-blocked") && text.contains("DBL-1005"),
+            "the failed instance must be named with its code: {text:?}"
+        );
+    }
+
+    #[test]
+    fn report_pass_exits_zero_when_every_flagged_start_succeeds() {
+        // Same double but both start fine: `blocked` is never a start failure,
+        // and its row is running on the wait read, so the pass is all-ok.
+        struct AllOk(TwoFlaggedService);
+        impl DblService for AllOk {
+            fn list_instances(&self) -> dblocal_core::Result<Vec<InstanceView>> {
+                let s = &self.0;
+                let n = s.reads.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                let _ = n;
+                Ok(vec![
+                    s.view(&s.ok_id, "auto-ok", InstanceStatus::Running),
+                    s.view(&s.blocked_id, "auto-blocked", InstanceStatus::Running),
+                ])
+            }
+            fn catalog(&self) -> dblocal_core::Result<CatalogView> {
+                self.0.catalog()
+            }
+            fn refresh_catalog(&self, f: bool) -> dblocal_core::Result<OperationId> {
+                self.0.refresh_catalog(f)
+            }
+            fn validate_spec(&self, spec: &InstanceSpec) -> dblocal_core::Result<()> {
+                self.0.validate_spec(spec)
+            }
+            fn suggest_port(&self, e: EngineKey) -> dblocal_core::Result<Port> {
+                self.0.suggest_port(e)
+            }
+            fn create_instance(&self, spec: InstanceSpec) -> dblocal_core::Result<OperationId> {
+                self.0.create_instance(spec)
+            }
+            fn start_instance(&self, _id: &InstanceId) -> dblocal_core::Result<OperationId> {
+                Ok(OperationId::new("op-start"))
+            }
+            fn stop_instance(&self, id: &InstanceId) -> dblocal_core::Result<OperationId> {
+                self.0.stop_instance(id)
+            }
+            fn delete_instance(
+                &self,
+                id: &InstanceId,
+                m: DeleteMode,
+            ) -> dblocal_core::Result<OperationId> {
+                self.0.delete_instance(id, m)
+            }
+            fn change_port(&self, id: &InstanceId, p: Port) -> dblocal_core::Result<()> {
+                self.0.change_port(id, p)
+            }
+            fn data_size(&self, id: &InstanceId) -> dblocal_core::Result<u64> {
+                self.0.data_size(id)
+            }
+            fn set_autostart(&self, id: &InstanceId, e: bool) -> dblocal_core::Result<()> {
+                self.0.set_autostart(id, e)
+            }
+            fn cancel_operation(&self, id: &OperationId) -> dblocal_core::Result<()> {
+                self.0.cancel_operation(id)
+            }
+            fn connection_uri(
+                &self,
+                id: &InstanceId,
+                f: UriFormat,
+            ) -> dblocal_core::Result<SecretString> {
+                self.0.connection_uri(id, f)
+            }
+            fn tail_logs(&self, id: &InstanceId, n: usize) -> dblocal_core::Result<Vec<String>> {
+                self.0.tail_logs(id, n)
+            }
+            fn watch_logs(&self, id: &InstanceId, e: bool) -> dblocal_core::Result<()> {
+                self.0.watch_logs(id, e)
+            }
+            fn list_runtimes(&self) -> dblocal_core::Result<Vec<Runtime>> {
+                self.0.list_runtimes()
+            }
+            fn remove_runtime(&self, r: &str) -> dblocal_core::Result<()> {
+                self.0.remove_runtime(r)
+            }
+            fn list_archives(&self) -> dblocal_core::Result<Vec<ArchivedData>> {
+                self.0.list_archives()
+            }
+            fn purge_archive(&self, a: &str) -> dblocal_core::Result<()> {
+                self.0.purge_archive(a)
+            }
+            fn subscribe(&self) -> tokio::sync::broadcast::Receiver<ServiceEvent> {
+                self.0.subscribe()
+            }
+        }
+
+        let service: Arc<dyn DblService> = Arc::new(AllOk(TwoFlaggedService::new()));
+        let mut err: Vec<u8> = Vec::new();
+        let code = report_pass(&service, &mut err).expect("pass");
+        assert_eq!(
+            code,
+            EXIT_OK,
+            "an all-ok pass must exit 0, stderr={:?}",
+            String::from_utf8_lossy(&err)
+        );
+    }
 }
