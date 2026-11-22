@@ -13,7 +13,7 @@ use gpui_kit::component::button::ButtonVariants;
 use gpui_kit::component::label::Label;
 use gpui_kit::component::{ActiveTheme, Sizable, TitleBar, h_flex};
 use gpui_kit::prelude::*;
-use gpui_kit::{App, Context, IntoElement, ParentElement, Styled, div, px};
+use gpui_kit::{Context, IntoElement, ParentElement, Styled, div, px};
 
 use crate::format;
 
@@ -116,7 +116,3 @@ fn breadcrumb(
         .child(Label::new(strings::UI_BREADCRUMB_SEPARATOR.to_owned()).text_color(muted))
         .child(Label::new(name.to_owned()).text_color(bright))
 }
-
-/// Unused parameter guard for the app handle (kept for signature stability).
-#[allow(dead_code)]
-fn _unused(_: &App) {}

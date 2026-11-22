@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use dblocal_core::model::InstanceStatus;
 use dblocal_core::service::DblService;
-use gpui_kit::{Context, Window};
+use gpui_kit::{AppContext as _, Context, Window};
 
 use super::{InnerTab, Workspace};
 
@@ -20,17 +20,22 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let mut workspace = Self::new(service, window, cx);
+        let mut workspace = Self::new_preview(service, window, cx);
         workspace.demo_content = true;
+        // Previews never start a tray; do not claim it is missing either.
+        workspace.tray_note = None;
+        workspace.tray_note_shown = true;
         // The prototype's status bar carries a live download row.
-        let (operation, progress) =
-            dblocal_core::service::mock::MockService::demo_download_progress();
         workspace.state.on_download(
-            operation,
-            progress,
+            dblocal_core::service::OperationId::new("demo-download-pg-15"),
+            dblocal_core::model::DownloadProgress::new(
+                220 * 1024 * 1024,
+                980 * 1024 * 1024,
+                24 * 1024 * 1024,
+                Some(std::time::Duration::from_secs(32)),
+            ),
             dblocal_core::strings::UI_DOWNLOADS.to_owned(),
         );
-        // Open the running instance so the Overview screen is the resting state.
         if let Some(first) = workspace
             .state
             .instances
@@ -38,7 +43,7 @@ impl Workspace {
             .find(|view| view.status == InstanceStatus::Running)
             .map(|view| view.id.clone())
         {
-            workspace.open_tab(first, cx);
+            workspace.open_tab_sync(first);
         }
         workspace
     }
@@ -69,7 +74,7 @@ impl Workspace {
             .map(|view| view.id.clone())
         {
             let index = workspace.tabs.open_or_select(id.clone());
-            workspace.load_logs_for(&id);
+            workspace.load_logs_sync(&id);
             workspace.tabs.set_inner(index, InnerTab::Logs);
         }
         workspace
@@ -90,7 +95,7 @@ impl Workspace {
             .map(|view| view.id.clone())
         {
             let index = workspace.tabs.open_or_select(id.clone());
-            workspace.load_logs_for(&id);
+            workspace.load_logs_sync(&id);
             workspace.tabs.set_inner(index, InnerTab::Overview);
         }
         workspace
@@ -104,8 +109,10 @@ impl Workspace {
     ) -> Self {
         let mut workspace = Self::preview(service, window, cx);
         if let Some(id) = workspace.tabs.selected_instance().cloned() {
-            workspace.load_logs_for(&id);
-            workspace.set_inner_tab(InnerTab::Logs);
+            workspace.load_logs_sync(&id);
+            workspace
+                .tabs
+                .set_inner(workspace.tabs.selected_index(), InnerTab::Logs);
         }
         workspace
     }
@@ -120,7 +127,9 @@ impl Workspace {
         let mut workspace = Self::preview(service, window, cx);
         // Switch to Logs first: `set_inner_tab` reloads the demo tail, which
         // would overwrite our custom buffer.
-        workspace.set_inner_tab(InnerTab::Logs);
+        workspace
+            .tabs
+            .set_inner(workspace.tabs.selected_index(), InnerTab::Logs);
         if let Some(id) = workspace.tabs.selected_instance().cloned() {
             let lines = (0..200)
                 .map(|index| format!("baris log panjang {index:03} — payload stabil"))
@@ -141,7 +150,9 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) -> Self {
         let mut workspace = Self::preview(service, window, cx);
-        workspace.set_inner_tab(InnerTab::Logs);
+        workspace
+            .tabs
+            .set_inner(workspace.tabs.selected_index(), InnerTab::Logs);
         if let Some(id) = workspace.tabs.selected_instance().cloned() {
             workspace
                 .logs
@@ -158,7 +169,7 @@ impl Workspace {
     ) -> Self {
         let mut workspace = Self::preview(service, window, cx);
         workspace.demo_content = false;
-        workspace.set_inner_tab(InnerTab::Config);
+        workspace.set_inner_tab(InnerTab::Config, cx);
         workspace
     }
 
@@ -169,7 +180,7 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) -> Self {
         let mut workspace = Self::preview(service, window, cx);
-        workspace.set_inner_tab(InnerTab::Databases);
+        workspace.set_inner_tab(InnerTab::Databases, cx);
         workspace
     }
 
@@ -181,7 +192,7 @@ impl Workspace {
     ) -> Self {
         let mut workspace = Self::preview(service, window, cx);
         workspace.demo_content = false;
-        workspace.set_inner_tab(InnerTab::Databases);
+        workspace.set_inner_tab(InnerTab::Databases, cx);
         workspace
     }
 
@@ -237,8 +248,81 @@ impl Workspace {
             .first()
             .map(|view| view.id.clone())
         {
-            workspace.open_delete_dialog(id, window, cx);
+            let name_input = cx.new(|cx| {
+                gpui_kit::component::input::InputState::new(window, cx)
+                    .placeholder(dblocal_core::strings::UI_DELETE_NAME_PLACEHOLDER.to_owned())
+            });
+            workspace.delete_target = Some(id.clone());
+            workspace.delete_mode = dblocal_core::model::DeleteMode::ArchiveData;
+            workspace.delete_name_input = Some(name_input);
+            workspace.delete_size = workspace.service.data_size(&id).unwrap_or(0);
         }
+        workspace
+    }
+
+    /// Preview with the quit dialog open on a running instance (F-TRY-02 AC2).
+    pub fn preview_quit(
+        service: Arc<dyn DblService>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let mut workspace = Self::preview(service, window, cx);
+        let running = crate::quit::running_instance_ids(&workspace.state.instances);
+        let action = workspace
+            .quit
+            .apply(crate::quit::QuitEvent::QuitRequested { running });
+        debug_assert!(matches!(action, crate::quit::QuitAction::ShowDialog));
+        workspace
+    }
+
+    /// Preview of the quit dialog reporting a failed stop.
+    pub fn preview_quit_stop_failed(
+        service: Arc<dyn DblService>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let mut workspace = Self::preview(service, window, cx);
+        let running = crate::quit::running_instance_ids(&workspace.state.instances);
+        workspace
+            .quit
+            .apply(crate::quit::QuitEvent::QuitRequested { running });
+        workspace.quit.apply(crate::quit::QuitEvent::StopAll);
+        if let Some(id) = workspace
+            .state
+            .instances
+            .first()
+            .map(|view| view.id.clone())
+        {
+            workspace
+                .quit
+                .apply(crate::quit::QuitEvent::StopFinished { id, ok: false });
+        }
+        workspace
+    }
+
+    /// Preview with a background service call in flight (neutral pending note).
+    pub fn preview_pending(
+        service: Arc<dyn DblService>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let mut workspace = Self::preview(service, window, cx);
+        workspace.pending_preview = true;
+        workspace
+    }
+
+    /// Preview of a build with no tray host: the status bar says so once.
+    pub fn preview_no_tray(
+        service: Arc<dyn DblService>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let mut workspace = Self::preview(service, window, cx);
+        workspace.tray_available = false;
+        workspace.tray_note_shown = true;
+        workspace.tray_note = Some(gpui_kit::SharedString::from(
+            dblocal_core::strings::UI_TRAY_UNAVAILABLE_NOTE,
+        ));
         workspace
     }
 
@@ -260,7 +344,8 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) -> Self {
         let mut workspace = Self::preview(service, window, cx);
-        workspace.set_catalog_status_for_preview(dblocal_core::model::CatalogStatus::Stale);
+        workspace.catalog.status = dblocal_core::model::CatalogStatus::Stale;
+        workspace.catalog.banner = Some(dblocal_core::strings::CATALOG_STALE.to_owned());
         workspace
     }
 
@@ -272,7 +357,7 @@ impl Workspace {
     ) -> Self {
         let mut workspace = Self::preview(service, window, cx);
         if let Some(id) = workspace.tabs.selected_instance().cloned() {
-            workspace.toggle_reveal(&id);
+            workspace.toggle_reveal_sync(&id);
         }
         workspace
     }

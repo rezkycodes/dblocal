@@ -79,6 +79,11 @@ pub const UI_WELCOME_TITLE: &str = "Selamat datang di DBLocal";
 pub const UI_WELCOME_SUBTITLE: &str = "Buat instance database lokal pertama Anda untuk mulai.";
 /// Call to action on the welcome screen.
 pub const UI_CREATE_FIRST: &str = "Buat instance pertama Anda";
+/// Shown when instances exist but no tab is open.
+pub const UI_SELECT_INSTANCE_TITLE: &str = "Pilih instance";
+/// Subtitle for the select-instance empty state.
+pub const UI_SELECT_INSTANCE_SUBTITLE: &str =
+    "Pilih instance dari panel kiri untuk melihat detail.";
 /// Instances panel header.
 pub const UI_INSTANCES: &str = "INSTANCE";
 /// Instances panel footer button.
@@ -625,6 +630,38 @@ pub const UI_WINDOW_MINIMIZE: &str = "Perkecil";
 pub const UI_WINDOW_MAXIMIZE: &str = "Perbesar";
 /// Title bar: close the window.
 pub const UI_WINDOW_CLOSE: &str = "Tutup jendela";
+
+// --- Tray and quit (F-TRY-01, F-TRY-02) ------------------------------------
+
+/// Tray menu item that brings the main window to the front.
+pub const UI_TRAY_OPEN: &str = "Buka DBLocal";
+/// Tray menu item that quits the app.
+pub const UI_TRAY_QUIT: &str = "Keluar";
+/// Status-bar note shown once when no tray host is available.
+pub const UI_TRAY_UNAVAILABLE_NOTE: &str = "Tray tidak tersedia di lingkungan desktop ini.";
+/// Quit dialog heading.
+pub const UI_QUIT_TITLE: &str = "Keluar dari DBLocal?";
+/// Quit dialog body shown when instances are still running.
+pub const UI_QUIT_BODY: &str =
+    "Masih ada instance yang berjalan. Pilih apa yang harus terjadi saat keluar.";
+/// Quit dialog: keep engines running (default).
+pub const UI_QUIT_KEEP_RUNNING: &str = "Biarkan tetap berjalan";
+/// Quit dialog: stop every running instance before quitting.
+pub const UI_QUIT_STOP_ALL: &str = "Hentikan semua lalu keluar";
+/// Quit dialog: a stop failed but the user can force quit anyway.
+pub const UI_QUIT_STOP_FAILED: &str = "Sebagian instance gagal dihentikan.";
+/// Quit dialog: confirm quitting while stops are still pending.
+pub const UI_QUIT_FORCE_CONFIRM: &str =
+    "Masih ada instance yang sedang dihentikan. Keluar sekarang?";
+/// Quit dialog: progress line while stopping all instances.
+pub const UI_QUIT_STOPPING: &str = "Menghentikan instance...";
+/// Neutral status-bar note while a background service call is in flight.
+pub const UI_PENDING: &str = "Memuat...";
+/// Startup failure window title.
+pub const UI_STARTUP_FAILED_TITLE: &str = "DBLocal tidak bisa dimulai";
+/// Startup failure window fallback body.
+pub const UI_STARTUP_FAILED_BODY: &str =
+    "DBLocal tidak bisa membaca atau menyiapkan data lokalnya.";
 
 /// Placeholders the UI renders while no backend exists (D-25). Each entry names
 /// the phase that fills it, so `docs/architecture/gui.md` and the GUI agree.

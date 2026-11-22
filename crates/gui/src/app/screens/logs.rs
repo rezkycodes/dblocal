@@ -5,7 +5,6 @@
 //! when the failure is the typed port-in-use error, implemented as
 //! `suggest_port` + `change_port` + `start_instance` (`F-PRT-02` AC1–AC2).
 
-use dblocal_core::model::InstanceStatus;
 use dblocal_core::strings;
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::Button;
@@ -129,7 +128,7 @@ impl Workspace {
         } else {
             strings::UI_LOGS_PAUSED
         };
-        let path = format!("~/.dblocal/instances/{}/logs/engine.log", view.name);
+        let path = format::engine_log_path(self.home_root(), self.home_dir(), &view.name);
 
         let mut viewer = v_flex()
             .id("log-viewer")
@@ -264,7 +263,3 @@ impl Workspace {
         .into_any_element()
     }
 }
-
-/// Unused import guard: the stopped status is part of the tab's contract.
-#[allow(dead_code)]
-fn _stopped(_: InstanceStatus) {}
