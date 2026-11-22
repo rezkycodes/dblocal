@@ -31,11 +31,15 @@ use crate::secrets::{BackendKind, SecretStore};
 use crate::service::FailureInfo;
 use crate::service::{DblService, OperationId, ServiceEvent};
 use crate::store::Store;
+use crate::update::{InstallKind, UpdateFetcher};
 use std::collections::HashMap;
 
+use super::admin_ops;
+use super::clients_ops::{self, ClientCache};
 use super::helpers::buffered_events;
 use super::log_watch::LogWatchers;
 use super::registry::Ops;
+use super::update_ops::{self, UpdateInstaller};
 
 /// One downloadable runtime the service may install.
 ///
@@ -181,6 +185,20 @@ pub struct ServiceOptions {
     /// must subscribe first if it needs startup events, then call
     /// [`LocalService::start_background`]. Defaults to true.
     pub auto_start: Option<bool>,
+    /// Host probe for client detection. Production uses the real filesystem.
+    pub host_probe: Option<Arc<dyn crate::clients::HostProbe>>,
+    /// Spawner for "open in client". Production uses the system spawner.
+    pub spawner: Option<Arc<dyn crate::clients::Spawner>>,
+    /// Update check transport. Production uses the HTTPS GitHub client.
+    pub update_fetcher: Option<Arc<dyn UpdateFetcher>>,
+    /// Download/verify/apply tail. Production downloads into the home.
+    pub update_installer: Option<Arc<dyn UpdateInstaller>>,
+    /// Install kind override, so a test can force "package-manager owned".
+    pub install_kind: Option<InstallKind>,
+    /// Version compared against GitHub releases. Defaults to `CARGO_PKG_VERSION`.
+    pub current_version: Option<semver::Version>,
+    /// GitHub repository the update check queries. Defaults to [`consts::UPDATE_REPO`].
+    pub update_repo: Option<String>,
 }
 
 impl std::fmt::Debug for ServiceOptions {
@@ -303,6 +321,22 @@ pub(crate) struct Inner {
     /// `stopping`, so a caller can wait for it to actually exit before taking
     /// over the home (a test restart, or a clean shutdown).
     pub supervisor_alive: std::sync::atomic::AtomicBool,
+    /// Detected external clients, cached for the process (`F-OPN-01`).
+    pub client_cache: ClientCache,
+    /// Host probe behind client detection.
+    pub host_probe: Arc<dyn crate::clients::HostProbe>,
+    /// Spawner behind "open in client".
+    pub spawner: Arc<dyn crate::clients::Spawner>,
+    /// Update check transport (`F-PKG-05`).
+    pub update_fetcher: Arc<dyn UpdateFetcher>,
+    /// Download/verify/apply tail of an update.
+    pub update_installer: Arc<dyn UpdateInstaller>,
+    /// Running version compared against releases.
+    pub current_version: semver::Version,
+    /// GitHub repository the update check queries.
+    pub update_repo: String,
+    /// Pre-detected install kind; when `None`, detected on first `check_update`.
+    pub install_kind: Option<InstallKind>,
 }
 
 impl Inner {
@@ -338,6 +372,21 @@ impl Inner {
     /// Whether the service is shutting down.
     pub(crate) fn is_stopping(&self) -> bool {
         self.stopping.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// The OS family the client planner builds for.
+    pub(crate) fn os_kind(&self) -> crate::clients::OsKind {
+        clients_ops::os_kind_of(self.os)
+    }
+
+    /// The install kind, detecting it once and caching it on `Inner`.
+    pub(crate) fn install_kind_or_detect(&self) -> Result<InstallKind> {
+        if let Some(kind) = &self.install_kind {
+            return Ok(kind.clone());
+        }
+        crate::update::detect_install_kind().map_err(|err| DblError::Unsupported {
+            reason: format!("{} ({})", err.user_message(), err.code()),
+        })
     }
 }
 
@@ -448,6 +497,30 @@ impl LocalService {
         let os = options.os.unwrap_or_else(Os::current);
         let arch = options.arch.unwrap_or_else(Arch::current);
 
+        // Cloned before `paths` moves into `Inner`; the update installer stages
+        // under this root.
+        let inner_paths = paths.clone();
+        let host_probe = options
+            .host_probe
+            .clone()
+            .unwrap_or_else(clients_ops::default_host);
+        let spawner = options
+            .spawner
+            .clone()
+            .unwrap_or_else(clients_ops::default_spawner);
+        let current_version = options
+            .current_version
+            .clone()
+            .unwrap_or_else(update_ops::running_version);
+        let update_fetcher = match options.update_fetcher.clone() {
+            Some(fetcher) => fetcher,
+            None => Arc::new(crate::update::ReqwestUpdateFetcher::new().map_err(|err| {
+                DblError::Network {
+                    reason: format!("could not build the update client: {err}"),
+                }
+            })?),
+        };
+
         let runtime = Arc::new(runtime);
         let inner = Arc::new(Inner {
             paths,
@@ -479,6 +552,24 @@ impl LocalService {
             handles: std::sync::atomic::AtomicUsize::new(1),
             supervisor_alive: std::sync::atomic::AtomicBool::new(true),
             runtime_handle: runtime.handle.clone(),
+            client_cache: ClientCache::new(None),
+            host_probe,
+            spawner,
+            update_installer: match options.update_installer.clone() {
+                Some(installer) => installer,
+                None => Arc::new(update_ops::DownloadInstaller::new(
+                    inner_paths.clone(),
+                    runtime.handle.clone(),
+                    current_exe_path(),
+                )),
+            },
+            update_fetcher,
+            current_version,
+            update_repo: options
+                .update_repo
+                .clone()
+                .unwrap_or_else(|| consts::UPDATE_REPO.to_owned()),
+            install_kind: options.install_kind.clone(),
         });
 
         let service = Self { inner, runtime };
@@ -625,6 +716,14 @@ impl LocalService {
     }
 }
 
+/// The running executable's path, or a placeholder when the OS cannot report it.
+///
+/// Only used to build an install plan for a self-update; a missing path makes
+/// `plan_install` refuse rather than replace the wrong file.
+fn current_exe_path() -> std::path::PathBuf {
+    std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::from("dblocal"))
+}
+
 impl Drop for LocalService {
     fn drop(&mut self) {
         // The supervisor task and the background worker hold their own
@@ -719,6 +818,74 @@ impl DblService for LocalService {
 
     fn watch_logs(&self, id: &InstanceId, enabled: bool) -> Result<()> {
         super::read_ops::watch_logs(&self.inner, id, enabled)
+    }
+
+    fn list_databases(
+        &self,
+        id: &InstanceId,
+    ) -> crate::service::ServiceResult<Vec<crate::admin::DatabaseInfo>> {
+        admin_ops::list_databases(&self.inner, id)
+    }
+
+    fn create_database(&self, id: &InstanceId, name: &str) -> crate::service::ServiceResult<()> {
+        admin_ops::create_database(&self.inner, id, name)
+    }
+
+    fn drop_database(
+        &self,
+        id: &InstanceId,
+        name: &str,
+        force: bool,
+    ) -> crate::service::ServiceResult<()> {
+        admin_ops::drop_database(&self.inner, id, name, force)
+    }
+
+    fn list_users(
+        &self,
+        id: &InstanceId,
+    ) -> crate::service::ServiceResult<Vec<crate::admin::UserInfo>> {
+        admin_ops::list_users(&self.inner, id)
+    }
+
+    fn create_user(
+        &self,
+        id: &InstanceId,
+        name: &str,
+        db: &str,
+        level: crate::admin::PrivilegeLevel,
+    ) -> crate::service::ServiceResult<SecretString> {
+        admin_ops::create_user(&self.inner, id, name, db, level)
+    }
+
+    fn reset_superuser_password(
+        &self,
+        id: &InstanceId,
+    ) -> crate::service::ServiceResult<SecretString> {
+        admin_ops::reset_superuser_password(&self.inner, id)
+    }
+
+    fn check_update(&self) -> crate::service::ServiceResult<crate::service::UpdateStatus> {
+        update_ops::check_update(&self.inner)
+    }
+
+    fn apply_update(&self) -> crate::service::ServiceResult<()> {
+        update_ops::apply_update(&self.inner)
+    }
+
+    fn detect_clients(
+        &self,
+        refresh: bool,
+    ) -> crate::service::ServiceResult<Vec<crate::clients::DetectedClient>> {
+        clients_ops::detect(&self.inner, refresh)
+    }
+
+    fn open_in_client(
+        &self,
+        id: &InstanceId,
+        client: crate::clients::ClientKind,
+        dry_run: bool,
+    ) -> crate::service::ServiceResult<crate::clients::LaunchPlan> {
+        clients_ops::open(&self.inner, id, client, dry_run)
     }
 
     fn list_runtimes(&self) -> Result<Vec<crate::model::Runtime>> {
