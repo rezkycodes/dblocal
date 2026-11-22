@@ -5,7 +5,7 @@ New branch from `main` AFTER the W2-A flake branch (`rezkycodes/w2-flaky-instanc
 ## Evidence (reviewer, 2026-11-22/23, private copy of the lib test binary, `RUST_TEST_THREADS=16 taskset -c 0-3`, whole lib x25)
 
 - branch head `fb1aff5` (your round 5): 1 failure in 25: `instance::tests::safety::reconciliation_adopts_a_live_process_and_clears_a_dead_one`, `safety.rs:315` "a dead identity is cleared on reconciliation". Default threads: 20/20.
-- `main` (same condition): at least 6 failing runs, five different tests (`a_delete_refuses_to_remove_a_row_whose_engine_survives` x3, `a_reconciled_interrupted_create_leaves_nothing_behind`, `change_port_config_rewrite_failure_leaves_store_and_file_unchanged_valkey`, `happy_path_create_start_stop_delete`, `a_failed_start_can_be_retried_after_the_port_frees`), AND one run that HUNG: the test binary sat at 2% CPU for 45 minutes until I killed it (`eu-stack` shows the test thread in `instance::tests::coverage::a_watched_log_streams_appended_lines`). Your fixes removed most of them; this one is what is left and it is not a test artefact.
+- `main` (same condition, 25 runs): 12 runs failed (11 distinct instance tests, `a_delete_refuses_to_remove_a_row_whose_engine_survives` 5 times) and 1 run HUNG: the test binary sat at 2% CPU for 45 minutes until I killed it (`eu-stack` shows the test thread in `instance::tests::coverage::a_watched_log_streams_appended_lines`); 12 runs passed. Your fixes removed almost all of that; the one failure left is not a test artefact.
 
 ## Cause (read from the code, confirm it)
 
