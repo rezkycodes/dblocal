@@ -340,6 +340,21 @@ operation completion, failure, timeout, or explicit force-exit confirmation.
 | `quit.rs` | the pure quit machine |
 | `tray.rs` | the pure menu model + Linux ksni glue |
 
+### Tray, window and quit after W2-B-fix2
+
+| Item | Behaviour |
+|---|---|
+| Bridges | **One**. `AppRuntime::new` creates the only `spawn_bridge` receiver; `start_app_loops` spawns the single consumer, which refreshes the tray and forwards each event to the live `Workspace`, dropping it when no window is open (`R3`). A new window reads the service in `startup_load`; it never replays a backlog. |
+| Tray quit, no window | Lists instances on the background executor, then opens the window and runs `request_quit_with(running)` (`R1`): the dialog appears when anything runs, the app exits at once when nothing does. A failed list read opens the window with the error toast and never quits. |
+| Quit stops | `crate::quit::StopLedger` (`R2`) buffers an `OperationFinished` that arrives before the request continuation registers its operation id, and hands it to the registration. Nothing is lost to the executor/bridge ordering. |
+| Window close | The body of `on_window_should_close` is `handle_window_should_close` (takes `&mut App`) so the decision is headless-testable. With a tray the window closes and the process, tray and engines stay; without one the close goes through the quit flow (`R4`). |
+| Tray errors | With no window every tray Start/Stop failure is logged (`tracing::warn!` with `code` and `instance`); with a window it also lands as the `<DBL code> — <message>` toast (`R5`). |
+| Tray icons | `TrayMenuModel` entries carry ARGB32 dots (`status_dot_argb`, alpha first) and `StandardItem::icon_data` uses them; the tray's own `icon_pixmap` follows `aggregate_tray_status` (any Failed -> red, else any running -> green, else grey) and `icon_name` is empty so the SNI host prefers the pixmap (`R8`). |
+| Home size | `refresh_home_size_bg` is coalesced (one walk in flight, at most one per 5 s) and runs after `OperationFinished` and `InstanceRemoved`; `dir_size_bytes` never follows a symlink (`R7`). |
+| Instance paths | The Detail card and the Logs tab build their paths from the real `DblPaths` root (`format::data_dir(root, name)`, `format::engine_log_path(root, name)`), abbreviated against `$HOME`; a Windows path keeps its separators (`R9`). |
+
+`grep -rn 'allow(dead_code)' crates/gui` is empty: the fabricated tray state, `tray_actions`, `start_tray_pump`, the `Workspace.events` receiver and the per-window pump are gone (`R6`).
+
 ## Defects found and fixed in W2-B-r2
 
 1. **The render binary aborted after ~10 cases (`HeadlessAppContext::shutdown` wedged).** Each
