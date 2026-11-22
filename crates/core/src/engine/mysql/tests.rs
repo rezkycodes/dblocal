@@ -50,7 +50,6 @@ fn assert_no_secret_in_command(cmd: &Command, secret: &str) {
     }
 }
 
-
 #[test]
 fn render_my_cnf_contains_required_security_settings() {
     let cnf = render_my_cnf(&MyCnfParams {
