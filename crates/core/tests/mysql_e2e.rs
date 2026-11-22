@@ -563,7 +563,8 @@ fn assert_file_has_no_password_bytes(path: &Path, needle: &[u8], label: &str) {
 fn assert_no_password_in_instance_files(instance_dir: &Path, needles: &[(&str, &[u8])]) {
     let mut stack = vec![instance_dir.to_path_buf()];
     while let Some(dir) = stack.pop() {
-        let entries = fs::read_dir(&dir).unwrap_or_else(|e| panic!("read dir {}: {e}", dir.display()));
+        let entries =
+            fs::read_dir(&dir).unwrap_or_else(|e| panic!("read dir {}: {e}", dir.display()));
         for entry in entries {
             let entry = entry.expect("dir entry");
             let path = entry.path();
@@ -602,7 +603,9 @@ fn mysql_84_no_password_cycle() {
     let cmd = MysqlAdapter.spawn_command(&ctx);
     let mut c = Command::new(cmd.get_program());
     c.args(cmd.get_args());
-    c.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+    c.stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
     guard.0 = Some(c.spawn().expect("spawn mysqld"));
     assert!(
         wait_tcp(port, Duration::from_secs(30)),
@@ -617,7 +620,10 @@ fn mysql_84_no_password_cycle() {
         "login failed: {}",
         String::from_utf8_lossy(&out.stderr)
     );
-    assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "root@127.0.0.1");
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout).trim(),
+        "root@127.0.0.1"
+    );
 
     let uri = MysqlAdapter.connection_uri_no_password(&ctx, dblocal_core::service::UriFormat::Uri);
     let expected_uri = format!("mysql://root@127.0.0.1:{port}/");
@@ -633,9 +639,16 @@ fn mysql_84_no_password_cycle() {
     if let Some(mut c) = guard.0.take() {
         let _ = c.wait();
     }
-    assert!(wait_tcp_gone(port, Duration::from_secs(30)), "port still listening");
+    assert!(
+        wait_tcp_gone(port, Duration::from_secs(30)),
+        "port still listening"
+    );
     let sock = socket_path_from_my_cnf(&run.join("my.cnf"));
-    assert!(!sock.exists(), "socket should be gone after shutdown: {}", sock.display());
+    assert!(
+        !sock.exists(),
+        "socket should be gone after shutdown: {}",
+        sock.display()
+    );
 }
 
 #[test]
@@ -664,8 +677,15 @@ fn mysql_84_hostile_password_works_and_never_reaches_a_file() {
     let ctx = run_ctx(&rt, &data, &logs, &run, port, AuthMode::Password, Some(pw));
 
     let out = mysql_client(&rt, port, pw, "SELECT CURRENT_USER();");
-    assert!(out.status.success(), "tcp login failed: {}", String::from_utf8_lossy(&out.stderr));
-    assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "root@127.0.0.1");
+    assert!(
+        out.status.success(),
+        "tcp login failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout).trim(),
+        "root@127.0.0.1"
+    );
 
     let sock = socket_path_from_my_cnf(&run.join("my.cnf"));
     let out_sock = Command::new(rt.join("bin/mysql"))
@@ -683,8 +703,15 @@ fn mysql_84_hostile_password_works_and_never_reaches_a_file() {
         .stderr(Stdio::piped())
         .output()
         .expect("mysql socket");
-    assert!(out_sock.status.success(), "socket login failed: {}", String::from_utf8_lossy(&out_sock.stderr));
-    assert_eq!(String::from_utf8_lossy(&out_sock.stdout).trim(), "root@localhost");
+    assert!(
+        out_sock.status.success(),
+        "socket login failed: {}",
+        String::from_utf8_lossy(&out_sock.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&out_sock.stdout).trim(),
+        "root@localhost"
+    );
 
     let out_bad = Command::new(rt.join("bin/mysql"))
         .args([
@@ -700,14 +727,24 @@ fn mysql_84_hostile_password_works_and_never_reaches_a_file() {
         .stderr(Stdio::piped())
         .output()
         .expect("mysql socket bad");
-    assert!(!out_bad.status.success(), "empty password on socket must fail");
+    assert!(
+        !out_bad.status.success(),
+        "empty password on socket must fail"
+    );
 
     MysqlAdapter.shutdown(&ctx).expect("shutdown");
     if let Some(mut c) = guard.0.take() {
         let _ = c.wait();
     }
-    assert!(wait_tcp_gone(port, Duration::from_secs(30)), "port still listening");
-    assert!(!sock.exists(), "socket should be gone after shutdown: {}", sock.display());
+    assert!(
+        wait_tcp_gone(port, Duration::from_secs(30)),
+        "port still listening"
+    );
+    assert!(
+        !sock.exists(),
+        "socket should be gone after shutdown: {}",
+        sock.display()
+    );
 
     let needles: Vec<(&str, &[u8])> = vec![
         ("full-password", pw.as_bytes()),
@@ -752,7 +789,8 @@ fn mysql_84_deep_socket_path_falls_back_and_cleans_up() {
     let actual_sock = socket_path_from_my_cnf(&cnf);
     assert_ne!(actual_sock, preferred, "deep path must use fallback socket");
     assert!(
-        actual_sock.as_os_str().as_encoded_bytes().len() <= dblocal_core::engine::mysql_socket_path_limit(),
+        actual_sock.as_os_str().as_encoded_bytes().len()
+            <= dblocal_core::engine::mysql_socket_path_limit(),
         "fallback socket too long: {}",
         actual_sock.display()
     );
@@ -776,13 +814,20 @@ fn mysql_84_deep_socket_path_falls_back_and_cleans_up() {
     let h = MysqlAdapter.health_check(&ctx).expect("health");
     assert!(matches!(h, dblocal_core::engine::Health::Ready));
     let out = mysql_client(&rt, port, pw, "SELECT 1;");
-    assert!(out.status.success(), "tcp login failed: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "tcp login failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
 
     MysqlAdapter.shutdown(&ctx).expect("shutdown");
     if let Some(mut c) = guard.0.take() {
         let _ = c.wait();
     }
-    assert!(wait_tcp_gone(port, Duration::from_secs(30)), "port still listening");
+    assert!(
+        wait_tcp_gone(port, Duration::from_secs(30)),
+        "port still listening"
+    );
     assert!(
         !actual_sock.exists(),
         "fallback socket should be removed after shutdown: {}",

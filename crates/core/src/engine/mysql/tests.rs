@@ -1,4 +1,3 @@
-
 use super::*;
 use crate::engine::Credential;
 use crate::model::Port;
@@ -122,10 +121,10 @@ fn connection_uri_password_and_no_password_shapes() {
 fn init_sql_password_mode_sets_both_hosts_and_flushes() {
     let ctx = init_ctx(42345, AuthMode::Password, Some(SECRET));
     let s = render_init_sql(&ctx).expect("sql").expose().to_owned();
-    assert!(
-        s.contains("ALTER USER 'root'@'localhost' IDENTIFIED BY 'S3cret-Canary-Pw-MySql!9x';")
-    );
-    assert!(s.contains("CREATE USER IF NOT EXISTS 'root'@'127.0.0.1' IDENTIFIED BY 'S3cret-Canary-Pw-MySql!9x';"));
+    assert!(s.contains("ALTER USER 'root'@'localhost' IDENTIFIED BY 'S3cret-Canary-Pw-MySql!9x';"));
+    assert!(s.contains(
+        "CREATE USER IF NOT EXISTS 'root'@'127.0.0.1' IDENTIFIED BY 'S3cret-Canary-Pw-MySql!9x';"
+    ));
     assert!(s.contains("GRANT ALL PRIVILEGES ON *.* TO 'root'@'127.0.0.1' WITH GRANT OPTION;"));
     assert!(s.contains("FLUSH PRIVILEGES;"));
 }
@@ -211,9 +210,8 @@ fn parse_handshake_auth_challenges_are_ready() {
     p1045.extend_from_slice(b"28000Access denied for user 'root'@'127.0.0.1'");
     assert_eq!(parse_handshake_payload(&p1045).unwrap(), Handshake::Ready);
     let mut p1130 = vec![0xFF, 0x6A, 0x04, b'#'];
-    p1130.extend_from_slice(
-        b"HY000Host '127.0.0.1' is not allowed to connect to this MySQL server",
-    );
+    p1130
+        .extend_from_slice(b"HY000Host '127.0.0.1' is not allowed to connect to this MySQL server");
     assert_eq!(parse_handshake_payload(&p1130).unwrap(), Handshake::Ready);
 }
 
@@ -343,8 +341,9 @@ fn resolve_socket_path_falls_back_for_long_run_dir() {
     let long_run = dir.path().join("r".repeat(140)).join("run");
     fs::create_dir_all(&long_run).expect("long run");
     let instance_dir = dir.path().join("instance-very-long-name-for-hash");
-    let sock = resolve_socket_path_with_fallback_dir(&long_run, 42000, &instance_dir, &fallback_root)
-        .expect("fallback sock");
+    let sock =
+        resolve_socket_path_with_fallback_dir(&long_run, 42000, &instance_dir, &fallback_root)
+            .expect("fallback sock");
     assert_ne!(sock, socket_path(&long_run, 42000));
     assert!(sock.starts_with(&fallback_root));
     assert!(sock.as_os_str().as_encoded_bytes().len() <= socket_path_limit());
@@ -365,8 +364,13 @@ fn resolve_socket_path_fallback_is_deterministic_for_same_instance() {
     let b = resolve_socket_path_with_fallback_dir(&long_run, 42001, &instance_dir, &fallback_root)
         .expect("b");
     assert_eq!(a, b);
-    let other = resolve_socket_path_with_fallback_dir(&long_run, 42001, &dir.path().join("instance-b"), &fallback_root)
-        .expect("other");
+    let other = resolve_socket_path_with_fallback_dir(
+        &long_run,
+        42001,
+        &dir.path().join("instance-b"),
+        &fallback_root,
+    )
+    .expect("other");
     assert_ne!(a, other);
 }
 
@@ -374,7 +378,11 @@ fn resolve_socket_path_fallback_is_deterministic_for_same_instance() {
 fn socket_path_from_my_cnf_reads_socket_value() {
     let dir = tempfile::tempdir().expect("tmp");
     let cnf = dir.path().join("my.cnf");
-    fs::write(&cnf, "[mysqld]\nsocket=/tmp/dblocal-1000/m42000-abcd.sock\nport=42000\n").expect("write");
+    fs::write(
+        &cnf,
+        "[mysqld]\nsocket=/tmp/dblocal-1000/m42000-abcd.sock\nport=42000\n",
+    )
+    .expect("write");
     let sock = socket_path_from_my_cnf(&cnf).expect("sock");
     assert_eq!(sock, PathBuf::from("/tmp/dblocal-1000/m42000-abcd.sock"));
 }
@@ -412,7 +420,10 @@ fn shutdown_command_uses_mysql_pwd_env_not_argv_password_mode() {
     let cmd = shutdown_command(&ctx);
     assert!(cmd.get_program().to_string_lossy().ends_with("mysqladmin"));
     assert_no_secret_in_command(&cmd, SECRET);
-    let args: Vec<String> = cmd.get_args().map(|a| a.to_string_lossy().into_owned()).collect();
+    let args: Vec<String> = cmd
+        .get_args()
+        .map(|a| a.to_string_lossy().into_owned())
+        .collect();
     assert!(args.iter().any(|a| a == "shutdown"));
     assert!(args.iter().any(|a| a == "--protocol=TCP"));
     let mut saw_mysql_pwd = false;
@@ -433,7 +444,10 @@ fn shutdown_command_omits_mysql_pwd_for_no_password_mode() {
     let has_mysql_pwd = cmd
         .get_envs()
         .any(|(k, _)| k.to_string_lossy() == "MYSQL_PWD");
-    assert!(!has_mysql_pwd, "MYSQL_PWD must not be set for AuthMode::None");
+    assert!(
+        !has_mysql_pwd,
+        "MYSQL_PWD must not be set for AuthMode::None"
+    );
 }
 
 #[test]
@@ -458,7 +472,10 @@ fn initialize_insecure_command_has_no_password() {
     let ctx = init_ctx(42345, AuthMode::Password, Some(SECRET));
     let cmd = initialize_insecure_command(&ctx, Path::new("/logs/init.err"));
     assert_no_secret_in_command(&cmd, SECRET);
-    let args: Vec<String> = cmd.get_args().map(|a| a.to_string_lossy().into_owned()).collect();
+    let args: Vec<String> = cmd
+        .get_args()
+        .map(|a| a.to_string_lossy().into_owned())
+        .collect();
     assert!(args.iter().any(|a| a == "--initialize-insecure"));
     assert!(!args.iter().any(|a| a.contains("--password")));
 }
@@ -472,7 +489,10 @@ fn bootstrap_mysqld_command_has_no_password() {
         Path::new("/run/dblocal-init.sql"),
     );
     assert_no_secret_in_command(&cmd, SECRET);
-    let args: Vec<String> = cmd.get_args().map(|a| a.to_string_lossy().into_owned()).collect();
+    let args: Vec<String> = cmd
+        .get_args()
+        .map(|a| a.to_string_lossy().into_owned())
+        .collect();
     assert!(args.iter().any(|a| a.starts_with("--defaults-file=")));
     assert!(args.iter().any(|a| a.starts_with("--init-file=")));
     assert!(args.iter().any(|a| a == "--daemonize=OFF"));

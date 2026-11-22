@@ -229,7 +229,11 @@ pub(in crate::engine::mysql) fn cleanup_fallback_socket(socket: &Path, run_dir: 
     let _ = fs::remove_file(socket);
 }
 
-pub(in crate::engine::mysql) fn cleanup_fallback_socket_from_my_cnf(my_cnf: &Path, run_dir: &Path, port: u16) {
+pub(in crate::engine::mysql) fn cleanup_fallback_socket_from_my_cnf(
+    my_cnf: &Path,
+    run_dir: &Path,
+    port: u16,
+) {
     let Some(socket) = socket_path_from_my_cnf(my_cnf) else {
         return;
     };

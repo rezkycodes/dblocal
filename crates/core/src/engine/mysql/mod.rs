@@ -12,7 +12,6 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
-
 use crate::consts;
 use crate::engine::uri::{self, exe_name};
 use crate::engine::{Credential, EngineAdapter, Health, InitContext, RunContext};
@@ -108,7 +107,11 @@ impl EngineAdapter for MysqlAdapter {
                 ),
             })
         };
-        cleanup_fallback_socket_from_my_cnf(&my_cnf_path(&ctx.run_dir), &ctx.run_dir, ctx.port.get());
+        cleanup_fallback_socket_from_my_cnf(
+            &my_cnf_path(&ctx.run_dir),
+            &ctx.run_dir,
+            ctx.port.get(),
+        );
         result
     }
 
@@ -151,12 +154,7 @@ fn render_my_cnf(params: &MyCnfParams<'_>) -> String {
     out
 }
 
-fn write_my_cnf(
-    ctx: &InitContext,
-    run_dir: &Path,
-    logs_dir: &Path,
-    socket: &Path,
-) -> Result<()> {
+fn write_my_cnf(ctx: &InitContext, run_dir: &Path, logs_dir: &Path, socket: &Path) -> Result<()> {
     let params = MyCnfParams {
         port: ctx.port.get(),
         data_dir: &ctx.data_dir,
@@ -483,8 +481,14 @@ pub fn pidfile_path(run_dir: &Path) -> PathBuf {
 
 mod socket;
 
-pub use socket::{ensure_fallback_socket_dir, resolve_socket_path, socket_path, socket_path_limit, validate_socket_path_len};
-pub(in crate::engine::mysql) use socket::{cleanup_fallback_socket, cleanup_fallback_socket_from_my_cnf, resolve_socket_path_with_fallback_dir, socket_path_from_my_cnf};
+pub(in crate::engine::mysql) use socket::{
+    cleanup_fallback_socket, cleanup_fallback_socket_from_my_cnf,
+    resolve_socket_path_with_fallback_dir, socket_path_from_my_cnf,
+};
+pub use socket::{
+    ensure_fallback_socket_dir, resolve_socket_path, socket_path, socket_path_limit,
+    validate_socket_path_len,
+};
 
 pub fn sibling_dir(data_dir: &Path, leaf: &str) -> PathBuf {
     match data_dir.parent() {
