@@ -5,12 +5,15 @@
 //! orchestration code.
 
 pub mod glibc;
-mod mariadb;
+pub mod mariadb;
 mod mysql;
 mod postgres;
 pub mod uri;
 mod valkey;
 
+pub use mariadb::{
+    MariaDbAdapter, prepare_run as prepare_mariadb_run, sync_port as sync_mariadb_port,
+};
 pub use mysql::{
     Handshake as MysqlHandshake, MysqlAdapter, my_cnf_path,
     parse_handshake_payload as parse_mysql_handshake_payload, pidfile_path as mysql_pidfile_path,
@@ -38,7 +41,7 @@ pub fn mysql_prepare_run(ctx: &RunContext) -> Result<()> {
 use std::path::PathBuf;
 use std::process::Command;
 
-use crate::error::{DblError, Result};
+use crate::error::Result;
 use crate::model::{AuthMode, EngineKey, Port, StartFailure};
 use crate::secret::SecretString;
 use crate::service::UriFormat;
@@ -244,62 +247,13 @@ pub trait EngineAdapter: Send + Sync {
     }
 }
 
-/// Adapter that deliberately refuses every operation.
-struct StubAdapter {
-    engine: EngineKey,
-}
-
-impl StubAdapter {
-    fn new(engine: EngineKey) -> Self {
-        Self { engine }
-    }
-
-    fn not_implemented(&self) -> DblError {
-        DblError::NotImplemented(format!("{} adapter", self.engine.display_name()))
-    }
-}
-
-impl EngineAdapter for StubAdapter {
-    fn key(&self) -> EngineKey {
-        self.engine
-    }
-
-    fn initialize(&self, _ctx: &InitContext) -> Result<()> {
-        Err(self.not_implemented())
-    }
-
-    fn spawn_command(&self, _ctx: &RunContext) -> Command {
-        Command::new("dblocal-stub")
-    }
-
-    fn health_check(&self, _ctx: &RunContext) -> Result<Health> {
-        Err(self.not_implemented())
-    }
-
-    fn shutdown(&self, _ctx: &RunContext) -> Result<()> {
-        Err(self.not_implemented())
-    }
-
-    fn connection_uri(
-        &self,
-        _ctx: &RunContext,
-        _credential: &Credential,
-        format: UriFormat,
-    ) -> SecretString {
-        match format {
-            UriFormat::Uri => SecretString::new(format!("{}://", self.engine.as_str())),
-            UriFormat::DotEnv => SecretString::new(String::new()),
-        }
-    }
-}
-
 /// Returns the adapter for an engine.
 pub fn adapter_for(engine: EngineKey) -> Box<dyn EngineAdapter> {
     match engine {
         EngineKey::Postgresql => Box::new(postgres::PostgresAdapter),
         EngineKey::Valkey => Box::new(valkey::ValkeyAdapter),
+        EngineKey::Mariadb => Box::new(mariadb::MariaDbAdapter),
         EngineKey::Mysql => Box::new(mysql::MysqlAdapter),
-        EngineKey::Mariadb => Box::new(StubAdapter::new(engine)),
     }
 }
 
@@ -335,25 +289,23 @@ mod tests {
     }
 
     #[test]
-    fn mariadb_remains_stub_mysql_is_real() {
-        let mariadb = adapter_for(EngineKey::Mariadb);
-        let (init, run) = ctx();
-        assert_eq!(mariadb.key(), EngineKey::Mariadb);
-        assert!(matches!(
-            mariadb.initialize(&init),
-            Err(DblError::NotImplemented(_))
-        ));
-        assert_eq!(
-            mariadb.spawn_command(&run).get_program(),
-            std::ffi::OsStr::new("dblocal-stub")
-        );
-
+    fn mysql_and_mariadb_are_real_adapters() {
+        let (_init, run) = ctx();
         let mysql = adapter_for(EngineKey::Mysql);
         assert_eq!(mysql.key(), EngineKey::Mysql);
         assert_eq!(mysql.canonical_port(), 3306);
         assert!(mysql.admin_ops().is_none());
         assert_ne!(
             mysql.spawn_command(&run).get_program(),
+            std::ffi::OsStr::new("dblocal-stub")
+        );
+
+        let mariadb = adapter_for(EngineKey::Mariadb);
+        assert_eq!(mariadb.key(), EngineKey::Mariadb);
+        assert_eq!(mariadb.canonical_port(), 3307);
+        assert!(mariadb.admin_ops().is_none());
+        assert_ne!(
+            mariadb.spawn_command(&run).get_program(),
             std::ffi::OsStr::new("dblocal-stub")
         );
     }
