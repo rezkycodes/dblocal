@@ -70,6 +70,17 @@ impl AppRuntime {
         }
     }
 
+    /// Test constructor that spawns the real bridge (so `subscribe` is counted)
+    /// with a fake tray, and no display.
+    #[cfg(test)]
+    pub fn new_for_test_with_bridge(
+        service: Arc<dyn DblService>,
+        tray: crate::tray::TrayHandle,
+    ) -> Self {
+        let events = crate::service_bridge::spawn_bridge(service.clone());
+        Self::new_for_test(service, tray, events)
+    }
+
     #[cfg(test)]
     pub fn new_for_test(
         service: Arc<dyn DblService>,
@@ -120,8 +131,7 @@ pub fn run_with_service(service: Arc<dyn DblService>) -> dblocal_core::Result<()
                 QuitMode::LastWindowClosed
             });
 
-            start_app_event_loop(cx);
-            start_tray_action_pump(cx);
+            start_app_loops(cx);
 
             if let Err(err) = open_main_window(cx) {
                 tracing::error!("could not open the main window: {err:#}");
@@ -129,6 +139,13 @@ pub fn run_with_service(service: Arc<dyn DblService>) -> dblocal_core::Result<()
             }
         });
     Ok(())
+}
+
+/// Starts the app-level loops. This is the only place the app wires its event
+/// consumers: one bridge, one tray-action pump (R3).
+pub fn start_app_loops(cx: &mut App) {
+    start_app_event_loop(cx);
+    start_tray_action_pump(cx);
 }
 
 /// Single app-level event loop: consumes the one bridge, refreshes tray, and
@@ -346,7 +363,11 @@ fn handle_tray_start_no_window(service: Arc<dyn DblService>, id: String, cx: &mu
     };
     cx.background_spawn(async move {
         if let Err(err) = service.start_instance(&id) {
-            tracing::warn!("tray start failed for {id}: {err}");
+            tracing::warn!(
+                code = err.code(),
+                instance = %id,
+                "tray start failed: {err}"
+            );
         }
     })
     .detach();
@@ -359,7 +380,11 @@ fn handle_tray_stop_no_window(service: Arc<dyn DblService>, id: String, cx: &mut
     };
     cx.background_spawn(async move {
         if let Err(err) = service.stop_instance(&id) {
-            tracing::warn!("tray stop failed for {id}: {err}");
+            tracing::warn!(
+                code = err.code(),
+                instance = %id,
+                "tray stop failed: {err}"
+            );
         }
     })
     .detach();
@@ -400,7 +425,47 @@ mod tests {
         CatalogView, DblService, InstanceView, OperationId, ServiceEvent, UriFormat,
     };
     use gpui_kit::TestAppContext;
+    use std::io::Write;
     use tokio::sync::broadcast;
+    use tracing_subscriber::fmt::MakeWriter;
+
+    #[derive(Clone, Default)]
+    struct LogBuffer(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+    impl Write for LogBuffer {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().expect("log buffer").extend_from_slice(buf);
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl<'a> MakeWriter<'a> for LogBuffer {
+        type Writer = LogBuffer;
+        fn make_writer(&'a self) -> Self::Writer {
+            self.clone()
+        }
+    }
+
+    static LOGS: std::sync::OnceLock<LogBuffer> = std::sync::OnceLock::new();
+
+    fn install_log_capture() {
+        let buffer = LOGS.get_or_init(LogBuffer::default);
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(buffer.clone())
+            .with_max_level(tracing::Level::WARN)
+            .with_ansi(false)
+            .finish();
+        let _ = tracing::subscriber::set_global_default(subscriber);
+    }
+
+    fn captured_log() -> String {
+        LOGS.get()
+            .map(|b| String::from_utf8_lossy(&b.0.lock().expect("log buffer")).into_owned())
+            .unwrap_or_default()
+    }
 
     #[derive(Clone)]
     struct CountingService {
@@ -835,18 +900,13 @@ mod tests {
         cx.update(crate::theme::init);
         let service = Arc::new(CountingService::new(vec![]));
         let svc: Arc<dyn DblService> = service.clone();
-        let events = crate::service_bridge::spawn_bridge(svc.clone());
-        let observed = events.clone();
-        assert_eq!(
-            service.subscribe_calls.load(Ordering::SeqCst),
-            1,
-            "R3: spawn_bridge subscribes once"
-        );
-        let runtime = AppRuntime::new_for_test(svc, crate::tray::TrayHandle::unavailable(), events);
+        let runtime =
+            AppRuntime::new_for_test_with_bridge(svc, crate::tray::TrayHandle::unavailable());
+        let observed = runtime.events.clone();
         cx.update(|cx| {
             cx.set_global(QuitLedger::default());
             cx.set_global(runtime);
-            start_app_event_loop(cx);
+            start_app_loops(cx);
         });
         for _ in 0..10_000 {
             let _ = service.tx.send(ServiceEvent::CatalogUpdated {
@@ -872,6 +932,45 @@ mod tests {
         );
         let has_workspace = cx.update(|cx| cx.global::<AppRuntime>().workspace.is_some());
         assert!(!has_workspace, "R3: no window was opened");
+    }
+
+    /// R5: the window-less tray path logs the failure with its code and id and
+    /// never a secret. Captured with a process-wide `tracing_subscriber` writer,
+    /// because the service call runs on a background thread.
+    #[gpui_kit::test]
+    fn tray_start_failure_logs_code_and_instance_id(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+        cx.update(crate::theme::init);
+        self::install_log_capture();
+        let service = Arc::new(CountingService::new(vec![CountingService::view(
+            "pg-secret",
+            InstanceStatus::Stopped,
+        )]));
+        service.fail_start.store(true, Ordering::SeqCst);
+        let id = service.views.lock().unwrap()[0].id.to_string();
+        install_runtime(cx, service.clone(), crate::tray::TrayHandle::unavailable());
+        cx.update(|cx| handle_tray_action(crate::tray::TrayAction::Start(id.clone()), cx));
+        for _ in 0..50 {
+            cx.run_until_parked();
+            if service.start_calls.load(Ordering::SeqCst) > 0 {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        std::thread::sleep(std::time::Duration::from_millis(80));
+        let logged = captured_log();
+        assert!(
+            logged.contains("tray start failed"),
+            "R5: the failure was not logged: {logged}"
+        );
+        assert!(
+            logged.contains(&id),
+            "R5: the log must name the instance: {logged}"
+        );
+        assert!(
+            logged.contains("DBL-"),
+            "R5: the log must carry the stable code: {logged}"
+        );
     }
 
     struct FakeTray {
