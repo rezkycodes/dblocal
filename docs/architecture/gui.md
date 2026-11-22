@@ -359,7 +359,7 @@ operation completion, failure, timeout, or explicit force-exit confirmation.
 | Quit stops | `crate::quit::StopLedger` (`R2`) buffers an `OperationFinished` that arrives before the request continuation registers its operation id, and hands it to the registration. Nothing is lost to the executor/bridge ordering. |
 | Window close | The body of `on_window_should_close` is `handle_window_should_close` (takes `&mut App`) so the decision is headless-testable. With a tray the window closes and the process, tray and engines stay; without one the close goes through the quit flow (`R4`). |
 | Tray errors | With no window every tray Start/Stop failure is logged (`tracing::warn!` with `code` and `instance`); with a window it also lands as the `<DBL code> — <message>` toast (`R5`). |
-| Tray icons | `TrayMenuModel` entries carry ARGB32 dots (`status_dot_argb`, alpha first) and `StandardItem::icon_data` uses them; the tray's own `icon_pixmap` follows `aggregate_tray_status` (any Failed -> red, else any running -> green, else grey) and `icon_name` is empty so the SNI host prefers the pixmap (`R8`). |
+| Tray icons | `TrayMenuModel` entries carry ARGB32 dots (`status_dot_argb`, alpha first) and `StandardItem::icon_data` uses them; the tray's own `icon_pixmap` follows `aggregate_tray_status` (any Failed -> red, else any running -> green, else grey) and `icon_name` is empty so the SNI host prefers the pixmap (`R8`). No DBLocal brand icon asset exists in `crates/gui/assets` (only the two theme JSON files), so the tray uses the status dot pixmap; a dedicated brand icon can be added later without changing the menu model. |
 | Home size | `refresh_home_size_bg` is coalesced (one walk in flight, at most one per 5 s) and runs after `OperationFinished` and `InstanceRemoved`; `dir_size_bytes` never follows a symlink (`R7`). |
 | Instance paths | The Detail card and the Logs tab build their paths from the real `DblPaths` root (`format::data_dir(root, name)`, `format::engine_log_path(root, name)`), abbreviated against `$HOME`; a Windows path keeps its separators (`R9`). |
 
@@ -404,6 +404,24 @@ operation completion, failure, timeout, or explicit force-exit confirmation.
 ## Known issue (W2-B-r2, a11y)
 
 A debug build panic was seen once on a real desktop with accessibility enabled: `Duplicate a11y node id: ... In a release build, this node would be silently discarded from the a11y tree.` It is a `debug_assert` in gpui (release builds drop the duplicate silently); it is not diagnosed in this round. Task W2-B2 will own it.
+
+### Linux-only startup paths (Q3 follow-up)
+
+`grep -rnE '/usr|/etc|/proc|XDG_|"HOME"|std::env::var\("HOME' crates/gui crates/cli crates/core/src
+--include=*.rs`, outside `#[cfg(test)]` and outside `cfg(target_os = "linux")` blocks, classification:
+
+- `crates/gui/src/vulkan.rs` (`/usr/share/vulkan/icd.d`, `/etc/vulkan/icd.d`, `/usr/local/share/vulkan/icd.d`,
+  `XDG_DATA_HOME`, `HOME`): **Vulkan preflight only**, and `preflight_for_os` skips it on every
+  non-Linux/BSD OS (`os_uses_vulkan_preflight`). Linux-gated, not a defect.
+- `crates/gui/src/app/workspace_api.rs` (`HOME` with a `USERPROFILE` fallback): path abbreviation for
+  display; used on every OS and correct there. Not a defect.
+- `crates/core/src/paths.rs` (`HOME`, `USERPROFILE` under `#[cfg(windows)]`): the documented home
+  resolution with a per-OS fallback. Not a defect.
+- `crates/core/src/clients/terminal.rs` (`XDG_RUNTIME_DIR`, `HOME`): launcher directories, behind
+  `launcher_dir(OsKind)` so each OS gets its own branch. Not a defect.
+- `crates/gui/examples/measure.rs` (`/proc`): a Linux measurement example, never linked into the app.
+- Everything else (`crates/core/src/**/tests*`, `crates/cli/tests/**`, test fixtures using
+  `/etc/passwd`, `/usr/bin/*`): test-only.
 
 ### Unverified per OS
 
