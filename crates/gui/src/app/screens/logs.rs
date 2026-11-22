@@ -128,8 +128,7 @@ impl Workspace {
         } else {
             strings::UI_LOGS_PAUSED
         };
-        let home = self.home_root();
-        let path = format::engine_log_path(&home, &view.name);
+        let path = format::engine_log_path(self.home_root(), &view.name);
 
         let mut viewer = v_flex()
             .id("log-viewer")

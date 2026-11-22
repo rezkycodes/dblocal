@@ -236,16 +236,6 @@ impl Workspace {
         }
     }
 
-    /// Seeds the first frame from an `InstanceView` list (previews and tests).
-    #[cfg(test)]
-    pub(crate) fn seed_state(&mut self, instances: Vec<dblocal_core::service::InstanceView>) {
-        self.state = super::ShellState {
-            instances,
-            downloads: Vec::new(),
-            last_failure: None,
-            uris: std::collections::HashMap::new(),
-        };
-    }
 }
 
 #[cfg(test)]

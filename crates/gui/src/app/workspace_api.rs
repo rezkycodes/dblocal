@@ -225,22 +225,6 @@ impl Workspace {
         self.choose_auth(auth);
     }
 
-    /// Overrides the cached catalog status for preview renders.
-    #[cfg(test)]
-    pub(crate) fn set_catalog_status_for_preview(
-        &mut self,
-        status: dblocal_core::model::CatalogStatus,
-    ) {
-        self.catalog.status = status;
-        self.catalog.banner = match status {
-            dblocal_core::model::CatalogStatus::Fresh => None,
-            dblocal_core::model::CatalogStatus::Stale => Some(strings::CATALOG_STALE.to_owned()),
-            dblocal_core::model::CatalogStatus::Offline => {
-                Some(strings::CATALOG_OFFLINE.to_owned())
-            }
-            _ => None,
-        };
-    }
 
     /// Next free port for an instance's engine, falling back to its port + 1.
     /// Uses cached suggestion; never calls the service on the render path.

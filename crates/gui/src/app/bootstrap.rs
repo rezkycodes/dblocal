@@ -177,11 +177,11 @@ pub fn should_focus_existing_main_window(has_main_window: bool) -> bool {
 }
 
 pub(crate) fn open_main_window(cx: &mut App) -> anyhow::Result<WindowHandle<Root>> {
-    if let Some(handle) = cx.try_global::<AppRuntime>().and_then(|r| r.main_window) {
-        if should_focus_existing_main_window(true) {
-            let _ = handle.update(cx, |_, window, _| window.activate_window());
-            return Ok(handle);
-        }
+    if let Some(handle) = cx.try_global::<AppRuntime>().and_then(|r| r.main_window)
+        && should_focus_existing_main_window(true)
+    {
+        let _ = handle.update(cx, |_, window, _| window.activate_window());
+        return Ok(handle);
     }
 
     let bounds = gpui_kit::Bounds::centered(None, size(px(1280.), px(820.)), cx);
