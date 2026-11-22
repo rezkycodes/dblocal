@@ -22,3 +22,10 @@ Both adapters ended up with their own copy of: socket path limit (107 Linux, 103
 ## Bar
 
 fmt, clippy workspace (and `--features demo`), `cargo deny check`, `engine::mysql` and `engine::mariadb` lib x20, full core lib x4, `mysql_e2e` and `mariadb_e2e` x3 under the e2e lock at load < 8 (paste the load), `cargo xtask ci` under the heavy lock on the final head, coverage of the new module >= 90%.
+
+## Added by the reviewer after merging W3-B1 (2026-11-22)
+
+Two items found while reviewing W3-B1, both belong to this task because it owns the socket-fallback code of both adapters:
+
+1. **MySQL e2e deletes the user's real fallback socket directory.** `crates/core/tests/mysql_e2e/main.rs` (`mysql_84_deep_socket_restart_after_volatile_dirs_disappear`, about line 678) calls `fs::remove_dir_all(&fallback_dir)` where `fallback_dir` is `$XDG_RUNTIME_DIR/dblocal` or `/tmp/dblocal-<uid>`: the shared, per-user directory with the sockets of every DBLocal MySQL/MariaDB instance of whoever runs the test, and of the other deep-socket test in the same binary when threads run in parallel. Apply the same fix as MariaDB E4 (`W3-B2-resume-3.md`): after `initialize`, rewrite the `socket=` line of the instance's `my.cnf` to a path inside a private short directory the test creates under `/tmp` (unique name, mode 0700), delete THAT directory, then run `prepare_run` and start. Audit every e2e for other `remove_dir_all` calls on a directory the test did not create.
+2. **Test-only copy of production logic.** `crates/core/src/engine/mysql/socket.rs` has `#[cfg(test)] resolve_socket_path_with_single_fallback_dir` and `resolve_socket_path_with_fallback_dir`, a second implementation of the resolver that several tests call instead of the production `resolve_socket_path_for`. Delete them and drive the tests through the one shared production function (with an injected candidate list).
