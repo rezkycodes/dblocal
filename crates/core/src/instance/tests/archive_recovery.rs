@@ -148,11 +148,15 @@ fn a_recreated_name_records_its_own_second_archive() {
         .expect("record first xx");
 
     // Delete the first instance fully so the name is free.
-    let op = h
-        .service
-        .delete_instance(first.id(), crate::model::DeleteMode::PurgeData)
-        .expect("delete first");
-    let _ = h.run(op);
+    let (_op, run) = h.run_call(|| {
+        h.service
+            .delete_instance(first.id(), crate::model::DeleteMode::PurgeData)
+    });
+    assert!(
+        matches!(run.result(), Some(Ok(()))),
+        "delete first: {:?}",
+        run.result()
+    );
     // Remove the archived row's *directory* record so only the row remains? No:
     // keep the record, that is the "same name earlier" case. Recreate `xx`.
     let second = create(&h, "xx");

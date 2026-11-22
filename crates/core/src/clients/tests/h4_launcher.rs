@@ -14,8 +14,7 @@ use super::super::terminal::{
 };
 
 fn write_exec(path: &Path, body: &str) {
-    fs::write(path, body).unwrap();
-    fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
+    crate::fsutil::write_executable_file_atomic(path, body.as_bytes()).unwrap();
 }
 
 fn secure_dir(base: &Path, name: &str) -> std::path::PathBuf {
@@ -87,8 +86,8 @@ fn h4_b_posix_launcher_preserves_hostile_password_bytes() {
         let plan = psql_plan(&pw, &psql);
         let temp = plan.temp_file().expect("launcher temp");
         let script_path = dir.path().join(temp.name_hint());
-        fs::write(&script_path, temp.contents().expose().as_bytes()).unwrap();
-        fs::set_permissions(&script_path, fs::Permissions::from_mode(0o600)).unwrap();
+        crate::fsutil::write_private_file_atomic(&script_path, temp.contents().expose().as_bytes())
+            .unwrap();
 
         let status = std::process::Command::new("sh")
             .arg(&script_path)

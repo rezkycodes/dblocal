@@ -72,8 +72,8 @@ fn an_unknown_catalog_version_is_reported_as_unsupported() {
     // finish before a receiver opened afterwards sees its events.
     let mut receiver = h.receiver();
     let op = h.service.create_instance(spec).expect("create");
-    let events = h.run_on(&mut receiver, op.clone());
-    match super::harness::finished_result(&events, &op) {
+    let run = h.run_on(&mut receiver, op.clone());
+    match run.result() {
         Some(Err(error)) => assert_eq!(error.code, crate::error::CODE_UNSUPPORTED),
         other => panic!("expected Unsupported, got {other:?}"),
     }
@@ -125,15 +125,17 @@ fn a_real_archive_can_be_listed_and_purged() {
     let h = Harness::new(EngineKey::Postgresql);
     let port = test_port();
     let spec = h.spec("archived", EngineKey::Postgresql, port);
-    h.create(spec);
-    let instance = h.instances().into_iter().next().expect("instance");
+    let events = h.create(spec);
+    let instance = h.instances().into_iter().next().unwrap_or_else(|| {
+        panic!(
+            "instance after create; events={:?}",
+            super::harness::describe(&events)
+        )
+    });
     let id = instance.id().clone();
 
-    let (op, events) = h.run_call(|| h.service.delete_instance(&id, DeleteMode::ArchiveData));
-    assert!(matches!(
-        super::harness::finished_result(&events, &op),
-        Some(Ok(()))
-    ));
+    let (_op, run) = h.run_call(|| h.service.delete_instance(&id, DeleteMode::ArchiveData));
+    assert!(matches!(run.result(), Some(Ok(()))));
 
     let archives = h.service.list_archives().expect("list");
     assert_eq!(archives.len(), 1);
@@ -230,17 +232,31 @@ fn delete_after_a_failed_start_uses_the_failed_source_status() {
     let port = test_port();
     let spec = h.spec("failed-then-deleted", EngineKey::Postgresql, port);
     h.create(spec);
-    let instance = h.instances().into_iter().next().expect("instance");
+    let instance = h.instances().into_iter().next().unwrap_or_else(|| {
+        panic!(
+            "instance vanished after create; service={:?} fresh={:?} db={} meta={:?}",
+            h.service
+                .list_instances()
+                .map(|views| views.into_iter().map(|v| v.name).collect::<Vec<_>>()),
+            h.instances()
+                .into_iter()
+                .map(|i| i.name().as_str().to_owned())
+                .collect::<Vec<_>>(),
+            h.paths.state_db().display(),
+            std::fs::metadata(h.paths.state_db()).map(|m| m.len()),
+        )
+    });
     let id = instance.id().clone();
-    let op = h.service.start_instance(&id).expect("start");
-    let _ = h.run(op);
+    let (_op, start_run) = h.run_call(|| h.service.start_instance(&id));
+    assert!(start_run.is_err() || matches!(start_run.result(), Some(Ok(()))));
     h.wait_for_status(&id, InstanceStatus::Failed);
 
-    let (op, events) = h.run_call(|| h.service.delete_instance(&id, DeleteMode::PurgeData));
-    assert!(matches!(
-        super::harness::finished_result(&events, &op),
-        Some(Ok(()))
-    ));
+    let (_op, run) = h.run_call(|| h.service.delete_instance(&id, DeleteMode::PurgeData));
+    assert!(
+        matches!(run.result(), Some(Ok(()))),
+        "delete: {:?}",
+        run.result()
+    );
     assert!(h.instance(&id).is_none());
 }
 
@@ -335,8 +351,13 @@ fn a_failed_start_settles_through_the_credential_and_store_paths() {
     // Remove the credential pointer, so `read_credential` returns an empty
     // reference set and the start proceeds unauthenticated rather than failing;
     // either way the row must settle out of `Starting`.
-    let (op, events) = h.run_call(|| h.service.start_instance(&id));
-    assert!(super::harness::finished_result(&events, &op).is_some());
+    let (op, run) = h.run_call(|| h.service.start_instance(&id));
+    let events = &run.events;
+    assert!(
+        run.result().is_some(),
+        "operation {op} must be finished; events={:?}",
+        super::harness::describe(events)
+    );
     let settled = h.instance(&id).expect("row");
     assert_ne!(
         settled.status(),
@@ -381,14 +402,17 @@ fn a_postgres_start_records_the_pid_from_postmaster_pid() {
     )
     .expect("pidfile");
 
-    let op = h.service.start_instance(&id).expect("start");
-    let events = h.run(op);
+    let (_op, run) = h.run_call(|| h.service.start_instance(&id));
     // Either the start succeeds with the server identity, or it fails (the
     // scripted health check cannot reach the fake server). What matters for
     // coverage is that the pidfile path is read and the identity persisted.
-    let _ = events;
     let row = h.instance(&id).expect("row");
     if row.status() == InstanceStatus::Running {
+        assert!(
+            matches!(run.result(), Some(Ok(()))),
+            "running start: {:?}",
+            run.result()
+        );
         assert_eq!(
             row.pid(),
             Some(server.pid()),

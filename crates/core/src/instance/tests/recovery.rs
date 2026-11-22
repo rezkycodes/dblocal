@@ -130,7 +130,7 @@ fn run_crash_point(mode: DeleteMode, point: CrashPoint) {
     }
 
     // App restart: reconciliation must finish this safely.
-    let restarted = super::harness::restart_with(
+    let (restarted, _startup) = super::harness::restart_with(
         &h.paths,
         Arc::clone(&h.procs),
         Arc::clone(&h.terminator),
@@ -302,14 +302,12 @@ fn a_reconciled_interrupted_create_leaves_nothing_behind() {
         .transition_status(&id, InstanceStatus::Stopped, InstanceStatus::Initializing)
         .expect("initializing");
 
-    let restarted = super::harness::restart_with(
+    let (restarted, mut startup_receiver) = super::harness::restart_with(
         &h.paths,
         Arc::clone(&h.procs),
         Arc::clone(&h.terminator),
         Arc::clone(&h.secrets),
     );
-    // Subscribe after the restart so the reconciliation events are observable.
-    let mut receiver = restarted.receiver();
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
     while restarted.instance(&id).is_some() {
         assert!(
@@ -331,10 +329,101 @@ fn a_reconciled_interrupted_create_leaves_nothing_behind() {
         "the credential pointer is gone"
     );
 
-    // One of the events the restart emitted must be the removal.
-    let removal_seen = std::iter::from_fn(|| receiver.try_recv().ok())
-        .any(|event| super::harness::removed_for(&[event], &id));
-    assert!(removal_seen, "reconciliation emits InstanceRemoved");
+    // Subscribe-before-startup is the contract: `restart_with` returns a receiver
+    // created before reconciliation began, so the removal event is observable even
+    // when reconciliation wins the race. `InstanceRemoved` is also durable in the
+    // sense that the row is gone; assert both.
+    let removal_seen = super::harness::wait_for_removed(
+        &mut startup_receiver,
+        &id,
+        std::time::Duration::from_secs(30),
+    );
+    assert!(
+        removal_seen,
+        "reconciliation emits InstanceRemoved for {id}; the row is gone but no removal event arrived before timeout"
+    );
+}
+
+#[test]
+fn a_create_that_finishes_while_reconciliation_lists_is_never_rolled_back() {
+    // The flake this test pins: reconciliation lists the rows (an `await` point),
+    // then acts on that snapshot. A create that was `Initializing` at list time can
+    // finish and release its instance lock before reconciliation reaches the
+    // cleanup, so the stale snapshot row looks unowned and gets the failed-create
+    // rollback — deleting a successfully created instance.
+    //
+    // `on_reconcile` forces that interleaving deterministically: the `before` hook
+    // writes the `Initializing` row the snapshot will see, and the `after` hook
+    // settles it to `Stopped` — exactly what a create that completes mid-list
+    // leaves behind. Without the fix (act on the snapshot row, guarded only by
+    // `is_busy`) the row is deleted and this test fails. With the fix (take the
+    // instance lock and re-read the row) the settled row is left alone.
+    let h = Harness::paused(EngineKey::Postgresql);
+    let root = h.paths.root().to_path_buf();
+    let name = crate::model::InstanceName::new("finished-during-list").expect("name");
+    let port = test_port();
+    let id = crate::model::InstanceId::new();
+
+    let before_id = id.clone();
+    let before_name = name.clone();
+    let after_id = id.clone();
+    super::super::reconcile::on_reconcile(
+        &root,
+        move |inner| {
+            let spec = crate::model::InstanceSpec::new(
+                before_name,
+                EngineKey::Postgresql,
+                "18.7",
+                Some(crate::model::Port::new(port).expect("port")),
+                crate::model::AuthMode::Password,
+            )
+            .expect("spec");
+            let row = crate::model::Instance::new(
+                &spec,
+                before_id,
+                InstanceStatus::Initializing,
+                std::time::SystemTime::now(),
+            );
+            inner
+                .db(|store| store.insert_instance(&row))
+                .expect("insert initializing row");
+        },
+        move |inner| {
+            // The create finished between the list and the cleanup: the row settles
+            // to `Stopped`, and its operation lock is already released (never taken
+            // here, mirroring a create that completed and dropped its guard).
+            let moved = inner
+                .db(|store| {
+                    store.transition_status(
+                        &after_id,
+                        InstanceStatus::Initializing,
+                        InstanceStatus::Stopped,
+                    )
+                })
+                .expect("settle row");
+            assert!(moved, "the row must still be Initializing after the list");
+        },
+    );
+
+    let restarted = super::harness::restart_paused(&h.paths, Arc::clone(&h.procs));
+    let done = super::super::reconcile::on_reconcile_done(&root);
+    restarted.service.start_background();
+    // Wait for reconciliation to run to completion, so the assertion is made
+    // *after* every cleanup decision, not before it (observing the row first would
+    // let the bug pass on timing).
+    done.recv_timeout(std::time::Duration::from_secs(30))
+        .expect("reconciliation must finish");
+    let row = restarted.instance(&id).unwrap_or_else(|| {
+        panic!(
+            "a create that finished during reconciliation must survive; rows={:?}",
+            restarted.instances()
+        )
+    });
+    assert_eq!(
+        row.status(),
+        InstanceStatus::Stopped,
+        "the finished create keeps its settled status"
+    );
 }
 
 #[test]
@@ -478,5 +567,105 @@ fn an_unverifiable_marker_identity_is_treated_as_interrupted_and_never_purges() 
             .expect("archives")
             .is_empty(),
         "no archive is invented for a delete that never moved the data"
+    );
+}
+
+/// R1: a row that holds a process and is owned by an in-flight operation must be
+/// left alone by reconciliation's third phase.
+///
+/// The third phase (`pending`: `Starting`/`Running`/`Stopping`) acts on the
+/// startup snapshot. When an in-process stop (or start) owns the instance, the
+/// snapshot row is a claim the operation is still working on:
+///
+/// - `Stopping` adopted as `Running` lets a second stop be accepted while the
+///   first is in flight, or leaves a `Running` row over a dead process if the
+///   stop already finished;
+/// - a `Starting` row adopted as `Running` claims readiness the start has not
+///   reached, and one marked absent is written `Stopped` with its identity
+///   cleared under a live start.
+///
+/// The test is deterministic: the instance lock is held before reconciliation
+/// runs, and `on_reconcile` inserts the owned row just before the snapshot is
+/// taken, so the interleaving does not depend on timing.
+#[test]
+fn reconciliation_leaves_a_row_owned_by_an_in_flight_operation_alone() {
+    for status in [InstanceStatus::Stopping, InstanceStatus::Starting] {
+        run_in_flight_reconcile_case(status);
+    }
+}
+
+fn run_in_flight_reconcile_case(status: InstanceStatus) {
+    let h = Harness::paused(EngineKey::Postgresql);
+    let root = h.paths.root().to_path_buf();
+    let id = crate::model::InstanceId::new();
+    let name = crate::model::InstanceName::new("in-flight").expect("name");
+    let port = test_port();
+    let procs = Arc::clone(&h.procs);
+
+    // The operation owns the instance before reconciliation starts. The guard is
+    // held for the whole pass and dropped only after it finishes.
+    let guard = h.lock_instance(&id);
+
+    let before_id = id.clone();
+    let before_name = name.clone();
+    let before_procs = Arc::clone(&procs);
+    super::super::reconcile::on_reconcile(
+        &root,
+        move |inner| {
+            let identity = before_procs.spawn("/fake/engine/bin/postgres");
+            let spec = crate::model::InstanceSpec::new(
+                before_name,
+                EngineKey::Postgresql,
+                "18.7",
+                Some(crate::model::Port::new(port).expect("port")),
+                crate::model::AuthMode::Password,
+            )
+            .expect("spec");
+            let row =
+                crate::model::Instance::new(&spec, before_id, status, std::time::SystemTime::now())
+                    .with_process(
+                        identity.pid(),
+                        identity.started_at(),
+                        identity.exe().to_path_buf(),
+                    );
+            inner
+                .db(|store| store.insert_instance(&row))
+                .expect("insert the operation-owned row");
+        },
+        |_| {},
+    );
+
+    let mut events = h.receiver();
+    let done = super::super::reconcile::on_reconcile_done(&root);
+    h.service.start_background();
+    done.recv_timeout(std::time::Duration::from_secs(30))
+        .expect("reconciliation must finish");
+    drop(guard);
+
+    let row = h.instance(&id).expect("the operation-owned row survives");
+    assert_eq!(
+        row.status(),
+        status,
+        "reconciliation must not overwrite the {status:?} claim of an in-flight operation"
+    );
+    assert!(
+        row.pid().is_some(),
+        "the {status:?} row keeps the identity the operation recorded"
+    );
+
+    let mut collected = Vec::new();
+    while let Ok(event) = events.try_recv() {
+        collected.push(event);
+    }
+    let announced = collected.iter().any(|event| {
+        matches!(
+            event,
+            crate::service::ServiceEvent::InstanceChanged { view } if view.id == id
+        )
+    });
+    assert!(
+        !announced,
+        "reconciliation must not announce a change for a row an operation owns; events={:?}",
+        super::harness::describe(&collected)
     );
 }

@@ -27,18 +27,23 @@ fn the_supervisor_never_overwrites_a_clean_stop_with_failed() {
         h.create(spec);
         let instance = h.instances().into_iter().next().expect("instance");
         let id = instance.id().clone();
-        let ops = h.service.start_instance(&id).expect("start");
-        h.run(ops);
+        let (_ops, start_run) = h.run_call(|| h.service.start_instance(&id));
+        assert!(
+            matches!(start_run.result(), Some(Ok(()))),
+            "start: {:?}",
+            start_run.result()
+        );
         h.wait_for_status(&id, InstanceStatus::Running);
 
         // Let the fast supervisor poll while the stop runs.
         let mut receiver = h.receiver();
         let op = h.service.stop_instance(&id).expect("stop");
-        let events = h.run_on(&mut receiver, op.clone());
+        let run = h.run_on(&mut receiver, op.clone());
+        let events = &run.events;
         assert!(
-            matches!(super::harness::finished_result(&events, &op), Some(Ok(()))),
+            matches!(run.result(), Some(Ok(()))),
             "round {round}: the stop must succeed: {:#?}",
-            super::harness::describe(&events)
+            super::harness::describe(events)
         );
 
         let final_status = h
@@ -75,11 +80,12 @@ fn a_finished_delete_ends_with_instance_removed() {
         .service
         .delete_instance(&id, DeleteMode::PurgeData)
         .expect("delete");
-    let events = h.run_on(&mut receiver, op);
+    let run = h.run_on(&mut receiver, op);
+    let events = &run.events;
     assert!(
-        super::harness::removed_for(&events, &id),
+        super::harness::removed_for(events, &id),
         "a delete ends with InstanceRemoved: {:#?}",
-        super::harness::describe(&events)
+        super::harness::describe(events)
     );
     // The removal is the last thing about that instance.
     let last_instance_event = events
@@ -110,7 +116,8 @@ fn a_failed_create_ends_with_instance_removed_and_one_error() {
 
     let mut receiver = h.receiver();
     let op = h.service.create_instance(spec).expect("create");
-    let events = h.run_on(&mut receiver, op.clone());
+    let run = h.run_on(&mut receiver, op.clone());
+    let events = &run.events;
 
     // The row is gone, so we cannot look its id up afterwards; the removal event
     // carries it.
@@ -122,14 +129,14 @@ fn a_failed_create_ends_with_instance_removed_and_one_error() {
         })
         .expect("a rolled-back create ends with InstanceRemoved");
     assert!(h.instances().is_empty(), "no row survives a failed create");
-    assert!(super::harness::removed_for(&events, &removed));
+    assert!(super::harness::removed_for(events, &removed));
     assert_eq!(
-        super::harness::finished_count(&events),
+        super::harness::finished_count(events),
         1,
         "exactly one OperationFinished"
     );
     assert!(
-        matches!(super::harness::finished_result(&events, &op), Some(Err(_))),
+        matches!(run.result(), Some(Err(_))),
         "the failed create reports its error"
     );
     // The removal must not be followed by an `InstanceChanged` for a dead row.
@@ -218,13 +225,14 @@ fn a_stop_that_finds_nothing_to_stop_still_reports_cleanly() {
 
     let mut receiver = h.receiver();
     let op = h.service.stop_instance(&id).expect("stop");
-    let events = h.run_on(&mut receiver, op.clone());
+    let run = h.run_on(&mut receiver, op.clone());
+    let events = &run.events;
     assert!(
-        matches!(super::harness::finished_result(&events, &op), Some(Ok(()))),
+        matches!(run.result(), Some(Ok(()))),
         "no identity + graceful shutdown is a clean stop: {:#?}",
-        super::harness::describe(&events)
+        super::harness::describe(events)
     );
-    assert!(!super::harness::stop_forced_for(&events, &id));
+    assert!(!super::harness::stop_forced_for(events, &id));
     assert_eq!(
         h.instance(&id).expect("row").status(),
         InstanceStatus::Stopped
@@ -241,22 +249,24 @@ fn a_delete_refuses_to_remove_a_row_whose_engine_survives() {
     h.create(spec);
     let instance = h.instances().into_iter().next().expect("instance");
     let id = instance.id().clone();
-    let ops = h.service.start_instance(&id).expect("start");
-    h.run(ops);
+    let (_ops, start_run) = h.run_call(|| h.service.start_instance(&id));
+    assert!(
+        matches!(start_run.result(), Some(Ok(()))),
+        "start: {:?}",
+        start_run.result()
+    );
     h.wait_for_status(&id, InstanceStatus::Running);
 
     h.terminator
         .refuse
         .store(true, std::sync::atomic::Ordering::SeqCst);
-    let op = h
-        .service
-        .delete_instance(&id, DeleteMode::PurgeData)
-        .expect("delete returns an id");
-    let events = h.run(op.clone());
+    let (op, run) = h.run_call(|| h.service.delete_instance(&id, DeleteMode::PurgeData));
+    let events = &run.events;
+    let finished = run.result();
     assert!(
-        matches!(super::harness::finished_result(&events, &op), Some(Err(_))),
-        "a surviving engine must fail the delete: {:#?}",
-        super::harness::describe(&events)
+        matches!(finished, Some(Err(_))),
+        "op {op}: a surviving engine must fail the delete: finished={finished:?} events={:#?}",
+        super::harness::describe(events)
     );
     assert!(
         h.instance(&id).is_some(),

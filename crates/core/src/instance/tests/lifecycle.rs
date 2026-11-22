@@ -6,19 +6,26 @@ use crate::service::{DblService, ServiceEvent, UriFormat};
 use super::created;
 use super::harness::{FailAt, Harness, test_port};
 
-fn start(h: &Harness, id: &crate::model::InstanceId) -> Vec<ServiceEvent> {
-    let op = h.service.start_instance(id).expect("start");
-    h.run(op)
+fn start(
+    h: &Harness,
+    id: &crate::model::InstanceId,
+) -> (crate::service::OperationId, super::harness::OperationRun) {
+    h.run_call(|| h.service.start_instance(id))
 }
 
-fn stop(h: &Harness, id: &crate::model::InstanceId) -> Vec<ServiceEvent> {
-    let op = h.service.stop_instance(id).expect("stop");
-    h.run(op)
+fn stop(
+    h: &Harness,
+    id: &crate::model::InstanceId,
+) -> (crate::service::OperationId, super::harness::OperationRun) {
+    h.run_call(|| h.service.stop_instance(id))
 }
 
-fn delete(h: &Harness, id: &crate::model::InstanceId, mode: DeleteMode) -> Vec<ServiceEvent> {
-    let op = h.service.delete_instance(id, mode).expect("delete");
-    h.run(op)
+fn delete(
+    h: &Harness,
+    id: &crate::model::InstanceId,
+    mode: DeleteMode,
+) -> (crate::service::OperationId, super::harness::OperationRun) {
+    h.run_call(|| h.service.delete_instance(id, mode))
 }
 
 #[test]
@@ -27,12 +34,13 @@ fn happy_path_create_start_stop_delete() {
     let instance = created(&h, "app-dev");
     let id = instance.id().clone();
 
-    let events = start(&h, &id);
-    let finished = super::harness::finished_result(&events, &last_op(&events));
+    let (op, run) = start(&h, &id);
     assert!(
-        matches!(finished, Some(Ok(()))),
-        "start must succeed: {finished:?}"
+        matches!(run.result(), Some(Ok(()))),
+        "start must succeed: {:?}",
+        run.result()
     );
+    let _ = (op, &run.events);
     assert_eq!(
         h.wait_for_status(&id, InstanceStatus::Running).status(),
         InstanceStatus::Running
@@ -42,19 +50,13 @@ fn happy_path_create_start_stop_delete() {
         "an identity must be recorded"
     );
 
-    let events = stop(&h, &id);
-    assert!(matches!(
-        super::harness::finished_result(&events, &last_op(&events)),
-        Some(Ok(()))
-    ));
+    let (_op, run) = stop(&h, &id);
+    assert!(matches!(run.result(), Some(Ok(()))));
     let stopped = h.wait_for_status(&id, InstanceStatus::Stopped);
     assert!(stopped.pid().is_none(), "identity is cleared on stop");
 
-    let events = delete(&h, &id, DeleteMode::PurgeData);
-    assert!(matches!(
-        super::harness::finished_result(&events, &last_op(&events)),
-        Some(Ok(()))
-    ));
+    let (_op, run) = delete(&h, &id, DeleteMode::PurgeData);
+    assert!(matches!(run.result(), Some(Ok(()))));
     assert!(h.instance(&id).is_none(), "row is gone");
     assert!(h.service.list_instances().expect("list").is_empty());
 }
@@ -78,8 +80,9 @@ fn create_emits_stages_in_order_and_one_operation_finished() {
     // Subscribe first so the `queued` stage is not missed.
     let mut receiver = h.receiver();
     let op = h.service.create_instance(spec).expect("create");
-    let events = h.run_on(&mut receiver, op.clone());
-    let stages = super::harness::stages(&events);
+    let run = h.run_on(&mut receiver, op.clone());
+    let events = &run.events;
+    let stages = super::harness::stages(events);
     // The instance is created from a runtime that is "already installed" in the
     // harness, so the expected stage order is initializing then done.
     assert_eq!(stages.first(), Some(&"queued"), "{stages:?}");
@@ -117,8 +120,8 @@ fn create_failure_at_every_stage_leaves_nothing_behind() {
         let h = Harness::with_adapter(adapter, EngineKey::Postgresql);
         let port = test_port();
         let spec = h.spec("doomed", EngineKey::Postgresql, port);
-        let (op, events) = h.run_call(|| h.service.create_instance(spec));
-        let finished = super::harness::finished_result(&events, &op);
+        let (_op, run) = h.run_call(|| h.service.create_instance(spec));
+        let finished = run.result();
         assert!(
             matches!(finished, Some(Err(_))),
             "create must fail at {fail_at:?}: {finished:?}"
@@ -147,8 +150,8 @@ fn start_on_a_port_taken_after_create_fails_with_port_in_use() {
     let id = instance.id().clone();
     h.busy_ports.lock().unwrap().push(instance.port().get());
 
-    let events = start(&h, &id);
-    let finished = super::harness::finished_result(&events, &last_op(&events));
+    let (_op, run) = start(&h, &id);
+    let finished = run.result();
     match finished {
         Some(Err(error)) => assert_eq!(error.code, crate::error::CODE_PORT_IN_USE),
         other => panic!("expected PortInUse, got {other:?}"),
@@ -163,15 +166,13 @@ fn a_failed_start_can_be_retried_after_the_port_frees() {
     let instance = created(&h, "app-dev");
     let id = instance.id().clone();
     h.busy_ports.lock().unwrap().push(instance.port().get());
-    let _ = start(&h, &id);
+    let (_op, run) = start(&h, &id);
+    assert!(matches!(run.result(), Some(Err(_))));
     h.wait_for_status(&id, InstanceStatus::Failed);
 
     h.busy_ports.lock().unwrap().clear();
-    let events = start(&h, &id);
-    assert!(matches!(
-        super::harness::finished_result(&events, &last_op(&events)),
-        Some(Ok(()))
-    ));
+    let (_op, run) = start(&h, &id);
+    assert!(matches!(run.result(), Some(Ok(()))));
     h.wait_for_status(&id, InstanceStatus::Running);
 }
 
@@ -184,8 +185,8 @@ fn an_unhealthy_engine_produces_a_diagnosed_failure_and_can_be_retried() {
     let instance = created(&h, "app-dev");
     let id = instance.id().clone();
 
-    let events = start(&h, &id);
-    let finished = super::harness::finished_result(&events, &last_op(&events));
+    let (_op, run) = start(&h, &id);
+    let finished = run.result();
     match finished {
         Some(Err(error)) => {
             assert_eq!(error.code, crate::error::CODE_ENGINE);
@@ -201,11 +202,8 @@ fn an_unhealthy_engine_produces_a_diagnosed_failure_and_can_be_retried() {
 
     // Retry after the fault clears.
     *h.adapter.fail_at.lock().unwrap() = FailAt::None;
-    let events = start(&h, &id);
-    assert!(matches!(
-        super::harness::finished_result(&events, &last_op(&events)),
-        Some(Ok(()))
-    ));
+    let (_op, run) = start(&h, &id);
+    assert!(matches!(run.result(), Some(Ok(()))));
     h.wait_for_status(&id, InstanceStatus::Running);
 }
 
@@ -219,39 +217,36 @@ fn a_forced_stop_is_reported_as_an_event_and_a_graceful_one_is_not() {
     let id = instance.id().clone();
 
     // Graceful first: no `StopForced`.
-    start(&h, &id);
+    let (_op, run) = start(&h, &id);
+    assert!(matches!(run.result(), Some(Ok(()))));
     h.wait_for_status(&id, InstanceStatus::Running);
-    let mut receiver = h.receiver();
-    let op = h.service.stop_instance(&id).expect("stop");
-    let events = h.run_on(&mut receiver, op);
+    let (op, run) = h.run_call(|| h.service.stop_instance(&id));
+    let events = &run.events;
     assert!(
-        matches!(
-            super::harness::finished_result(&events, &last_op(&events)),
-            Some(Ok(()))
-        ),
-        "graceful stop: {:#?}",
-        super::harness::describe(&events)
+        matches!(run.result(), Some(Ok(()))),
+        "graceful stop {op}: {:#?}",
+        super::harness::describe(events)
     );
     assert!(
-        !super::harness::stop_forced_for(&events, &id),
+        !super::harness::stop_forced_for(events, &id),
         "a graceful stop must not emit StopForced: {:#?}",
-        super::harness::describe(&events)
+        super::harness::describe(events)
     );
 
     // Now a stop that needs escalation: exactly one `StopForced`, before the
     // final change.
-    start(&h, &id);
+    let (_op, run) = start(&h, &id);
+    assert!(matches!(run.result(), Some(Ok(()))));
     h.wait_for_status(&id, InstanceStatus::Running);
     h.terminator
         .forced
         .store(true, std::sync::atomic::Ordering::SeqCst);
-    let mut receiver = h.receiver();
-    let op = h.service.stop_instance(&id).expect("stop");
-    let events = h.run_on(&mut receiver, op);
+    let (_op, run) = h.run_call(|| h.service.stop_instance(&id));
+    let events = &run.events;
     assert!(
-        super::harness::stop_forced_for(&events, &id),
+        super::harness::stop_forced_for(events, &id),
         "a forced stop must emit StopForced: {:#?}",
-        super::harness::describe(&events)
+        super::harness::describe(events)
     );
     let forced_count = events
         .iter()
@@ -286,7 +281,8 @@ fn start_from_a_running_instance_is_rejected() {
     let h = Harness::new(EngineKey::Postgresql);
     let instance = created(&h, "app-dev");
     let id = instance.id().clone();
-    start(&h, &id);
+    let (_op, run) = start(&h, &id);
+    assert!(matches!(run.result(), Some(Ok(()))));
     h.wait_for_status(&id, InstanceStatus::Running);
     let err = h.service.start_instance(&id).expect_err("already running");
     assert_eq!(err.code(), crate::error::CODE_INVALID_TRANSITION);
@@ -303,11 +299,8 @@ fn delete_in_archive_mode_records_the_data() {
         "the harness adapter creates the data dir"
     );
 
-    let events = delete(&h, &id, DeleteMode::ArchiveData);
-    assert!(matches!(
-        super::harness::finished_result(&events, &last_op(&events)),
-        Some(Ok(()))
-    ));
+    let (_op, run) = delete(&h, &id, DeleteMode::ArchiveData);
+    assert!(matches!(run.result(), Some(Ok(()))));
     assert!(h.instance(&id).is_none(), "row removed");
     assert!(
         !data_dir.exists(),
@@ -330,8 +323,8 @@ fn delete_while_running_stops_first() {
     start(&h, &id);
     h.wait_for_status(&id, InstanceStatus::Running);
 
-    let events = delete(&h, &id, DeleteMode::PurgeData);
-    let result = super::harness::finished_result(&events, &last_op(&events));
+    let (_op, run) = delete(&h, &id, DeleteMode::PurgeData);
+    let result = run.result();
     assert!(matches!(result, Some(Ok(()))), "delete failed: {result:?}");
     assert!(h.instance(&id).is_none());
     assert!(

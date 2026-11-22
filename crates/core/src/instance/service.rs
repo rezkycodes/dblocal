@@ -177,6 +177,10 @@ pub struct ServiceOptions {
     pub start_timeout: Option<Duration>,
     /// Override for the supervisor poll interval (tests need it short).
     pub status_poll: Option<Duration>,
+    /// When false, reconciliation and the supervisor are not started. The caller
+    /// must subscribe first if it needs startup events, then call
+    /// [`LocalService::start_background`]. Defaults to true.
+    pub auto_start: Option<bool>,
 }
 
 impl std::fmt::Debug for ServiceOptions {
@@ -478,11 +482,19 @@ impl LocalService {
         });
 
         let service = Self { inner, runtime };
-        service.schedule_startup();
+        if options.auto_start.unwrap_or(true) {
+            service.start_background();
+        }
         Ok(service)
     }
 
-    fn schedule_startup(&self) {
+    /// Starts reconciliation and the supervisor loop.
+    ///
+    /// Called automatically by [`Self::new`] unless `ServiceOptions::auto_start`
+    /// is false. Tests that must observe startup reconciliation events subscribe
+    /// before calling this; starting after subscription means the broadcast has a
+    /// receiver and no event is lost to "no subscribers".
+    pub fn start_background(&self) {
         let inner = Arc::clone(&self.inner);
         self.inner.handle().spawn(async move {
             super::reconcile::reconcile_on_startup(Arc::clone(&inner)).await;
@@ -551,6 +563,19 @@ impl LocalService {
     #[cfg(test)]
     pub(crate) fn is_operation_finished(&self, op: &OperationId) -> bool {
         self.inner.ops.is_finished(op)
+    }
+
+    /// Final outcome of `op`, if it finished inside the retained window.
+    ///
+    /// Unlike the broadcast event, this is durable: a caller that missed
+    /// `OperationFinished` can still observe whether the operation succeeded or
+    /// failed. Exposed to this module's tests for harnesses that run under load.
+    #[cfg(test)]
+    pub(crate) fn operation_result(
+        &self,
+        op: &OperationId,
+    ) -> Option<std::result::Result<(), crate::service::UserFacingError>> {
+        self.inner.ops.operation_result(op)
     }
 
     /// Whether this service has been told to stop (its last handle was dropped).

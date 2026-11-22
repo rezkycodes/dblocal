@@ -1,8 +1,8 @@
 # Engine adapters (W1-F)
 
 This document records the concrete behavior implemented in `crates/core/src/engine/`
-for PostgreSQL and Valkey. It follows the W0-B spike findings and the coordinator
-decisions for W1-F. Spawning detached processes is owned by W1-D/W2-A; adapters
+for PostgreSQL, Valkey and MySQL. It follows the W0-B/W3-B1 spike findings and the
+coordinator decisions. Spawning detached processes is owned by W1-D/W2-A; adapters
 build commands, parse identities, run protocol health checks, stop engines and
 diagnose failures.
 
@@ -178,6 +178,156 @@ Spike refs: README C-03, C-10..C-12, `docs/spikes/engines/valkey.md`.
     range, missing `dir`); `Can't open or create append-only dir ...: Not a directory`;
     and anything unrecognized.
 
+## MariaDB (`engine::mariadb`)
+
+Spike refs: `docs/spikes/engines/mariadb.md` (W3-B2, 2026-11-22), MariaDB REST
+API `downloads.mariadb.org/rest-api/mariadb/<version>/`. Verified LTS builds:
+11.8.10 and 11.4.14, Linux x86_64 `linux-systemd` tarballs, SHA-256 matched the
+REST API `checksum.sha256sum`.
+
+- **Layout.** Top-level `mariadb-<ver>-linux-systemd-x86_64/` with `bin/`,
+  `scripts/`, `lib/`, `share/`. Strip the top-level dir. `mariadbd` is the
+  canonical server binary; `mysqld` is a compat name. `mariadb-install-db` lives
+  in `scripts/` (shell script), not `bin/`.
+
+- **Host deps.** `mariadbd` needs glibc >= 2.28 and links `libcrypt.so.1` on the
+  probed build. Fedora 44 provides `libcrypt.so.2` (XCRYPT_2.0) which satisfies
+  the required symbol, but the soname differs; a host without `libcrypt.so.1`
+  will fail to exec with `error while loading shared libraries: libcrypt.so.1: ...`.
+  The adapter diagnoses loader errors as `BinaryMissing` (raw text kept by caller).
+  Packaging should preflight and document the host package: `libxcrypt-compat` on
+  Fedora, `libcrypt1`/`libxcrypt-compat` as appropriate on Debian/Arch. Do not
+  install packages automatically.
+
+- **Not verified on this host.** MariaDB 11.4 side-by-side is a *printed skip*
+  when the host cannot load the 11.4 binary (`libcrypt.so.1` version mismatch);
+  macOS and Windows behaviour (including the `ps` fallback identity check and
+  AF_UNIX path limits) is implemented but unverified; aarch64 is unverified.
+
+- **Initialize (`mariadb-install-db`):** runs
+  `scripts/mariadb-install-db --datadir=<dir> --basedir=<runtime>
+  --auth-root-authentication-method=normal --skip-test-db`.
+  On failure the data dir is removed and raw output is returned. It writes the
+  DBLocal-managed `my.cnf` (0600) with `bind-address=127.0.0.1`, `port`,
+  `datadir`, `basedir`, a socket path, `pid-file`, `log-error`, `tmpdir`,
+  `skip-name-resolve`. No password in config.
+
+- **Socket path fallback (C-09 analogue).** AF_UNIX `sun_path` is 107 bytes on
+  Linux and 103 bytes on macOS/BSD. The natural path is
+  `<instance>/run/mariadb-<port>.sock`; when it exceeds the platform limit the
+  adapter selects a short private fallback (`$XDG_RUNTIME_DIR/dblocal/` if set
+  and short enough, else `/tmp/dblocal-<euid>/`, mode 0700, owned by current
+  euid, not a symlink) with a deterministic file name derived from port and a
+  short hash of the data directory. The chosen path is written into `my.cnf`, so
+  initialize, bootstrap and start agree. macOS behavior is implemented but
+  unverified on this Linux host.
+
+- **Password bootstrap (`AuthMode::Password`).** After install-db, the adapter
+  writes a 0600 one-shot init file containing `ALTER USER ... IDENTIFIED BY ...;
+  FLUSH PRIVILEGES; SHUTDOWN;`, starts
+  `mariadbd --defaults-file=... --init-file=... --skip-networking`, waits for it
+  to exit within `START_TIMEOUT_SECS`, then deletes the init file on both success
+  and failure. `--skip-networking` is required so initialization does not depend
+  on the instance TCP port being free: the bootstrap server would otherwise bind
+  it, and a foreign listener between the port check and the bootstrap would make
+  `initialize` fail with `Address already in use`. The init file and its
+  `SHUTDOWN` only need the unix socket from `my.cnf`. The SQL literal escapes backslashes,
+  single quotes and control chars. The password never appears in argv, env, or
+  logs; init-file contents are not logged. On failure the data dir is removed.
+
+- **Start command:** `bin/mariadbd --defaults-file=<data_dir>/my.cnf` with
+  stdin null. No password in argv/env; `MYSQL_PWD` and `MYSQL_TCP_PORT` are
+  removed from the environment. `TMPDIR` is set to the instance's private
+  tmpdir (`<instance>/run/tmp`) for the start command, `mariadb-install-db` and
+  the bootstrap server. The instance tmpdir is created 0700, owned by the
+  current euid, never a symlink, and stale contents are removed before every
+  initialize/start (MariaDB `#sql-temptable*` leftovers would otherwise be
+  shared with the process-wide `/tmp`).
+
+- **`prepare_run` on every start (S5).** `<instance>/run` and
+  `<instance>/run/tmp` are volatile (a reboot or `/tmp` cleanup removes them),
+  and the chosen fallback socket dir can be removed too. The service calls
+  `engine::prepare_mariadb_run` before every spawn: it recreates the instance
+  tmpdir and the socket's parent directory (private 0700, owner-checked,
+  symlink-refused via `socket::ensure_secure_runtime_dir` for the shared
+  per-user fallback) and removes only a stale *socket* file at the configured
+  path, leaving a regular file there alone.
+
+- **Health:** TCP connect to `127.0.0.1:<port>`, read the MySQL/MariaDB packet
+  header + greeting payload, parse protocol version 10. A valid greeting
+  (including MariaDB version string like `11.8.10-MariaDB`) means
+  `Health::Ready`. A protocol error packet is treated as Ready because the
+  server spoke the protocol. Connect/read failures are engine errors. No
+  `mysqladmin ping` exit-code trust.
+
+- **Shutdown:** read `data_dir/mariadbd.pid`, verify the PID identity before
+  signalling. On Linux `/proc/<pid>/exe` must resolve to this runtime's
+  `mariadbd` and `/proc/<pid>/cmdline` must contain this instance's
+  `--datadir` or `--defaults-file`; on macOS/BSD a best-effort
+  `ps -p <pid> -o command=` check runs the same matching (documented as
+  unverified here). The `ps` matcher compares whole tokens after the executable
+  path, so a data dir containing a space (`Application Support`) is handled
+  without tokenising on whitespace: the executable must be a prefix followed by
+  whitespace, and `--datadir=...` / `--defaults-file=...` must be surrounded by
+  whitespace. Then send `SIGTERM` and wait up to `STOP_GRACE_SECS` for the PID
+  to disappear. Liveness uses `kill(pid,0)` and treats Linux zombie state (`Z`)
+  as dead.
+  - `NoSuchProcess` ("gone") and `NotOurs` (a pidfile pid that is not our
+    mariadbd) return `Ok(())` with a log line; a live process is never
+    signalled.
+  - `Unverifiable` (e.g. `/proc/<pid>/exe` or `/proc/<pid>/cmdline` cannot be
+    read) returns an engine error instead of `Ok`: a pid we cannot positively
+    identify must not be reported as stopped.
+  - The bounded wait returns a clear engine error on timeout so the service can
+    escalate.
+
+- **Connection values:**
+  - `UriFormat::Uri`: `mysql://<user>:<enc_pw>@127.0.0.1:<port>/`
+  - `UriFormat::DotEnv`: `DATABASE_URL`, `DB_HOST`, `DB_PORT`, `DB_DATABASE=`
+    (empty, MariaDB/MySQL has no mandatory default db in URI), `DB_USERNAME`,
+    `DB_PASSWORD` when present. Uses `uri.rs` percent-encoding.
+
+- **Diagnosis (substring markers, raw tail kept by caller):**
+  - `PortInUse`: `Address already in use`, `Can't start server: Bind on TCP/IP
+    port`, `Do you already have another server running on port`.
+  - `DataDirVersionMismatch`: explicit incompatible-data markers, including
+    MySQL 8.4 datadir opened by MariaDB (`ib_logfile0 was not found` +
+    `Unknown/unsupported storage engine: InnoDB` / `Plugin 'InnoDB' registration
+    as a STORAGE ENGINE failed`). Cross-major MariaDB dirs that InnoDB upgrades
+    silently are not misclassified.
+  - `PermissionDenied`: real `Permission denied`.
+  - `BinaryMissing`: exec `Exec format error` or missing mariadbd/install-db.
+  - `Unknown`: socket path too long, bad config/unknown variable, missing data
+    dir / `Can't change dir to`, disk full, and anything unrecognized.
+
+## MySQL (`engine::mysql`)
+
+Spike refs: `docs/spikes/engines/mysql.md` (W3-B1, real 8.4.11 minimal tarball, Linux x86_64).
+
+- **Runtime:** MySQL 8.4 LTS minimal tarball, `strip_prefix` `mysql-8.4.11-linux-glibc2.28-x86_64-minimal/`. Binaries used: `bin/mysqld`, `bin/mysqladmin`. `mysql` client is present in the tarball and used by e2e tests. glibc floor GLIBC_2.28, `RUNPATH=$ORIGIN/../lib/private`, 0 missing ldd deps on the spike host.
+
+- **Initialize (`mysqld --initialize-insecure`):** runs `mysqld --no-defaults --initialize-insecure --datadir=<dir> --basedir=<runtime> --log-error=<logs>/init.err`. The initialize step creates `root@localhost` with an empty password; it does **not** create `root@127.0.0.1`. The adapter then writes `run/my.cnf` (0600), writes a one-shot `run/dblocal-init.sql` (0600), starts `mysqld --defaults-file=<my.cnf> --init-file=<init.sql>` foreground, waits for TCP readiness, issues `mysqladmin ... shutdown` (password via `MYSQL_PWD` env when `AuthMode::Password`, never argv), waits for exit bounded by `STOP_GRACE_SECS`, and deletes the init SQL file. On any failure the data directory and init SQL file are removed and raw output/log tail is returned.
+
+- **Auth bootstrap (no password in argv/file left behind):** password mode init SQL runs `ALTER USER 'root'@'localhost' IDENTIFIED BY '...'`, creates/grants `root@127.0.0.1`, and `FLUSH PRIVILEGES`. No-password mode creates/grants `root@127.0.0.1` with empty password and keeps localhost as created by initialize-insecure. Passwords are SQL single-quote escaped before embedding in the one-shot init SQL; the init SQL is a `SecretString`-backed render and is never logged.
+
+- **`my.cnf` (0600, atomic write):** `bind-address=127.0.0.1`, `port=<port>`, `datadir`, `socket=<resolved socket>`, `pid-file=<run>/mysqld.pid`, `log-error=<logs>/error.log`, `mysqlx=OFF`, `skip-name-resolve`, `basedir=<runtime>`. No `0.0.0.0`. `mysqlx=OFF` is required: without it MySQL 8.4 binds X Plugin on `*:33060` and a unix `mysqlx.sock`, which violates the single-loopback-port invariant (spike proved with ss).
+
+- **Socket path limit and fallback:** MySQL has no "no unix socket" switch, so the adapter cannot disable the unix socket the way PostgreSQL does. It applies a platform `sun_path` limit: 107 bytes on Linux, 103 bytes on macOS/BSD. If `<run_dir>/mysqld-<port>.sock` fits, it is used unchanged. If it is too long, the adapter resolves a short fallback socket under a verified private directory candidate: `$XDG_RUNTIME_DIR/dblocal/` when set and usable, else `/tmp/dblocal-<euid>/`. Candidates are tried in order; a candidate is used only when it is a real 0700 directory owned by the current euid and the resulting `<candidate>/m<port>-<12hex>.sock` path fits the platform limit. The fallback socket file name is derived from the port and a short SHA-256 hash of the instance directory so two instances never collide. `initialize`, bootstrap and `spawn_command` read the same `my.cnf`, so they agree on the socket. `shutdown` and protocol health use TCP and are unaffected. `shutdown` removes a fallback socket file only when its parent is an allowed fallback directory, its name matches `m<port>-<12hex>.sock` for that port, and the path is a real unix socket; otherwise it warns and leaves it alone. The adapter returns `DblError::InvalidInput { field: "socket", ... }` only when no verified candidate can produce a fitting socket path. macOS behavior is implemented by platform limit/cfg but **unverified on macOS** in this workspace.
+
+- **Start command:** `mysqld --defaults-file=<run>/my.cnf`. No password in argv or env.
+
+- **Prepare on every start:** the fallback socket directory (`$XDG_RUNTIME_DIR/dblocal/` or `/tmp/dblocal-<euid>/`) and the per-instance `tmpdir` (`<run_dir>/tmp`) are volatile — `/run/user/<uid>` and `/tmp` are wiped at logout/reboot (macOS clears `/private/tmp` at boot) and a restored backup can lose `<run_dir>/tmp`. `MysqlAdapter::prepare_run` runs on every start from `instance/start.rs::prepare`: it re-reads `socket=` from `my.cnf`, recreates and re-verifies the fallback directory (0700, our euid, not a symlink) only when the socket lives under an allowed fallback candidate, deletes a stale socket file left by a crash (and refuses a non-socket regular file), recreates the private `tmpdir` 0700, and fails with a clear `Engine` error when it cannot. Without this an instance whose socket path needed the fallback starts once and then fails after the first reboot. macOS is **unverified on macOS** in this workspace.
+
+- **Health check:** real TCP MySQL protocol handshake. The adapter reads the 4-byte packet header and payload; protocol v10 greeting => `Ready`; ERR packet 1045/1130/1251/1524 (or Access denied / Host not allowed messages) => `Ready` (server is up, auth challenge). Other ERR/empty/unknown => `NotReady`. `mysqladmin ping` exit code is not trusted (spike showed rc 0 with a host-not-allowed error).
+
+- **Shutdown:** `mysqladmin --no-defaults -h 127.0.0.1 -P <port> -u root --protocol=TCP shutdown`, password via `MYSQL_PWD` env only when password auth is configured. Non-zero exit returns `DblError::Engine` with raw output. Spike confirmed SQL shutdown and SIGTERM both produce `Shutdown complete`; the adapter's normal path is SQL shutdown.
+
+- **Connection URI:** `UriFormat::Uri` => `mysql://root:<percent-encoded>@127.0.0.1:<port>/`; `UriFormat::DotEnv` includes `DATABASE_URL`, `DB_HOST`, `DB_PORT`, `DB_DATABASE=` (empty), `DB_USERNAME`, `DB_PASSWORD`. No-password (`F-CRD-03`): `mysql://root@127.0.0.1:<port>/` and `.env` omits `DB_PASSWORD`.
+
+- **Diagnosis mapping:** `StartFailure::PortInUse` for `Bind on TCP/IP port: Address already in use` / `Do you already have another mysqld server running on port`. `StartFailure::PermissionDenied` for `Permission denied` / `OS errno 13`. `StartFailure::BinaryMissing` for exec/ENOENT of mysqld/mysqladmin. Socket-path-too-long, bad config/value, missing/garbled ibdata1/datadir, DD init failures, and unrecognized cases map to `StartFailure::Unknown` with raw tail kept by caller.
+
+- **Deviations / notes:** No `mysql_async` runtime dependency was added for health/shutdown; a small handshake reader keeps behavior explicit and auditable. `mysqladmin` is used for shutdown because it is present in the minimal tarball and gives a clean SQL shutdown path; password is passed through `MYSQL_PWD` env, not argv. Windows/macOS/aarch64/MySQL 9.x are unverified.
+
 ## Host glibc detection (`engine::glibc`, C-03)
 
 Valkey Linux binaries are not self-contained. `jammy` requires `GLIBC_2.34`,
@@ -217,3 +367,12 @@ Valkey Linux binaries are not self-contained. `jammy` requires `GLIBC_2.34`,
   host; if unavailable it falls back to the preference chain which resolves to
   `C`, matching the spike's "fallback `C.utf8`, then `C`" intent. The runtime's
   bundled environment is not probed directly.
+- **MariaDB cross-major dirs (W3-B2 spike):** opening a MariaDB 11.4 datadir
+  with 11.8 and the reverse both reached "ready for connections" on the probed
+  builds (InnoDB tolerated the format). The adapter therefore only reports
+  `DataDirVersionMismatch` for explicit incompatibility markers (including the
+  real MySQL 8.4-on-MariaDB InnoDB failure), never for a silent/ambiguous case.
+- **MariaDB host libcrypt (W3-B2 spike):** the 11.8.10/11.4.14 Linux tarballs
+  link `libcrypt.so.1`; Fedora 44 ships `libcrypt.so.2` (XCRYPT_2.0) with the
+  required symbol but a different soname. The adapter does not bundle or shim the
+  library; exec/loader failures surface through the normal start-failure path.
