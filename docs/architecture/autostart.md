@@ -256,6 +256,10 @@ Exit code 0; no `postgres` process from the temp home survived.
 
 ## Fix round 1 (D1–D5) — real-binary evidence (2026-11-23)
 
+Re-verified on the merged head (main + W4-D, merge `59798f6`) with the shipped
+binary; the `client`/`db`/`user` W4-A commands are present alongside
+`autostart`.
+
 ### D1 red first (unit test on the pre-fix head)
 
 ```text
