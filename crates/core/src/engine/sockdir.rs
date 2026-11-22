@@ -390,19 +390,20 @@ pub fn cleanup_socket(socket: &Path, port: u16, xdg_runtime_dir: Option<OsString
                 return;
             }
         }
+        if let Err(err) = fs::remove_file(socket)
+            && err.kind() != std::io::ErrorKind::NotFound
+        {
+            tracing::warn!(
+                socket = %socket.display(),
+                port,
+                "failed to remove fallback socket: {err}"
+            );
+        }
     }
     #[cfg(not(unix))]
     {
-        return;
-    }
-    if let Err(err) = fs::remove_file(socket)
-        && err.kind() != std::io::ErrorKind::NotFound
-    {
-        tracing::warn!(
-            socket = %socket.display(),
-            port,
-            "failed to remove fallback socket: {err}"
-        );
+        // Non-Unix targets have no unix sockets; there is nothing to remove.
+        let _ = (socket, port);
     }
 }
 
