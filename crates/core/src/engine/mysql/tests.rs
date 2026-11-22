@@ -1169,3 +1169,130 @@ fn command_builders_set_tmpdir_env() {
         .expect("TMPDIR");
     assert_eq!(tmp.to_string_lossy(), "/run/tmp");
 }
+
+#[test]
+fn prepare_run_recreates_missing_tmpdir_and_fallback_socket_dir() {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+    let dir = tempfile::tempdir().expect("tmp");
+    let run_dir = dir.path().join("run");
+    fs::create_dir_all(&run_dir).expect("run");
+    let uid = nix::unistd::geteuid().as_raw();
+    let xdg = dir.path().join("xdg");
+    fs::create_dir_all(&xdg).expect("xdg");
+    let fb = xdg.join("dblocal");
+    let sock = fb.join("m42120-abc123def456.sock");
+    fs::write(
+        run_dir.join("my.cnf"),
+        format!("[mysqld]\nsocket={}\nport=42120\n", sock.display()),
+    )
+    .expect("cnf");
+    let tmp = run_dir.join("tmp");
+    let _ = fs::remove_dir_all(&tmp);
+    prepare_runtime_dirs_for_start_with_env(
+        &run_dir,
+        42120,
+        Some(xdg.as_os_str().to_os_string()),
+        uid,
+    )
+    .expect("prepare");
+    let meta = fs::symlink_metadata(&tmp).expect("tmp meta");
+    assert!(meta.is_dir());
+    assert_eq!(meta.permissions().mode() & 0o777, 0o700);
+    let fb_meta = fs::symlink_metadata(&fb).expect("fb meta");
+    assert_eq!(fb_meta.uid(), uid);
+    assert_eq!(fb_meta.permissions().mode() & 0o777, 0o700);
+}
+
+#[test]
+fn prepare_run_removes_stale_socket_file_and_refuses_regular_file() {
+    let dir = tempfile::tempdir().expect("tmp");
+    let run_dir = dir.path().join("run");
+    fs::create_dir_all(&run_dir).expect("run");
+    let uid = nix::unistd::geteuid().as_raw();
+    let xdg = dir.path().join("xdg");
+    let fb = xdg.join("dblocal");
+    crate::fsutil::ensure_private_dir(&fb).expect("fb");
+    let sock = fb.join("m42121-abc123def456.sock");
+    let _ = fs::remove_file(&sock);
+    let l = std::os::unix::net::UnixListener::bind(&sock).expect("bind");
+    drop(l);
+    fs::write(
+        run_dir.join("my.cnf"),
+        format!("[mysqld]\nsocket={}\n", sock.display()),
+    )
+    .expect("cnf");
+    prepare_runtime_dirs_for_start_with_env(
+        &run_dir,
+        42121,
+        Some(xdg.as_os_str().to_os_string()),
+        uid,
+    )
+    .expect("prepare");
+    assert!(!sock.exists(), "stale socket file should be removed");
+
+    fs::write(&sock, b"not socket").expect("write");
+    let err = prepare_runtime_dirs_for_start_with_env(
+        &run_dir,
+        42121,
+        Some(xdg.as_os_str().to_os_string()),
+        uid,
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("not a socket"));
+    let _ = fs::remove_file(&sock);
+}
+
+#[test]
+fn prepare_run_refuses_symlink_and_wrong_mode_fallback_dir() {
+    use std::os::unix::fs::{PermissionsExt, symlink};
+    let dir = tempfile::tempdir().expect("tmp");
+    let run_dir = dir.path().join("run");
+    fs::create_dir_all(&run_dir).expect("run");
+    let uid = nix::unistd::geteuid().as_raw();
+    let xdg = dir.path().join("xdg");
+    let fb = xdg.join("dblocal");
+    crate::fsutil::ensure_private_dir(&fb).expect("fb");
+    let target = dir.path().join("target");
+    crate::fsutil::ensure_private_dir(&target).expect("target");
+    let sock = fb.join("m42122-abc123def456.sock");
+    fs::write(
+        run_dir.join("my.cnf"),
+        format!("[mysqld]\nsocket={}\n", sock.display()),
+    )
+    .expect("cnf");
+
+    fs::set_permissions(&fb, fs::Permissions::from_mode(0o755)).expect("chmod");
+    let err = prepare_runtime_dirs_for_start_with_env(
+        &run_dir,
+        42122,
+        Some(xdg.as_os_str().to_os_string()),
+        uid,
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("0700") || err.to_string().contains("mode"));
+    fs::set_permissions(&fb, fs::Permissions::from_mode(0o700)).expect("restore");
+
+    let link_xdg = dir.path().join("xdg-link");
+    fs::create_dir_all(&link_xdg).expect("link xdg");
+    let link_parent = link_xdg.join("dblocal");
+    symlink(&target, &link_parent).expect("symlink");
+    let link_sock = link_parent.join("m42122-abc123def456.sock");
+    fs::write(
+        run_dir.join("my.cnf"),
+        format!("[mysqld]\nsocket={}\n", link_sock.display()),
+    )
+    .expect("cnf");
+    let err = prepare_runtime_dirs_for_start_with_env(
+        &run_dir,
+        42122,
+        Some(link_xdg.as_os_str().to_os_string()),
+        uid,
+    )
+    .unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("not an allowed fallback socket path")
+            || err.to_string().contains("fallback")
+            || err.to_string().contains("not a real directory")
+    );
+}

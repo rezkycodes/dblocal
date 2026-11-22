@@ -426,3 +426,87 @@ pub(in crate::engine::mysql) fn socket_path_from_my_cnf(my_cnf: &Path) -> Option
     }
     None
 }
+
+pub(in crate::engine::mysql) fn prepare_runtime_dirs_for_start(
+    run_dir: &Path,
+    port: u16,
+) -> Result<()> {
+    let uid = current_euid();
+    let xdg = std::env::var_os("XDG_RUNTIME_DIR");
+    prepare_runtime_dirs_for_start_with_env(run_dir, port, xdg, uid)
+}
+
+pub(in crate::engine::mysql) fn prepare_runtime_dirs_for_start_with_env(
+    run_dir: &Path,
+    port: u16,
+    xdg: Option<std::ffi::OsString>,
+    uid: u32,
+) -> Result<()> {
+    let tmp = run_dir.join("tmp");
+    ensure_verified_private_dir(&tmp, uid).map_err(|e| DblError::Engine {
+        reason: format!("cannot prepare mysql tmpdir {}: {e}", tmp.display()),
+    })?;
+
+    let my_cnf = run_dir.join("my.cnf");
+    let Some(socket) = socket_path_from_my_cnf(&my_cnf) else {
+        return Ok(());
+    };
+    let preferred = socket_path(run_dir, port);
+    if socket == preferred {
+        remove_stale_socket_file(&socket, port)?;
+        return Ok(());
+    }
+    if !is_safe_fallback_socket_for_port_with_candidates(&socket, port, xdg.clone(), uid) {
+        return Err(DblError::Engine {
+            reason: format!(
+                "mysql my.cnf socket {} is not an allowed fallback socket path for port {port}",
+                socket.display()
+            ),
+        });
+    }
+    let parent = socket.parent().ok_or_else(|| DblError::Engine {
+        reason: format!("mysql fallback socket {} has no parent", socket.display()),
+    })?;
+    ensure_verified_private_dir(parent, uid).map_err(|e| DblError::Engine {
+        reason: format!(
+            "cannot prepare mysql fallback socket dir {}: {e}",
+            parent.display()
+        ),
+    })?;
+    remove_stale_socket_file(&socket, port)?;
+    Ok(())
+}
+
+fn remove_stale_socket_file(socket: &Path, port: u16) -> Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::FileTypeExt;
+        match fs::symlink_metadata(socket) {
+            Ok(meta) if meta.file_type().is_socket() => {
+                fs::remove_file(socket).map_err(|e| DblError::Engine {
+                    reason: format!("cannot remove stale mysql socket {}: {e}", socket.display()),
+                })?;
+            }
+            Ok(meta) => {
+                return Err(DblError::Engine {
+                    reason: format!(
+                        "mysql socket path {} exists but is not a socket (port {port}, type {:?})",
+                        socket.display(),
+                        meta.file_type()
+                    ),
+                });
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+            Err(err) => {
+                return Err(DblError::Engine {
+                    reason: format!("cannot stat mysql socket {}: {err}", socket.display()),
+                });
+            }
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (socket, port);
+    }
+    Ok(())
+}

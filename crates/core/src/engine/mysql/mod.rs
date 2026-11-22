@@ -502,17 +502,20 @@ pub fn tmpdir_path(run_dir: &Path) -> PathBuf {
 mod socket;
 
 pub(in crate::engine::mysql) use socket::{
-    cleanup_fallback_socket, cleanup_fallback_socket_from_my_cnf,
+    cleanup_fallback_socket, cleanup_fallback_socket_from_my_cnf, prepare_runtime_dirs_for_start,
 };
 #[cfg(test)]
 pub(in crate::engine::mysql) use socket::{
     cleanup_fallback_socket_with_candidates, ensure_fallback_socket_dir_for,
     ensure_verified_private_dir_for_test, fallback_socket_dir_candidates,
-    is_fallback_socket_name_for_port, resolve_socket_path_with_fallback_dir,
-    socket_path_from_my_cnf,
-    verify_secure_dir_for_test,
+    is_fallback_socket_name_for_port, prepare_runtime_dirs_for_start_with_env,
+    resolve_socket_path_with_fallback_dir, socket_path_from_my_cnf, verify_secure_dir_for_test,
 };
 pub use socket::{resolve_socket_path, socket_path, socket_path_limit, validate_socket_path_len};
+
+pub fn prepare_run(ctx: &RunContext) -> Result<()> {
+    prepare_runtime_dirs_for_start(&ctx.run_dir, ctx.port.get())
+}
 
 pub fn sibling_dir(data_dir: &Path, leaf: &str) -> PathBuf {
     match data_dir.parent() {
