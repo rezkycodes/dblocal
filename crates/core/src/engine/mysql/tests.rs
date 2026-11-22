@@ -964,6 +964,34 @@ fn write_fake_bin(dir: &Path, name: &str, script: &str) -> PathBuf {
     p
 }
 
+/// Runs `f` until it stops failing with ETXTBSY.
+///
+/// Another test in the same binary can fork while our fake script is still open
+/// for writing; the forked child inherits that descriptor and the following exec
+/// of the script fails with `Text file busy` (os error 26). That is a test
+/// environment artifact, not product behaviour, so retry briefly.
+fn retry_etxtbsy<T, E>(
+    mut f: impl FnMut() -> std::result::Result<T, E>,
+) -> std::result::Result<T, E>
+where
+    E: std::fmt::Display,
+{
+    let mut last = None;
+    for _ in 0..500 {
+        match f() {
+            Ok(value) => return Ok(value),
+            Err(err) => {
+                if !err.to_string().contains("Text file busy") {
+                    return Err(err);
+                }
+                last = Some(err);
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+        }
+    }
+    Err(last.expect("retry budget always records the last ETXTBSY"))
+}
+
 #[test]
 fn initialize_insecure_command_failure_cleans_up_and_reports_tail() {
     let dir = tempfile::tempdir().expect("tmp");
@@ -987,7 +1015,7 @@ fn initialize_insecure_command_failure_cleans_up_and_reports_tail() {
         auth: AuthMode::None,
         password: None,
     };
-    let err = MysqlAdapter.initialize(&ctx).unwrap_err();
+    let err = retry_etxtbsy(|| MysqlAdapter.initialize(&ctx)).unwrap_err();
     let msg = err.to_string();
     assert!(
         msg.contains("init boom") || msg.contains("code"),
@@ -1021,7 +1049,7 @@ fn initialize_reports_init_err_log_tail() {
         auth: AuthMode::None,
         password: None,
     };
-    let err = MysqlAdapter.initialize(&ctx).unwrap_err();
+    let err = retry_etxtbsy(|| MysqlAdapter.initialize(&ctx)).unwrap_err();
     let msg = err.to_string();
     assert!(msg.contains("log detail"), "msg: {msg}");
 }
@@ -1059,7 +1087,7 @@ fn shutdown_command_failure_reports_tail_and_cleans_fallback_socket() {
         auth: AuthMode::None,
         credential: None,
     };
-    let err = MysqlAdapter.shutdown(&ctx).unwrap_err();
+    let err = retry_etxtbsy(|| MysqlAdapter.shutdown(&ctx)).unwrap_err();
     let msg = err.to_string();
     assert!(msg.contains("shutdown bad"), "msg: {msg}");
     assert!(msg.contains("9") || msg.contains("code"), "msg: {msg}");
@@ -1313,7 +1341,8 @@ fn shutdown_bootstrap_reports_spawn_and_exit_failure() {
     let dir = tempfile::tempdir().expect("tmp");
     let missing = dir.path().join("rt");
     fs::create_dir_all(&missing).expect("rt");
-    let err = shutdown_bootstrap(&missing, 42200, "root", AuthMode::None, None).unwrap_err();
+    let err = retry_etxtbsy(|| shutdown_bootstrap(&missing, 42200, "root", AuthMode::None, None))
+        .unwrap_err();
     assert!(
         err.to_string()
             .contains("failed to shutdown bootstrap mysqld"),
@@ -1325,7 +1354,8 @@ fn shutdown_bootstrap_reports_spawn_and_exit_failure() {
         "mysqladmin",
         "#!/bin/sh\necho 'boot shutdown bad' >&2\nexit 5\n",
     );
-    let err = shutdown_bootstrap(&missing, 42201, "root", AuthMode::None, None).unwrap_err();
+    let err = retry_etxtbsy(|| shutdown_bootstrap(&missing, 42201, "root", AuthMode::None, None))
+        .unwrap_err();
     let msg = err.to_string();
     assert!(msg.contains("bootstrap shutdown failed"), "{msg}");
     assert!(msg.contains("boot shutdown bad"), "{msg}");
@@ -1342,7 +1372,7 @@ fn run_initialize_insecure_missing_binary_and_early_exit() {
     let mut ctx = init_ctx(42202, AuthMode::None, None);
     ctx.runtime_dir = runtime.clone();
     ctx.data_dir = dir.path().join("data");
-    let err = run_initialize_insecure(&ctx, &logs).unwrap_err();
+    let err = retry_etxtbsy(|| run_initialize_insecure(&ctx, &logs)).unwrap_err();
     assert!(
         err.to_string()
             .contains("failed to execute mysqld --initialize-insecure"),
@@ -1354,7 +1384,7 @@ fn run_initialize_insecure_missing_binary_and_early_exit() {
         "mysqld",
         "#!/bin/sh\necho 'init failed hard' >&2\nexit 4\n",
     );
-    let err = run_initialize_insecure(&ctx, &logs).unwrap_err();
+    let err = retry_etxtbsy(|| run_initialize_insecure(&ctx, &logs)).unwrap_err();
     let msg = err.to_string();
     assert!(msg.contains("--initialize-insecure failed"), "{msg}");
     assert!(msg.contains("init failed hard"), "{msg}");
@@ -1386,7 +1416,7 @@ fn bootstrap_credentials_reports_unwritable_init_file_and_early_exit() {
 
     let before = fs::symlink_metadata(&run_dir).expect("meta");
     fs::set_permissions(&run_dir, fs::Permissions::from_mode(0o500)).expect("chmod");
-    let err = bootstrap_credentials(&ctx, &run_dir, &logs).unwrap_err();
+    let err = retry_etxtbsy(|| bootstrap_credentials(&ctx, &run_dir, &logs)).unwrap_err();
     assert!(err.to_string().contains("cannot write init SQL"), "{err}");
     fs::set_permissions(
         &run_dir,
@@ -1394,7 +1424,7 @@ fn bootstrap_credentials_reports_unwritable_init_file_and_early_exit() {
     )
     .expect("restore");
 
-    let err = bootstrap_credentials(&ctx, &run_dir, &logs).unwrap_err();
+    let err = retry_etxtbsy(|| bootstrap_credentials(&ctx, &run_dir, &logs)).unwrap_err();
     let msg = err.to_string();
     assert!(msg.contains("mysqld bootstrap exited early"), "{msg}");
     assert!(msg.contains("bootstrap early"), "{msg}");
