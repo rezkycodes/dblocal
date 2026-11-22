@@ -768,6 +768,38 @@ fn placeholder_layouts_match_the_prototype_structure() {
     assert_eq!(placeholder_phase_label(PlaceholderTab::Config), "3");
 }
 
+/// R9: every instance path the UI prints comes from the real home root, never a
+/// literal `~/.dblocal`, and a Windows path is not rewritten with `/`.
+#[test]
+fn instance_paths_come_from_the_real_home_root() {
+    let home = std::path::Path::new("/tmp/dblocal-home-w2b");
+    let data = data_dir(home, "app");
+    let log = engine_log_path(home, "app");
+    assert!(
+        data.starts_with("/tmp/dblocal-home-w2b/instances/app/data"),
+        "{data}"
+    );
+    assert!(
+        log.starts_with("/tmp/dblocal-home-w2b/instances/app/logs/engine.log"),
+        "{log}"
+    );
+    assert!(!data.contains("~/.dblocal") && !log.contains("~/.dblocal"));
+
+    let abbreviated = abbreviate_home(
+        std::path::Path::new("/tmp/dblocal-home-w2b/instances/app/data"),
+        Some(std::path::Path::new("/tmp")),
+    );
+    assert_eq!(abbreviated, "~/dblocal-home-w2b/instances/app/data");
+
+    // A Windows-style path is shown as is, not rewritten with `/`.
+    let windows = std::path::Path::new(r"C:\Users\x\AppData\Local\DBLocal");
+    let printed = abbreviate_home(windows, None);
+    assert!(printed.starts_with("C:\\Users"), "{printed}");
+    assert!(!printed.contains("~/"), "{printed}");
+    let data = data_dir(windows, "app");
+    assert!(data.contains("DBLocal"), "{data}");
+}
+
 #[test]
 fn abbreviate_home_replaces_prefix() {
     let home = std::path::Path::new("/home/alice");

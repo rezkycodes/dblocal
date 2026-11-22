@@ -258,7 +258,7 @@ pub fn abbreviate_home(path: &std::path::Path, home: Option<&std::path::Path>) -
         if rest.as_os_str().is_empty() {
             return "~".to_owned();
         }
-        let rest = rest.to_string_lossy().replace('\\', "/");
+        let rest = rest.to_string_lossy();
         return format!("~/{rest}");
     }
     path.to_string_lossy().into_owned()
