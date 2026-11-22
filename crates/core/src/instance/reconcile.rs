@@ -24,23 +24,23 @@ pub(crate) async fn reconcile_on_startup(inner: Arc<Inner>) {
         }
     };
 
-    // An instance with an operation running in this process is not interrupted;
-    // it is still being created. Skipping it keeps reconciliation from racing a
-    // create that started at the same instant as the app.
-    let instances: Vec<Instance> = instances
-        .into_iter()
-        .filter(|instance| !inner.ops.is_busy(instance.id()))
-        .collect();
-
-    // A `Deleting` row is terminal and must be finished — but only when the
-    // delete is genuinely interrupted. The GUI and a CLI share this home, so a
-    // live delete in another process has written `Deleting` and is between its
-    // filesystem steps; a service starting in that window must not mistake it
-    // for a crash and revert it to `Stopped` (which would let a second delete
-    // run). The owner records its PID in a marker file while it works, and the
-    // row counts as in-flight only while that PID is still alive. A crashed
-    // owner leaves the same file, but its PID is gone, so recovery proceeds.
+    // Work from a snapshot, but never act on stale state: a create can finish
+    // between the list and the cleanup (it drops its instance lock only after the
+    // row is `Stopped`), so every mutating decision below re-reads the row and
+    // re-checks the in-process lock before touching it. Acting on the snapshot
+    // alone would delete a successfully created instance.
     for instance in &instances {
+        if inner.ops.is_busy(instance.id()) {
+            continue;
+        }
+        // A `Deleting` row is terminal and must be finished — but only when the
+        // delete is genuinely interrupted. The GUI and a CLI share this home, so a
+        // live delete in another process has written `Deleting` and is between its
+        // filesystem steps; a service starting in that window must not mistake it
+        // for a crash and revert it to `Stopped` (which would let a second delete
+        // run). The owner records its PID in a marker file while it works, and the
+        // row counts as in-flight only while that PID is still alive. A crashed
+        // owner leaves the same file, but its PID is gone, so recovery proceeds.
         if instance.status() == InstanceStatus::Deleting
             && !super::delete::delete_in_flight(&inner, instance)
         {
@@ -55,7 +55,8 @@ pub(crate) async fn reconcile_on_startup(inner: Arc<Inner>) {
         if matches!(
             instance.status(),
             InstanceStatus::Provisioning | InstanceStatus::Initializing
-        ) {
+        ) && !inner.ops.is_busy(instance.id())
+        {
             clean_interrupted_create(&inner, instance).await;
         }
     }
