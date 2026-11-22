@@ -52,6 +52,52 @@ fn create_no_password_has_no_secret() {
     assert_eq!(view.auth, AuthMode::None);
 }
 
+/// `create --no-password` prints the no-password URI itself, exactly, and exits 0.
+///
+/// The round-1 defect was on `create` too: the reviewer's real binary exited 3
+/// here, so a test that only checks `starts_with("redis://")` would have passed
+/// on a wrong shape. This one compares the whole line.
+#[test]
+fn create_no_password_stdout_is_exactly_the_no_password_uri() {
+    let svc = MockService::deterministic();
+    let (code, out, err) = run_cmd(
+        &svc,
+        &Command::Create {
+            engine: "valkey".into(),
+            version: "9.2.0".into(),
+            name: "open".into(),
+            port: Some(25100),
+            no_password: true,
+        },
+        false,
+    );
+    assert_eq!(code, EXIT_OK, "stderr: {err}");
+    assert_eq!(out, "redis://127.0.0.1:25100/0\n");
+    assert!(!out.contains('@'), "no userinfo expected: {out}");
+    // Progress goes to stderr; stdout is just the URI.
+    assert!(err.contains("Membuat instance"), "stderr: {err}");
+}
+
+/// A no-password PostgreSQL create prints `user@`, never `user:@`.
+#[test]
+fn create_no_password_postgres_uri_has_a_user_but_no_colon() {
+    let svc = MockService::deterministic();
+    let (code, out, err) = run_cmd(
+        &svc,
+        &Command::Create {
+            engine: "postgresql".into(),
+            version: "17.4".into(),
+            name: "open".into(),
+            port: Some(25101),
+            no_password: true,
+        },
+        false,
+    );
+    assert_eq!(code, EXIT_OK, "stderr: {err}");
+    assert_eq!(out, "postgresql://postgres@127.0.0.1:25101/postgres\n");
+    assert!(!out.contains(":@"), "an empty password was printed: {out}");
+}
+
 #[test]
 fn create_unknown_engine_is_bad_arguments() {
     let svc = MockService::deterministic();
