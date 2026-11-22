@@ -78,15 +78,16 @@ pub(crate) async fn reconcile_on_startup(inner: Arc<Inner>) {
         ),
     );
 
-    // Work from a snapshot, but never act on stale state: a create can finish
-    // between the list and the cleanup (it drops its instance lock only after the
-    // row is `Stopped`), so every mutating decision below re-reads the row and
-    // re-checks the in-process lock before touching it. Acting on the snapshot
-    // alone would delete a successfully created instance.
+    // Act on a **freshly read** row under the in-process instance lock, never on
+    // the startup snapshot alone. Listing the rows is an `await` point: a create
+    // can insert `Initializing`, finish and release its lock before
+    // reconciliation acts. Treating the stale `Initializing` snapshot row as an
+    // interrupted create then ran the failed-create rollback and deleted a
+    // successfully created instance. The instance lock is what closes the race:
+    // a create (or a delete) holds it for its whole life, so acquiring it proves
+    // no such operation is running here, and the fresh read proves the row is
+    // still mid-create rather than already settled.
     for instance in &instances {
-        if inner.ops.is_busy(instance.id()) {
-            continue;
-        }
         // A `Deleting` row is terminal and must be finished — but only when the
         // delete is genuinely interrupted. The GUI and a CLI share this home, so a
         // live delete in another process has written `Deleting` and is between its
@@ -95,12 +96,18 @@ pub(crate) async fn reconcile_on_startup(inner: Arc<Inner>) {
         // run). The owner records its PID in a marker file while it works, and the
         // row counts as in-flight only while that PID is still alive. A crashed
         // owner leaves the same file, but its PID is gone, so recovery proceeds.
-        if instance.status() == InstanceStatus::Deleting
-            && !super::delete::delete_in_flight(&inner, instance)
-        {
-            #[cfg(test)]
-            record_decision(&inner, &format!("finish_delete id={} status={:?}", instance.id().as_str(), instance.status()));
-            finish_delete(&inner, instance).await;
+        if instance.status() == InstanceStatus::Deleting {
+            let Some(_guard) = lock_if_idle(&inner, instance.id()) else {
+                continue;
+            };
+            let Some(fresh) = fresh_instance(&inner, instance.id()) else {
+                continue;
+            };
+            if fresh.status() == InstanceStatus::Deleting
+                && !super::delete::delete_in_flight(&inner, &fresh)
+            {
+                finish_delete(&inner, &fresh).await;
+            }
         }
     }
 
@@ -108,14 +115,23 @@ pub(crate) async fn reconcile_on_startup(inner: Arc<Inner>) {
     // runs: a half-initialised data directory and a possible credential must not
     // survive as a "failed" zombie (`F-INS-01`: nothing half-created, ever).
     for instance in &instances {
-        if matches!(
+        if !matches!(
             instance.status(),
             InstanceStatus::Provisioning | InstanceStatus::Initializing
-        ) && !inner.ops.is_busy(instance.id())
-        {
-            #[cfg(test)]
-            record_decision(&inner, &format!("clean_interrupted id={} status={:?}", instance.id().as_str(), instance.status()));
-            clean_interrupted_create(&inner, instance).await;
+        ) {
+            continue;
+        }
+        let Some(_guard) = lock_if_idle(&inner, instance.id()) else {
+            continue;
+        };
+        let Some(fresh) = fresh_instance(&inner, instance.id()) else {
+            continue;
+        };
+        if matches!(
+            fresh.status(),
+            InstanceStatus::Provisioning | InstanceStatus::Initializing
+        ) {
+            clean_interrupted_create(&inner, &fresh).await;
         }
     }
 
@@ -160,6 +176,25 @@ pub(crate) async fn reconcile_on_startup(inner: Arc<Inner>) {
             mark(&inner, instance, InstanceEvent::ReconciledAbsent).await;
         }
     }
+}
+
+/// Acquires the per-instance lock when no in-process operation owns it.
+///
+/// `Err` means busy (an operation holds it in this process); `Ok` gives a guard
+/// that releases on drop. It is the only in-process proof that a create/delete is
+/// not mid-flight, so every mutating reconciliation decision takes it before
+/// reading fresh state.
+fn lock_if_idle(
+    inner: &Arc<Inner>,
+    id: &InstanceId,
+) -> Option<super::registry::InstanceLock> {
+    inner.ops.lock_instance(id).ok()
+}
+
+/// Re-reads one instance from the store, so a decision never acts on a stale
+/// snapshot row whose operation already finished.
+fn fresh_instance(inner: &Arc<Inner>, id: &InstanceId) -> Option<Instance> {
+    inner.db(|store| store.get_instance(id)).ok().flatten()
 }
 
 /// Reconciles every row that was mid-operation when the app died.
@@ -314,7 +349,19 @@ fn short_id(id: &InstanceId) -> String {
 /// The same cleanup a failed create runs (`helpers::rollback_create`): data and
 /// instance directories, both credential backends and the row. The verified
 /// runtime is kept because it is reusable.
+///
+/// The caller holds the instance lock and passes a row it just re-read, so this
+/// only ever removes a row that is genuinely still mid-create; it re-checks the
+/// status anyway, because the row could have been settled by a writer in another
+/// process in the meantime.
 async fn clean_interrupted_create(inner: &Arc<Inner>, instance: &Instance) {
+    if !matches!(
+        instance.status(),
+        InstanceStatus::Provisioning | InstanceStatus::Initializing
+    ) {
+        return;
+    }
+
     let removed = super::helpers::rollback_create(inner, instance.id(), instance.name()).await;
     if removed {
         super::helpers::emit_removed(inner, instance.id());
