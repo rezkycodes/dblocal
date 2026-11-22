@@ -71,7 +71,7 @@ PostgreSQL logs the text of a failing statement by default
 (`log_min_error_statement = error`), and `logs/postgres.log` is the file surfaced
 by `dblocal logs` and the Logs tab. Instead the client computes a SCRAM-SHA-256
 verifier with `postgres_protocol::password::scram_sha_256` and sends
-`PASSWORD E'SCRAM-SHA-256$4096:...'` through `quote_postgres_literal`. The
+`PASSWORD 'SCRAM-SHA-256$4096:...'` as a plain literal (not `E'...'`). The
 server stores a verifier either way, so authentication is unchanged. Every admin
 connection also sets `-c log_min_error_statement=panic -c log_statement=none -c
 log_min_duration_statement=-1` as belt-and-braces (the admin user is superuser).

@@ -451,7 +451,7 @@ fn create_user_builders() {
     let pg = create_role_postgres(&user, verifier);
     assert_eq!(
         pg.sql(),
-        "CREATE ROLE \"app_user\" LOGIN PASSWORD E'SCRAM-SHA-256$4096:salt$stored:server'"
+        "CREATE ROLE \"app_user\" LOGIN PASSWORD 'SCRAM-SHA-256$4096:salt$stored:server'"
     );
     assert_eq!(
         one_statement(pg.sql()),
@@ -562,7 +562,7 @@ fn alter_password_and_drop_user_builders() {
     let pg = alter_role_password_postgres(&user, verifier);
     assert_eq!(
         pg.sql(),
-        "ALTER ROLE \"app\" PASSWORD E'SCRAM-SHA-256$4096:salt$stored:server'"
+        "ALTER ROLE \"app\" PASSWORD 'SCRAM-SHA-256$4096:salt$stored:server'"
     );
     assert_eq!(
         one_statement(pg.sql()),

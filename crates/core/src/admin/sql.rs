@@ -161,6 +161,19 @@ pub fn quote_postgres_literal(value: &str) -> String {
     out
 }
 
+/// Quotes a SCRAM verifier as a plain PostgreSQL literal.
+///
+/// SCRAM verifiers are base64/`$`/digits/`=` — no backslash, no NUL, no quote.
+/// Using a plain literal (not `E'...'`) keeps the password field from looking
+/// like a cleartext `PASSWORD E'...'` in engine logs when log_statement is on.
+pub fn quote_postgres_scram_literal(value: &str) -> String {
+    debug_assert!(
+        !value.contains('\\') && !value.contains('\0') && !value.contains('\''),
+        "SCRAM verifier must not contain backslash, NUL, or single quote"
+    );
+    format!("'{}'", value.replace('\'', "''"))
+}
+
 /// Quotes a value as a MySQL string literal (backslash escapes).
 pub fn quote_mysql_literal(value: &str) -> String {
     let mut out = String::with_capacity(value.len() + 2);
@@ -306,7 +319,7 @@ pub fn role_exists_postgres(user: &Identifier) -> SqlStatement {
 /// way, so authentication is unchanged.
 pub fn create_role_postgres(user: &Identifier, credential: &str) -> SqlStatement {
     let name = quote_identifier(Dialect::Postgres, user);
-    let pw = quote_postgres_literal(credential);
+    let pw = quote_postgres_scram_literal(credential);
     SqlStatement::new(format!("CREATE ROLE {name} LOGIN PASSWORD {pw}"))
 }
 
@@ -432,7 +445,7 @@ pub fn revoke_privileges(
 /// cleartext can never appear in a logged failing statement.
 pub fn alter_role_password_postgres(user: &Identifier, credential: &str) -> SqlStatement {
     let name = quote_identifier(Dialect::Postgres, user);
-    let pw = quote_postgres_literal(credential);
+    let pw = quote_postgres_scram_literal(credential);
     SqlStatement::new(format!("ALTER ROLE {name} PASSWORD {pw}"))
 }
 
