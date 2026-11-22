@@ -4,7 +4,10 @@
 //! module is the thin GPUI glue that turns its actions into service calls and
 //! window operations.
 
+use std::time::Duration;
+
 use dblocal_core::model::InstanceId;
+use dblocal_core::service::OperationId;
 use dblocal_core::strings;
 use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::component::button::ButtonVariants as _;
@@ -21,7 +24,7 @@ impl Workspace {
     pub(crate) fn apply_tray_action(&mut self, action: TrayAction, cx: &mut Context<Self>) {
         match action {
             TrayAction::OpenWindow => {
-                cx.activate(true);
+                self.open_or_focus_main_window(cx);
             }
             TrayAction::Quit => self.request_quit(cx),
             TrayAction::Start(id) => {
@@ -37,6 +40,14 @@ impl Workspace {
         }
     }
 
+    fn open_or_focus_main_window(&mut self, cx: &mut Context<Self>) {
+        cx.defer(|cx| {
+            if let Err(err) = crate::app::bootstrap::open_main_window(cx) {
+                tracing::error!("could not open main window from tray: {err:#}");
+            }
+        });
+    }
+
     pub(crate) fn request_quit(&mut self, cx: &mut Context<Self>) {
         let running = running_instance_ids(&self.state.instances);
         let action = self.quit.apply(QuitEvent::QuitRequested { running });
@@ -45,28 +56,100 @@ impl Workspace {
 
     fn handle_quit_action(&mut self, action: QuitAction, cx: &mut Context<Self>) {
         match action {
-            QuitAction::None | QuitAction::ShowDialog => cx.notify(),
+            QuitAction::None | QuitAction::ShowDialog => {
+                self.maybe_clear_quit_stops();
+                cx.notify();
+            }
             QuitAction::StopInstances(ids) => {
+                self.quit_stops.clear();
+                self.arm_quit_timeout(cx);
                 for id in ids {
                     let service = self.service.clone();
                     let iid = id.clone();
                     self.bg(cx, move || {
                         let result = service.stop_instance(&iid);
                         move |this: &mut Workspace, cx: &mut Context<Workspace>| {
-                            let ok = result.is_ok();
-                            if let Err(err) = result {
-                                this.report_error(&err);
+                            match result {
+                                Ok(op) => {
+                                    this.quit_stops.insert(op, iid);
+                                }
+                                Err(err) => {
+                                    this.report_error(&err);
+                                    let action =
+                                        this.quit.apply(QuitEvent::StopFinished { id: iid, ok: false });
+                                    this.handle_quit_action(action, cx);
+                                }
                             }
-                            let action = this.quit.apply(QuitEvent::StopFinished { id: iid, ok });
-                            this.handle_quit_action(action, cx);
                             cx.notify();
                         }
                     });
                 }
                 cx.notify();
             }
-            QuitAction::Exit => cx.quit(),
+            QuitAction::Exit => {
+                self.quit_stops.clear();
+                self.quit_timeout_task = None;
+                cx.quit();
+            }
         }
+    }
+
+    /// Arm the bounded wait for all quit-initiated stops to finish.
+    fn arm_quit_timeout(&mut self, cx: &mut Context<Self>) {
+        let duration = self.quit_stop_timeout;
+        self.quit_timeout_task = Some(cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(duration).await;
+            let _ = this.update(cx, |this, cx| {
+                if matches!(this.quit.state(), QuitState::StoppingAll { .. }) {
+                    let action = this.quit.apply(QuitEvent::Timeout);
+                    this.handle_quit_action(action, cx);
+                }
+            });
+        }));
+    }
+
+    fn maybe_clear_quit_stops(&mut self) {
+        if !matches!(self.quit.state(), QuitState::StoppingAll { .. }) {
+            self.quit_stops.clear();
+            self.quit_timeout_task = None;
+        }
+    }
+
+    /// A quit-initiated stop operation finished (or failed). Only a real
+    /// `OperationFinished` advances the quit machine; request acceptance does not.
+    pub(crate) fn on_quit_stop_finished(
+        &mut self,
+        op: &OperationId,
+        ok: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(id) = self.quit_stops.remove(op) else {
+            return;
+        };
+        if !matches!(self.quit.state(), QuitState::StoppingAll { .. }) {
+            self.maybe_clear_quit_stops();
+            return;
+        }
+        let action = self.quit.apply(QuitEvent::StopFinished { id, ok });
+        self.handle_quit_action(action, cx);
+    }
+
+    /// Inject a shorter quit-stop timeout (tests only).
+    #[cfg(test)]
+    pub(crate) fn set_quit_stop_timeout(&mut self, duration: Duration) {
+        self.quit_stop_timeout = duration;
+    }
+
+    /// Number of quit-stop operations still waiting for `OperationFinished`.
+    #[cfg(test)]
+    pub(crate) fn quit_stop_pending_count(&self) -> usize {
+        self.quit_stops.len()
+    }
+
+    /// Quit-stop operation ids still pending completion (tests only).
+    #[cfg(test)]
+    pub(crate) fn quit_stop_pending_ops(&self) -> Vec<OperationId> {
+        self.quit_stops.keys().cloned().collect()
     }
 
     pub(crate) fn quit_keep_running(&mut self, cx: &mut Context<Self>) {
@@ -89,11 +172,16 @@ impl Workspace {
         self.handle_quit_action(action, cx);
     }
 
-    /// Called by the window-close hook. Hides to tray when a tray is present;
-    /// otherwise treats close as quit (F-TRY-02 AC1).
+    /// Called by the window-close hook. With a tray the window is actually
+    /// closed and the process stays alive (Linux: cx.hide() is not implemented).
+    /// Without a tray the close goes through the quit flow.
     pub(crate) fn handle_window_close_request(&mut self, cx: &mut Context<Self>) {
-        if self.tray.is_available() {
-            cx.hide();
+        let has_tray = cx
+            .try_global::<crate::app::bootstrap::AppRuntime>()
+            .is_some_and(|r| r.tray_available());
+        if has_tray {
+            // Window should_close hook already allowed the close; just clear handle.
+            cx.defer(|cx| crate::app::bootstrap::clear_main_window(cx));
         } else {
             self.request_quit(cx);
         }
@@ -285,33 +373,115 @@ mod glue_tests {
         assert_eq!(service.calls(), before);
     }
 
-    /// "Hentikan semua lalu keluar" issues a stop for every live instance and
-    /// lands in Done once the stops report back.
+    /// Q1: request acceptance must not quit; only OperationFinished does.
     #[gpui_kit::test]
-    fn stop_all_stops_every_live_instance(cx: &mut TestAppContext) {
+    fn stop_all_does_not_quit_before_operation_finishes(cx: &mut TestAppContext) {
         let (view, service, cx) = fixture(cx);
         view.update(cx, |this, cx| this.request_quit(cx));
         cx.run_until_parked();
         let before = service.calls();
         view.update(cx, |this, cx| this.quit_stop_all(cx));
-        for _ in 0..20 {
+        for _ in 0..40 {
             cx.run_until_parked();
-            if matches!(
-                view.read_with(cx, |this, _| this.quit_machine().state().clone()),
-                QuitState::Done
-            ) {
+            if view.read_with(cx, |this, _| this.quit_stop_pending_count()) > 0 {
                 break;
             }
             std::thread::sleep(std::time::Duration::from_millis(2));
         }
+        assert!(service.calls() > before, "stop request must be issued");
         assert!(
-            service.calls() > before,
-            "stop-all must issue stop_instance calls"
+            matches!(
+                view.read_with(cx, |this, _| this.quit_machine().state().clone()),
+                QuitState::StoppingAll { .. }
+            ),
+            "request acceptance must not transition to Done"
         );
+        // Simulate time passing after acceptance, but no OperationFinished.
+        cx.executor().advance_clock(std::time::Duration::from_millis(300));
+        cx.run_until_parked();
+        assert!(
+            matches!(
+                view.read_with(cx, |this, _| this.quit_machine().state().clone()),
+                QuitState::StoppingAll { .. }
+            ),
+            "still stopping before OperationFinished"
+        );
+        let ops = view.read_with(cx, |this, _| this.quit_stop_pending_ops());
+        for op in ops {
+            view.update(cx, |this, cx| {
+                this.apply_event_with_cx(
+                    crate::service_bridge::UiEvent::OperationFinished { id: op, result: Ok(()) },
+                    cx,
+                )
+            });
+            cx.run_until_parked();
+        }
         assert_eq!(
             view.read_with(cx, |this, _| this.quit_machine().state().clone()),
             QuitState::Done
         );
+    }
+
+    /// Q1: an operation finishing with an error leaves quit in StopFailed.
+    #[gpui_kit::test]
+    fn stop_all_operation_error_becomes_stop_failed(cx: &mut TestAppContext) {
+        let (view, _service, cx) = fixture(cx);
+        view.update(cx, |this, cx| this.request_quit(cx));
+        cx.run_until_parked();
+        view.update(cx, |this, cx| this.quit_stop_all(cx));
+        for _ in 0..40 {
+            cx.run_until_parked();
+            if view.read_with(cx, |this, _| this.quit_stop_pending_count()) > 0 {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        let ops = view.read_with(cx, |this, _| this.quit_stop_pending_ops());
+        assert!(!ops.is_empty());
+        let err = dblocal_core::service::UserFacingError::new("DBL-9999", "boom");
+        for op in ops {
+            view.update(cx, |this, cx| {
+                this.apply_event_with_cx(
+                    crate::service_bridge::UiEvent::OperationFinished {
+                        id: op,
+                        result: Err(err.clone()),
+                    },
+                    cx,
+                )
+            });
+            cx.run_until_parked();
+        }
+        assert!(matches!(
+            view.read_with(cx, |this, _| this.quit_machine().state().clone()),
+            QuitState::StopFailed { .. }
+        ));
+    }
+
+    /// Q1: if an operation never finishes, the bounded wait moves to StopFailed.
+    #[gpui_kit::test]
+    fn stop_all_timeout_moves_to_stop_failed(cx: &mut TestAppContext) {
+        let (view, _service, cx) = fixture(cx);
+        view.update(cx, |this, _cx| this.set_quit_stop_timeout(std::time::Duration::from_millis(20)));
+        view.update(cx, |this, cx| this.request_quit(cx));
+        cx.run_until_parked();
+        view.update(cx, |this, cx| this.quit_stop_all(cx));
+        for _ in 0..40 {
+            cx.run_until_parked();
+            if view.read_with(cx, |this, _| this.quit_stop_pending_count()) > 0 {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        assert!(matches!(
+            view.read_with(cx, |this, _| this.quit_machine().state().clone()),
+            QuitState::StoppingAll { .. }
+        ));
+        cx.executor().advance_clock(std::time::Duration::from_millis(30));
+        cx.run_until_parked();
+        assert!(matches!(
+            view.read_with(cx, |this, _| this.quit_machine().state().clone()),
+            QuitState::StopFailed { .. }
+        ));
     }
 
     /// A tray Quit is the same entry point the window-close hook uses.

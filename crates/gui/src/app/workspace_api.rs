@@ -364,7 +364,7 @@ impl Workspace {
     }
 
     pub(crate) fn tray_available(&self) -> bool {
-        self.tray.is_available()
+        self.tray_available_cached || self.tray.is_available()
     }
 
     pub(crate) fn tray_note(&self) -> Option<SharedString> {

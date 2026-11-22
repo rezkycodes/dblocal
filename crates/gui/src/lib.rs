@@ -157,16 +157,50 @@ impl gpui_kit::Render for StartupFailureView {
 /// then the display check. Each is a real, documented constraint rather than a
 /// workaround for a test.
 pub fn gui_unavailable_reason() -> Option<String> {
-    if std::env::var_os("DBLOCAL_GUI_HEADLESS").is_some() {
+    gui_unavailable_reason_for(
+        std::env::var_os("DBLOCAL_GUI_HEADLESS").is_some(),
+        is_main_thread(),
+        std::env::consts::OS,
+        std::env::var_os("WAYLAND_DISPLAY").is_some(),
+        std::env::var_os("DISPLAY").is_some(),
+    )
+}
+
+/// Pure decision for [`gui_unavailable_reason`], testable on any host OS.
+pub fn gui_unavailable_reason_for(
+    headless_flag: bool,
+    on_main_thread: bool,
+    os: &str,
+    wayland: bool,
+    x11: bool,
+) -> Option<String> {
+    if headless_flag {
         return Some("DBLOCAL_GUI_HEADLESS is set".to_owned());
     }
-    if !is_main_thread() {
+    if !on_main_thread {
         return Some("the GPUI event loop requires the process main thread".to_owned());
     }
-    if !has_display() {
+    if !display_available_for_os(os, wayland, x11) {
         return Some("no Wayland or X11 display is available".to_owned());
     }
     None
+}
+
+/// Whether the current OS needs an explicit display server variable.
+///
+/// Linux/BSD need Wayland or X11. Windows and macOS manage the display through
+/// the OS window server, so the env-var check does not apply.
+pub fn display_available_for_os(os: &str, wayland: bool, x11: bool) -> bool {
+    if os_requires_display_env(os) {
+        wayland || x11
+    } else {
+        true
+    }
+}
+
+/// OSes where GPUI needs a Wayland or X11 display environment variable.
+pub fn os_requires_display_env(os: &str) -> bool {
+    matches!(os, "linux" | "freebsd" | "dragonfly" | "netbsd" | "openbsd")
 }
 
 fn is_main_thread() -> bool {
@@ -174,7 +208,11 @@ fn is_main_thread() -> bool {
 }
 
 fn has_display() -> bool {
-    std::env::var_os("WAYLAND_DISPLAY").is_some() || std::env::var_os("DISPLAY").is_some()
+    display_available_for_os(
+        std::env::consts::OS,
+        std::env::var_os("WAYLAND_DISPLAY").is_some(),
+        std::env::var_os("DISPLAY").is_some(),
+    )
 }
 
 #[cfg(test)]
@@ -192,5 +230,43 @@ mod tests {
     fn display_presence_reads_the_standard_variables() {
         let _ = has_display();
         let _ = is_main_thread();
+    }
+
+    #[test]
+    fn display_check_is_os_aware() {
+        assert!(os_requires_display_env("linux"));
+        assert!(os_requires_display_env("freebsd"));
+        assert!(!os_requires_display_env("macos"));
+        assert!(!os_requires_display_env("windows"));
+
+        assert!(!display_available_for_os("linux", false, false));
+        assert!(display_available_for_os("linux", true, false));
+        assert!(display_available_for_os("linux", false, true));
+        assert!(display_available_for_os("macos", false, false));
+        assert!(display_available_for_os("windows", false, false));
+    }
+
+    #[test]
+    fn gui_unavailable_reason_is_os_aware() {
+        assert!(
+            gui_unavailable_reason_for(false, true, "linux", false, false)
+                .is_some_and(|r| r.contains("Wayland or X11"))
+        );
+        assert_eq!(
+            gui_unavailable_reason_for(false, true, "macos", false, false),
+            None
+        );
+        assert_eq!(
+            gui_unavailable_reason_for(false, true, "windows", false, false),
+            None
+        );
+        assert!(
+            gui_unavailable_reason_for(true, true, "windows", false, false)
+                .is_some_and(|r| r.contains("DBLOCAL_GUI_HEADLESS"))
+        );
+        assert!(
+            gui_unavailable_reason_for(false, false, "windows", false, false)
+                .is_some_and(|r| r.contains("main thread"))
+        );
     }
 }

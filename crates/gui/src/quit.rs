@@ -4,10 +4,18 @@
 //! tells the caller what to do next: show the dialog, stop instances through the
 //! service, or exit. It never touches GPUI or the service directly.
 
+use std::time::Duration;
+
 use dblocal_core::model::InstanceId;
 use dblocal_core::service::InstanceView;
 
 use crate::format;
+
+/// Bound on how long "Hentikan semua lalu keluar" waits for every stop to
+/// finish. Derived from the engine grace period (never a literal) with a margin
+/// for the service to report the outcome.
+pub const QUIT_STOP_TIMEOUT: Duration =
+    Duration::from_secs(dblocal_core::consts::STOP_GRACE_SECS + 10);
 
 /// Pure quit state.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -39,8 +47,10 @@ pub enum QuitEvent {
     KeepRunning,
     /// User chose to stop all running instances.
     StopAll,
-    /// One stop operation completed.
+    /// One stop operation completed (the operation finished, not merely accepted).
     StopFinished { id: InstanceId, ok: bool },
+    /// The bounded stop wait elapsed before every stop finished.
+    Timeout,
     /// User cancelled the dialog.
     Cancel,
     /// User confirmed exit despite failures or pending stops.
@@ -141,6 +151,12 @@ impl QuitMachine {
             (QuitState::StoppingAll { .. }, QuitEvent::ForceExit) => {
                 self.state = QuitState::Done;
                 QuitAction::Exit
+            }
+            (QuitState::StoppingAll { pending, failed }, QuitEvent::Timeout) => {
+                let mut failed = failed.clone();
+                failed.extend(pending.iter().cloned());
+                self.state = QuitState::StopFailed { failed };
+                QuitAction::ShowDialog
             }
             (QuitState::StoppingAll { .. }, QuitEvent::Cancel) => {
                 // Cancel while stopping is not allowed; stops already issued.
@@ -288,5 +304,37 @@ mod tests {
         ];
         let ids = running_instance_ids(&views);
         assert_eq!(ids.len(), 2);
+    }
+
+    #[test]
+    fn timeout_while_stopping_fails_pending_stops() {
+        let mut m = QuitMachine::new();
+        let a = id(1);
+        let b = id(2);
+        m.apply(QuitEvent::QuitRequested {
+            running: vec![a.clone(), b.clone()],
+        });
+        m.apply(QuitEvent::StopAll);
+        // b finished ok, a still pending when timeout fires.
+        m.apply(QuitEvent::StopFinished { id: b, ok: true });
+        let action = m.apply(QuitEvent::Timeout);
+        assert_eq!(action, QuitAction::ShowDialog);
+        assert_eq!(
+            m.state(),
+            &QuitState::StopFailed {
+                failed: vec![a]
+            }
+        );
+    }
+
+    #[test]
+    fn timeout_ignored_outside_stopping() {
+        let mut m = QuitMachine::new();
+        assert_eq!(m.apply(QuitEvent::Timeout), QuitAction::None);
+        let a = id(1);
+        m.apply(QuitEvent::QuitRequested {
+            running: vec![a],
+        });
+        assert_eq!(m.apply(QuitEvent::Timeout), QuitAction::None);
     }
 }

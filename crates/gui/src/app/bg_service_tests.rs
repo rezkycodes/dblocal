@@ -161,7 +161,7 @@ fn slow_service_calls_do_not_block_gpui(cx: &mut TestAppContext) {
     let calls = service.calls.clone();
     let svc: Arc<dyn DblService> = service.clone();
 
-    let (view, _cx_handle) = cx.add_window_view(|window, cx| Workspace::new(svc, window, cx));
+    let (view, _cx_handle) = cx.add_window_view(|window, cx| Workspace::new_preview(svc, window, cx));
     cx.run_until_parked();
 
     let start = Instant::now();

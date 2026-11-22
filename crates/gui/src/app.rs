@@ -40,21 +40,21 @@ mod workspace_api;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use dblocal_core::model::{AuthMode, DeleteMode, EngineKey, InstanceId, Port, Runtime};
-use dblocal_core::service::{CatalogView, DblService, InstanceView, UriFormat, UserFacingError};
+use dblocal_core::service::{CatalogView, DblService, InstanceView, OperationId, UriFormat, UserFacingError};
 use dblocal_core::strings;
 use gpui_kit::component::{ActiveTheme, command::CommandState, h_flex, input::InputState};
 use gpui_kit::{
-    App, AppContext as _, Context, Entity, FocusHandle, Focusable, IntoElement, ParentElement,
-    Render, SharedString, Subscription, Task, Window, div, prelude::*,
+    App, AppContext as _, Context, Entity, FocusHandle, Focusable, IntoElement,
+    ParentElement, Render, SharedString, Subscription, Task, Window, div, prelude::*,
 };
 
 use crate::logs::LogStore;
 use crate::quit::QuitMachine;
-use crate::service_bridge::{self, UiEvent};
-use crate::tray::{TrayAction, TrayHandle, start_tray};
+use crate::service_bridge::UiEvent;
+use crate::tray::{TrayAction, TrayHandle};
 
 pub use actions::{ROOT_CONTEXT, modifier_label, palette_hint};
 pub use bootstrap::{appearance_is_dark, run_with_service};
@@ -128,9 +128,17 @@ pub struct Workspace {
     toast: Option<SharedString>,
     tray: TrayHandle,
     tray_actions: flume::Receiver<TrayAction>,
+    tray_available_cached: bool,
     tray_note_shown: bool,
     tray_note: Option<SharedString>,
     quit: QuitMachine,
+    /// Stop operations issued by the quit flow: operation id -> instance id.
+    /// A stop is finished only when `OperationFinished` arrives for it.
+    quit_stops: HashMap<OperationId, InstanceId>,
+    /// Wall-clock bound for quit-stop completion; injectable for tests.
+    quit_stop_timeout: Duration,
+    /// Task that fires the quit timeout.
+    quit_timeout_task: Option<Task<()>>,
     version: &'static str,
     focus_handle: FocusHandle,
     started_at: Instant,
@@ -146,6 +154,7 @@ pub struct Workspace {
     /// Forces the pending note for a render preview, where background calls have
     /// already drained by the time the frame is captured.
     pending_preview: bool,
+    tray_needs_refresh: bool,
     _appearance: Option<Subscription>,
     _event_task: Option<Task<()>>,
     _tray_task: Option<Task<()>>,
@@ -163,31 +172,39 @@ struct Parts {
 }
 
 impl Workspace {
-    /// Builds the workspace and starts the event pump.
-    pub fn new(service: Arc<dyn DblService>, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        Self::build(service, window, cx, true)
+    /// Builds a live workspace attached to the app-level runtime.
+    pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let (service, events, tray_actions, tray_available) = {
+            let runtime = cx.global_mut::<crate::app::bootstrap::AppRuntime>();
+            let service = runtime.service.clone();
+            let events = runtime.events.clone();
+            let tray_actions = runtime.take_tray_actions();
+            let tray_available = runtime.tray_available();
+            (service, events, tray_actions, tray_available)
+        };
+        Self::build_live(service, events, tray_actions, tray_available, window, cx)
     }
 
-    /// The shared constructor.
-    ///
-    /// `live` starts the service bridge, the background startup load and the
-    /// two pumps. Previews and tests pass `false`: starting a bridge over a
-    /// service that emits on its own threads made `App::shutdown`'s effect
-    /// flush loop forever, so a preview render hung in `drop(HeadlessAppContext)`
-    /// under load. A preview seeds its state synchronously and needs none of it.
-    fn build(
+    /// Live constructor wired to an existing service/bridge/tray.
+    fn build_live(
         service: Arc<dyn DblService>,
+        events: flume::Receiver<UiEvent>,
+        tray_actions: flume::Receiver<TrayAction>,
+        tray_available: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
-        live: bool,
     ) -> Self {
-        let tray_start = Self::tray_startup();
         let focus_handle = cx.focus_handle();
         let command_state = cx.new(|cx| CommandState::new(window, cx));
         let filter_input = cx
             .new(|cx| InputState::new(window, cx).placeholder(strings::UI_DOCK_FILTER.to_owned()));
         cx.observe(&filter_input, |_, _, cx| cx.notify()).detach();
-        let events = Self::event_source(service.clone(), live);
+        let tray_start = crate::tray::TrayStartup {
+            handle: crate::tray::TrayHandle::unavailable(),
+            actions: tray_actions,
+            sender: flume::unbounded().0,
+            backend_name: if tray_available { "app" } else { "none" },
+        };
         let mut workspace = Self::assemble(Parts {
             service,
             events,
@@ -196,11 +213,49 @@ impl Workspace {
             filter_input,
             focus_handle,
         });
-        if live {
-            workspace.startup_load(cx);
-            workspace.start_event_pump(cx);
-            workspace.start_tray_pump(cx);
-        }
+        workspace.tray_available_cached = tray_available;
+        workspace.tray_note_shown = !tray_available;
+        workspace.tray_note = if tray_available {
+            None
+        } else {
+            Some(SharedString::from(strings::UI_TRAY_UNAVAILABLE_NOTE))
+        };
+        workspace.startup_load(cx);
+        workspace.start_event_pump(cx);
+        workspace.start_tray_pump(cx);
+        workspace
+    }
+
+    /// Preview/test constructor: synchronous reads, no bg startup, no app global.
+    fn build_preview(
+        service: Arc<dyn DblService>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let (tx, rx) = flume::unbounded::<UiEvent>();
+        drop(tx);
+        let (_atx, arx) = flume::unbounded::<TrayAction>();
+        let focus_handle = cx.focus_handle();
+        let command_state = cx.new(|cx| CommandState::new(window, cx));
+        let filter_input = cx
+            .new(|cx| InputState::new(window, cx).placeholder(strings::UI_DOCK_FILTER.to_owned()));
+        cx.observe(&filter_input, |_, _, cx| cx.notify()).detach();
+        let tray_start = crate::tray::TrayStartup {
+            handle: crate::tray::TrayHandle::unavailable(),
+            actions: arx,
+            sender: flume::unbounded().0,
+            backend_name: "none",
+        };
+        let mut workspace = Self::assemble(Parts {
+            service,
+            events: rx,
+            tray_start,
+            command_state,
+            filter_input,
+            focus_handle,
+        });
+        workspace.tray_note_shown = true;
+        workspace.tray_note = Some(SharedString::from(strings::UI_TRAY_UNAVAILABLE_NOTE));
         workspace
     }
 
@@ -217,6 +272,7 @@ impl Workspace {
             events: parts.events,
             tray: parts.tray_start.handle,
             tray_actions: parts.tray_start.actions,
+            tray_available_cached: tray_available,
             tray_note_shown: !tray_available,
             tray_note,
             command_state: parts.command_state,
@@ -243,6 +299,9 @@ impl Workspace {
             last_failure_mirror: None,
             toast: None,
             quit: QuitMachine::new(),
+            quit_stops: HashMap::new(),
+            quit_stop_timeout: crate::quit::QUIT_STOP_TIMEOUT,
+            quit_timeout_task: None,
             version: env!("CARGO_PKG_VERSION"),
             started_at: Instant::now(),
             first_paint_logged: false,
@@ -250,32 +309,13 @@ impl Workspace {
             bg_tasks: Vec::new(),
             pending: Arc::new(AtomicUsize::new(0)),
             pending_preview: false,
+            tray_needs_refresh: false,
             _appearance: None,
             _event_task: None,
             _tray_task: None,
         }
     }
 
-    /// The event source. A live app gets the bridge thread; a preview gets a
-    /// channel this view can never receive on, closed immediately, so no thread
-    /// is ever started.
-    fn event_source(service: Arc<dyn DblService>, live: bool) -> flume::Receiver<UiEvent> {
-        if live {
-            return service_bridge::spawn_bridge(service);
-        }
-        let (tx, rx) = flume::unbounded::<UiEvent>();
-        drop(tx);
-        rx
-    }
-
-    /// Starts the platform tray when the app is enabled to own one.
-    fn tray_startup() -> crate::tray::TrayStartup {
-        if crate::tray::app_enabled() {
-            start_tray()
-        } else {
-            crate::tray::TrayStartup::none()
-        }
-    }
 
     /// Preview/test constructor: synchronous reads, no bg startup.
     pub fn new_preview(
@@ -283,7 +323,7 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let mut this = Self::build(service, window, cx, false);
+        let mut this = Self::build_preview(service, window, cx);
         if let Ok(instances) = this.service.list_instances() {
             this.state.replace_instances(instances);
         }
@@ -327,7 +367,7 @@ impl Workspace {
         match event {
             UiEvent::InstanceChanged(view) => {
                 self.state.upsert_instance(view);
-                self.refresh_tray();
+                self.tray_needs_refresh = true;
             }
             UiEvent::OperationProgress { id, stage } => self.state.on_progress(&id, stage),
             UiEvent::DownloadProgress { id, progress } => {
@@ -336,17 +376,17 @@ impl Workspace {
             }
             UiEvent::OperationFinished { id, result } => {
                 self.state.on_finished(&id, result.clone());
-                if let Err(err) = result {
+                if let Err(err) = &result {
                     self.toast = Some(SharedString::from(format!(
                         "{} — {}",
                         err.code, err.message
                     )));
-                    self.last_failure_mirror = Some(err);
-                    // If we're in a quit-stopping flow, record failure for this op?
-                    // Quit tracks by instance id; we mark failures via stop results.
+                    self.last_failure_mirror = Some(err.clone());
                 }
+                // Quit-stop completion is driven by the finished operation, never
+                // by request acceptance. The actual state transition is applied in
+                // `apply_event_with_cx` where we have `cx`.
                 // Refresh in background; don't block event pump.
-                // (caller has no cx here; refresh_tray already done on InstanceChanged)
             }
             UiEvent::CatalogUpdated => {
                 // Catalog fetch is cheap; read in bg next tick via flag not needed:
@@ -365,7 +405,7 @@ impl Workspace {
                 self.state
                     .apply_removed(&id, &mut self.tabs, &mut self.logs);
                 self.forget_instance(&id);
-                self.refresh_tray();
+                self.tray_needs_refresh = true;
             }
             UiEvent::StopForced(id) => {
                 self.toast = Some(SharedString::from(strings::UI_TOAST_STOP_FORCED));
@@ -389,8 +429,19 @@ impl Workspace {
             UiEvent::InstanceRemoved(id) => Some(id.clone()),
             _ => None,
         };
-        let finished = matches!(event, UiEvent::OperationFinished { .. });
+        let quit_stop_finished = match &event {
+            UiEvent::OperationFinished { id, result } => Some((id.clone(), result.is_ok())),
+            _ => None,
+        };
+        let finished = quit_stop_finished.is_some();
         self.apply_event(event);
+        if self.tray_needs_refresh {
+            self.tray_needs_refresh = false;
+            self.refresh_tray(cx);
+        }
+        if let Some((op, ok)) = quit_stop_finished {
+            self.on_quit_stop_finished(&op, ok, cx);
+        }
         if let Some(id) = removed_id {
             let service = self.service.clone();
             self.bg(cx, move || {

@@ -119,16 +119,16 @@ impl DblService for QuietService {
         Ok(OperationId::new("op-create"))
     }
     fn start_instance(&self, _id: &InstanceId) -> Result<OperationId> {
-        self.bump();
-        Ok(OperationId::new("op-start"))
+        let n = self.calls.fetch_add(1, Ordering::SeqCst);
+        Ok(OperationId::new(format!("op-start-{n}")))
     }
     fn stop_instance(&self, _id: &InstanceId) -> Result<OperationId> {
-        self.bump();
-        Ok(OperationId::new("op-stop"))
+        let n = self.calls.fetch_add(1, Ordering::SeqCst);
+        Ok(OperationId::new(format!("op-stop-{n}")))
     }
     fn delete_instance(&self, _id: &InstanceId, _mode: DeleteMode) -> Result<OperationId> {
-        self.bump();
-        Ok(OperationId::new("op-del"))
+        let n = self.calls.fetch_add(1, Ordering::SeqCst);
+        Ok(OperationId::new(format!("op-del-{n}")))
     }
     fn change_port(&self, _id: &InstanceId, _port: Port) -> Result<()> {
         self.bump();

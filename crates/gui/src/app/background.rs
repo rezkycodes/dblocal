@@ -12,7 +12,7 @@ use dblocal_core::model::CatalogStatus;
 use dblocal_core::model::InstanceId;
 use dblocal_core::service::{CatalogView, InstanceView};
 use dblocal_core::strings;
-use gpui_kit::{AppContext as _, Context, Task};
+use gpui_kit::{AppContext as _, BorrowAppContext, Context, Task};
 
 use crate::service_bridge::UiEvent;
 
@@ -62,7 +62,7 @@ impl Workspace {
                 if let Some(runtimes) = runtimes {
                     this.runtimes = runtimes;
                 }
-                this.refresh_tray();
+                this.refresh_tray(cx);
                 cx.notify();
             }
         });
@@ -88,7 +88,7 @@ impl Workspace {
                 if let Some(runtimes) = runtimes {
                     this.runtimes = runtimes;
                 }
-                this.refresh_tray();
+                this.refresh_tray(cx);
                 cx.notify();
             }
         });
@@ -125,9 +125,16 @@ impl Workspace {
     }
 
     /// Refreshes the tray menu from current views; records the note once when no
-    /// host exists (F-TRY-01 AC3).
-    pub(crate) fn refresh_tray(&mut self) {
-        let available = self.tray.refresh(&self.state.instances);
+    /// host exists (F-TRY-01 AC3). Tray ownership lives in the app runtime.
+    pub(crate) fn refresh_tray(&mut self, cx: &mut gpui_kit::Context<Self>) {
+        let available = if cx.has_global::<crate::app::bootstrap::AppRuntime>() {
+            cx.update_global::<crate::app::bootstrap::AppRuntime, _>(|runtime, _| {
+                runtime.refresh_tray(&self.state.instances)
+            })
+        } else {
+            self.tray.refresh(&self.state.instances)
+        };
+        let available = available || self.tray_available_cached;
         if !available && !self.tray_note_shown {
             self.tray_note_shown = true;
             self.tray_note = Some(gpui_kit::SharedString::from(
