@@ -543,3 +543,133 @@ fn restart_now_on_a_stopped_instance_starts_it_directly(cx: &mut TestAppContext)
         "there is nothing to stop on a stopped instance"
     );
 }
+
+/// "Batalkan perubahan" drops the edits and disables Terapkan again.
+#[gpui_kit::test]
+fn cancel_changes_drops_every_edit(cx: &mut TestAppContext) {
+    let (view, service, cx) = fixture(cx);
+    let id = open_config(&view, &service, cx);
+    view.update(cx, |this, _| {
+        this.config.entry(&id).set_field("max_connections", "999");
+    });
+    view.update(cx, |this, cx| this.reset_config_edits(&id, cx));
+    settle(cx);
+    let (edits, can_apply) = view.read_with(cx, |this, _| {
+        let config = this.config_state_for(&id).expect("config state");
+        (config.edits.len(), config.can_apply())
+    });
+    assert_eq!(edits, 0, "Batalkan perubahan clears every edit");
+    assert!(!can_apply, "nothing left to apply");
+}
+
+/// "Muat ulang" issues a fresh read after a failed load.
+#[gpui_kit::test]
+fn retry_re_reads_after_a_failed_load(cx: &mut TestAppContext) {
+    let (view, service, cx) = fixture(cx);
+    service.set(|script| {
+        script.config_view = Err(UserFacingError::new("DBL-8603", "gagal baca"));
+    });
+    let id = open_config(&view, &service, cx);
+    let before = service.counts().config_view;
+    service.set(|script| script.config_view = Ok(view_with_backup()));
+    view.update(cx, |this, cx| this.retry_config(&id, cx));
+    settle(cx);
+    assert!(
+        service.counts().config_view > before,
+        "Muat ulang issues a fresh read"
+    );
+    let ready = view.read_with(cx, |this, _| {
+        this.config_state_for(&id)
+            .is_some_and(|config| config.view().is_some())
+    });
+    assert!(ready, "the retry must land a view, not stay failed");
+}
+
+/// "Nanti" dismisses the restart banner without restarting.
+#[gpui_kit::test]
+fn nanti_dismisses_the_restart_banner(cx: &mut TestAppContext) {
+    let (view, service, cx) = fixture(cx);
+    let id = open_config(&view, &service, cx);
+    view.update(cx, |this, cx| {
+        this.config.entry(&id).set_field("max_connections", "300");
+        this.apply_config(&id, cx);
+    });
+    settle(cx);
+    assert!(
+        view.read_with(cx, |this, _| this
+            .config_state_for(&id)
+            .is_some_and(|c| c.applied.is_some())),
+        "a successful apply raises the banner"
+    );
+    let stops = service.counts().stop_instance;
+    view.update(cx, |this, cx| this.dismiss_config_applied(&id, cx));
+    let applied = view.read_with(cx, |this, _| {
+        this.config_state_for(&id)
+            .is_some_and(|c| c.applied.is_some())
+    });
+    assert!(!applied, "Nanti clears the banner");
+    assert_eq!(
+        service.counts().stop_instance,
+        stops,
+        "Nanti must not restart the instance"
+    );
+}
+
+/// Copy puts the raw path on the clipboard.
+#[gpui_kit::test]
+fn copy_writes_the_raw_path_to_the_clipboard(cx: &mut TestAppContext) {
+    let (view, service, cx) = fixture(cx);
+    let id = open_config(&view, &service, cx);
+    view.update(cx, |this, cx| this.copy_config_path(&id, cx));
+    settle(cx);
+    let text = cx
+        .read_from_clipboard()
+        .and_then(|item| item.text())
+        .unwrap_or_default();
+    assert!(
+        text.contains("postgresql.conf"),
+        "the clipboard must hold the config path: {text}"
+    );
+}
+
+/// A failed restore reports the service's typed error, not a success.
+#[gpui_kit::test]
+fn a_failed_restore_is_reported_typed(cx: &mut TestAppContext) {
+    let (view, service, cx) = fixture(cx);
+    service.set(|script| {
+        script.config_view = Ok(view_with_backup());
+        script.config_restore = Err(UserFacingError::new("DBL-8605", "pulihkan gagal"));
+    });
+    let id = open_config(&view, &service, cx);
+    view.update(cx, |this, cx| this.restore_and_restart(&id, cx));
+    settle(cx);
+    let code = view.read_with(cx, |this, _| {
+        this.config_state_for(&id)
+            .and_then(|config| config.error.as_ref().map(|e| e.code.clone()))
+    });
+    assert_eq!(
+        code.as_deref(),
+        Some("DBL-8605"),
+        "a failed restore is the service's typed error"
+    );
+}
+
+/// A plain restore (no start) after "Pulihkan" from the dialog.
+#[gpui_kit::test]
+fn confirm_restore_restores_without_starting(cx: &mut TestAppContext) {
+    let (view, service, cx) = fixture(cx);
+    service.set(|script| script.config_view = Ok(view_with_backup()));
+    let id = open_config(&view, &service, cx);
+    let starts_before = service.counts().start_instance;
+    view.update(cx, |this, cx| {
+        this.open_config_restore(&id, cx);
+        this.confirm_config_restore(cx);
+    });
+    settle(cx);
+    assert_eq!(service.mutations().config_restores, vec![id.clone()]);
+    assert_eq!(
+        service.counts().start_instance,
+        starts_before,
+        "the dialog's restore does not start the instance; that is a separate action"
+    );
+}
