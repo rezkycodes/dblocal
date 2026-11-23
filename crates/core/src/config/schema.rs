@@ -442,11 +442,11 @@ pub fn format_size(bytes: u64) -> String {
     const KB: u64 = 1024;
     const MB: u64 = 1024 * KB;
     const GB: u64 = 1024 * MB;
-    if bytes % GB == 0 && bytes >= GB {
+    if bytes.is_multiple_of(GB) && bytes >= GB {
         format!("{}GB", bytes / GB)
-    } else if bytes % MB == 0 && bytes >= MB {
+    } else if bytes.is_multiple_of(MB) && bytes >= MB {
         format!("{}MB", bytes / MB)
-    } else if bytes % KB == 0 && bytes >= KB {
+    } else if bytes.is_multiple_of(KB) && bytes >= KB {
         format!("{}kB", bytes / KB)
     } else {
         bytes.to_string()
@@ -484,7 +484,7 @@ pub fn validate_value(spec: &SettingSpec, value: &str) -> Result<(), ConfigError
         }
         ValueKind::Boolean { on, off } => {
             let lower = value.trim().to_ascii_lowercase();
-            let accepted = match (on.as_ref(), off.as_ref()) {
+            let accepted = match (*on, *off) {
                 ("on", "off") => ["on", "off"],
                 _ => ["yes", "no"],
             };

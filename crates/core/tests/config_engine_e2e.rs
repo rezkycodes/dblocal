@@ -288,13 +288,20 @@ fn valkey_defaults_match_the_table() {
     let _ = child.wait();
 }
 
-/// A free port in 20000-29999 for the Valkey probe.
+/// A free loopback port in 20000-29999 for the Valkey probe.
+///
+/// Binds `:0` to find a free port, then retries until one lands in the reserved
+/// range (`:0` usually returns the ephemeral range, which the e2e rules forbid
+/// for a listener we own).
 fn rc_port() -> u16 {
-    std::net::TcpListener::bind("127.0.0.1:0")
-        .expect("bind")
-        .local_addr()
-        .expect("addr")
-        .port()
-        .max(20000)
-        .min(29999)
+    for _ in 0..200 {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = listener.local_addr().expect("addr").port();
+        drop(listener);
+        if (20000..=29999).contains(&port) {
+            return port;
+        }
+    }
+    // Fall back to a fixed reserved port; the e2e lock serialises the runs.
+    28497
 }

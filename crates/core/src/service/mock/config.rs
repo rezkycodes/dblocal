@@ -134,7 +134,7 @@ pub(crate) fn apply(
 }
 
 pub(crate) fn restore(inner: &Arc<Mutex<Inner>>, id: &InstanceId) -> ServiceResult<()> {
-    let mut guard = inner.lock().map_err(|_| io())?;
+    let guard = inner.lock().map_err(|_| io())?;
     let (state, _engine, _path) = loaded(&guard, id)?;
     if state.backups.is_empty() {
         return Err(UserFacingError::from(ConfigError::NoBackup));

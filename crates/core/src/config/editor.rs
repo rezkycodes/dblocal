@@ -115,12 +115,11 @@ pub fn apply_edit(dialect: Dialect, text: &str, edit: &Edit<'_>) -> Result<Strin
     // our new line ends with the dominant terminator; the "no trailing newline"
     // property of the previous last line is intentionally preserved only when we
     // did not touch it (we always do when we append).
-    if at == lines.len() {
-        if let Some(last) = lines.last_mut()
-            && last.terminator.is_empty()
-        {
-            last.terminator = newline.to_owned();
-        }
+    if at == lines.len()
+        && let Some(last) = lines.last_mut()
+        && last.terminator.is_empty()
+    {
+        last.terminator = newline.to_owned();
     }
     lines.insert(at, entry);
     Ok(join_lines(&lines))

@@ -212,7 +212,7 @@ fn a_value_that_starts_a_comment_is_refused_for_every_kind() {
 fn control_characters_are_refused() {
     for engine in EngineKey::ALL {
         for spec in settings_for(engine) {
-            for value in ["1\n2", "1\r2", "1\02"] {
+            for value in ["1\n2", "1\r2", "1\u{0}2"] {
                 assert!(
                     validate_value(spec, value).is_err(),
                     "{} {}",
