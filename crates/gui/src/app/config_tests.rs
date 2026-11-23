@@ -11,7 +11,7 @@
 use dblocal_core::config::{BackupInfo, ConfigView};
 use dblocal_core::model::{EngineKey, InstanceStatus};
 use dblocal_core::service::UserFacingError;
-use gpui_kit::TestAppContext;
+use gpui_kit::{Focusable, TestAppContext};
 
 use super::databases_support::{fixture, settle};
 use super::scripted_service::ScriptedService;
@@ -976,4 +976,129 @@ fn apply_is_disabled_and_enter_is_inert_while_a_field_has_an_error(cx: &mut Test
         before,
         "F5: Enter with a field error must not call the service"
     );
+}
+
+/// `F6`: Confirm takes the dialog away exactly like Escape and Cancel, so it
+/// must park the focus restore the frame applies.
+#[gpui_kit::test]
+fn confirm_restore_returns_the_focus_like_escape(cx: &mut TestAppContext) {
+    let (view, service, cx) = fixture(cx);
+    service.set(|script| script.config_view = Ok(view_with_backup()));
+    let id = open_config(&view, &service, cx);
+    // A field the dialog covers; open the dialog from it.
+    let field = view.read_with(cx, |this, cx| {
+        this.config_field_handle(&id, "max_connections")
+            .map(|entity| entity.read(cx).focus_handle(cx))
+    });
+    let Some(field) = field else {
+        return; // no field entity off-screen; the pending flag is what matters
+    };
+    cx.update(|window, cx| field.focus(window, cx));
+    // The window only records the focus on the next frame.
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert_eq!(
+        cx.update(|window, cx| window.focused(cx)),
+        Some(field.clone()),
+        "F6: the field has the keyboard before the dialog"
+    );
+    view.update(cx, |this, cx| this.open_config_restore(&id, cx));
+    // The dialog takes the keyboard while it is open.
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert_ne!(
+        cx.update(|window, cx| window.focused(cx)),
+        Some(field.clone()),
+        "F6: the open dialog holds the keyboard"
+    );
+    view.update(cx, |this, cx| this.confirm_config_restore(cx));
+    // Confirm takes the dialog away; the next frame gives the field its focus
+    // back, exactly as Escape and Cancel do.
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert_eq!(
+        cx.update(|window, cx| window.focused(cx)),
+        Some(field.clone()),
+        "F6: Confirm must return the focus to the covered field"
+    );
+}
+
+/// `F7a`: entering the tab re-reads every time, so an edit made by the CLI (an
+/// out-of-process writer with no `ConfigChanged`) is visible on return.
+#[gpui_kit::test]
+fn re_entering_the_tab_sees_an_out_of_process_edit(cx: &mut TestAppContext) {
+    let (view, service, cx) = fixture(cx);
+    let id = open_config(&view, &service, cx);
+    // The file changed behind the app: the next read returns 120.
+    service.set(|script| {
+        let mut new = view_with_backup();
+        new.settings[0].current = Some("120".to_owned());
+        script.config_view = Ok(new);
+    });
+    let before = service.counts().config_view;
+    // Leave and come back to the tab (the CLI wrote while we were away).
+    view.update(cx, |this, cx| this.set_inner_tab(InnerTab::Overview, cx));
+    view.update(cx, |this, cx| this.set_inner_tab(InnerTab::Config, cx));
+    settle(cx);
+    assert!(
+        service.counts().config_view > before,
+        "F7a: re-entering the tab must re-read"
+    );
+    let shown = view.read_with(cx, |this, _| {
+        this.config_state_for(&id)
+            .and_then(|c| c.view())
+            .and_then(|v| v.settings.first())
+            .and_then(|s| s.current.clone())
+    });
+    assert_eq!(
+        shown.as_deref(),
+        Some("120"),
+        "F7a: the CLI edit is visible after returning to the tab"
+    );
+}
+
+/// `F7a`: a window activation re-reads the visible Config tab, which is the path
+/// back from the external editor that "Buka file konfigurasi" launches.
+#[gpui_kit::test]
+fn a_window_activation_re_reads_the_visible_config_tab(cx: &mut TestAppContext) {
+    let (view, service, cx) = fixture(cx);
+    let id = open_config(&view, &service, cx);
+    view.update(cx, |this, cx| this.open_config_raw(&id, cx));
+    settle(cx);
+    let before = service.counts().config_view;
+    view.update(cx, |this, cx| this.refresh_config_on_activation(cx));
+    settle(cx);
+    assert!(
+        service.counts().config_view > before,
+        "F7a: an activation re-reads the visible Config tab"
+    );
+}
+
+/// `F7b`: a re-read keeps the typed text and the rows: it never blanks the form
+/// or drops the field the user is typing in.
+#[gpui_kit::test]
+fn a_re_read_keeps_the_typed_text_and_the_rows(cx: &mut TestAppContext) {
+    let (view, service, cx) = fixture(cx);
+    let id = open_config(&view, &service, cx);
+    view.update(cx, |this, cx| {
+        this.record_config_field(&id, "max_connections", "300", cx);
+    });
+    // Force the refresh state the way `reload_config_bg` enters it.
+    view.update(cx, |this, _| this.config.entry(&id).begin_refresh());
+    let (rows, refreshing) = view.read_with(cx, |this, _| {
+        let config = this.config_state_for(&id).expect("config state");
+        (config.editable().len(), config.refreshing)
+    });
+    assert!(
+        rows > 0,
+        "F7b: a refresh keeps the rows on screen, no 'Memuat...'"
+    );
+    assert!(refreshing, "F7b: the card knows a read is in flight");
+    let typed = view.read_with(cx, |this, _| {
+        this.config_state_for(&id)
+            .and_then(|c| c.edits.get("max_connections").cloned())
+    });
+    assert_eq!(
+        typed.as_deref(),
+        Some("300"),
+        "F7b: the typed text survives the refresh"
+    );
+    let _ = service;
 }

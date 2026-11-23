@@ -504,6 +504,81 @@ mod tests {
     }
 
     #[test]
+    fn can_apply_is_false_while_a_field_error_exists() {
+        let mut config = ready(EngineKey::Postgresql);
+        config.set_field("max_connections", "x");
+        assert!(!config.validate(EngineKey::Postgresql));
+        assert!(
+            !config.can_apply(),
+            "F5: Terapkan is disabled while a field shows an error"
+        );
+        // Clearing the error re-enables it (the change is still there).
+        config.set_field("max_connections", "200");
+        assert!(config.validate(EngineKey::Postgresql));
+        assert!(config.can_apply());
+    }
+
+    #[test]
+    fn a_re_read_that_returns_the_same_file_does_not_raise_the_banner() {
+        let mut config = ready(EngineKey::Postgresql);
+        config.set_field("max_connections", "200");
+        // The file did not change: the same view comes back.
+        config.rebase(view(EngineKey::Postgresql));
+        assert!(
+            !config.touched_outside,
+            "F7c: an unchanged file must not claim it changed outside"
+        );
+        assert_eq!(
+            config.edits.get("max_connections").map(String::as_str),
+            Some("200"),
+            "the edit survives a no-op re-read"
+        );
+    }
+
+    #[test]
+    fn a_re_read_that_changed_a_key_raises_the_banner_even_without_an_edit_on_it() {
+        let mut config = ready(EngineKey::Postgresql);
+        config.set_field("max_connections", "200");
+        let mut changed = view(EngineKey::Postgresql);
+        changed.settings[1].current = Some("256MB".to_owned());
+        config.rebase(changed);
+        assert!(
+            config.touched_outside,
+            "F7c: a real file change raises the banner even with no edit on that key"
+        );
+    }
+
+    #[test]
+    fn a_refresh_keeps_the_rows_on_screen_and_only_a_first_read_says_loading() {
+        let mut config = ready(EngineKey::Postgresql);
+        config.begin_refresh();
+        assert!(
+            config.view().is_some(),
+            "F7b: a refresh keeps the last good view on screen"
+        );
+        assert!(config.refreshing);
+
+        // No view yet: the card honestly says 'Memuat...'.
+        let mut fresh = InstanceConfig::default();
+        fresh.begin_refresh();
+        assert!(fresh.view().is_none(), "F7b: nothing to show yet");
+        assert!(fresh.data.is_loading());
+    }
+
+    #[test]
+    fn a_failed_refresh_keeps_the_previous_rows_and_shows_the_error() {
+        let mut config = ready(EngineKey::Postgresql);
+        config.begin_refresh();
+        config.end_refresh_failed(UserFacingError::new("DBL-8603", "gagal baca"));
+        assert!(!config.refreshing);
+        assert!(config.view().is_some(), "F7b: the rows stay on screen");
+        assert_eq!(
+            config.error.as_ref().map(|e| e.code.as_str()),
+            Some("DBL-8603")
+        );
+    }
+
+    #[test]
     fn reset_drops_every_edit_and_field_error() {
         let mut config = ready(EngineKey::Postgresql);
         config.set_field("max_connections", "x");
