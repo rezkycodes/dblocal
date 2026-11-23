@@ -77,6 +77,21 @@ pub(crate) struct Script {
     pub apply_update: ServiceResult<()>,
 }
 
+/// The arguments one mutation was called with.
+///
+/// The GUI's own guarantee (`F-DBU-01` AC3 "never kill a live session") is a
+/// constant argument, so a test has to see the value that crossed the seam, not
+/// only that the call happened.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub(crate) struct Mutations {
+    /// `(instance, name, force)` of every `drop_database` call, in order.
+    pub drops: Vec<(InstanceId, String, bool)>,
+    /// `(instance, name, database, level)` of every `create_user` call.
+    pub users: Vec<(InstanceId, String, String, PrivilegeLevel)>,
+    /// `(instance, name)` of every `create_database` call.
+    pub creates: Vec<(InstanceId, String)>,
+}
+
 impl Default for Script {
     fn default() -> Self {
         Self {
@@ -157,6 +172,7 @@ pub(crate) struct ScriptedService {
     instances: Arc<Vec<InstanceView>>,
     script: Arc<Mutex<Script>>,
     counts: Arc<Mutex<CallCounts>>,
+    mutations: Arc<Mutex<Mutations>>,
     tx: broadcast::Sender<ServiceEvent>,
 }
 
@@ -189,6 +205,7 @@ impl ScriptedService {
             instances: Arc::new(instances),
             script: Arc::new(Mutex::new(Script::default())),
             counts: Arc::new(Mutex::new(CallCounts::default())),
+            mutations: Arc::new(Mutex::new(Mutations::default())),
             tx,
         }
     }
@@ -202,6 +219,11 @@ impl ScriptedService {
     /// The call counts of the current script, a snapshot.
     pub(crate) fn counts(&self) -> CallCounts {
         *self.counts.lock().expect("counts lock")
+    }
+
+    /// The arguments of every mutation so far, a snapshot.
+    pub(crate) fn mutations(&self) -> Mutations {
+        self.mutations.lock().expect("mutations lock").clone()
     }
 
     /// The id of the first instance in the given status.
@@ -303,8 +325,13 @@ impl DblService for ScriptedService {
             Err(err) => Err(clone_error(err)),
         }
     }
-    fn create_database(&self, _id: &InstanceId, _name: &str) -> ServiceResult<()> {
+    fn create_database(&self, id: &InstanceId, name: &str) -> ServiceResult<()> {
         self.bump(|counts| counts.create_database += 1);
+        self.mutations
+            .lock()
+            .expect("mutations lock")
+            .creates
+            .push((id.clone(), name.to_owned()));
         let script = self.script.lock().expect("script lock");
         script
             .create_database
@@ -312,8 +339,13 @@ impl DblService for ScriptedService {
             .map(|_| ())
             .map_err(clone_error)
     }
-    fn drop_database(&self, _id: &InstanceId, _name: &str, _force: bool) -> ServiceResult<()> {
+    fn drop_database(&self, id: &InstanceId, name: &str, force: bool) -> ServiceResult<()> {
         self.bump(|counts| counts.drop_database += 1);
+        self.mutations.lock().expect("mutations lock").drops.push((
+            id.clone(),
+            name.to_owned(),
+            force,
+        ));
         let script = self.script.lock().expect("script lock");
         script
             .drop_database
@@ -331,12 +363,18 @@ impl DblService for ScriptedService {
     }
     fn create_user(
         &self,
-        _id: &InstanceId,
-        _name: &str,
-        _db: &str,
-        _level: PrivilegeLevel,
+        id: &InstanceId,
+        name: &str,
+        db: &str,
+        level: PrivilegeLevel,
     ) -> ServiceResult<SecretString> {
         self.bump(|counts| counts.create_user += 1);
+        self.mutations.lock().expect("mutations lock").users.push((
+            id.clone(),
+            name.to_owned(),
+            db.to_owned(),
+            level,
+        ));
         let script = self.script.lock().expect("script lock");
         match &script.create_user {
             Ok(password) => Ok(password.clone()),

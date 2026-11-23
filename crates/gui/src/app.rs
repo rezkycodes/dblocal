@@ -8,6 +8,9 @@
 mod actions;
 mod admin_actions;
 mod admin_dialogs;
+#[cfg(test)]
+#[path = "app/admin_fix_tests.rs"]
+mod admin_fix_tests;
 mod admin_state;
 mod background;
 #[cfg(test)]
@@ -22,6 +25,9 @@ mod bootstrap_tests;
 mod components;
 mod create_dialog;
 mod create_submit;
+#[cfg(test)]
+#[path = "app/databases_support.rs"]
+mod databases_support;
 #[cfg(test)]
 #[path = "app/databases_tests.rs"]
 mod databases_tests;
