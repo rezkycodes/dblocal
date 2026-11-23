@@ -412,6 +412,12 @@ fn create_user(&self, id: &InstanceId, name: &str, db: &str, level: PrivilegeLev
     -> ServiceResult<SecretString>;
 fn reset_superuser_password(&self, id: &InstanceId) -> ServiceResult<SecretString>;
 
+fn config_view(&self, id: &InstanceId) -> ServiceResult<ConfigView>;
+fn config_apply(&self, id: &InstanceId, changes: Vec<(String, String)>)
+    -> ServiceResult<ConfigApplied>;
+fn config_restore(&self, id: &InstanceId) -> ServiceResult<()>;
+fn config_raw_path(&self, id: &InstanceId) -> ServiceResult<PathBuf>;
+
 fn check_update(&self) -> ServiceResult<UpdateStatus>;
 fn apply_update(&self) -> ServiceResult<()>;
 
@@ -445,6 +451,10 @@ existing `translate` already has a `_ => None` arm.
   reset.
 - `UpdateChecked { version: Option<String>, can_self_update: bool }` — an update
   check finished; `None` means the running version is current.
+- `ConfigChanged { id }` — the config file of `id` was applied or restored
+  (`F-CFG-01`); the Config tab re-reads it through `config_view`. It carries **no
+  content**, because `valkey.conf` can hold `requirepass` and an event must never
+  carry a secret.
 
 ### `LocalService`
 

@@ -4,6 +4,7 @@ pub mod admin;
 pub mod autostart;
 pub mod catalog;
 pub mod clients;
+pub mod config;
 pub mod consts;
 pub mod download;
 pub mod engine;

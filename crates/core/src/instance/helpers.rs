@@ -553,6 +553,7 @@ pub(crate) fn failure_info(
         message,
         diagnosis,
         log_tail,
+        restore_available: false,
     }
 }
 

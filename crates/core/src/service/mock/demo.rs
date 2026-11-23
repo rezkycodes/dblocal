@@ -202,6 +202,7 @@ impl MockService {
                             .rev()
                             .map(|l| (*l).to_owned())
                             .collect(),
+                        restore_available: false,
                     },
                 );
             }
@@ -335,6 +336,25 @@ mod tests {
                 "missing {expected}: {names:?}"
             );
         }
+    }
+
+    #[test]
+    fn config_view_is_available_for_every_demo_engine() {
+        // `F-CFG-01`: the Config tab must open for each of the four engines in
+        // the demo cast. The mock returns the editable subset and defaults.
+        let service = MockService::demo();
+        let mut seen_engines = std::collections::BTreeSet::new();
+        for view in service.demo_instances() {
+            let config = service.config_view(&view.id).expect("config view");
+            assert_eq!(config.engine, view.engine);
+            assert!(
+                config.settings.iter().any(|s| !s.readonly),
+                "{} has no editable setting",
+                view.name
+            );
+            seen_engines.insert(view.engine);
+        }
+        assert_eq!(seen_engines.len(), 4, "all four engines are exercised");
     }
 
     #[test]

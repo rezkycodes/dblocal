@@ -11,6 +11,7 @@
 
 #![cfg(test)]
 
+mod config;
 mod inspect;
 mod lifecycle;
 mod races;
