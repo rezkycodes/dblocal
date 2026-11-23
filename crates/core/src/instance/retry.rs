@@ -10,14 +10,24 @@ use crate::error::Result;
 /// Removes a directory tree that another live writer may be recreating inside.
 ///
 /// Two services can share one home (the GUI and a CLI, or two test services). A
-/// delete holds the cross-process claim on the row, but a sibling that lost the
-/// claim can still be finishing its own cleanup — for example recreating
-/// `delete.inflight` inside `instances/<name>/` right after `InstanceLock::create`
-/// wrote it — while this delete's `remove_dir_all` is walking that directory. The
-/// kernel then reports `DirectoryNotEmpty` (`ENOTEMPTY`) for an entry that appeared
-/// after the walk read it. That is a transient race, not a permissions or disk
-/// problem, so retry a bounded number of times with a short pause; if the tree is
-/// genuinely unremovable the last error is reported.
+/// delete holds the cross-process claim on the row, but it does not hold the
+/// instance directory: while `remove_dir_all` walks `instances/<name>/`, another
+/// writer can still put an entry back into it. The concrete cases are a new
+/// create of the same name (which creates `data/`, `logs/` and `run/` under that
+/// path), an engine that is still flushing its log file into `logs/`, and a
+/// sibling delete finishing its own cleanup. The kernel then reports
+/// `DirectoryNotEmpty` (`ENOTEMPTY`) for an entry that appeared after the walk
+/// read it. That is a transient race, not a permissions or disk problem, so retry
+/// a bounded number of times with a short pause; if the tree is genuinely
+/// unremovable the last error is reported.
+///
+/// The in-flight marker used to live inside this directory and was the original
+/// reason for the retry (a losing service re-created `delete.inflight` right
+/// after the winner's walk read the directory). That is no longer true: the
+/// marker now sits beside the instance directories (`delete::marker_path`), so a
+/// delete never writes into the tree it removes. The retry stays because the
+/// writers above still exist; its test drives the transient error directly
+/// rather than depending on any one of them.
 pub(crate) fn remove_tree_retrying(path: &Path) -> Result<()> {
     retry_while_not_empty(|| std::fs::remove_dir_all(path))
 }
@@ -66,9 +76,12 @@ mod tests {
 
     /// A sibling racing the delete can recreate an entry inside the tree between
     /// `remove_dir_all`'s read and its `rmdir`, which surfaces as `ENOTEMPTY`. The
-    /// retry must absorb that transient error and eventually succeed, exactly as a
-    /// delete of an instance whose marker file a losing service keeps recreating
-    /// needs it to.
+    /// retry must absorb that transient error and eventually succeed.
+    ///
+    /// The error is injected directly, not produced by a real second writer: the
+    /// point is the retry policy, and any writer that can re-create an entry in a
+    /// directory being removed (a create of the same name, a log flush) exercises
+    /// the same kernel race.
     #[test]
     fn retry_absorbs_directory_not_empty_until_it_succeeds() {
         let mut calls = 0;
