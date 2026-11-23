@@ -16,6 +16,8 @@ gpui_kit::actions!(
         CloseOverlay,
         /// Copy the selected instance's URI (`Ctrl/Cmd+Shift+C`).
         CopyUri,
+        /// Open the Settings dialog (`Ctrl/Cmd+,`).
+        OpenSettings,
         /// Start or stop the selected instance (`Ctrl/Cmd+Enter`).
         ToggleRun,
         /// Start the selected instance.
@@ -36,6 +38,7 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("cmd-shift-p", OpenPalette, Some(ROOT_CONTEXT)),
         KeyBinding::new("cmd-n", NewInstance, Some(ROOT_CONTEXT)),
         KeyBinding::new("cmd-shift-c", CopyUri, Some(ROOT_CONTEXT)),
+        KeyBinding::new("cmd-,", OpenSettings, Some(ROOT_CONTEXT)),
         KeyBinding::new("cmd-enter", ToggleRun, Some(ROOT_CONTEXT)),
     ];
     #[cfg(not(target_os = "macos"))]
@@ -44,6 +47,7 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("ctrl-shift-p", OpenPalette, Some(ROOT_CONTEXT)),
         KeyBinding::new("ctrl-n", NewInstance, Some(ROOT_CONTEXT)),
         KeyBinding::new("ctrl-shift-c", CopyUri, Some(ROOT_CONTEXT)),
+        KeyBinding::new("ctrl-,", OpenSettings, Some(ROOT_CONTEXT)),
         KeyBinding::new("ctrl-enter", ToggleRun, Some(ROOT_CONTEXT)),
     ];
     cx.bind_keys(modifiers);

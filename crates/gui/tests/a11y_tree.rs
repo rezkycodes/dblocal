@@ -138,6 +138,12 @@ case_tests! {
     failed_overview_is_unique => "failed overview", Workspace::preview_failed_overview;
     databases_is_unique => "databases", Workspace::preview_databases;
     databases_product_is_unique => "databases product", Workspace::preview_product_databases;
+    databases_loaded_is_unique => "databases loaded", Workspace::preview_databases_loaded;
+    drop_dialog_is_unique => "drop dialog", Workspace::preview_drop_dialog;
+    reset_dialog_is_unique => "reset dialog", Workspace::preview_reset_dialog;
+    secret_dialog_is_unique => "secret dialog", Workspace::preview_secret_dialog;
+    settings_dialog_is_unique => "settings dialog", Workspace::preview_settings;
+    same_database_name_two_instances_is_unique => "two instances, same database name", Workspace::preview_two_instances_same_db;
     config_product_is_unique => "config product", Workspace::preview_product_config;
     config_demo_is_unique => "config demo", Workspace::preview_config_demo;
     filtered_dock_is_unique => "filtered dock", Workspace::preview_filtered;

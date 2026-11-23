@@ -256,7 +256,11 @@ impl Workspace {
                                     cx,
                                 );
                             })),
-                    ),
+                    )
+                    // The second "Open in…" entry point the task names, beside
+                    // the header's one (`F-OPN-01..02`); its slot keeps the ids
+                    // distinct from the header menu's.
+                    .child(self.render_open_in(view, "connection", theme, cx)),
             )
             .child(env_block)
             .when(view.status == InstanceStatus::Stopped, |this| {

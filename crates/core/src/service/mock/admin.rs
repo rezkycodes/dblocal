@@ -9,6 +9,14 @@
 //! or reset returns a fresh value exactly once, and the superuser reset updates
 //! the map the connect URI reads so `uri` and the reset agree, as `F-DBU-03` AC1
 //! requires.
+//!
+//! # Scripted scenarios
+//!
+//! [`super::AdminScenario`] lets the demo build and the GUI tests render every
+//! state the tab has: an empty list, many rows, a failing mutation and a failing
+//! reset. `Empty` and `ManyRows` are *sticky* (a demo screen must keep the state
+//! it was asked for); `FailNextMutation` and `ResetFailure` are consumed by one
+//! call.
 
 use std::sync::{Arc, Mutex};
 
@@ -17,7 +25,7 @@ use crate::model::{AuthMode, EngineKey, Instance, InstanceId};
 use crate::secret::SecretString;
 use crate::service::{ServiceEvent, ServiceResult, UserFacingError};
 
-use super::{Inner, lock, not_found};
+use super::{AdminScenario, Inner, lock, not_found};
 
 /// The rule the real and mock services share: Valkey has no database/user model
 /// (typed "not supported"), and a no-password instance has no credential to
@@ -50,6 +58,19 @@ fn load(inner: &Arc<Mutex<Inner>>, id: &InstanceId) -> Result<Instance, UserFaci
         .ok_or_else(|| not_found_error(id))
 }
 
+/// The sticky scenarios (`Empty`, `ManyRows`), in queue order.
+fn sticky(g: &Inner) -> Option<&AdminScenario> {
+    g.admin_scenarios
+        .iter()
+        .find(|scenario| matches!(scenario, AdminScenario::Empty | AdminScenario::ManyRows(_)))
+}
+
+/// Removes and returns the first one-shot scenario matching `wanted`.
+fn take_once(g: &mut Inner, wanted: impl Fn(&AdminScenario) -> bool) -> Option<AdminScenario> {
+    let index = g.admin_scenarios.iter().position(wanted)?;
+    g.admin_scenarios.remove(index)
+}
+
 /// The default databases every PostgreSQL instance starts with.
 fn seeded_databases(owner: &str) -> Vec<DatabaseInfo> {
     vec![
@@ -58,7 +79,20 @@ fn seeded_databases(owner: &str) -> Vec<DatabaseInfo> {
     ]
 }
 
-/// The databases the mock reports for `id`.
+/// `db_00` .. `db_{n-1}`, so a long list is stable and obviously synthetic.
+fn many_databases(owner: &str, count: usize) -> Vec<DatabaseInfo> {
+    (0..count)
+        .map(|index| {
+            DatabaseInfo::new(
+                format!("db_{index:02}"),
+                owner.to_owned(),
+                1_048_576 + index as i64 * 65_536,
+            )
+        })
+        .collect()
+}
+
+/// The databases the mock reports for `id`, honouring a sticky scenario.
 pub(crate) fn list_databases(
     inner: &Arc<Mutex<Inner>>,
     id: &InstanceId,
@@ -67,11 +101,27 @@ pub(crate) fn list_databases(
     if let Some(err) = unsupported(&instance) {
         return Err(err);
     }
+    // A queued `SlowRead` models a driver round trip that takes real time, so
+    // the demo and the GUI tests can see the loading state.
+    let slow = take_once(&mut lock(inner), |scenario| {
+        matches!(scenario, AdminScenario::SlowRead(_))
+    });
+    if let Some(AdminScenario::SlowRead(delay)) = slow {
+        std::thread::sleep(delay);
+    }
     let g = lock(inner);
+    let owner = instance.superuser();
+    if let Some(scenario) = sticky(&g) {
+        return Ok(match scenario {
+            AdminScenario::Empty => Vec::new(),
+            AdminScenario::ManyRows(count) => many_databases(owner, *count),
+            _ => seeded_databases(owner),
+        });
+    }
     Ok(g.databases
         .get(id)
         .cloned()
-        .unwrap_or_else(|| seeded_databases(instance.superuser())))
+        .unwrap_or_else(|| seeded_databases(owner)))
 }
 
 pub(crate) fn list_users(
@@ -83,6 +133,9 @@ pub(crate) fn list_users(
         return Err(err);
     }
     let g = lock(inner);
+    if matches!(sticky(&g), Some(AdminScenario::Empty)) {
+        return Ok(Vec::new());
+    }
     Ok(g.users.get(id).cloned().unwrap_or_else(|| {
         vec![UserInfo::new(
             crate::consts::SUPERUSER_POSTGRESQL,
@@ -90,6 +143,14 @@ pub(crate) fn list_users(
             true,
         )]
     }))
+}
+
+/// The typed failure a `FailNextMutation` scenario injects, if one is queued.
+fn next_mutation_failure(g: &mut Inner) -> Option<UserFacingError> {
+    take_once(g, |scenario| {
+        matches!(scenario, AdminScenario::FailNextMutation)
+    })
+    .map(|_| admin_error(crate::admin::AdminError::Unsupported))
 }
 
 pub(crate) fn create_database(
@@ -103,6 +164,9 @@ pub(crate) fn create_database(
     }
     let validated = Identifier::new(name).map_err(admin_error)?;
     let mut g = lock(inner);
+    if let Some(err) = next_mutation_failure(&mut g) {
+        return Err(err);
+    }
     let owner = instance.superuser().to_owned();
     let list = g
         .databases
@@ -128,6 +192,9 @@ pub(crate) fn drop_database(
     }
     let validated = Identifier::new(name).map_err(admin_error)?;
     let mut g = lock(inner);
+    if let Some(err) = next_mutation_failure(&mut g) {
+        return Err(err);
+    }
     let owner = instance.superuser().to_owned();
     let list = g
         .databases
@@ -156,6 +223,9 @@ pub(crate) fn create_user(
     let role = Identifier::role(name).map_err(admin_error)?;
     let database = Identifier::new(db).map_err(admin_error)?;
     let mut g = lock(inner);
+    if let Some(err) = next_mutation_failure(&mut g) {
+        return Err(err);
+    }
     let owner = instance.superuser().to_owned();
     let databases = g
         .databases
@@ -189,6 +259,17 @@ pub(crate) fn reset_superuser_password(
         return Err(err);
     }
     let mut g = lock(inner);
+    // F-DBU-03 AC2: a scripted reset failure leaves the stored password map
+    // untouched, so the old password still works and no partial write happened.
+    if take_once(&mut g, |scenario| {
+        matches!(scenario, AdminScenario::ResetFailure)
+    })
+    .is_some()
+    {
+        return Err(UserFacingError::from(
+            crate::admin::AdminError::PasswordVerify,
+        ));
+    }
     let password = SecretString::new(format!("pwd-reset-{:08x}", g.det.next_u64() as u32));
     // Keep the map `connection_uri` reads consistent with the reset, so the
     // printed URI carries the new password (F-DBU-03 AC1).

@@ -42,6 +42,9 @@ impl Workspace {
         self.load_data_size(&id, cx);
         self.load_dotenv(&id, cx);
         self.load_port_suggestion(&id, cx);
+        // The header's "Open in…" menu reads the cached detection; fetch it on
+        // first open rather than on a render path.
+        self.ensure_clients_loaded(cx);
         cx.notify();
     }
 

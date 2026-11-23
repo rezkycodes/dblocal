@@ -210,6 +210,102 @@ impl Workspace {
         workspace
     }
 
+    /// Two running PostgreSQL instances that each report a database named `app`.
+    ///
+    /// Each tab's Databases screen derives its row ids from the instance id and
+    /// the database name, so two instances with the same database name cannot
+    /// collide in the a11y tree — the trap `F-DBU` names and W2-B2 fixed. Both
+    /// tabs open on Databases; the second is selected.
+    pub fn preview_two_instances_same_db(
+        service: Arc<dyn DblService>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let mut workspace = Self::preview(service, window, cx);
+        for view in workspace.state.instances.clone() {
+            workspace.open_tab_sync(view.id.clone());
+            workspace.set_inner_tab(InnerTab::Databases, cx);
+        }
+        // Leave the last tab selected; its Databases rows use its own id.
+        workspace
+    }
+
+    /// Preview with the Databases tab open and its rows already read, so a
+    /// render shows the real table rather than the loading line.
+    pub fn preview_databases_loaded(
+        service: Arc<dyn DblService>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let mut workspace = Self::preview(service, window, cx);
+        workspace.set_inner_tab(InnerTab::Databases, cx);
+        if let Some(id) = workspace.tabs.selected_instance().cloned() {
+            workspace.reload_admin_bg(&id, cx);
+        }
+        workspace
+    }
+
+    /// Preview with the type-the-name drop dialog open.
+    pub fn preview_drop_dialog(
+        service: Arc<dyn DblService>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let mut workspace = Self::preview(service, window, cx);
+        workspace.set_inner_tab(InnerTab::Databases, cx);
+        if let Some(id) = workspace.tabs.selected_instance().cloned() {
+            workspace.open_drop_dialog(&id, "postgres".to_owned(), window, cx);
+        }
+        workspace
+    }
+
+    /// Preview with the reset-password confirmation open.
+    pub fn preview_reset_dialog(
+        service: Arc<dyn DblService>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let mut workspace = Self::preview(service, window, cx);
+        workspace.set_inner_tab(InnerTab::Databases, cx);
+        if let Some(id) = workspace.tabs.selected_instance().cloned() {
+            workspace.open_reset_confirm(&id, cx);
+        }
+        workspace
+    }
+
+    /// Preview with the Settings dialog open, on the Settings tab.
+    pub fn preview_settings(
+        service: Arc<dyn DblService>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let mut workspace = Self::preview(service, window, cx);
+        // Open without the login-item read so the preview never touches the
+        // host's real login items.
+        workspace.settings.open();
+        workspace
+    }
+
+    /// Preview with the one-time secret dialog open (a created user password).
+    pub fn preview_secret_dialog(
+        service: Arc<dyn DblService>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let mut workspace = Self::preview(service, window, cx);
+        workspace.set_inner_tab(InnerTab::Databases, cx);
+        if let Some(id) = workspace.tabs.selected_instance().cloned() {
+            workspace.secret_dialog = Some(super::admin_dialogs::SecretDialog {
+                instance: id,
+                kind: super::admin_dialogs::SecretKind::UserPassword {
+                    user: "app_ro".to_owned(),
+                },
+                value: dblocal_core::secret::SecretString::new("pwd-user-0001"),
+            });
+        }
+        workspace
+    }
+
     /// Preview with the create modal open on a version that needs a download.
     ///
     /// PostgreSQL 17.4 is installed in the demo, so the preview selects 16.6
