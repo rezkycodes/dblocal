@@ -584,9 +584,10 @@ impl LocalService {
                 .admin_factory
                 .clone()
                 .unwrap_or_else(|| admin_ops::default_admin_factory(inner_paths.clone())),
-            open_launcher: options.open_launcher.clone().unwrap_or_else(|| {
-                Arc::new(crate::config::SystemOpenLauncher)
-            }),
+            open_launcher: options
+                .open_launcher
+                .clone()
+                .unwrap_or_else(|| Arc::new(crate::config::SystemOpenLauncher)),
         });
 
         let service = Self { inner, runtime };

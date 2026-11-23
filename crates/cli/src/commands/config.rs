@@ -115,7 +115,11 @@ fn open(ctx: &mut Ctx<'_>, name: &str) -> u8 {
         Ok(command) => {
             // The handler ran; print the file path (last argv is the path on
             // every OS) so the user and a script both see what was opened.
-            if let Some(path) = command.args.iter().find(|arg| !arg.contains("FileProtocolHandler")) {
+            if let Some(path) = command
+                .args
+                .iter()
+                .find(|arg| !arg.contains("FileProtocolHandler"))
+            {
                 output::stdout_line(ctx.out, path);
             }
             EXIT_OK

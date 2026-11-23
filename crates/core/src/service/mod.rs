@@ -453,10 +453,7 @@ pub trait DblService: Send + Sync + 'static {
     /// returns the command it ran (so the CLI can print the path when the
     /// handler is unavailable). Refuses with `DBL-8607` when the file does not
     /// exist yet and `DBL-8608` when the handler could not be started.
-    fn config_open_raw(
-        &self,
-        id: &InstanceId,
-    ) -> ServiceResult<crate::config::OpenCommand> {
+    fn config_open_raw(&self, id: &InstanceId) -> ServiceResult<crate::config::OpenCommand> {
         let _ = id;
         not_implemented()
     }

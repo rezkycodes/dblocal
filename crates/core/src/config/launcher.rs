@@ -102,7 +102,10 @@ mod tests {
 
     #[test]
     fn linux_uses_xdg_open_with_one_argument() {
-        let command = OpenCommand::for_os(Os::Linux, Path::new("/home/u/.dblocal/instances/a/run/my.cnf"));
+        let command = OpenCommand::for_os(
+            Os::Linux,
+            Path::new("/home/u/.dblocal/instances/a/run/my.cnf"),
+        );
         assert_eq!(command.program, PathBuf::from("xdg-open"));
         assert_eq!(command.args.len(), 1);
         assert_eq!(command.args[0], "/home/u/.dblocal/instances/a/run/my.cnf");
