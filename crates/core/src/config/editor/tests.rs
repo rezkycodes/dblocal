@@ -274,3 +274,55 @@ fn section_append_falls_back_to_end_when_the_section_is_absent() {
     // No [mysqld]: append at the end rather than corrupting [client].
     assert_eq!(got, "[client]\nport=1\nmax_connections=300\n");
 }
+
+#[test]
+fn read_value_reads_the_last_assignment_and_strips_comments_and_quotes() {
+    // PostgreSQL: `key = value`, trailing comment, quotes.
+    let pg = "# max_connections = 999\nmax_connections = 200   # tuned\n";
+    assert_eq!(
+        read_value(Dialect::Postgresql, pg, "max_connections"),
+        Some("200".to_owned())
+    );
+    assert_eq!(
+        read_value(
+            Dialect::Postgresql,
+            "timezone = 'Asia/Makassar'\n",
+            "timezone"
+        ),
+        Some("Asia/Makassar".to_owned())
+    );
+    assert_eq!(read_value(Dialect::Postgresql, "a = 1\n", "missing"), None);
+    // A key only in a comment is not an assignment.
+    assert_eq!(read_value(Dialect::Postgresql, "# a = 1\n", "a"), None);
+
+    // INI: `key=value`, spaced, duplicate -> last wins.
+    let ini = "[mysqld]\nmax_connections=151\nmax_connections = 300\n";
+    assert_eq!(
+        read_value(Dialect::Ini, ini, "max_connections"),
+        Some("300".to_owned())
+    );
+    assert_eq!(
+        read_value(Dialect::Ini, "[mysqld]\n# c\n", "max_connections"),
+        None
+    );
+
+    // Valkey: `key value`, multi-token.
+    let vk = "save 3600 1 300 100\nmaxmemory 0\n";
+    assert_eq!(
+        read_value(Dialect::Valkey, vk, "save"),
+        Some("3600 1 300 100".to_owned())
+    );
+    assert_eq!(
+        read_value(Dialect::Valkey, "# maxmemory 1gb\n", "maxmemory"),
+        None
+    );
+}
+
+#[test]
+fn read_value_does_not_match_a_postgres_key_without_equals() {
+    // `key` alone is a boolean-on directive; its value is empty.
+    assert_eq!(
+        read_value(Dialect::Postgresql, "fsync\n", "fsync"),
+        Some(String::new())
+    );
+}

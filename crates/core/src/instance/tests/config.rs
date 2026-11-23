@@ -263,3 +263,44 @@ fn a_failed_start_with_a_changed_config_offers_a_restore() {
         "a changed config with a backup must offer a restore"
     );
 }
+
+#[test]
+fn postgresql_view_shows_the_authentication_method_from_pg_hba() {
+    let (harness, id, _path) = created(EngineKey::Postgresql);
+    let name = harness.instances()[0].name().clone();
+    let hba = harness.paths.data_dir(&name).join("pg_hba.conf");
+    fs::write(
+        &hba,
+        "# TYPE  DATABASE  USER  ADDRESS  METHOD\n\
+         host all all 127.0.0.1/32 scram-sha-256\n\
+         host all all ::1/128 scram-sha-256\n\
+         host all all 0.0.0.0/0 trust\n",
+    )
+    .expect("hba");
+    let view = harness.service.config_view(&id).expect("view");
+    let method = view
+        .settings
+        .iter()
+        .find(|s| s.key == "authentication method")
+        .expect("auth method row");
+    assert!(method.readonly);
+    assert_eq!(method.current.as_deref(), Some("scram-sha-256, trust"));
+}
+
+#[test]
+fn restore_available_is_false_without_a_file_or_a_backup() {
+    let (harness, id, path) = created(EngineKey::Valkey);
+    // No file and no backup yet.
+    let _ = fs::remove_file(&path);
+    let instance = harness.instance(&id).expect("row");
+    assert!(!super::super::config_ops::restore_available(
+        &harness.service.inner(),
+        &instance
+    ));
+    // File present but never backed up -> false.
+    seed(&path, EngineKey::Valkey);
+    assert!(!super::super::config_ops::restore_available(
+        &harness.service.inner(),
+        &instance
+    ));
+}
