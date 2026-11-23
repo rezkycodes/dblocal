@@ -458,19 +458,22 @@ fn the_supervisor_skips_a_running_row_while_an_operation_holds_it() {
     assert!(matches!(start_run.result(), Some(Ok(()))));
     h.wait_for_status(&id, InstanceStatus::Running);
 
-    // Phase 1: hold the instance lock and arm the gate. The supervisor must not
-    // validate this `Running` row while the operation owns it.
+    // Phase 1: hold the instance lock, then let the supervisor reach a tick
+    // boundary, then arm the gate. The supervisor must not validate this
+    // `Running` row while the operation owns it.
     //
-    // A supervisor tick that started **before** we took the lock may legitimately
-    // reach `validate` afterwards: it read `is_busy == false` before the lock
-    // existed, and the gate chain below confirms that is what flake 8 saw under
-    // load (a `tick` whose `is_busy` check preceded the test's `lock_instance`).
-    // So first wait for a tick boundary: the supervisor has completed a tick
-    // since we armed ourselves, then take the lock. With no tick in flight, the
-    // only tick that can observe the row next starts after the lock is held.
-    h.wait_for_supervisor_tick();
+    // Ordering matters under load. A supervisor tick that started **before** the
+    // lock may have already read `is_busy == false`; if it then reached
+    // `validate` after the gate was armed, the test failed with a legitimately
+    // late tick, not a product defect (that is what flake 8 observed: the trace
+    // showed `is_busy = false` evaluated before `lock_instance`). Taking the lock
+    // first and only then waiting for a **completed** tick closes that window:
+    // every tick still in flight when we lock has finished before the arm, and
+    // every tick that starts afterwards observes the held lock. So a tick that
+    // reaches `validate` can only be one that ignored the guard.
     let lock = h.lock_instance(&id);
     gated.reset();
+    h.wait_for_supervisor_tick();
     gated.arm();
     let reached_while_busy = gated.wait_reached(Duration::from_millis(200));
     // Whatever happened, release the gate so no parked task outlives this test.
