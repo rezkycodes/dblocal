@@ -354,16 +354,28 @@ was extracted into `admin/reset.rs` and is shared by `PgAdmin` and `MysqlAdmin`.
 `mysql_async` 0.37 (MIT OR Apache-2.0). It was already a workspace dependency
 (health checks and the e2e client), resolves to rustls + `flate2` with no
 `openssl` / `native-tls` in the lock (`cargo tree` shows none), and its default
-feature set needs no system C library. Kept out of scope: any TLS feature; the
-module only ever talks to a loopback unix socket.
+feature set needs no system C library. Kept out of scope: any TLS feature.
 
-### Connection: always the unix socket, never TCP
+### Connection: the unix socket on unix, loopback TCP on Windows (W4-A3)
+
+One pure decision, `admin/mysql.rs::Transport::for_platform(unix, socket, port)`,
+picks the transport exactly once at construction and never re-decides at runtime:
+
+| Platform | Arm | `Opts` the driver gets |
+|---|---|---|
+| unix (Linux, macOS) | `Transport::Socket(path)` | `socket=<path>`, `prefer_socket(true)` — unchanged from W4-A2 |
+| non-unix (Windows) | `Transport::Loopback { port }` | `ip_or_hostname("127.0.0.1")`, `tcp_port=<instance port>`, **no** socket, `prefer_socket(false)` |
+
+Both arms route the **same** superuser and password; only the transport differs.
+There is no runtime fallback between them: a unix host is never moved onto TCP by
+a missing socket, and a Windows host is never moved onto a named pipe (see the
+driver fact below).
+
+#### unix arm (the original guarantee, unchanged)
 
 Every admin connection dials the instance's **unix socket** (`my.cnf`'s
 `socket=`; the adapters' `configured_socket_path` returns the same path the
-start command wrote, including the long-path fallback). There is **no TCP
-fallback**: `MysqlTarget` carries no port and `opts()` always sets the socket, so
-admin can never quietly connect over TCP. Reasons:
+start command wrote, including the long-path fallback). Reasons:
 
 - The socket is a secure (never-transmitted) channel, so no byte — the password
   or a statement's text — crosses the loopback TCP stream. (`mysql_async` would
@@ -372,9 +384,64 @@ admin can never quietly connect over TCP. Reasons:
   that keeps the traffic off TCP.)
 - MariaDB's bootstrap (`--auth-root-authentication-method=normal`) configures
   `root@localhost`, reachable only through the socket.
+- Tests pin it: `transport_on_unix_is_the_socket_and_never_loopback_even_with_a_port`
+  feeds a port and an empty path and still gets `Socket`.
+
+#### Windows arm (W4-A3)
+
+Windows has no unix socket: `mysqld`/`mariadbd` do not create one, and
+`mysql_async` 0.37.1's `Conn::new` (`src/conn/mod.rs:1029-1034`) returns
+`DriverError::NamedPipesDisabled` for any `Opts` that carries a socket path on a
+non-unix target. Before W4-A3 that made every `list_databases`, `create_database`,
+`drop_database`, `create_user` and `reset_superuser_password` fail with
+`DBL-8100` on Windows. Admin now dials `127.0.0.1:<instance port>`:
+
+- The host is the literal `127.0.0.1` (`MANAGED_ACCOUNT_HOST`), equal to the host
+  the created accounts live at (`user@'127.0.0.1'`), and never `localhost` — so no
+  resolver is consulted and the account host and the transport host cannot drift
+  (a test asserts `opts.ip_or_hostname() == MANAGED_ACCOUNT_HOST`).
+- `prefer_socket(false)`: with it on, `mysql_async`'s `read_settings` loads
+  `@@socket` and `reconnect_via_socket_if_needed` would retry over a path it
+  learned from the server. Off, the connection stays on the TCP stream it opened.
+- The engine listens only on loopback: both adapters render
+  `bind-address=127.0.0.1` into their config (`engine/mysql` `BIND`,
+  `engine/mariadb::render_config`), never `0.0.0.0`, and both have a test that
+  fails if that line changes.
+- Password transport: `mysql_async` completes `caching_sha2_password` with its own
+  RSA public-key exchange over the plain TCP stream (it requests the server key,
+  XORs the password with the nonce and encrypts it). MariaDB's bootstrap sets the
+  password with a plain `ALTER USER … IDENTIFIED BY`, which leaves the default
+  plugin for that account; `mysql_async` also accepts a `mysql_native_password`
+  switch. Either way the cleartext never crosses the wire.
+
+#### Residual risk of loopback TCP (Windows only)
+
+Any loopback TCP admin path has one hazard the unix socket does not: between the
+port check and the engine's bind, a **rogue process** could be listening on
+`127.0.0.1:<port>`, and admin would hand it the superuser password. Mitigations
+and limits:
+
+- The adapters' recovery path opens no listening window of their own; the engine
+  binds loopback and the port is checked free before a start, but the check and
+  the bind are not atomic.
+- Admin only behaves this way after the caller has loaded a `Running` instance
+  row; a stopped or failed instance's port is not dialled by an admin call in
+  normal use, and a failed start ends `failed` with the port released.
+- The existing identity gate (`process::identity::verify_pid_identity`, used by
+  stop/delete) validates a PID's executable and start time **before signalling**
+  a process; there is **no** equivalent pre-dial identity check for the admin
+  connection today, and this task did not invent one. The core invariant it
+  protects — never signal an unidentified process — still holds, because admin
+  never signals anything.
+- If a hostile local process can race the bind, it already shares the user's
+  session and can read the same `~/.dblocal` data; loopback TCP does not widen
+  that boundary beyond the port window itself. This is recorded so a future
+  hardening task can add a post-connect server identity check (e.g. a
+  `SELECT @@version_comment` / handshake fingerprint) if the owner wants it.
 
 Managed accounts are created at `user@'127.0.0.1'` (the TCP account the service
 URI uses), not `localhost`, so a client opened with the URI can log in.
+
 
 ### Exact SQL per call
 
@@ -416,7 +483,9 @@ observer) and its failure does not abort the statement.
 The shared `reset_with` runs `apply → verify → store`, rolling back to the old
 password on a verify or sink failure. `apply` sets the new password on every
 loopback host account of the superuser (`localhost`, `127.0.0.1`, `::1`);
-`verify` opens a fresh socket connection with the new password. A failed reset
+`verify` opens a fresh connection with the new password — over the socket on
+unix, over loopback TCP on Windows — so the reset is only reported as successful
+after the transport admin actually uses has authenticated with it. A failed reset
 leaves the old password working and the keychain untouched (service-level test
 with a failing sink).
 
@@ -448,3 +517,38 @@ payload. System schemas are `DBL-8118`.
   absent on this host), MySQL 8.0/9.x, a live OS keychain, and a reset with a
   live keychain failure against a real server (the sink-failure rollback is
   proven at the service level with the shared state machine).
+
+## W4-A3 — the Windows transport
+
+W4-A3 added the loopback TCP arm described under "Connection" above. What changed
+in code:
+
+- `admin/mysql.rs::Transport` (pure): `Socket(PathBuf)` or `Loopback { port }`,
+  chosen by `Transport::for_platform(unix, socket, port)`. `MysqlTarget::new`
+  takes the instance port again and derives the arm from `cfg!(unix)`;
+  `MysqlTarget::opts` maps the arm to `Opts` and nothing else chooses a
+  transport. There is no runtime fallback.
+- `instance/admin_ops.rs::mysql_admin` passes `instance.port()` and still
+  resolves `configured_socket_path` first — the socket is the unix arm and the
+  long-path fallback it already applies is unaffected.
+
+Proven on Linux (the unix host is where every commit and gate runs):
+
+- `Transport::for_platform` both arms, including "unix + a port available is
+  still the socket" and "unix + an empty socket path is still not loopback".
+- The loopback `Opts`: socket absent, `prefer_socket` off, host the literal
+  `127.0.0.1` equal to `MANAGED_ACCOUNT_HOST`, port the instance port.
+- A real connection attempt to a closed `127.0.0.1:<port>` maps to `Connect`
+  (`DBL-8100`) without a socket configured.
+- The Linux e2e (`admin_mysql`) still passes on real MySQL 8.4.11 and MariaDB
+  11.8.10 under the e2e lock, which is the unix arm end to end.
+- Type-check for a non-unix target: `docs/spikes/admin/mysql-admin-tcp/probe`
+  compiles the real `admin/mysql.rs` against real `mysql_async` 0.37.1 for
+  `x86_64-pc-windows-gnu` (the workspace cross-check stops earlier in
+  `aws-lc-sys`/`libz-sys`/`libsqlite3-sys`/`liblzma-sys`, which need a mingw C
+  compiler this host does not have).
+
+**Not proven:** any Windows run at all. No `mysqld`/`mariadbd` on Windows was
+started, the `caching_sha2_password` RSA exchange was not observed against a real
+Windows server, and the engine's own `my.ini` on Windows was not inspected.
+`docs/dev/windows-verification.md` carries the manual rows.
