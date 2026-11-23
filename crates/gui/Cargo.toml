@@ -22,6 +22,9 @@ anyhow = { workspace = true }
 [target.'cfg(target_os = "linux")'.dependencies]
 ksni = { version = "0.3", default-features = false, features = ["blocking", "async-io"] }
 
+[target.'cfg(any(target_os = "windows", target_os = "macos"))'.dependencies]
+tray-icon = { workspace = true }
+
 [target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies]
 wgpu = { version = "30.0.1", default-features = true }
 
@@ -29,6 +32,10 @@ wgpu = { version = "30.0.1", default-features = true }
 dblocal-core = { workspace = true, features = ["mock"] }
 gpui-kit = { workspace = true, features = ["test-support"] }
 image = "0.25"
+# The a11y harness (tests/support/a11y_platform.rs) wraps a gpui PlatformWindow,
+# so it needs the same raw-window-handle gpui uses, and futures' oneshot.
+futures = "0.3"
+raw-window-handle = "0.6"
 
 
 [lints]

@@ -232,11 +232,50 @@ impl InFlightMarker {
         };
         std::fs::write(&path, owner.render()).ok()?;
         register_nonce(nonce);
+        // Record the nonce the production code actually wrote, so a test observes the
+        // real call-site value (not a helper's) and catches a call-site mutation.
+        #[cfg(test)]
+        record_created_nonce(&dir.display().to_string(), nonce);
         Some(Self {
             path,
             nonce: nonce.to_owned(),
         })
     }
+}
+
+/// Marker nonces written by [`InFlightMarker::create`], keyed by the instance
+/// directory, for the item-5(b) test.
+#[cfg(test)]
+fn created_nonce_log() -> &'static std::sync::Mutex<Vec<(String, String)>> {
+    static LOG: std::sync::OnceLock<std::sync::Mutex<Vec<(String, String)>>> =
+        std::sync::OnceLock::new();
+    LOG.get_or_init(|| std::sync::Mutex::new(Vec::new()))
+}
+
+#[cfg(test)]
+fn record_created_nonce(dir: &str, nonce: &str) {
+    if let Ok(mut log) = created_nonce_log().lock() {
+        log.push((dir.to_owned(), nonce.to_owned()));
+    }
+}
+
+/// Every marker nonce [`InFlightMarker::create`] wrote for `dir`, in order.
+#[cfg(test)]
+pub(crate) fn take_created_nonces(dir: &std::path::Path) -> Vec<String> {
+    let dir = dir.display().to_string();
+    let Ok(mut log) = created_nonce_log().lock() else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    log.retain(|(seen, nonce)| {
+        if seen == &dir {
+            out.push(nonce.clone());
+            false
+        } else {
+            true
+        }
+    });
+    out
 }
 
 impl Drop for InFlightMarker {

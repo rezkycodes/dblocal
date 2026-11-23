@@ -158,6 +158,66 @@ impl MyClient {
             .map(|_| ())
             .map_err(|err| format!("batch {sql:?}: {err}"))
     }
+
+    /// Runs a query whose first column is text.
+    pub fn query_one_text(&mut self, sql: &str) -> Result<String, String> {
+        let value: Option<String> = self
+            .runtime
+            .block_on(self.conn.query_first(sql))
+            .map_err(|err| format!("query {sql:?}: {err}"))?;
+        value.ok_or_else(|| format!("query {sql:?} returned no row"))
+    }
+}
+
+/// A `mysql_async` session at one user/db over loopback TCP, for proving the
+/// privileges an admin-created account actually has.
+pub struct ScopedMyClient {
+    runtime: tokio::runtime::Runtime,
+    conn: mysql_async::Conn,
+}
+
+impl ScopedMyClient {
+    /// Connects as `user`/`password` to `db` on `127.0.0.1:port` over TCP.
+    pub fn connect(port: u16, user: &str, password: &str, db: &str) -> Result<Self, String> {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|err| format!("build the client runtime: {err}"))?;
+        let builder = mysql_async::OptsBuilder::default()
+            .ip_or_hostname("127.0.0.1")
+            .tcp_port(port)
+            .user(Some(user))
+            .pass(Some(password))
+            .db_name(Some(db))
+            .prefer_socket(false);
+        let opts = mysql_async::Opts::from(builder);
+        let conn = runtime
+            .block_on(mysql_async::Conn::new(opts))
+            .map_err(|err| format!("connect as {user} to {db} on {port}: {err}"))?;
+        Ok(Self { runtime, conn })
+    }
+
+    /// Runs a query whose first column is an integer.
+    pub fn query_i64(&mut self, sql: &str) -> Result<i64, String> {
+        let value: Option<i64> = self
+            .runtime
+            .block_on(self.conn.query_first(sql))
+            .map_err(|err| format!("query {sql:?}: {err}"))?;
+        value.ok_or_else(|| format!("query {sql:?} returned no row"))
+    }
+
+    /// Runs a statement; `Ok(())` when the server accepts it.
+    pub fn can(&mut self, sql: &str) -> bool {
+        self.runtime.block_on(self.conn.query_drop(sql)).is_ok()
+    }
+
+    /// Runs a statement, returning an error string when the server refuses it.
+    pub fn batch(&mut self, sql: &str) -> Result<(), String> {
+        self.runtime
+            .block_on(self.conn.query_drop(sql))
+            .map(|_| ())
+            .map_err(|err| format!("batch {sql:?}: {err}"))
+    }
 }
 
 /// Opens a raw TCP connection to `127.0.0.1:port` and closes it.

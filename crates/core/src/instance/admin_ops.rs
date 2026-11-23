@@ -20,8 +20,8 @@ use std::time::Duration;
 
 use crate::DblError;
 use crate::admin::{
-    AdminError, AdminResult, AdminTarget, CredentialSink, DatabaseInfo, Identifier, PgAdmin,
-    PrivilegeLevel, UserInfo,
+    AdminError, AdminExecutor, AdminResult, AdminTarget, CredentialSink, DatabaseInfo, Identifier,
+    PgAdmin, PrivilegeLevel, UserInfo,
 };
 use crate::consts;
 use crate::model::{AuthMode, EngineKey, Instance, InstanceId};
@@ -32,65 +32,13 @@ use crate::service::{ServiceResult, UserFacingError};
 use super::read_ops::load;
 use super::service::Inner;
 
-/// The engine-facing half of admin, abstracted so the wiring is testable
-/// without a live PostgreSQL.
-pub trait AdminExecutor: Send + Sync {
-    /// Lists databases with owner and size.
-    fn list_databases(&self) -> AdminResult<Vec<DatabaseInfo>>;
-    /// Lists login-capable roles.
-    fn list_users(&self) -> AdminResult<Vec<UserInfo>>;
-    /// Creates a database.
-    fn create_database(&self, db: &Identifier) -> AdminResult<()>;
-    /// Drops a database, forcing only when `force`.
-    fn drop_database(&self, db: &Identifier, force: bool) -> AdminResult<()>;
-    /// Creates a login role and returns its password once.
-    fn create_user(&self, user: &Identifier) -> AdminResult<SecretString>;
-    /// Whether `db` exists, checked before a role is created in it.
-    fn database_exists(&self, db: &Identifier) -> AdminResult<bool>;
-    /// Grants `level` on `db` to `user`.
-    fn grant(&self, user: &Identifier, db: &Identifier, level: PrivilegeLevel) -> AdminResult<()>;
-    /// Drops a role (used to undo a half-created user).
-    fn drop_user(&self, user: &Identifier) -> AdminResult<()>;
-    /// Resets the superuser password with the F-DBU-03 AC2 guarantee.
-    fn reset_superuser_password(&self, sink: &dyn CredentialSink) -> AdminResult<SecretString>;
-}
-
-impl AdminExecutor for PgAdmin {
-    fn list_databases(&self) -> AdminResult<Vec<DatabaseInfo>> {
-        PgAdmin::list_databases(self)
-    }
-    fn list_users(&self) -> AdminResult<Vec<UserInfo>> {
-        PgAdmin::list_users(self)
-    }
-    fn create_database(&self, db: &Identifier) -> AdminResult<()> {
-        PgAdmin::create_database(self, db)
-    }
-    fn drop_database(&self, db: &Identifier, force: bool) -> AdminResult<()> {
-        PgAdmin::drop_database(self, db, force)
-    }
-    fn create_user(&self, user: &Identifier) -> AdminResult<SecretString> {
-        PgAdmin::create_user(self, user)
-    }
-    fn database_exists(&self, db: &Identifier) -> AdminResult<bool> {
-        PgAdmin::database_exists(self, db)
-    }
-    fn grant(&self, user: &Identifier, db: &Identifier, level: PrivilegeLevel) -> AdminResult<()> {
-        PgAdmin::grant(self, user, db, level)
-    }
-    fn drop_user(&self, user: &Identifier) -> AdminResult<()> {
-        PgAdmin::drop_user(self, user)
-    }
-    fn reset_superuser_password(&self, sink: &dyn CredentialSink) -> AdminResult<SecretString> {
-        PgAdmin::reset_superuser_password(self, sink)
-    }
-}
-
 /// Builds the executor for one instance from its stored credential. Production
-/// dials loopback; tests inject a fake.
+/// dials loopback (PostgreSQL) or the instance socket (MySQL/MariaDB); tests
+/// inject a fake.
 pub type AdminFactory =
     Arc<dyn Fn(&Instance, SecretString) -> ServiceResult<Box<dyn AdminExecutor>> + Send + Sync>;
 
-/// The production factory: a [`PgAdmin`] over loopback with the stored password.
+/// The production factory for PostgreSQL: a [`PgAdmin`] over loopback.
 pub fn pg_admin_factory() -> AdminFactory {
     Arc::new(|instance, password| {
         let target = AdminTarget::new(
@@ -108,6 +56,62 @@ pub fn pg_admin_factory() -> AdminFactory {
     })
 }
 
+/// The production factory for every engine: PostgreSQL over loopback, and
+/// MySQL/MariaDB over the instance unix socket (see [`crate::admin::mysql`]).
+///
+/// `paths` locates the instance's `my.cnf` so the socket path is the one the
+/// adapter wrote (including the long-path fallback).
+pub fn default_admin_factory(paths: crate::paths::DblPaths) -> AdminFactory {
+    let pg = pg_admin_factory();
+    Arc::new(move |instance, password| match instance.engine() {
+        EngineKey::Postgresql => pg(instance, password),
+        EngineKey::Mysql => mysql_admin(&paths, instance, password, "mysql"),
+        EngineKey::Mariadb => mysql_admin(&paths, instance, password, "mariadb"),
+        // Valkey has no named databases or login roles; the engine gate rejects
+        // it before this factory is called, but returning Unsupported here keeps
+        // the factory total rather than panicking.
+        EngineKey::Valkey => Err(UserFacingError::from(AdminError::Unsupported)),
+    })
+}
+
+/// Builds a [`MysqlAdmin`] for a MySQL/MariaDB instance over its unix socket.
+fn mysql_admin(
+    paths: &crate::paths::DblPaths,
+    instance: &Instance,
+    password: SecretString,
+    engine: &'static str,
+) -> ServiceResult<Box<dyn AdminExecutor>> {
+    let name = instance.name();
+    let data_dir = paths.data_dir(name);
+    let run_dir = paths.run_dir(name);
+    let socket = match instance.engine() {
+        EngineKey::Mysql => crate::engine::mysql_configured_socket_path(
+            &run_dir,
+            instance.port().get(),
+            &paths.instance_dir(name),
+        ),
+        EngineKey::Mariadb => {
+            crate::engine::mariadb_configured_socket_path(&data_dir, instance.port().get())
+        }
+        _ => return Err(UserFacingError::from(AdminError::Unsupported)),
+    }
+    .map_err(|err| {
+        tracing::warn!(engine, instance = %name, error = %err, "cannot resolve the admin socket");
+        UserFacingError::from(AdminError::Connect)
+    })?;
+    let target = crate::admin::MysqlTarget::new(
+        socket,
+        instance.port().get(),
+        instance.superuser(),
+        password,
+    )
+    .with_timeouts(
+        Duration::from_secs(consts::ADMIN_CONNECT_TIMEOUT_SECS),
+        Duration::from_secs(consts::ADMIN_STATEMENT_TIMEOUT_SECS),
+    );
+    Ok(Box::new(crate::admin::MysqlAdmin::new(target)))
+}
+
 /// Runs `f` against the executor for `instance`, after the engine gate and the
 /// credential read.
 fn with_admin<T>(
@@ -122,13 +126,13 @@ fn with_admin<T>(
 
 /// Builds the executor for `instance`, enforcing the engine gate first.
 fn executor_for(inner: &Inner, instance: &Instance) -> ServiceResult<Box<dyn AdminExecutor>> {
-    if instance.engine() != EngineKey::Postgresql {
-        // MySQL/MariaDB await W4-A2 and Valkey has no named databases or login
-        // roles: both are a typed "not supported", not an empty list.
+    if instance.engine() == EngineKey::Valkey {
+        // Valkey has no named databases or login roles: a typed "not supported",
+        // not an empty list. PostgreSQL, MySQL and MariaDB are all supported.
         return Err(AdminError::Unsupported.into());
     }
     if instance.auth() != AuthMode::Password {
-        // PostgreSQL *is* supported; this instance was created without a
+        // The engine *is* supported; this instance was created without a
         // password, so there is nothing to authenticate an admin session with.
         // That is a different answer from the engine gate above (`F-DBU`).
         return Err(AdminError::NoPassword.into());

@@ -227,7 +227,7 @@ impl Workspace {
                     .px(px(10.)),
             );
         }
-        for row in rows {
+        for (index, row) in rows.iter().enumerate() {
             let usage_colour = if row.unused {
                 theme.warning
             } else {
@@ -235,12 +235,23 @@ impl Workspace {
             };
             list = list.child(
                 h_flex()
+                    .id(SharedString::from(format!("runtime-row-{index}")))
                     .h(px(26.))
                     .px(px(10.))
                     .gap_2()
                     .child(icon(IconName::Package, 14.0, theme.muted_foreground))
-                    .child(Label::new(row.title).flex_1().text_xs())
-                    .child(Label::new(row.usage).text_xs().text_color(usage_colour)),
+                    .child(
+                        Label::new(row.title.clone())
+                            .id(SharedString::from(format!("runtime-title-{index}")))
+                            .flex_1()
+                            .text_xs(),
+                    )
+                    .child(
+                        Label::new(row.usage.clone())
+                            .id(SharedString::from(format!("runtime-usage-{index}")))
+                            .text_xs()
+                            .text_color(usage_colour),
+                    ),
             );
         }
         list

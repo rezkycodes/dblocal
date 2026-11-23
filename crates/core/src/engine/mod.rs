@@ -13,14 +13,17 @@ pub mod uri;
 mod valkey;
 
 pub use mariadb::{
-    MariaDbAdapter, log_error_path as mariadb_log_path, prepare_run as prepare_mariadb_run,
+    MariaDbAdapter, configured_socket_path as mariadb_configured_socket_path,
+    log_error_path as mariadb_log_path, prepare_run as prepare_mariadb_run,
     sync_port as sync_mariadb_port,
 };
 pub use mysql::{
-    Handshake as MysqlHandshake, MysqlAdapter, log_path as mysql_log_path, my_cnf_path,
-    parse_handshake_payload as parse_mysql_handshake_payload, pidfile_path as mysql_pidfile_path,
-    prepare_run as prepare_mysql_run, read_handshake as read_mysql_handshake,
-    socket_path as mysql_socket_path, socket_path_from_my_cnf as mysql_socket_path_from_my_cnf,
+    Handshake as MysqlHandshake, MysqlAdapter,
+    configured_socket_path as mysql_configured_socket_path, log_path as mysql_log_path,
+    my_cnf_path, parse_handshake_payload as parse_mysql_handshake_payload,
+    pidfile_path as mysql_pidfile_path, prepare_run as prepare_mysql_run,
+    read_handshake as read_mysql_handshake, socket_path as mysql_socket_path,
+    socket_path_from_my_cnf as mysql_socket_path_from_my_cnf,
     socket_path_limit as mysql_socket_path_limit, sync_port as sync_mysql_port,
     validate_socket_path_len as validate_mysql_socket_path_len,
 };

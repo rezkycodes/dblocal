@@ -19,7 +19,7 @@ use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::label::Label;
 use gpui_kit::component::{ActiveTheme, Theme, h_flex, v_flex};
 use gpui_kit::prelude::*;
-use gpui_kit::{AnyElement, Context, IntoElement, ParentElement, Styled, div, px};
+use gpui_kit::{AnyElement, Context, IntoElement, ParentElement, SharedString, Styled, div, px};
 
 use super::Workspace;
 use super::page;
@@ -45,7 +45,7 @@ impl Workspace {
         if view.engine == EngineKey::Valkey {
             return page()
                 .child(
-                    card(None, &theme).child(
+                    card(None, Some("valkey-note"), &theme).child(
                         Label::new(strings::UI_DATABASES_VALKEY_NOTE)
                             .text_color(theme.muted_foreground),
                     ),
@@ -157,11 +157,11 @@ fn placeholder_card(
                 theme,
             ));
         }
-        let mut c = card(None, theme);
+        let mut c = card(None, Some(&format!("placeholder-{index}")), theme);
         c = c.child(hdr);
         c
     } else {
-        let mut c = card(spec.title, theme);
+        let mut c = card(spec.title, Some(&format!("placeholder-{index}")), theme);
         if !spec.controls.is_empty() {
             let mut row = h_flex().gap_2().items_center().flex_wrap();
             for (control_index, control) in spec.controls.iter().enumerate() {
@@ -290,20 +290,31 @@ fn demo_databases_table(theme: &Theme) -> impl IntoElement {
                 .child(Label::new(strings::UI_DATABASES_COLUMN_ENCODING).w(px(160.)))
                 .child(Label::new(strings::UI_DATABASES_COLUMN_SIZE).w(px(100.))),
         );
-    for (name, size) in rows {
+    for (index, (name, size)) in rows.into_iter().enumerate() {
         table = table.child(
             h_flex()
+                .id(SharedString::from(format!("demo-db-row-{index}")))
                 .h(px(42.))
                 .px(px(14.))
                 .border_t_1()
                 .border_color(theme.table_row_border)
-                .child(Label::new(name).flex_1().font_family(mono.clone()))
+                .child(
+                    Label::new(name)
+                        .id(SharedString::from(format!("demo-db-name-{index}")))
+                        .flex_1()
+                        .font_family(mono.clone()),
+                )
                 .child(
                     Label::new(strings::UI_DATABASES_ENCODING)
+                        .id(SharedString::from(format!("demo-db-encoding-{index}")))
                         .w(px(160.))
                         .text_color(theme.muted_foreground),
                 )
-                .child(Label::new(size).w(px(100.))),
+                .child(
+                    Label::new(size)
+                        .id(SharedString::from(format!("demo-db-size-{index}")))
+                        .w(px(100.)),
+                ),
         );
     }
     table
@@ -312,25 +323,34 @@ fn demo_databases_table(theme: &Theme) -> impl IntoElement {
 /// The demo user list and the superuser password card.
 fn demo_users_card(theme: &Theme) -> impl IntoElement {
     let mono = theme.mono_font_family.clone();
-    card(Some(strings::UI_DATABASES_USERS), theme).children(
+    card(Some(strings::UI_DATABASES_USERS), None, theme).children(
         [
             ("postgres", "semua", "superuser"),
             ("app_rw", "app_dev", "read-write"),
             ("report_ro", "app_dev", "read-only"),
         ]
         .into_iter()
-        .map(|(user, db, role)| {
+        .enumerate()
+        .map(|(index, (user, db, role))| {
             h_flex()
+                .id(SharedString::from(format!("demo-user-row-{index}")))
                 .gap_3()
                 .h(px(34.))
-                .child(Label::new(user).flex_1().font_family(mono.clone()))
+                .child(
+                    Label::new(user)
+                        .id(SharedString::from(format!("demo-user-name-{index}")))
+                        .flex_1()
+                        .font_family(mono.clone()),
+                )
                 .child(
                     Label::new(db)
+                        .id(SharedString::from(format!("demo-user-db-{index}")))
                         .w(px(100.))
                         .text_color(theme.muted_foreground),
                 )
                 .child(
                     Label::new(role)
+                        .id(SharedString::from(format!("demo-user-role-{index}")))
                         .px_2()
                         .rounded_full()
                         .bg(theme.muted)
@@ -391,10 +411,11 @@ fn demo_config_table(
                         .text_color(theme.muted_foreground),
                 ),
         );
-    for (name, value, default, hint) in params {
+    for (index, (name, value, default, hint)) in params.into_iter().enumerate() {
         let changed = value != default && name != "port";
         table = table.child(
             h_flex()
+                .id(SharedString::from(format!("config-row-{index}")))
                 .gap_4()
                 .px(px(18.))
                 .py(px(10.))
@@ -406,10 +427,17 @@ fn demo_config_table(
                         .child(
                             h_flex()
                                 .gap_2()
-                                .child(Label::new(name).font_family(mono.clone()))
+                                .child(
+                                    Label::new(name)
+                                        .id(SharedString::from(format!("config-name-{index}")))
+                                        .font_family(mono.clone()),
+                                )
                                 .when(changed, |this| {
                                     this.child(
                                         Label::new(strings::UI_CONFIG_CHANGED)
+                                            .id(SharedString::from(format!(
+                                                "config-changed-{index}"
+                                            )))
                                             .text_size(px(11.))
                                             .text_color(theme.primary),
                                     )
@@ -417,6 +445,7 @@ fn demo_config_table(
                         )
                         .child(
                             Label::new(hint)
+                                .id(SharedString::from(format!("config-hint-{index}")))
                                 .text_xs()
                                 .text_color(theme.muted_foreground),
                         ),
@@ -432,10 +461,15 @@ fn demo_config_table(
                         .border_1()
                         .border_color(if changed { theme.primary } else { theme.border })
                         .bg(theme.background)
-                        .child(Label::new(value).font_family(mono.clone())),
+                        .child(
+                            Label::new(value)
+                                .id(SharedString::from(format!("config-value-{index}")))
+                                .font_family(mono.clone()),
+                        ),
                 )
                 .child(
                     Label::new(default)
+                        .id(SharedString::from(format!("config-default-{index}")))
                         .w(px(120.))
                         .font_family(mono.clone())
                         .text_color(theme.muted_foreground),
