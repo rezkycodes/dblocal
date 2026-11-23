@@ -294,13 +294,13 @@ fn restore_available_is_false_without_a_file_or_a_backup() {
     let _ = fs::remove_file(&path);
     let instance = harness.instance(&id).expect("row");
     assert!(!super::super::config_ops::restore_available(
-        &harness.service.inner(),
+        harness.service.inner(),
         &instance
     ));
     // File present but never backed up -> false.
     seed(&path, EngineKey::Valkey);
     assert!(!super::super::config_ops::restore_available(
-        &harness.service.inner(),
+        harness.service.inner(),
         &instance
     ));
 }
