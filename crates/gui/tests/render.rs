@@ -63,6 +63,8 @@ type Build = fn(Arc<dyn DblService>, &mut gpui_kit::Window, &mut Context<Workspa
 mod frame;
 #[path = "render/watchdog.rs"]
 mod watchdog;
+#[path = "render/both_themes.rs"]
+mod both_themes;
 
 use frame::Frame;
 
@@ -779,48 +781,4 @@ fn renders_stale_banner_and_revealed_uri() {
         Workspace::preview_revealed,
     );
     assert!(revealed.colours > 40, "revealed render too flat");
-}
-
-/// `F-PLH-02` AC1: every screen and overlay renders in **both** themes.
-///
-/// Each case is drawn dark and light; both frames must be non-trivial (many
-/// distinct colours, i.e. text and surfaces are present) and the two themes must
-/// differ (a light frame is not the dark one). This is the "both themes render
-/// every screen" check without committing a second screenshot per case.
-#[test]
-fn every_screen_renders_in_both_themes() {
-    let cases: [(&str, Build); 9] = [
-        ("overview", Workspace::preview),
-        ("create", Workspace::preview_create),
-        ("delete", Workspace::preview_delete),
-        ("palette", Workspace::preview_palette),
-        ("settings", Workspace::preview_settings),
-        ("databases", Workspace::preview_product_databases),
-        ("config", Workspace::preview_product_config),
-        ("quit", Workspace::preview_quit),
-        ("failure", Workspace::preview_failure),
-    ];
-    for (name, build) in cases {
-        let dark = render(true, &format!("both-{name}-dark.png"), build);
-        let light = render(false, &format!("both-{name}-light.png"), build);
-        eprintln!(
-            "BOTH {name}: dark_colours={} light_colours={}",
-            dark.colours, light.colours
-        );
-        assert!(
-            dark.colours > 24,
-            "{name}: dark render too flat ({} colours)",
-            dark.colours
-        );
-        assert!(
-            light.colours > 24,
-            "{name}: light render too flat ({} colours)",
-            light.colours
-        );
-        // The two themes must actually differ: mean luminance of the frame.
-        assert!(
-            light.mean_luminance() > dark.mean_luminance(),
-            "{name}: the light frame is not lighter than the dark one"
-        );
-    }
 }
