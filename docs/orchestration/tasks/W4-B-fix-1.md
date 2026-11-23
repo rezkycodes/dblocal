@@ -32,6 +32,14 @@ The prompt "Database dan seluruh isinya dihapus permanen. Ketik nama database un
 
 After a successful create the name field keeps its text (a second click gives "already exists"); clear it on success (database and user). After a successful drop no toast is shown and the status bar keeps "Database appdb dibuat (UTF-8)" from the earlier create; show a drop confirmation toast ("Database <name> dihapus") from `strings`.
 
+## F7 (MEDIUM) — three mutations stay green (the spec asked for these guarantees)
+
+Reviewer mutations on the trial merge, each leaves all 295 GUI lib tests green:
+- `confirm_drop` calls `service.drop_database(&iid, &name, true)` instead of `false` (the GUI would silently kill other sessions): no test pins `force == false`. Test through a scripted service that records the arguments of `drop_database`.
+- the `UiEvent::AdminChanged` arm in `app.rs` no longer sets another instance's rows back to `Idle` (`if false {`): the test only covers the visible instance, which `apply_event_with_cx` re-reads anyway. Test the non-visible instance: its rows change, `AdminChanged` arrives, entering its tab issues a fresh read.
+- the "user created" toast built as `format!("{user} {password}")` (the one-time password in a toast): the spec says "never in a toast, never logged". Add a canary test: after `create_user` and after `confirm_reset` with a known secret from the scripted service, neither the toast, the status-bar text, the card error, nor any `Debug`/`Display` of the view state contains the secret while the dialog is open (only the dialog may), and nothing contains it after the dialog closes.
+Paste each mutation red on your head after the test is added, restored, clean `git status --short`. The other six reviewer mutations (drop confirm accepts any text, row ids ignore the instance, secret dialog kept after close, login switch shows enabled after a failed call, confirm_drop skips its re-check, reset failure flag never set) were red: keep those tests.
+
 ## Bar
 
 fmt, clippy workspace (also `--features demo`), deny, GUI lib x20 from a private copy of the test binary (check with `--list` that your new tests are inside it), a11y_tree and render tests, `cargo xtask ci` under the heavy lock on the final head (`CARGO_BUILD_JOBS=8`, MemAvailable above 8000 MB), real-window evidence for F1 (the two-instance reproduction above, after the fix: `pg2` shows `postgres` right after the start) and F3 (type into the dialog without clicking first) using `delivery_mode:"foreground"` clicks and typing under Xwayland, isolated `DBLOCAL_HOME`, engines and home removed afterwards (`pgrep -x postgres` must be 0), never leave `~/.config/systemd/user/dblocal.service` behind. `worker_done` only with the red and green outputs pasted.
