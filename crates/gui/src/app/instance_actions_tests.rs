@@ -465,7 +465,7 @@ fn palette_actions_reach_the_same_handlers(cx: &mut TestAppContext) {
     // Run the New-instance entry (index 0 in the unfiltered list).
     let new_index = actions
         .iter()
-        .position(|a| matches!(a, crate::format::PaletteAction::NewInstance))
+        .position(|a| matches!(a, Some(crate::format::PaletteAction::NewInstance)))
         .expect("new-instance entry");
     view.update_in(cx, |this, window, cx| {
         this.run_palette_action(new_index, window, cx)
@@ -478,15 +478,18 @@ fn palette_actions_reach_the_same_handlers(cx: &mut TestAppContext) {
     assert!(!view.read_with(cx, |this, _| this.palette_is_open()));
     view.update(cx, |this, _| this.cancel_create());
 
-    // Start, stop, open and copy each route to their handler.
+    // Start, stop, open and copy each route to their handler. The list now
+    // carries disabled rows too (`None`), so only the runnable ones run.
     let id = service.id_with(InstanceStatus::Stopped);
     let entries = view.read_with(cx, |this, _| this.palette_actions());
     for (index, action) in entries.iter().enumerate() {
         match action {
-            crate::format::PaletteAction::Start(value)
-            | crate::format::PaletteAction::Stop(value)
-            | crate::format::PaletteAction::Open(value)
-            | crate::format::PaletteAction::CopyUri(value) => {
+            Some(
+                crate::format::PaletteAction::Start(value)
+                | crate::format::PaletteAction::Stop(value)
+                | crate::format::PaletteAction::Open(value)
+                | crate::format::PaletteAction::CopyUri(value),
+            ) => {
                 if value == &id.to_string() {
                     view.update_in(cx, |this, window, cx| {
                         this.run_palette_action(index, window, cx)
@@ -494,7 +497,7 @@ fn palette_actions_reach_the_same_handlers(cx: &mut TestAppContext) {
                     cx.run_until_parked();
                 }
             }
-            crate::format::PaletteAction::NewInstance => {}
+            Some(crate::format::PaletteAction::NewInstance) | None => {}
         }
     }
     assert!(
@@ -608,18 +611,20 @@ fn engine_groups_collapse_and_expand(cx: &mut TestAppContext) {
 fn palette_actions_with_bad_ids_are_ignored(cx: &mut TestAppContext) {
     let (view, service, cx) = fixture(cx);
     let before = service.calls();
-    view.update(cx, |this, _| {
-        this.palette_open = true;
-        this.palette_query = "zzz-tidak-ada".to_owned();
-    });
-    let actions = view.read_with(cx, |this, _| this.palette_actions());
+    // The local query filter lives in `filter_palette` (the palette's
+    // `CommandState` filters locally); a query that matches nothing leaves no
+    // rows to confirm.
+    let items = view.read_with(cx, |this, _| this.palette_items());
     assert!(
-        actions.is_empty(),
-        "no instance matches the query: {actions:?}"
+        crate::format::filter_palette(&items, "zzz-tidak-ada").is_empty(),
+        "no instance matches the query"
     );
+    view.update(cx, |this, _| this.palette_open = true);
+    // An out-of-range confirm runs nothing and closes the palette.
     view.update_in(cx, |this, window, cx| {
-        this.run_palette_action(0, window, cx)
+        this.run_palette_action(9_999, window, cx)
     });
     cx.run_until_parked();
-    assert_eq!(service.calls(), before);
+    assert_eq!(service.calls(), before, "a bad index must reach no service");
+    assert!(!view.read_with(cx, |this, _| this.palette_is_open()));
 }

@@ -113,7 +113,39 @@ impl Workspace {
 
     pub(crate) fn toggle_palette(&mut self) {
         self.palette_open = !self.palette_open;
-        self.palette_query.clear();
+    }
+
+    /// Opens or closes the palette, taking and returning keyboard focus.
+    ///
+    /// `F-PLH-01` AC1/AC2: the palette is keyboard-driven, so opening it must
+    /// move focus into its query field and closing it must give focus back to
+    /// wherever it came from (`dialog_focus` owns the capture/restore rule).
+    pub(crate) fn toggle_palette_in(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.palette_open {
+            self.close_palette(cx);
+        } else {
+            self.open_palette(window, cx);
+        }
+    }
+
+    /// Opens the palette and focuses its query field.
+    pub(crate) fn open_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.dialog_focus.opened(window.focused(cx));
+        self.palette_open = true;
+        let command_state = self.command_state.clone();
+        command_state.update(cx, |state, cx| state.focus(window, cx));
+    }
+
+    /// Closes the palette and gives focus back to the element that opened it.
+    pub(crate) fn close_palette(&mut self, cx: &mut Context<Self>) {
+        if !self.palette_open {
+            return;
+        }
+        self.palette_open = false;
+        // The close often runs from a listener without a window (the palette's
+        // own Escape); `render` applies the parked handle on the next frame.
+        let _ = cx;
+        self.restore_dialog_focus_after_close();
     }
 
     #[cfg(test)]
@@ -123,26 +155,42 @@ impl Workspace {
 
     pub(crate) fn set_palette_open(&mut self, open: bool) {
         self.palette_open = open;
-        self.palette_query.clear();
     }
 
     pub(crate) fn command_state(&self) -> &Entity<CommandState> {
         &self.command_state
     }
 
-    pub(crate) fn palette_actions(&self) -> Vec<PaletteAction> {
-        let items = format::palette_items(&self.state.instances);
-        format::filter_palette(&items, &self.palette_query)
+    /// The palette rows the command renders, in order (`F-PLH-01` AC2).
+    ///
+    /// `CommandState` filters these locally and reports the *original* row index
+    /// on confirm, so the list `run_palette_action` indexes is this unfiltered
+    /// one — never `palette_query`-filtered, or the indices would drift once the
+    /// user types.
+    pub(crate) fn palette_items(&self) -> Vec<format::PaletteItem> {
+        format::palette_items(&self.state.instances)
+    }
+
+    /// The runnable actions of the palette rows, `None` for a disabled row.
+    pub(crate) fn palette_actions(&self) -> Vec<Option<PaletteAction>> {
+        self.palette_items()
             .into_iter()
-            .map(|item| item.action.clone())
+            .map(|item| item.action)
             .collect()
     }
 
     pub(crate) fn palette_labels(&self) -> Vec<String> {
-        let items = format::palette_items(&self.state.instances);
-        format::filter_palette(&items, &self.palette_query)
+        self.palette_items()
             .into_iter()
-            .map(|item| item.label.clone())
+            .map(|item| item.label)
+            .collect()
+    }
+
+    /// The reason a disabled palette row shows, or `None` when it is runnable.
+    pub(crate) fn palette_reasons(&self) -> Vec<Option<String>> {
+        self.palette_items()
+            .into_iter()
+            .map(|item| item.reason)
             .collect()
     }
 
@@ -152,12 +200,13 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let actions = self.palette_actions();
-        let Some(action) = actions.get(index).cloned() else {
-            self.palette_open = false;
+        let action = self.palette_actions().get(index).cloned().flatten();
+        self.palette_open = false;
+        let Some(action) = action else {
+            // A disabled row or an out-of-range index: close without running.
+            cx.notify();
             return;
         };
-        self.palette_open = false;
         match action {
             PaletteAction::NewInstance => self.open_new_instance(window, cx),
             PaletteAction::Open(value) => {

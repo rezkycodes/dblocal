@@ -240,7 +240,6 @@ pub struct Workspace {
     /// The login-item seam; `Err` when this host has no usable backend.
     login: Option<Result<Arc<dyn login_item::LoginItemControl>, UserFacingError>>,
     palette_open: bool,
-    palette_query: String,
     command_state: Entity<CommandState>,
     last_failure_mirror: Option<UserFacingError>,
     toast: Option<SharedString>,
@@ -331,9 +330,19 @@ impl Workspace {
                 this.refresh_config_on_activation(cx);
             }
         }));
-        // No per-window event pump: the app-level loop is the single consumer of
-        // the one bridge and forwards each event here (R3). Two pumps on one
-        // flume channel would split the stream between them.
+        // `F-PLH-02` AC1: follow the system appearance while running. A change
+        // to the OS light/dark setting re-applies the matching theme, unless an
+        // explicit `DBLOCAL_THEME` override is set (then the override wins).
+        workspace._appearance = Some(window.observe_window_appearance(|window, cx| {
+            if crate::theme::theme_override().is_none() {
+                let wanted = if crate::app::appearance_is_dark(window.appearance()) {
+                    crate::theme::DARK_THEME
+                } else {
+                    crate::theme::LIGHT_THEME
+                };
+                crate::theme::apply_named(cx, wanted);
+            }
+        }));
         workspace
     }
 
@@ -431,7 +440,6 @@ impl Workspace {
             settings: settings_state::SettingsState::default(),
             login: None,
             palette_open: false,
-            palette_query: String::new(),
             last_failure_mirror: None,
             toast: None,
             quit: QuitMachine::new(),
@@ -562,7 +570,15 @@ impl Workspace {
     }
 
     pub(crate) fn close_modals(&mut self) {
-        self.palette_open = false;
+        if self.palette_open {
+            // The palette owns its focus capture/restore (F-PLH-01); closing it
+            // through here must return focus too, not just flip the flag.
+            // `close_palette` needs no window: it parks the restore for the
+            // next frame.
+            self.palette_open = false;
+            self.restore_dialog_focus_after_close();
+            return;
+        }
         self.create = None;
         self.delete_target = None;
         self.delete_name_input = None;
@@ -643,8 +659,8 @@ impl Render for Workspace {
             .bg(colours.background)
             .text_color(colours.foreground)
             .font_family(colours.font_family.clone())
-            .on_action(cx.listener(|this, _: &actions::OpenPalette, _window, cx| {
-                this.toggle_palette();
+            .on_action(cx.listener(|this, _: &actions::OpenPalette, window, cx| {
+                this.toggle_palette_in(window, cx);
                 cx.notify();
             }))
             .on_action(cx.listener(|this, _: &actions::OpenSettings, _window, cx| {

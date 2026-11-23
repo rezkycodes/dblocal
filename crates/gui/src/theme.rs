@@ -52,14 +52,40 @@ pub fn merged_theme_set() -> String {
 }
 
 /// Registers both themes and selects the one matching the system appearance.
+///
+/// `F-PLH-02` AC1: the app follows the system appearance. `DBLOCAL_THEME` is an
+/// explicit override (`light`, `dark`, or `system`); it exists so the override
+/// can be forced in a test or a screenshot run without touching the user's real
+/// desktop theme, and it is documented in `docs/architecture/gui.md`.
 pub fn init(cx: &mut App) {
     let set = merged_theme_set();
     if let Err(err) = ThemeRegistry::global_mut(cx).load_themes_from_str(&set) {
         tracing::error!("could not register the DBLocal themes: {err}");
     }
-    sync_to_system(cx);
+    apply_from_environment_or_system(cx);
     apply_explicit_fonts(cx);
     log_resolved_fonts(cx);
+}
+
+/// The theme override named by `DBLOCAL_THEME`, if any.
+///
+/// `light` and `dark` force a theme; `system` (or an unset/garbage value) means
+/// "follow the OS". The value is read once per call so a test can set it in the
+/// process environment before `init`.
+pub fn theme_override() -> Option<&'static str> {
+    match std::env::var("DBLOCAL_THEME") {
+        Ok(value) if value.eq_ignore_ascii_case("dark") => Some(DARK_THEME),
+        Ok(value) if value.eq_ignore_ascii_case("light") => Some(LIGHT_THEME),
+        _ => None,
+    }
+}
+
+/// Applies the override if one is set, else the system appearance.
+pub fn apply_from_environment_or_system(cx: &mut App) {
+    match theme_override() {
+        Some(name) => apply_named(cx, name),
+        None => sync_to_system(cx),
+    }
 }
 
 /// The sane UI font stack, in preference order.

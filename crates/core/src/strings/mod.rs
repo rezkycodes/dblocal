@@ -256,6 +256,12 @@ pub const UI_PALETTE_STOP: &str = "Hentikan";
 pub const UI_PALETTE_COPY_URI: &str = "Salin URI";
 /// Palette: open an instance tab (prefix).
 pub const UI_PALETTE_OPEN: &str = "Buka";
+/// Palette: why "Start" cannot run (the instance is already running).
+pub const UI_PALETTE_REASON_ALREADY_RUNNING: &str = "sudah berjalan";
+/// Palette: why "Stop" cannot run (the instance is not running).
+pub const UI_PALETTE_REASON_NOT_RUNNING: &str = "tidak sedang berjalan";
+/// Palette: why an action cannot run during a transition.
+pub const UI_PALETTE_REASON_BUSY: &str = "sedang sibuk, tunggu hingga selesai";
 
 // --- Validation -------------------------------------------------------------
 
