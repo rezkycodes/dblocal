@@ -474,6 +474,16 @@ impl Workspace {
         self.user_name_input.read(cx).value().to_string()
     }
 
+    /// Runs the Enter path ("apply only when Terapkan is enabled") for one
+    /// instance, exactly as a keypress in a Config field does.
+    pub(crate) fn apply_config_if_ready_for_test(
+        &mut self,
+        id: &InstanceId,
+        cx: &mut Context<Self>,
+    ) {
+        self.apply_config_if_ready(id, cx);
+    }
+
     /// Opens the drop dialog, reusing the database-name field as its input (the
     /// dialog only needs an entity to hold the typed text).
     pub(crate) fn open_drop_dialog_for_test(

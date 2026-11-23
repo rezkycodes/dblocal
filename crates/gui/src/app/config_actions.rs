@@ -203,7 +203,7 @@ impl Workspace {
     }
 
     /// Stores one typed field value in the pure state, validating locally.
-    fn record_config_field(
+    pub(crate) fn record_config_field(
         &mut self,
         id: &InstanceId,
         key: &str,
@@ -232,7 +232,7 @@ impl Workspace {
     }
 
     /// Applies on Enter only when "Terapkan" is enabled.
-    fn apply_config_if_ready(&mut self, id: &InstanceId, cx: &mut Context<Self>) {
+    pub(crate) fn apply_config_if_ready(&mut self, id: &InstanceId, cx: &mut Context<Self>) {
         if self.config_can_apply(id) {
             self.apply_config(id, cx);
         }
@@ -371,6 +371,11 @@ impl Workspace {
                 config.end(ConfigAction::Restore);
                 match restored {
                     Ok(()) => {
+                        // The restored file is what the form now shows; re-read
+                        // it first so a start failure set below is not cleared by
+                        // the read (both are reported typed, and neither rolls
+                        // the restored file back).
+                        this.reload_config_bg(&iid, cx);
                         match started {
                             Some(Ok(_)) => {
                                 this.toast =
@@ -380,12 +385,11 @@ impl Workspace {
                                 // The restore worked but the start did not;
                                 // report the real typed failure of the start.
                                 let facing = UserFacingError::from(&err);
-                                config.error = Some(facing.clone());
+                                this.config.entry(&iid).error = Some(facing.clone());
                                 this.report_user_facing_error(&facing);
                             }
                             None => {}
                         }
-                        this.reload_config_bg(&iid, cx);
                     }
                     Err(err) => {
                         // The restore itself failed (`DBL-8604` busy, `DBL-8605`
@@ -414,8 +418,11 @@ impl Workspace {
         self.bg(cx, move || {
             let result = service.config_open_raw(&iid);
             move |this: &mut Workspace, cx: &mut Context<Workspace>| {
-                let config = this.config.entry(&iid);
-                config.end(ConfigAction::OpenRaw);
+                this.config.entry(&iid).end(ConfigAction::OpenRaw);
+                // The launch is how the file changes: re-read now the launcher
+                // has returned, so the editor's edit is visible on return even
+                // when the window never loses activation (`F7a`).
+                this.reload_config_bg(&iid, cx);
                 match result {
                     Ok(_command) => {
                         this.toast = Some(SharedString::from(
@@ -423,17 +430,13 @@ impl Workspace {
                         ));
                     }
                     Err(err) => {
-                        // The typed message is shown, and the path is rendered
-                        // next to it by the card (from the view) so the user can
-                        // open it by hand.
-                        config.error = Some(err.clone());
+                        // The typed message is shown *after* the re-read began,
+                        // so it survives that read; the card also renders the
+                        // path (from the view) so the user can open it by hand.
+                        this.config.entry(&iid).error = Some(err.clone());
                         this.report_user_facing_error(&err);
                     }
                 }
-                // The launch is how the file changes: re-read now the launcher
-                // has returned, so the editor's edit is visible on return even
-                // when the window never loses activation (`F7a`).
-                this.reload_config_bg(&iid, cx);
                 cx.notify();
             }
         });

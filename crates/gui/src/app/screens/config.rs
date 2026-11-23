@@ -455,9 +455,14 @@ impl Workspace {
             right = right.child(field).child(default_note);
         }
 
+        // The row's content must fill the row: a `v_flex` child with no flex
+        // sizes to its content, which lands the right group wherever the left
+        // text happens to end (`F3`).
         let mut content = v_flex()
+            .flex_1()
+            .min_w(px(0.))
             .gap_1()
-            .child(h_flex().gap_4().items_center().child(left).child(right));
+            .child(h_flex().flex_1().min_w(px(0.)).gap_4().items_center().child(left).child(right));
         // The service's own validation sentence, under the field (`DBL-8601`).
         if let Some(err) = config.errors.get(&setting.key) {
             content = content.child(

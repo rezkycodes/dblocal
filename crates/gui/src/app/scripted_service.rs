@@ -99,6 +99,9 @@ pub(crate) struct Script {
     pub config_raw_path: ServiceResult<std::path::PathBuf>,
     /// `config_open_raw` answer.
     pub config_open_raw: ServiceResult<dblocal_core::config::OpenCommand>,
+    /// `start_instance` answer: when `Err`, the code is returned as an engine
+    /// failure (the service's real `start_instance` error shape).
+    pub start_instance: ServiceResult<()>,
 }
 
 /// The arguments one mutation was called with.
@@ -153,6 +156,7 @@ impl Default for Script {
                 dblocal_core::platform::Os::Linux,
                 &std::path::PathBuf::from("/mock/pg-run/postgresql.conf"),
             )),
+            start_instance: Ok(()),
         }
     }
 }
@@ -355,7 +359,13 @@ impl DblService for ScriptedService {
     }
     fn start_instance(&self, _id: &InstanceId) -> Result<OperationId> {
         self.bump(|counts| counts.start_instance += 1);
-        Ok(OperationId::new("op-start"))
+        let script = self.script.lock().expect("script lock");
+        match &script.start_instance {
+            Ok(()) => Ok(OperationId::new("op-start")),
+            Err(err) => Err(dblocal_core::DblError::Engine {
+                reason: format!("{} — {}", err.code, err.message),
+            }),
+        }
     }
     fn stop_instance(&self, _id: &InstanceId) -> Result<OperationId> {
         self.bump(|counts| counts.stop_instance += 1);

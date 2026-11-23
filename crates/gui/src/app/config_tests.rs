@@ -673,3 +673,307 @@ fn confirm_restore_restores_without_starting(cx: &mut TestAppContext) {
         "the dialog's restore does not start the instance; that is a separate action"
     );
 }
+
+/// `F1`: a failed restore is reported typed and never starts the instance.
+///
+/// Red on `a6f4255` (`restore_config_now` started regardless of the restore's
+/// result); this is the reviewer's first probe, pinned as a product test.
+#[gpui_kit::test]
+fn a_failed_restore_is_typed_and_does_not_start_the_instance(cx: &mut TestAppContext) {
+    let (view, service, cx) = fixture(cx);
+    service.set(|script| {
+        script.config_view = Ok(view_with_backup());
+        script.config_restore = Err(UserFacingError::new("DBL-8605", "pulihkan gagal"));
+    });
+    let id = open_config(&view, &service, cx);
+    let starts_before = service.counts().start_instance;
+    view.update(cx, |this, cx| this.restore_and_restart(&id, cx));
+    settle(cx);
+    assert_eq!(
+        service.counts().start_instance,
+        starts_before,
+        "F1: a failed restore must not be followed by a start"
+    );
+    let code = view.read_with(cx, |this, _| {
+        this.config_state_for(&id)
+            .and_then(|c| c.error.as_ref().map(|e| e.code.clone()))
+    });
+    assert_eq!(code.as_deref(), Some("DBL-8605"));
+}
+
+/// `F1` mirror: a good restore then a failing start reports the start's own
+/// typed failure and never rolls the restored file back.
+#[gpui_kit::test]
+fn a_good_restore_then_a_failed_start_reports_the_start(cx: &mut TestAppContext) {
+    let (view, service, cx) = fixture(cx);
+    service.set(|script| {
+        script.config_view = Ok(view_with_backup());
+        script.config_restore = Ok(());
+        script.start_instance = Err(UserFacingError::new("DBL-4001", "mesin gagal start"));
+    });
+    let id = open_config(&view, &service, cx);
+    view.update(cx, |this, cx| this.restore_and_restart(&id, cx));
+    settle(cx);
+    assert_eq!(
+        service.mutations().config_restores,
+        vec![id.clone()],
+        "F1: the restore went out exactly once"
+    );
+    assert_eq!(
+        service.counts().start_instance,
+        1,
+        "F1: the start is attempted after a good restore"
+    );
+    let code = view.read_with(cx, |this, _| {
+        this.config_state_for(&id)
+            .and_then(|c| c.error.as_ref().map(|e| e.code.clone()))
+    });
+    assert_eq!(
+        code.as_deref(),
+        Some("DBL-4001"),
+        "F1: the start's failure is the reported one, not the restore's"
+    );
+}
+
+/// `F2`: a stop that fails after "Restart sekarang" must not leave a restart
+/// that a later manual stop consumes. This is the reviewer's second probe.
+#[gpui_kit::test]
+fn a_failed_stop_after_restart_now_leaves_no_pending_restart(cx: &mut TestAppContext) {
+    let (view, service, cx) = fixture(cx);
+    let id = service.id_with(InstanceStatus::Running);
+    let starts_before = service.counts().start_instance;
+    view.update(cx, |this, cx| this.restart_after_apply(&id, cx));
+    settle(cx);
+    // The queued stop's OperationFinished says it failed; the instance is still
+    // running (the event does not change its status).
+    view.update(cx, |this, cx| {
+        this.apply_event_with_cx(
+            UiEvent::OperationFinished {
+                id: dblocal_core::service::OperationId::new("op-stop"),
+                result: Err(UserFacingError::new("DBL-4002", "stop gagal")),
+            },
+            cx,
+        );
+    });
+    settle(cx);
+    // Much later the user stops the instance by hand: no start may follow.
+    view.update(cx, |this, cx| {
+        let mut stopped = this.instance(&id).cloned().expect("instance view");
+        stopped.status = InstanceStatus::Stopped;
+        this.apply_event_with_cx(UiEvent::InstanceChanged(stopped), cx);
+    });
+    settle(cx);
+    assert_eq!(
+        service.counts().start_instance,
+        starts_before,
+        "F2: a manual stop after a failed Restart sekarang must not auto-start"
+    );
+}
+
+/// `F2`: an unrelated operation finishing with an error must not clear a pending
+/// restart, and a pending restart of A is never consumed by B's stop.
+#[gpui_kit::test]
+fn a_pending_restart_matches_only_its_own_stop_and_instance(cx: &mut TestAppContext) {
+    let (view, service, cx) = fixture(cx);
+    let running = service.id_with(InstanceStatus::Running);
+    let other = service.id_with(InstanceStatus::Stopped);
+    let starts_before = service.counts().start_instance;
+    view.update(cx, |this, cx| this.restart_after_apply(&running, cx));
+    settle(cx);
+    // An unrelated operation fails: the restart for `running` must survive.
+    view.update(cx, |this, cx| {
+        this.apply_event_with_cx(
+            UiEvent::OperationFinished {
+                id: dblocal_core::service::OperationId::new("op-unrelated"),
+                result: Err(UserFacingError::new("DBL-4002", "lain gagal")),
+            },
+            cx,
+        );
+    });
+    // The other instance stops: that is not the stop `running` waits on.
+    view.update(cx, |this, cx| {
+        let mut stopped = this.instance(&other).cloned().expect("instance view");
+        stopped.status = InstanceStatus::Running;
+        this.apply_event_with_cx(UiEvent::InstanceChanged(stopped), cx);
+        let mut stopped = this.instance(&other).cloned().expect("instance view");
+        stopped.status = InstanceStatus::Stopped;
+        this.apply_event_with_cx(UiEvent::InstanceChanged(stopped), cx);
+    });
+    settle(cx);
+    assert_eq!(
+        service.counts().start_instance,
+        starts_before,
+        "F2: another instance's stop must not consume A's pending restart"
+    );
+    // The queued stop for `running` now completes: the restart runs exactly once.
+    view.update(cx, |this, cx| {
+        let mut stopped = this.instance(&running).cloned().expect("instance view");
+        stopped.status = InstanceStatus::Stopped;
+        this.apply_event_with_cx(UiEvent::InstanceChanged(stopped), cx);
+    });
+    settle(cx);
+    assert_eq!(
+        service.counts().start_instance,
+        starts_before + 1,
+        "F2: the real stop still completes the happy path"
+    );
+}
+
+/// `F2`: an instance that goes back to `Running` instead of `Stopped` (a stop
+/// that ends between `Stopping` and `Running`) drops the pending restart.
+#[gpui_kit::test]
+fn a_stop_that_ends_running_drops_the_pending_restart(cx: &mut TestAppContext) {
+    let (view, service, cx) = fixture(cx);
+    let id = service.id_with(InstanceStatus::Running);
+    let starts_before = service.counts().start_instance;
+    view.update(cx, |this, cx| this.restart_after_apply(&id, cx));
+    settle(cx);
+    view.update(cx, |this, cx| {
+        let mut stopping = this.instance(&id).cloned().expect("instance view");
+        stopping.status = InstanceStatus::Stopping;
+        this.apply_event_with_cx(UiEvent::InstanceChanged(stopping), cx);
+    });
+    view.update(cx, |this, cx| {
+        let mut running = this.instance(&id).cloned().expect("instance view");
+        running.status = InstanceStatus::Running;
+        this.apply_event_with_cx(UiEvent::InstanceChanged(running), cx);
+    });
+    settle(cx);
+    view.update(cx, |this, cx| {
+        let mut stopped = this.instance(&id).cloned().expect("instance view");
+        stopped.status = InstanceStatus::Stopped;
+        this.apply_event_with_cx(UiEvent::InstanceChanged(stopped), cx);
+    });
+    settle(cx);
+    assert_eq!(
+        service.counts().start_instance,
+        starts_before,
+        "F2: a stop that never reached Stopped drops the restart"
+    );
+}
+
+/// `F4`: the "Tersimpan. Berlaku setelah restart." banner is gone once the
+/// instance is running again — a stopped Valkey that was applied and then
+/// started must not keep offering a restart for a change already in effect.
+#[gpui_kit::test]
+fn the_applied_banner_clears_when_the_instance_starts(cx: &mut TestAppContext) {
+    let (view, service, cx) = fixture(cx);
+    let id = service.id_with(InstanceStatus::Stopped);
+    view.update(cx, |this, cx| {
+        this.open_tab(id.clone(), cx);
+        this.set_inner_tab(InnerTab::Config, cx);
+    });
+    settle(cx);
+    view.update(cx, |this, cx| {
+        this.config.entry(&id).set_field("max_connections", "300");
+        this.apply_config(&id, cx);
+    });
+    settle(cx);
+    assert!(
+        view.read_with(cx, |this, _| this
+            .config_state_for(&id)
+            .is_some_and(|c| c.applied.is_some())),
+        "F4: the apply raises the banner"
+    );
+    // The user starts the stopped instance: the change is now in effect.
+    view.update(cx, |this, cx| {
+        let mut running = this.instance(&id).cloned().expect("instance view");
+        running.status = InstanceStatus::Running;
+        this.apply_event_with_cx(UiEvent::InstanceChanged(running), cx);
+    });
+    settle(cx);
+    assert!(
+        view.read_with(cx, |this, _| this
+            .config_state_for(&id)
+            .is_some_and(|c| c.applied.is_none())),
+        "F4: a start applies the change, so the banner must be gone"
+    );
+}
+
+/// `F4`: a banner shown while the instance is already running stays until it is
+/// restarted or dismissed (a start is not what applies it there).
+#[gpui_kit::test]
+fn the_applied_banner_stays_while_a_running_instance_just_sits_there(cx: &mut TestAppContext) {
+    let (view, service, cx) = fixture(cx);
+    let id = open_config(&view, &service, cx);
+    view.update(cx, |this, cx| {
+        this.config.entry(&id).set_field("max_connections", "300");
+        this.apply_config(&id, cx);
+    });
+    settle(cx);
+    // A running instance's banner waits for "Restart sekarang"/"Nanti".
+    let applied = view.read_with(cx, |this, _| {
+        this.config_state_for(&id)
+            .is_some_and(|c| c.applied.is_some())
+    });
+    assert!(applied, "F4: the banner stays until restarted or dismissed");
+}
+
+/// `F4`: the banner does not flicker through a restart taken from the header —
+/// the stop half keeps it, the start half clears it.
+#[gpui_kit::test]
+fn the_applied_banner_survives_the_stop_half_of_a_restart(cx: &mut TestAppContext) {
+    let (view, service, cx) = fixture(cx);
+    let id = open_config(&view, &service, cx);
+    view.update(cx, |this, cx| {
+        this.config.entry(&id).set_field("max_connections", "300");
+        this.apply_config(&id, cx);
+    });
+    settle(cx);
+    // The header's Restart: Running -> Stopping, no banner dismissal.
+    view.update(cx, |this, cx| {
+        let mut stopping = this.instance(&id).cloned().expect("instance view");
+        stopping.status = InstanceStatus::Stopping;
+        this.apply_event_with_cx(UiEvent::InstanceChanged(stopping), cx);
+    });
+    settle(cx);
+    assert!(
+        view.read_with(cx, |this, _| this
+            .config_state_for(&id)
+            .is_some_and(|c| c.applied.is_some())),
+        "F4: the stop half of a restart keeps the banner, no flicker"
+    );
+    // Stopping -> Running: the change is in effect now.
+    view.update(cx, |this, cx| {
+        let mut running = this.instance(&id).cloned().expect("instance view");
+        running.status = InstanceStatus::Running;
+        this.apply_event_with_cx(UiEvent::InstanceChanged(running), cx);
+    });
+    settle(cx);
+    assert!(
+        view.read_with(cx, |this, _| this
+            .config_state_for(&id)
+            .is_some_and(|c| c.applied.is_none())),
+        "F4: the start half clears it"
+    );
+}
+
+/// `F5`: "Terapkan" is disabled while a field carries a validation error, and
+/// Enter in that field does not call the service.
+#[gpui_kit::test]
+fn apply_is_disabled_and_enter_is_inert_while_a_field_has_an_error(cx: &mut TestAppContext) {
+    let (view, service, cx) = fixture(cx);
+    let id = open_config(&view, &service, cx);
+    view.update(cx, |this, cx| {
+        this.record_config_field(&id, "max_connections", "bukan-angka", cx);
+    });
+    settle(cx);
+    let (can_apply, has_error) = view.read_with(cx, |this, _| {
+        let config = this.config_state_for(&id).expect("config state");
+        (config.can_apply(), config.errors.contains_key("max_connections"))
+    });
+    assert!(has_error, "F5: the field shows its DBL-8601 error");
+    assert!(!can_apply, "F5: Terapkan is disabled while a field has an error");
+
+    let before = service.counts().config_apply;
+    // Enter in the field runs the same guarded path a keypress runs.
+    view.update(cx, |this, cx| {
+        this.apply_config_if_ready_for_test(&id, cx);
+    });
+    settle(cx);
+    assert_eq!(
+        service.counts().config_apply,
+        before,
+        "F5: Enter with a field error must not call the service"
+    );
+}
