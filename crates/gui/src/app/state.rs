@@ -56,9 +56,11 @@ impl InnerTab {
         Self::ALL.get(index).copied().unwrap_or_default()
     }
 
-    /// Whether this tab has no backend in the frozen service.
+    /// Whether this tab is still an honest placeholder (`D-25`).
+    ///
+    /// Only Config is: `F-DBU` and `F-OPN` became real screens in `W4-B`.
     pub fn is_placeholder(self) -> bool {
-        matches!(self, Self::Databases | Self::Config)
+        matches!(self, Self::Config)
     }
 }
 
@@ -489,7 +491,10 @@ mod tests {
         assert_eq!(InnerTab::from_index(99), InnerTab::Overview);
         assert!(!InnerTab::Overview.is_placeholder());
         assert!(!InnerTab::Logs.is_placeholder());
-        assert!(InnerTab::Databases.is_placeholder());
+        assert!(
+            !InnerTab::Databases.is_placeholder(),
+            "the Databases tab is live since W4-B"
+        );
         assert!(InnerTab::Config.is_placeholder());
     }
 

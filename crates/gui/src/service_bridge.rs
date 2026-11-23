@@ -52,6 +52,15 @@ pub enum UiEvent {
     },
     /// An instance no longer exists; drop its row, tab and log buffer.
     InstanceRemoved(InstanceId),
+    /// The databases or users of one instance changed; re-read them (`F-DBU`).
+    AdminChanged(InstanceId),
+    /// An update check finished; the Settings dialog renders the result.
+    UpdateChecked {
+        /// Newer version, or `None` when the running version is current.
+        version: Option<String>,
+        /// Whether this install may self-update.
+        can_self_update: bool,
+    },
     /// A stop escalated to a forced kill; tell the user it was forced.
     StopForced(InstanceId),
     /// The service stream lagged and the UI may have missed changes.
@@ -139,6 +148,14 @@ pub fn translate(event: ServiceEvent) -> Option<UiEvent> {
         ServiceEvent::LogLines { id, lines } => Some(UiEvent::LogLines {
             instance: id.to_string(),
             lines,
+        }),
+        ServiceEvent::AdminChanged { id } => Some(UiEvent::AdminChanged(id)),
+        ServiceEvent::UpdateChecked {
+            version,
+            can_self_update,
+        } => Some(UiEvent::UpdateChecked {
+            version,
+            can_self_update,
         }),
         _ => None,
     }

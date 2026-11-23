@@ -6,6 +6,12 @@
 //! render the title bar, dock, tabs, screens, status bar, palette and dialogs.
 
 mod actions;
+mod admin_actions;
+mod admin_dialogs;
+#[cfg(test)]
+#[path = "app/admin_fix_tests.rs"]
+mod admin_fix_tests;
+mod admin_state;
 mod background;
 #[cfg(test)]
 mod bg_service_tests;
@@ -19,12 +25,24 @@ mod bootstrap_tests;
 mod components;
 mod create_dialog;
 mod create_submit;
+#[cfg(test)]
+#[path = "app/databases_support.rs"]
+mod databases_support;
+#[cfg(test)]
+#[path = "app/databases_tests.rs"]
+mod databases_tests;
 mod delete_dialog;
+mod dialog_focus;
 mod dock;
 mod instance_actions;
 #[cfg(test)]
 #[path = "app/instance_actions_tests.rs"]
 mod instance_actions_tests;
+mod login_item;
+mod open_in;
+mod open_in_actions;
+#[cfg(test)]
+mod open_in_tests;
 mod palette;
 mod preview;
 mod quit_flow;
@@ -32,6 +50,13 @@ mod quit_flow;
 #[path = "app/quit_flow_tests.rs"]
 mod quit_flow_tests;
 mod screens;
+#[cfg(test)]
+mod scripted_service;
+mod settings_actions;
+mod settings_dialog;
+mod settings_state;
+#[cfg(test)]
+mod settings_tests;
 mod state;
 mod status_bar;
 #[cfg(test)]
@@ -52,6 +77,8 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
 use std::time::{Duration, Instant};
 
+use dblocal_core::admin::PrivilegeLevel;
+use dblocal_core::clients::DetectedClient;
 use dblocal_core::model::{AuthMode, DeleteMode, EngineKey, InstanceId, Port, Runtime};
 use dblocal_core::service::{CatalogView, DblService, InstanceView, UriFormat, UserFacingError};
 use dblocal_core::strings;
@@ -76,6 +103,21 @@ pub use state::{ActiveDownload, InnerTab, OpenTab, ShellState, Tabs, UriView};
 #[cfg(feature = "demo")]
 pub fn run_with_mock() -> dblocal_core::Result<()> {
     bootstrap::run_with_mock()
+}
+
+/// The two Databases-tab text fields, built with the workspace so every entry
+/// path (click, preview, keyboard, restored tab) finds them.
+fn databases_tab_inputs(
+    window: &mut Window,
+    cx: &mut Context<Workspace>,
+) -> (Entity<InputState>, Entity<InputState>) {
+    let db = cx.new(|cx| {
+        InputState::new(window, cx).placeholder(strings::UI_DATABASES_NAME_PLACEHOLDER.to_owned())
+    });
+    let user = cx.new(|cx| {
+        InputState::new(window, cx).placeholder(strings::UI_DATABASES_USER_NAME.to_owned())
+    });
+    (db, user)
 }
 
 /// What the create dialog currently has selected.
@@ -138,6 +180,40 @@ pub struct Workspace {
     delete_typed_name: Option<String>,
     delete_mode: DeleteMode,
     delete_size: u64,
+    /// Per-instance Databases tab state (`F-DBU-01..03`).
+    admin: admin_state::AdminState,
+    /// The database-create field of the Databases tab.
+    ///
+    /// Created once with the workspace, not on first tab click: the tab can be
+    /// reached by the tab bar, a preview, a keyboard action or a restored inner
+    /// tab, and every one of those paths needs a field that exists.
+    db_name_input: Entity<InputState>,
+    /// The new-user name field; created once, as `db_name_input` is.
+    user_name_input: Entity<InputState>,
+    /// The database a new user is granted on.
+    user_db_choice: Option<String>,
+    /// The privilege level a new user gets.
+    user_level: PrivilegeLevel,
+    /// A drop-database dialog: the instance, the database, and the typed text.
+    drop_dialog: Option<admin_dialogs::DropDialog>,
+    /// A reset-password confirmation is open for this instance.
+    reset_confirm: Option<InstanceId>,
+    /// The one-time secret dialog (new user password or reset URI).
+    secret_dialog: Option<admin_dialogs::SecretDialog>,
+    /// Keyboard focus for the Databases dialogs: take it on open, give it back
+    /// on close (F3).
+    dialog_focus: dialog_focus::DialogFocus,
+    /// A focus return the next frame must apply; set by a close path that had no
+    /// window (Escape) and consumed by `render`.
+    pending_focus_restore: Option<FocusHandle>,
+    /// Clients detected for the "Open in…" menu; `None` until the first read.
+    clients: Option<Result<Vec<DetectedClient>, UserFacingError>>,
+    /// An instance whose "Open in…" launch is in flight.
+    opening: Option<InstanceId>,
+    /// The Settings dialog's data (`F-PKG-05`, `F-AUT-01`).
+    settings: settings_state::SettingsState,
+    /// The login-item seam; `Err` when this host has no usable backend.
+    login: Option<Result<Arc<dyn login_item::LoginItemControl>, UserFacingError>>,
     palette_open: bool,
     palette_query: String,
     command_state: Entity<CommandState>,
@@ -180,6 +256,8 @@ struct Parts {
     tray_available: bool,
     command_state: Entity<CommandState>,
     filter_input: Entity<InputState>,
+    db_name_input: Entity<InputState>,
+    user_name_input: Entity<InputState>,
     focus_handle: FocusHandle,
 }
 
@@ -205,11 +283,14 @@ impl Workspace {
         let filter_input = cx
             .new(|cx| InputState::new(window, cx).placeholder(strings::UI_DOCK_FILTER.to_owned()));
         cx.observe(&filter_input, |_, _, cx| cx.notify()).detach();
+        let (db_name_input, user_name_input) = databases_tab_inputs(window, cx);
         let mut workspace = Self::assemble(Parts {
             service,
             tray_available,
             command_state,
             filter_input,
+            db_name_input,
+            user_name_input,
             focus_handle,
         });
         workspace.startup_load(cx);
@@ -230,11 +311,14 @@ impl Workspace {
         let filter_input = cx
             .new(|cx| InputState::new(window, cx).placeholder(strings::UI_DOCK_FILTER.to_owned()));
         cx.observe(&filter_input, |_, _, cx| cx.notify()).detach();
+        let (db_name_input, user_name_input) = databases_tab_inputs(window, cx);
         let mut workspace = Self::assemble(Parts {
             service,
             tray_available: false,
             command_state,
             filter_input,
+            db_name_input,
+            user_name_input,
             focus_handle,
         });
         workspace.tray_note_shown = true;
@@ -283,6 +367,20 @@ impl Workspace {
             delete_typed_name: None,
             delete_mode: DeleteMode::ArchiveData,
             delete_size: 0,
+            admin: admin_state::AdminState::default(),
+            db_name_input: parts.db_name_input,
+            user_name_input: parts.user_name_input,
+            user_db_choice: None,
+            user_level: PrivilegeLevel::ReadOnly,
+            drop_dialog: None,
+            reset_confirm: None,
+            secret_dialog: None,
+            dialog_focus: dialog_focus::DialogFocus::default(),
+            pending_focus_restore: None,
+            clients: None,
+            opening: None,
+            settings: settings_state::SettingsState::default(),
+            login: None,
             palette_open: false,
             palette_query: String::new(),
             last_failure_mirror: None,
@@ -386,11 +484,31 @@ impl Workspace {
             UiEvent::InstanceRemoved(id) => {
                 self.state
                     .apply_removed(&id, &mut self.tabs, &mut self.logs);
+                self.admin.forget(&id);
                 self.forget_instance(&id);
                 self.tray_needs_refresh = true;
             }
+            UiEvent::AdminChanged(id) => {
+                // The rows are stale. The visible instance is re-read below
+                // (`apply_event_with_cx`); any other instance goes back to
+                // `Idle`, so opening its tab issues a fresh read instead of
+                // showing rows that changed while it was in the background.
+                if let Some(admin) = self.admin.get(&id).cloned() {
+                    let mut admin = admin;
+                    if admin.data.ready().is_some() {
+                        admin.data = admin_state::Loadable::Idle;
+                        *self.admin.entry(&id) = admin;
+                    }
+                }
+            }
             UiEvent::StopForced(_id) => {
                 self.toast = Some(SharedString::from(strings::UI_TOAST_STOP_FORCED));
+            }
+            UiEvent::UpdateChecked { .. } => {
+                // `check_update` returns the full status to the caller, so the
+                // dialog already has it; the event only exists for consumers
+                // that poll nothing, and a stray one must not overwrite a check
+                // the dialog is showing with a partial answer.
             }
             UiEvent::Resync => {}
             UiEvent::Closed => {}
@@ -402,6 +520,22 @@ impl Workspace {
         let needs_catalog = matches!(event, UiEvent::CatalogUpdated);
         let removed_id = match &event {
             UiEvent::InstanceRemoved(id) => Some(id.clone()),
+            _ => None,
+        };
+        let admin_changed = match &event {
+            UiEvent::AdminChanged(id) => Some(id.clone()),
+            _ => None,
+        };
+        // F1: a start or stop changes whether the Databases tab can be read at
+        // all, so the rows read before the transition are stale even though no
+        // `AdminChanged` was emitted. Record the transition here, where the
+        // status is still visible before `apply_event` overwrites it.
+        let status_changed = match &event {
+            UiEvent::InstanceChanged(view) => self
+                .instance(&view.id)
+                .map(|current| current.status != view.status)
+                .unwrap_or(false)
+                .then(|| view.id.clone()),
             _ => None,
         };
         let quit_stop_finished = match &event {
@@ -428,6 +562,20 @@ impl Workspace {
         if needs_catalog {
             self.reload_catalog_bg(cx);
         }
+        if let Some(id) = status_changed {
+            self.admin.invalidate(&id);
+            if self.database_tab_visible(&id) {
+                self.reload_admin_bg(&id, cx);
+            }
+        }
+        if let Some(id) = admin_changed {
+            // Re-read only the instance whose Databases tab is on screen; an
+            // event for a background instance just clears its "ready" state in
+            // `apply_event`, and it is read again when the user opens it.
+            if self.database_tab_visible(&id) {
+                self.reload_admin_bg(&id, cx);
+            }
+        }
         if needs_resync || finished {
             self.refresh_instances_bg(cx);
         }
@@ -438,6 +586,17 @@ impl Workspace {
 
     pub(crate) fn instance(&self, id: &InstanceId) -> Option<&InstanceView> {
         self.state.instances.iter().find(|view| &view.id == id)
+    }
+
+    /// Whether this instance's Databases tab is the one on screen.
+    ///
+    /// The tab must be both selected and showing Databases: a row re-read for a
+    /// tab the user has on Overview would be work nobody sees, and the tab is
+    /// re-read on entry anyway.
+    pub(crate) fn database_tab_visible(&self, id: &InstanceId) -> bool {
+        self.tabs
+            .selected_tab()
+            .is_some_and(|tab| &tab.instance == id && tab.inner == InnerTab::Databases)
     }
 
     fn close_tab_by_instance(&mut self, id: &InstanceId, cx: &mut Context<Self>) {
@@ -486,6 +645,35 @@ impl Workspace {
         self.create = None;
         self.delete_target = None;
         self.delete_name_input = None;
+        // The top overlay only: Escape closes the topmost dialog, so a secret
+        // dialog closes first, then the confirmation under it stays open.
+        if self.secret_dialog.take().is_some() {
+            self.restore_dialog_focus_after_close();
+            return;
+        }
+        if self.drop_dialog.take().is_some() {
+            self.restore_dialog_focus_after_close();
+            return;
+        }
+        if self.reset_confirm.take().is_some() {
+            self.restore_dialog_focus_after_close();
+            return;
+        }
+        if self.settings.open {
+            self.settings.close();
+        }
+    }
+
+    /// Gives focus back to the field a Databases dialog covered (F3).
+    ///
+    /// `close_modals` runs from the Escape listener with no window of its own,
+    /// so the focus goes through the entity's current window, which GPUI
+    /// resolves from the frame the workspace last rendered in.
+    fn restore_dialog_focus_after_close(&mut self) {
+        let Some(target) = self.dialog_focus.closed() else {
+            return;
+        };
+        self.pending_focus_restore = Some(target);
     }
 }
 
@@ -496,7 +684,7 @@ impl Focusable for Workspace {
 }
 
 impl Render for Workspace {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if !self.first_paint_logged {
             self.first_paint_logged = true;
             tracing::info!(
@@ -506,6 +694,11 @@ impl Render for Workspace {
         }
         let deleting = self.delete_target.is_some();
         let creating = self.create.is_some();
+        // F3: a close from a listener with no window (Escape) parks the handle
+        // here; the frame is the first place it can be focused.
+        if let Some(target) = self.pending_focus_restore.take() {
+            target.focus(window, cx);
+        }
         let colours = cx.theme().clone();
         div()
             .id("root")
@@ -520,6 +713,9 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &actions::OpenPalette, _window, cx| {
                 this.toggle_palette();
                 cx.notify();
+            }))
+            .on_action(cx.listener(|this, _: &actions::OpenSettings, _window, cx| {
+                this.open_settings(cx);
             }))
             .on_action(cx.listener(|this, _: &actions::NewInstance, window, cx| {
                 this.open_new_instance(window, cx);
@@ -553,6 +749,18 @@ impl Render for Workspace {
             .when(deleting, |this| this.child(delete_dialog::render(self, cx)))
             .when(self.palette_open, |this| {
                 this.child(palette::render(self, cx))
+            })
+            .when(self.settings.open, |this| {
+                this.child(settings_dialog::render(self, cx))
+            })
+            .when(self.drop_dialog.is_some(), |this| {
+                this.child(admin_dialogs::render_drop(self, cx))
+            })
+            .when(self.reset_confirm.is_some(), |this| {
+                this.child(admin_dialogs::render_reset(self, cx))
+            })
+            .when(self.secret_dialog.is_some(), |this| {
+                this.child(admin_dialogs::render_secret(self, cx))
             })
             .when(self.quit.is_confirming(), |this| {
                 this.child(self.render_quit_dialog(cx))
@@ -592,173 +800,5 @@ pub(crate) fn masked_env_rows(
 }
 
 #[cfg(test)]
-mod event_tests {
-    #![allow(clippy::expect_used, clippy::unwrap_used)]
-
-    use std::sync::Arc;
-
-    use dblocal_core::model::InstanceStatus;
-    use dblocal_core::service::{DblService, OperationId, UserFacingError};
-    use gpui_kit::TestAppContext;
-
-    use super::Workspace;
-    use super::test_service::QuietService;
-    use crate::service_bridge::UiEvent;
-
-    fn fixture(
-        cx: &mut TestAppContext,
-    ) -> (
-        gpui_kit::Entity<Workspace>,
-        QuietService,
-        &mut gpui_kit::VisualTestContext,
-    ) {
-        cx.update(gpui_kit::init);
-        cx.update(crate::theme::init);
-        let service = QuietService::three();
-        let svc: Arc<dyn DblService> = Arc::new(service.clone());
-        let (view, cx) = cx.add_window_view(|window, cx| Workspace::new_preview(svc, window, cx));
-        cx.run_until_parked();
-        (view, service, cx)
-    }
-
-    /// `InstanceChanged` upserts the row and refreshes the tray.
-    #[gpui_kit::test]
-    fn instance_changed_upserts_the_row(cx: &mut TestAppContext) {
-        let (view, service, cx) = fixture(cx);
-        let mut changed = view.read_with(cx, |this, _| {
-            this.instances()
-                .iter()
-                .find(|v| v.status == InstanceStatus::Stopped)
-                .expect("stopped instance")
-                .clone()
-        });
-        changed.status = InstanceStatus::Running;
-        view.update(cx, |this, cx| {
-            this.apply_event_with_cx(UiEvent::InstanceChanged(changed.clone()), cx)
-        });
-        cx.run_until_parked();
-        let status = view.read_with(cx, |this, _| this.instance(&changed.id).map(|v| v.status));
-        assert_eq!(status, Some(InstanceStatus::Running));
-        assert!(
-            service.calls() > 0,
-            "the tray refresh must re-read instances"
-        );
-    }
-
-    /// `InstanceRemoved` drops the row, its tab, its logs and every cache, then
-    /// asks the service to stop watching it.
-    #[gpui_kit::test]
-    fn instance_removed_drops_tab_logs_and_caches(cx: &mut TestAppContext) {
-        let (view, service, cx) = fixture(cx);
-        let id = service.id_with(InstanceStatus::Stopped);
-        view.update(cx, |this, cx| this.open_tab(id.clone(), cx));
-        cx.run_until_parked();
-
-        view.update(cx, |this, cx| {
-            this.apply_event_with_cx(UiEvent::InstanceRemoved(id.clone()), cx)
-        });
-        cx.run_until_parked();
-
-        let (row, tabs, logs) = view.read_with(cx, |this, _| {
-            (
-                this.instance(&id).is_some(),
-                this.tabs.len(),
-                this.log_lines(&id).is_empty(),
-            )
-        });
-        assert!(!row, "the removed row is still in the dock");
-        assert_eq!(tabs, 0, "the removed instance kept its tab");
-        assert!(logs, "the removed instance kept its log buffer");
-    }
-
-    /// `StopForced` raises the Indonesian forced-stop toast.
-    #[gpui_kit::test]
-    fn stop_forced_raises_the_toast(cx: &mut TestAppContext) {
-        let (view, service, cx) = fixture(cx);
-        let id = service.id_with(InstanceStatus::Running);
-        view.update(cx, |this, cx| {
-            this.apply_event_with_cx(UiEvent::StopForced(id.clone()), cx)
-        });
-        assert_eq!(
-            view.read_with(cx, |this, _| this.toast_text())
-                .as_deref()
-                .map(ToString::to_string),
-            Some(dblocal_core::strings::UI_TOAST_STOP_FORCED.to_owned())
-        );
-    }
-
-    /// A failed operation lands as `<DBL code> — <message>` and is mirrored for
-    /// the failure panel.
-    #[gpui_kit::test]
-    fn a_failed_operation_shows_the_code_and_message(cx: &mut TestAppContext) {
-        let (view, _service, cx) = fixture(cx);
-        let err = dblocal_core::DblError::InvalidInput {
-            field: "port",
-            reason: "nilai tidak valid".to_owned(),
-        };
-        let facing = UserFacingError::from(&err);
-        view.update(cx, |this, cx| {
-            this.apply_event_with_cx(
-                UiEvent::OperationFinished {
-                    id: OperationId::new("op-fail"),
-                    result: Err(facing.clone()),
-                },
-                cx,
-            )
-        });
-        cx.run_until_parked();
-        let toast = view
-            .read_with(cx, |this, _| this.toast_text())
-            .map(|t| t.to_string())
-            .unwrap_or_default();
-        assert!(
-            toast.contains(&facing.code),
-            "toast lacks the code: {toast}"
-        );
-        assert!(
-            toast.contains(&facing.message),
-            "toast lacks the message: {toast}"
-        );
-    }
-
-    /// `close_tab_by_instance` is what a delete calls; it withdraws the tab.
-    #[gpui_kit::test]
-    fn close_tab_by_instance_withdraws_the_tab(cx: &mut TestAppContext) {
-        let (view, service, cx) = fixture(cx);
-        let id = service.id_with(InstanceStatus::Stopped);
-        view.update(cx, |this, cx| this.open_tab(id.clone(), cx));
-        cx.run_until_parked();
-        view.update(cx, |this, cx| this.close_tab_by_instance(&id, cx));
-        cx.run_until_parked();
-        assert_eq!(view.read_with(cx, |this, _| this.tabs.len()), 0);
-    }
-
-    /// The toast setter, the focus handle and the count accessors are what the
-    /// element tree reads every frame.
-    #[gpui_kit::test]
-    fn small_accessors_answer_from_state(cx: &mut TestAppContext) {
-        let (view, _service, cx) = fixture(cx);
-        view.update(cx, |this, _| {
-            this.set_toast(gpui_kit::SharedString::from("halo"));
-        });
-        assert_eq!(
-            view.read_with(cx, |this, _| this.toast_text())
-                .map(|t| t.to_string()),
-            Some("halo".to_owned())
-        );
-        let counts = view.read_with(cx, |this, _| this.counts());
-        assert_eq!(
-            (counts.running, counts.stopped, counts.failed),
-            (1, 1, 1),
-            "the counts must see the seeded instances"
-        );
-        assert_eq!(
-            view.read_with(cx, |this, _| this.version()),
-            env!("CARGO_PKG_VERSION")
-        );
-        view.update(cx, |this, _| this.close_modals());
-        assert!(view.read_with(cx, |this, _| this.create_form().is_none()));
-        let _ = view.read_with(cx, |this, _| this.focus_handle.clone());
-        let _ = view.read_with(cx, |this, _| this.command_state().clone());
-    }
-}
+#[path = "app/event_tests.rs"]
+mod event_tests;

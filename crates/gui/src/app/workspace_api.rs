@@ -32,7 +32,10 @@ impl Workspace {
         }
     }
 
-    /// Sets the visible tab's inner tab, loading the log tail on first use.
+    /// Sets the inner tab, loading what that tab needs on entry.
+    ///
+    /// The Databases tab reads its rows here, not on a render path, so opening
+    /// it by any route (tab bar, keyboard, restored tab) issues the same reads.
     pub(crate) fn set_inner_tab(&mut self, inner: InnerTab, cx: &mut Context<Self>) {
         let index = self.tabs.selected_index();
         self.tabs.set_inner(index, inner);
@@ -41,6 +44,22 @@ impl Workspace {
         {
             self.load_logs_for(&id, cx);
         }
+        if inner == InnerTab::Databases
+            && let Some(id) = self.tabs.selected_instance().cloned()
+        {
+            self.enter_databases_tab(&id, cx);
+        }
+    }
+
+    /// Sets the inner tab from a click. Kept for the tab bar's listener, which
+    /// has a window; the work itself no longer needs one.
+    pub(crate) fn set_inner_tab_with_window(
+        &mut self,
+        inner: InnerTab,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.set_inner_tab(inner, cx);
     }
 
     /// Toggles follow mode for the visible Logs tab and, when turning it on,
@@ -389,5 +408,77 @@ impl Workspace {
 
     pub(crate) fn open_new_instance(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.open_create_dialog(window, cx);
+    }
+}
+
+/// Test-only shortcuts so the Databases tests drive the handlers exactly as a
+/// typed click would, without spinning up a second window for every entity.
+#[cfg(test)]
+impl Workspace {
+    /// Types `value` into the database-name field.
+    pub(crate) fn set_db_name_for_test(
+        &self,
+        value: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.db_name_input.update(cx, |state, cx| {
+            state.set_value(value.to_owned(), window, cx)
+        });
+    }
+
+    /// Types `value` into the new-user name field.
+    pub(crate) fn set_user_name_for_test(
+        &self,
+        value: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.user_name_input.update(cx, |state, cx| {
+            state.set_value(value.to_owned(), window, cx)
+        });
+    }
+
+    /// Types `value` into the drop dialog's confirmation field.
+    pub(crate) fn set_drop_text_for_test(
+        &self,
+        value: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(dialog) = &self.drop_dialog {
+            dialog.input.update(cx, |state, cx| {
+                state.set_value(value.to_owned(), window, cx)
+            });
+        }
+    }
+
+    /// The database-name field's text, as the user sees it.
+    #[cfg(test)]
+    pub(crate) fn db_name_text_for_test(&self, cx: &App) -> String {
+        self.db_name_input.read(cx).value().to_string()
+    }
+
+    /// The new-user name field's text.
+    #[cfg(test)]
+    pub(crate) fn user_name_text_for_test(&self, cx: &App) -> String {
+        self.user_name_input.read(cx).value().to_string()
+    }
+
+    /// Opens the drop dialog, reusing the database-name field as its input (the
+    /// dialog only needs an entity to hold the typed text).
+    pub(crate) fn open_drop_dialog_for_test(
+        &mut self,
+        id: &InstanceId,
+        name: &str,
+        cx: &mut Context<Self>,
+    ) {
+        let input = self.db_name_input.clone();
+        self.drop_dialog = Some(super::admin_dialogs::DropDialog {
+            instance: id.clone(),
+            name: name.to_owned(),
+            input,
+        });
+        cx.notify();
     }
 }

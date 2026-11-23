@@ -10,6 +10,7 @@
 //! their controls; only the demo build renders sample rows, so the layout stays
 //! reviewable. `shell.rs` decides which of the two runs.
 
+mod config;
 mod databases;
 mod logs;
 mod overview;
@@ -290,42 +291,101 @@ impl Workspace {
                                 cx.notify();
                             })),
                     )
-                    .child(self.render_open_in(view, &theme, cx)),
+                    .child(self.render_open_in(view, "header", &theme, cx)),
             )
     }
 
-    /// The "Open in…" dropdown (placeholder: `F-OPN` is Phase 2).
+    /// The "Open in…" menu, live over `detect_clients` / `open_in_client`
+    /// (`F-OPN-01..02`).
     ///
-    /// In the product build the menu says the backend is not available yet and
-    /// every entry is disabled; the demo build lists the prototype's clients
-    /// (`F-OPN-01` AC1) so the layout is reviewable.
+    /// Entries come from the cached detection, grouped GUI then CLI, with a
+    /// refresh item. A client that cannot open this engine is listed disabled.
+    /// When nothing was detected the menu offers "Salin URI" instead of an empty
+    /// list (`F-OPN-01` AC2). A launch failure is reported as a typed toast.
+    ///
+    /// `slot` keeps the element ids unique when two of these menus are on screen
+    /// at once — the instance header and the Overview Connection card both draw
+    /// one (the W2-B2 duplicate-node trap).
     fn render_open_in(
         &self,
-        _view: &dblocal_core::service::InstanceView,
+        view: &dblocal_core::service::InstanceView,
+        slot: &'static str,
         theme: &Theme,
-        _cx: &mut Context<Self>,
+        cx: &mut Context<Self>,
     ) -> impl IntoElement {
         use gpui_kit::component::button::DropdownButton;
         use gpui_kit::component::menu::PopupMenuItem;
-        let placeholder = !self.demo_content;
-        DropdownButton::new("header-open-in")
+        let menu = self.open_in_menu(view.engine);
+        let opening = self.opening_instance() == Some(&view.id);
+        // "Salin URI" is the fallback when nothing was detected (`F-OPN-01` AC2)
+        // and also when every detected client is for another engine, so the menu
+        // is never a list of dead rows.
+        let copy_uri = menu.copy_uri_fallback || !menu.has_launchable();
+        let groups = menu.groups.clone();
+        let entity = cx.entity();
+        let id_copy = view.id.clone();
+        let detection_failed = self.clients.as_ref().is_some_and(|result| result.is_err());
+
+        DropdownButton::new(SharedString::from(format!("{slot}-open-in")))
             .button(
-                Button::new("header-open-in-main")
+                Button::new(SharedString::from(format!("{slot}-open-in-main")))
                     .icon(IconName::ExternalLink)
                     .label(strings::UI_ACTION_OPEN_IN)
-                    .tooltip(strings::UI_PLACEHOLDER_OPEN_IN),
+                    .loading(opening)
+                    .disabled(opening),
             )
             .dropdown_menu(move |menu, _, _| {
-                let menu = menu.min_w(px(240.));
-                if placeholder {
-                    menu.item(PopupMenuItem::new(strings::UI_PLACEHOLDER_OPEN_IN).disabled(true))
-                } else {
-                    menu.item(PopupMenuItem::new("psql").disabled(true))
-                        .item(PopupMenuItem::new("TablePlus").disabled(true))
-                        .item(PopupMenuItem::new(strings::UI_COPY_URI).disabled(true))
+                let mut popup = menu.min_w(px(260.));
+                if detection_failed {
+                    popup = popup
+                        .item(PopupMenuItem::new(strings::UI_OPEN_IN_FAILED).disabled(true))
+                        .separator();
                 }
+                if copy_uri {
+                    popup = popup.item(PopupMenuItem::new(strings::UI_COPY_URI).on_click({
+                        let entity = entity.clone();
+                        let id = id_copy.clone();
+                        move |_, window, cx| {
+                            entity.update(cx, |this, cx| {
+                                this.copy_uri(
+                                    id.clone(),
+                                    dblocal_core::service::UriFormat::Uri,
+                                    window,
+                                    cx,
+                                );
+                            });
+                        }
+                    }));
+                }
+                for group in &groups {
+                    popup = popup.item(PopupMenuItem::label(group.heading));
+                    for entry in &group.entries {
+                        let kind = entry.kind;
+                        let enabled = entry.enabled();
+                        let entity = entity.clone();
+                        let instance = id_copy.clone();
+                        popup = popup.item(
+                            PopupMenuItem::new(entry.label).disabled(!enabled).on_click(
+                                move |_, _, cx| {
+                                    entity.update(cx, |this, cx| {
+                                        this.open_instance_in(instance.clone(), kind, cx);
+                                    });
+                                },
+                            ),
+                        );
+                    }
+                }
+                let refresh = entity.clone();
+                popup.separator().item(
+                    PopupMenuItem::new(strings::UI_OPEN_IN_REFRESH)
+                        .icon(gpui_kit::assets::IconName::RefreshCw)
+                        .on_click(move |_, _, cx| {
+                            refresh.update(cx, |this, cx| {
+                                this.detect_clients_refresh(cx);
+                            });
+                        }),
+                )
             })
-            .when(placeholder, |this| this)
             .text_color(theme.muted_foreground)
     }
 
@@ -341,8 +401,8 @@ impl Workspace {
                 TabBar::new("inner-tabs")
                     .underline()
                     .selected_index(active.index())
-                    .on_click(cx.listener(|this, index: &usize, _window, cx| {
-                        this.set_inner_tab(InnerTab::from_index(*index), cx);
+                    .on_click(cx.listener(|this, index: &usize, window, cx| {
+                        this.set_inner_tab_with_window(InnerTab::from_index(*index), window, cx);
                         cx.notify();
                     }))
                     .children(

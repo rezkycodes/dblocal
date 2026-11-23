@@ -519,9 +519,6 @@ pub const UI_DATABASES_RESET: &str = "Reset password";
 pub const UI_DATABASES_CREATED: &str = "Database {name} dibuat (UTF-8)";
 /// Databases tab: toast after the superuser password is reset.
 pub const UI_DATABASES_PASSWORD_RESET: &str = "Password baru tersimpan di Keychain";
-/// Databases tab: why the list is empty on an engine without named databases.
-pub const UI_DATABASES_VALKEY_NOTE: &str =
-    "Valkey tidak punya database bernama atau user SQL. Gunakan indeks 0–15 langsung dari URI.";
 /// Databases tab: why the list is empty while the instance is not running.
 pub const UI_DATABASES_STOPPED: &str = "Jalankan instance untuk melihat dan mengelola database.";
 
@@ -665,8 +662,10 @@ pub const UI_STARTUP_FAILED_BODY: &str =
 
 /// Placeholders the UI renders while no backend exists (D-25). Each entry names
 /// the phase that fills it, so `docs/architecture/gui.md` and the GUI agree.
-pub const PLACEHOLDERS: [(&str, &str); 3] = [
-    ("Databases", "F-DBU · Phase 2"),
-    ("Config", "F-CFG · Phase 3"),
-    ("Open in…", "F-OPN · Phase 2"),
-];
+///
+/// `Databases` and `Open in…` are gone: `F-DBU` and `F-OPN` now have their
+/// service calls. Only the Config editor is still a placeholder (`F-CFG`).
+pub const PLACEHOLDERS: [(&str, &str); 1] = [("Config", "F-CFG · Phase 3")];
+
+mod admin;
+pub use admin::*;

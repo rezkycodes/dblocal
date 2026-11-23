@@ -53,6 +53,29 @@ pub enum ScriptedFailure {
     CreateRolledBack,
 }
 
+/// A scripted outcome for one database/user admin call (`F-DBU`).
+///
+/// The GUI renders each of these states, so the mock must be able to produce
+/// them deterministically: an empty list, a long list, a slow call, a failure
+/// and a reset that fails while the old password keeps working.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AdminScenario {
+    /// `list_databases` / `list_users` return nothing.
+    Empty,
+    /// `list_databases` returns this many rows, named `db_00`, `db_01`, ...
+    ManyRows(usize),
+    /// The next `create_database` / `create_user` / `drop_database` fails with
+    /// the typed `Unsupported` error.
+    FailNextMutation,
+    /// `reset_superuser_password` fails and leaves the stored password as it
+    /// was (`F-DBU-03` AC2).
+    ResetFailure,
+    /// The next `list_databases` sleeps for this long before answering, so a
+    /// demo or a test can show the loading state and prove the call is off the
+    /// GPUI thread.
+    SlowRead(std::time::Duration),
+}
+
 /// Controls simulated timing and deterministic randomness.
 #[derive(Debug, Clone)]
 pub struct MockConfig {
@@ -142,6 +165,10 @@ struct Inner {
     /// Update state: running version and an optional install-kind override.
     current_version: semver::Version,
     install_kind: Option<InstallKind>,
+    /// Scripted admin outcomes, consumed by the next matching call (`F-DBU`).
+    admin_scenarios: VecDeque<AdminScenario>,
+    /// Whether the mock pretends no external client is installed (`F-OPN-01` AC2).
+    no_clients: bool,
 }
 
 impl Inner {
@@ -172,6 +199,8 @@ impl Inner {
             current_version: semver::Version::parse(env!("CARGO_PKG_VERSION"))
                 .unwrap_or_else(|_| semver::Version::new(0, 0, 0)),
             install_kind: None,
+            admin_scenarios: VecDeque::new(),
+            no_clients: false,
         }
     }
 
@@ -360,6 +389,16 @@ impl MockService {
     /// Sets the install kind the update mock reports (`F-PKG-05` AC2).
     pub fn set_install_kind(&self, kind: InstallKind) {
         lock(&self.inner).install_kind = Some(kind);
+    }
+
+    /// Queues a scripted admin outcome for the next matching call (`F-DBU`).
+    pub fn push_admin_scenario(&self, scenario: AdminScenario) {
+        lock(&self.inner).admin_scenarios.push_back(scenario);
+    }
+
+    /// Makes the mock report no detected clients at all (`F-OPN-01` AC2).
+    pub fn set_no_clients(&self, none: bool) {
+        lock(&self.inner).no_clients = none;
     }
 
     /// Sets the running version the update mock compares against.
