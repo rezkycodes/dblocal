@@ -60,12 +60,85 @@ Coverage totals are from `cargo llvm-cov -p dblocal-gui`. Layout-heavy files (`a
 5. **Removal and forced stop (addendum G).** `InstanceRemoved` goes through `ShellState::apply_removed`, which drops the row, closes its tab, clears the selection if it pointed there and drops its log buffer; the workspace then calls `watch_logs(id, false)`. An unknown id is a no-op. The mock emits it when a delete completes (before `OperationFinished`) and when a create rolls back; both are tested. `StopForced` (a scripted `StopNeedsForce`) is emitted before the final `InstanceChanged` and raises the Indonesian toast `UI_TOAST_STOP_FORCED`; a render test proves a deleted instance leaves the dock (status-dot pixels 540 → 360, 113 sidebar rows differ).
 6. **Resync on lag.** `broadcast` drops the oldest events of a slow receiver. When the bridge sees `RecvError::Lagged` it emits `UiEvent::Resync`; the workspace then re-reads `list_instances()` and the catalog, so a row can never stay "berjalan" after missed `InstanceChanged` events.
 
-## Themes and contrast
+## Focus model and keyboard (`F-PLH-01`, W4-G)
 
-- Dark: `DBLocal One Dark`, light: `DBLocal One Light`, based on Atom One palettes. Source files: `crates/gui/assets/themes/one-dark.json`, `one-light.json`, embedded with `include_str!` and registered through `ThemeRegistry::load_themes_from_str`.
-- The contrast test parses the **same JSON files** and checks every `X.foreground` on its paired `X.background` and on `background`/`sidebar.background`, plus `foreground`, `muted.foreground`, the status/semantic colours, the tab/list/table rows, and every `base.*` colour in both themes, failing below 4.5:1. 122 pairs are checked (61 per theme).
-- The test is load-bearing: setting the light theme's `primary.background` back to `#4078f2` reproduces the review's `3.88:1` failure.
-- Light-theme tokens fixed in the tokens, not the test: `primary`/`info`/`sidebar.primary` background `#4078f2 → #2a56c0` (fg 3.88 → 6.31), `base.blue(.light)` and `chart.1` moved with it, and `muted.foreground #696c77 → #5f6169` (on `muted.background` 4.35 → 5.14). The dark theme already passed.
+The whole first session — choose engine → create → start → copy URI — is
+completable from the keyboard, with the focus always visible. The rules:
+
+- **The window root is `gpui-component::Root`.** `gpui_base::init` binds `Tab` /
+  `Shift+Tab` to `focus_next` / `focus_prev` in the `Root` key context, and
+  `Root` handles them. A test that builds the `Workspace` directly (without
+  `Root`) has no working Tab, so the keyboard tests wrap it exactly as the real
+  window does (`app/bootstrap.rs` `open_main_window`).
+- **Every clickable row is a focusable tab stop.** gpui synthesises an `on_click`
+  from `Enter`/`Space` on a *focused* element, so a row that already has
+  `on_click` becomes keyboard-activatable once it holds focus. The create
+  dialog's engine cards and version rows go through
+  `components::apply_focus_ring`, which calls `track_focus`, sets `tab_stop(true)`
+  and, when focused, draws the theme's own focus appearance (`focus_ring_style`:
+  a `theme.ring` border plus the outside ring — a ring, never just a background
+  tint).
+- **Dialogs take the keyboard on open and return it on close.**
+  `dialog_focus::DialogFocus` captures what had focus before the first overlay
+  opened, ignores a stacked open, and hands the exact handle back on the last
+  close. `open_create_dialog`, `open_drop_dialog`, `focus_dialog_buttons` and the
+  palette use it; `Workspace::render` applies the parked restore on the next
+  frame (Escape runs from a listener with no window). `close_modals` closes the
+  top overlay only and routes the restore.
+- **The command palette** (`Ctrl/Cmd+K`) focuses its query field on open and
+  gives focus back on Escape/scrim. Each row carries keywords (engine name,
+  version, port) so a query finds an instance by any of them; a start/stop/copy
+  command that does not apply is listed **disabled with a plain-text reason**
+  (`ui_palette::...` strings), never hidden, so the palette explains itself.
+- Controls owned by `gpui-component` (Button, Checkbox, Switch, Input, the
+  palette rows) already carry focus handles, tab stops and Enter/Space
+  activation; the app adds them only to the hand-built rows.
+
+The keyboard tests are `crates/gui/src/app/keyboard_flow_tests.rs`:
+`ctrl_n_opens_the_create_dialog`, `keyboard_only_first_session`,
+`palette_disables_inapplicable_commands_with_a_reason`,
+`palette_starts_an_instance_with_the_keyboard`, and
+`escape_returns_focus_to_the_opener`. They drive focus with
+`Window::focus_next`/`focus_prev` and activation with real `Keystroke`
+down/up pairs; a pointer event is never sent. `docs/dev/accessibility-checklist.md`
+lists the mutation checks that turn each red.
+
+## Themes and contrast (`F-PLH-02`, W4-G)
+
+- Dark: `DBLocal Dark` (base `#15161d`), light: `DBLocal Light`, same visual
+  language. Source files: `crates/gui/assets/themes/dblocal-dark.json`,
+  `dblocal-light.json`, embedded with `include_str!` and registered through
+  `ThemeRegistry::load_themes_from_str`.
+- **Following the system**: `theme::init` selects the theme matching
+  `cx.window_appearance()`; the live window also subscribes with
+  `window.observe_window_appearance` (`build_live`), so a change to the OS
+  light/dark setting repaints every screen while the app runs.
+- **Override**: `DBLOCAL_THEME=light|dark|system` forces a theme (or "follow the
+  OS" with `system`/unset/garbage). It exists so a screenshot run or a test can
+  pin a theme without touching the user's real desktop setting; when set, it wins
+  over the appearance subscription.
+- The contrast test (`contrast.rs`, `tests/contrast_table.rs`) parses the **same
+  JSON files** and checks every text/background pair the screens use: every
+  `X.foreground` on its paired `X.background` and on the page/dock/raised
+  surfaces, `muted.foreground`, the status/semantic colours, the tab/list/table
+  rows and every `base.*` colour; the **real tinted status-badge fills** (the
+  status colour at `0.14` composited over each surface, which is what a status
+  pill draws its glyph and word on); link text, the active tab, danger/warning
+  text on the page and on cards; all at ≥ 4.5:1, plus a separate 3:1 check
+  (WCAG 2.1 SC 1.4.11) of `theme.ring` against every surface it is drawn on.
+  Both themes pass. `cargo test -p dblocal-gui --test contrast_table
+  -- --nocapture` prints the measured table.
+- Disabled controls: WCAG exempts disabled text, but the PRD says "seluruh teks".
+  The disabled palette rows and disabled `gpui-component` buttons use
+  `muted.foreground`, which the table checks against every surface at 4.5:1; no
+  exemption is taken.
+- The test is load-bearing: setting a pair back below 4.5:1 (e.g. the dark
+  `muted.foreground` to `#3a3d47`) reproduces a red `contrast` run.
+- Light-theme tokens fixed in the tokens, not the test: `primary`/`info`/
+  `sidebar.primary` background `#4078f2 → #1a609f` (white fg was 3.88:1),
+  `base.blue(.light)` and `chart.1` moved with it, and `muted.foreground
+  #6b7280 → #545866` (on `muted.background`). The dark theme's prototype tokens
+  already passed.
 
 ## Fonts
 

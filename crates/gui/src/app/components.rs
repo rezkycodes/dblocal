@@ -255,6 +255,9 @@ pub fn apply_focus_ring<E: InteractiveElement + Styled + ParentElement + 'static
     let stop = focus.clone().tab_stop(true);
     let row = row.track_focus(&stop);
     if focused {
+        // The theme's own focus appearance: a border in `theme.ring` plus the
+        // outside ring. This is the visible focus indicator `F-PLH-01` AC1
+        // requires, and it is a ring/outline, not only a background tint.
         row.focus_ring_style(window, cx)
     } else {
         row

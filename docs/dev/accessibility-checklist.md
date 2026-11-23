@@ -9,6 +9,28 @@ verify on Windows and macOS.
 Related: `docs/architecture/gui.md` (focus model, theme override, contrast test),
 `docs/design/UI-DIRECTION.md` (the visual language and keyboard map).
 
+## Mutation checks (red first, then restored, clean tree)
+
+A test is not evidence until it fails without the code it tests. Each rule below
+was reverted in turn, the named test observed red, then restored; the tree is
+clean at `git status --short`.
+
+| Mutation | Red test | Observed |
+|---|---|---|
+| The engine card's focus handling removed (`apply_focus_ring` stops calling `track_focus`/`focus_ring_style`) | `keyboard_flow_tests::keyboard_only_first_session` | `FAILED` — "Enter on the focused engine card must select that engine" |
+| The palette's start command enabled on a running instance (`if true` instead of `can_start`) | `format::tests::palette_disables_commands_with_a_reason_when_they_do_not_apply`, `palette_a_busy_instance_cannot_start_stop_or_copy`, `keyboard_flow_tests::palette_disables_inapplicable_commands_with_a_reason` | `FAILED` — "start on a running instance is disabled" |
+| A token pair darkened below 4.5:1 (dark `muted.foreground` `#9da5b4 → #3a3d47`) | `contrast::tests::every_rendered_text_pair_meets_wcag_aa`, `derived_surfaces_keep_text_legible_too`, `tinted_status_badges_keep_their_text_readable` | `FAILED` — "muted.foreground on background: #3a3d47 on #15161d = 1.66" |
+| A status variant without a label (`status_label(Running) → ""`) | `format::tests::every_status_has_a_glyph_and_a_nonempty_label` | `FAILED` — `Running` |
+| Escape not returning focus (`restore_dialog_focus_after_close` made a no-op) | `keyboard_flow_tests::escape_returns_focus_to_the_opener` | `FAILED` — "Escape must return focus to the opener" |
+
+The focus-ring *pixels* themselves are not sampled headlessly: gpui-component
+draws its ring inside the dependency, where `cfg!(test)` is false, so its
+`focus-ring` debug selector records nothing from this crate's tests. The ring is
+verified instead by (a) the `focus_ring_pairs` contrast test proving `theme.ring`
+clears 3:1 on every surface it is drawn on, and (b) the `keyboard_only_first_session`
+mutation above proving the control is focusable and draws the theme ring only when
+`apply_focus_ring` runs. A pixel check of the ring is a manual step (below).
+
 ## What "good" means (acceptance, verbatim intent)
 
 - **F-PLH-01 AC1** — with only the keyboard the whole first session (choose

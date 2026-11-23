@@ -65,9 +65,7 @@ fn press(cx: &mut VisualTestContext, key: &'static str) {
     cx.update(move |window, cx| {
         window.dispatch_keystroke(keystroke, cx);
         window.dispatch_event(
-            gpui_kit::PlatformInput::KeyUp(gpui_kit::KeyUpEvent {
-                keystroke: release,
-            }),
+            gpui_kit::PlatformInput::KeyUp(gpui_kit::KeyUpEvent { keystroke: release }),
             cx,
         );
     });
@@ -94,7 +92,11 @@ fn tab_forward(cx: &mut VisualTestContext, n: usize) -> bool {
 }
 
 /// The create form's engine-card handle for `engine`.
-fn engine_handle(view: &Entity<Workspace>, cx: &VisualTestContext, engine: EngineKey) -> FocusHandle {
+fn engine_handle(
+    view: &Entity<Workspace>,
+    cx: &VisualTestContext,
+    engine: EngineKey,
+) -> FocusHandle {
     view.read_with(cx, |this, _| {
         this.create_form()
             .and_then(|form| {
@@ -107,7 +109,43 @@ fn engine_handle(view: &Entity<Workspace>, cx: &VisualTestContext, engine: Engin
     })
 }
 
-/// Opens the create dialog with `ctrl-n` (the bound key) and returns the view.
+/// F-PLH-01 AC1: Escape closes the top overlay and returns focus to the control
+/// that opened it, so the keyboard user is never stranded.
+#[gpui_kit::test]
+fn escape_returns_focus_to_the_opener(cx: &mut TestAppContext) {
+    let (view, _service, cx) = harness(cx);
+    // Park focus on the workspace root, open the create dialog, then Escape.
+    let root_focus = view.read_with(cx, |this, cx| {
+        use gpui_kit::Focusable as _;
+        this.focus_handle(cx)
+    });
+    focus(cx, &root_focus);
+    assert!(
+        cx.update(|window, _cx| root_focus.is_focused(window)),
+        "the workspace holds focus before opening"
+    );
+    cx.update(|window, cx| {
+        view.update(cx, |this, cx| this.open_new_instance(window, cx));
+    });
+    draw(cx);
+    // The dialog took focus away from the root.
+    assert!(
+        !cx.update(|window, _cx| root_focus.is_focused(window)),
+        "the dialog takes focus from the opener"
+    );
+    // Escape closes it and gives focus back to the opener.
+    press(cx, "escape");
+    draw(cx);
+    assert!(
+        view.read_with(cx, |this, _| this.create_form().is_none()),
+        "Escape closes the create dialog"
+    );
+    assert!(
+        cx.update(|window, _cx| root_focus.is_focused(window)),
+        "Escape must return focus to the opener"
+    );
+}
+
 #[gpui_kit::test]
 fn ctrl_n_opens_the_create_dialog(cx: &mut TestAppContext) {
     let (view, _service, cx) = harness(cx);
@@ -128,7 +166,10 @@ fn ctrl_n_opens_the_create_dialog(cx: &mut TestAppContext) {
         "the create dialog must take focus on open"
     );
     // Tab never loses focus across the whole dialog (no trap, always visible).
-    assert!(tab_forward(cx, 10), "focus must survive every Tab in the dialog");
+    assert!(
+        tab_forward(cx, 10),
+        "focus must survive every Tab in the dialog"
+    );
 }
 
 /// F-PLH-01 AC1: the whole first session by keyboard only.
@@ -195,8 +236,9 @@ fn keyboard_only_first_session(cx: &mut TestAppContext) {
 #[gpui_kit::test]
 fn palette_disables_inapplicable_commands_with_a_reason(cx: &mut TestAppContext) {
     let (view, _service, _cx) = harness(cx);
-    let (labels, reasons) =
-        view.read_with(_cx, |this, _| (this.palette_labels(), this.palette_reasons()));
+    let (labels, reasons) = view.read_with(_cx, |this, _| {
+        (this.palette_labels(), this.palette_reasons())
+    });
     // The quiet service has one running and one stopped instance, so the
     // "start <running>" and "stop <stopped>" rows exist but are disabled.
     let start_running = labels
@@ -205,14 +247,20 @@ fn palette_disables_inapplicable_commands_with_a_reason(cx: &mut TestAppContext)
             l.starts_with(dblocal_core::strings::UI_PALETTE_START) && l.contains("pg-run")
         })
         .expect("start row for the running instance");
-    assert!(reasons[start_running].is_some(), "start on a running instance is disabled");
+    assert!(
+        reasons[start_running].is_some(),
+        "start on a running instance is disabled"
+    );
     let stop_stopped = labels
         .iter()
         .position(|l| {
             l.starts_with(dblocal_core::strings::UI_PALETTE_STOP) && l.contains("pg-stop")
         })
         .expect("stop row for the stopped instance");
-    assert!(reasons[stop_stopped].is_some(), "stop on a stopped instance is disabled");
+    assert!(
+        reasons[stop_stopped].is_some(),
+        "stop on a stopped instance is disabled"
+    );
 }
 
 /// F-PLH-01 AC2: the palette finds an instance by name and engine, and runs
@@ -237,9 +285,7 @@ fn palette_starts_an_instance_with_the_keyboard(cx: &mut TestAppContext) {
 
     // Query by the engine word (a keyword, not the label) and confirm the
     // start row for the stopped instance runs on Enter.
-    let index = view.read_with(cx, |this, _| {
-        this.command_state().clone()
-    });
+    let index = view.read_with(cx, |this, _| this.command_state().clone());
     cx.update(|window, cx| {
         index.update(cx, |state, cx| state.set_query("postgres", window, cx));
     });
@@ -257,7 +303,9 @@ fn palette_starts_an_instance_with_the_keyboard(cx: &mut TestAppContext) {
             .expect("a start row for the stopped instance")
     });
     cx.update(|window, cx| {
-        view.update(cx, |this, cx| this.run_palette_action(start_index, window, cx));
+        view.update(cx, |this, cx| {
+            this.run_palette_action(start_index, window, cx)
+        });
     });
     cx.run_until_parked();
     assert!(
@@ -269,4 +317,3 @@ fn palette_starts_an_instance_with_the_keyboard(cx: &mut TestAppContext) {
         "confirming a command closes the palette"
     );
 }
-

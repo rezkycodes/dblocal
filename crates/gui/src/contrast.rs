@@ -292,7 +292,8 @@ const BADGE_ALPHA: f64 = 0.14;
 /// Composites `color` at `alpha` over an opaque `base`, as GPUI paints a tinted
 /// fill over the surface below it.
 fn composite(color: Rgb, alpha: f64, base: Rgb) -> Rgb {
-    let mix = |fg: u8, bg: u8| (f64::from(fg) * alpha + f64::from(bg) * (1.0 - alpha)).round() as u8;
+    let mix =
+        |fg: u8, bg: u8| (f64::from(fg) * alpha + f64::from(bg) * (1.0 - alpha)).round() as u8;
     Rgb {
         r: mix(color.r, base.r),
         g: mix(color.g, base.g),
@@ -358,10 +359,22 @@ fn extra_text_pairs(theme_name: &str, colors: &HashMap<String, String>) -> Vec<C
     const PAIRS: [(&str, &str, &str); 6] = [
         ("link.foreground", "background", "link on page"),
         ("link.foreground", "sidebar.background", "link on dock"),
-        ("tab.active.foreground", "tab.active.background", "active tab"),
+        (
+            "tab.active.foreground",
+            "tab.active.background",
+            "active tab",
+        ),
         ("danger.background", "background", "danger text on page"),
-        ("danger.background", "muted.background", "danger text on card"),
-        ("warning.background", "muted.background", "warning text on card"),
+        (
+            "danger.background",
+            "muted.background",
+            "danger text on card",
+        ),
+        (
+            "warning.background",
+            "muted.background",
+            "warning text on card",
+        ),
     ];
     let mut out = Vec::new();
     for (fg_key, bg_key, label) in PAIRS {
@@ -619,7 +632,10 @@ mod tests {
                 }
             }
         }
-        assert!(checked >= 6, "each theme must check the ring on its surfaces");
+        assert!(
+            checked >= 6,
+            "each theme must check the ring on its surfaces"
+        );
         assert!(
             failing.is_empty(),
             "focus ring contrast failures (need 3:1):\n{}",

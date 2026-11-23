@@ -443,16 +443,17 @@ fn palette_lists_start_stop_open_and_copy() {
             .iter()
             .any(|l| l.starts_with(strings::UI_PALETTE_STOP) && l.contains("run"))
     );
-    assert!(labels.iter().any(|l| l.starts_with(strings::UI_PALETTE_OPEN)));
+    assert!(
+        labels
+            .iter()
+            .any(|l| l.starts_with(strings::UI_PALETTE_OPEN))
+    );
     assert!(
         labels
             .iter()
             .any(|l| l.starts_with(strings::UI_PALETTE_COPY_URI))
     );
-    assert!(matches!(
-        items[0].action,
-        Some(PaletteAction::NewInstance)
-    ));
+    assert!(matches!(items[0].action, Some(PaletteAction::NewInstance)));
 }
 
 #[test]
@@ -464,11 +465,12 @@ fn palette_disables_commands_with_a_reason_when_they_do_not_apply() {
     // Start on a RUNNING instance: disabled, with the "already running" reason.
     let start_run = items
         .iter()
-        .find(|i| {
-            i.label.starts_with(strings::UI_PALETTE_START) && i.label.contains("run")
-        })
+        .find(|i| i.label.starts_with(strings::UI_PALETTE_START) && i.label.contains("run"))
         .expect("start row for the running instance");
-    assert!(!start_run.is_enabled(), "start on a running instance is disabled");
+    assert!(
+        !start_run.is_enabled(),
+        "start on a running instance is disabled"
+    );
     assert_eq!(
         start_run.reason.as_deref(),
         Some(strings::UI_PALETTE_REASON_ALREADY_RUNNING)
@@ -477,9 +479,7 @@ fn palette_disables_commands_with_a_reason_when_they_do_not_apply() {
     // Stop on a STOPPED instance: disabled, with the "not running" reason.
     let stop_stop = items
         .iter()
-        .find(|i| {
-            i.label.starts_with(strings::UI_PALETTE_STOP) && i.label.contains("stop")
-        })
+        .find(|i| i.label.starts_with(strings::UI_PALETTE_STOP) && i.label.contains("stop"))
         .expect("stop row for the stopped instance");
     assert!(!stop_stop.is_enabled());
     assert_eq!(
@@ -490,9 +490,7 @@ fn palette_disables_commands_with_a_reason_when_they_do_not_apply() {
     // And the applicable ones are enabled with no reason.
     let start_stop = items
         .iter()
-        .find(|i| {
-            i.label.starts_with(strings::UI_PALETTE_START) && i.label.contains("stop")
-        })
+        .find(|i| i.label.starts_with(strings::UI_PALETTE_START) && i.label.contains("stop"))
         .expect("start row for the stopped instance");
     assert!(start_stop.is_enabled());
     assert!(start_stop.reason.is_none());

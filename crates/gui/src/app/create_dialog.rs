@@ -135,74 +135,68 @@ fn render_engine_cards(
     let cards = crate::format::create_engine_cards(entries);
     // One focus handle per engine card, taken from the form so the keyboard
     // tests focus the exact same control the view draws (`F-PLH-01` AC1).
-    let cards = cards
-        .into_iter()
-        .map(|entry| {
-            let engine = entry.engine;
-            let focus = form
-                .engine_focus
-                .iter()
-                .find(|(key, _)| *key == engine)
-                .map(|(_, handle)| handle.clone());
-            let selected = engine == form.engine;
-            let disabled = !entry.available;
-            let reason = format::engine_unavailable_reason(entry).map(str::to_owned);
-            let card = v_flex()
-                .id(SharedString::from(format!("engine-{}", engine.as_str())))
-                .flex_1()
-                .min_w(px(140.))
-                .gap_2()
-                .p(px(12.))
-                .rounded(px(8.))
-                .border_1()
-                .cursor_pointer()
-                .border_color(if selected {
-                    theme.primary
-                } else {
-                    theme.border
-                })
-                .bg(if selected {
-                    crate::theme::tokens::tint(theme.primary, 0.08)
-                } else {
-                    theme.background
-                })
-                .hover(|s| s.border_color(theme.primary))
-                .on_click(cx.listener(move |this, _, window, cx| {
-                    if !disabled {
-                        this.choose_engine_action(engine, window, cx);
-                    }
-                }))
-                .child(
-                    h_flex()
-                        .items_center()
-                        .child(engine_badge(engine, 28.0, theme))
-                        .child(div().flex_1())
-                        .when(selected, |this| {
-                            this.child(icon(IconName::Check, 16.0, theme.primary))
-                        }),
-                )
-                .child(
-                    Label::new(engine.display_name()).font_weight(gpui_kit::FontWeight::SEMIBOLD),
-                )
-                .child(
-                    Label::new(format!("Port kanonik {}", engine.canonical_port()))
+    let cards = cards.into_iter().map(|entry| {
+        let engine = entry.engine;
+        let focus = form
+            .engine_focus
+            .iter()
+            .find(|(key, _)| *key == engine)
+            .map(|(_, handle)| handle.clone());
+        let selected = engine == form.engine;
+        let disabled = !entry.available;
+        let reason = format::engine_unavailable_reason(entry).map(str::to_owned);
+        let card = v_flex()
+            .id(SharedString::from(format!("engine-{}", engine.as_str())))
+            .flex_1()
+            .min_w(px(140.))
+            .gap_2()
+            .p(px(12.))
+            .rounded(px(8.))
+            .border_1()
+            .cursor_pointer()
+            .border_color(if selected {
+                theme.primary
+            } else {
+                theme.border
+            })
+            .bg(if selected {
+                crate::theme::tokens::tint(theme.primary, 0.08)
+            } else {
+                theme.background
+            })
+            .hover(|s| s.border_color(theme.primary))
+            .on_click(cx.listener(move |this, _, window, cx| {
+                if !disabled {
+                    this.choose_engine_action(engine, window, cx);
+                }
+            }))
+            .child(
+                h_flex()
+                    .items_center()
+                    .child(engine_badge(engine, 28.0, theme))
+                    .child(div().flex_1())
+                    .when(selected, |this| {
+                        this.child(icon(IconName::Check, 16.0, theme.primary))
+                    }),
+            )
+            .child(Label::new(engine.display_name()).font_weight(gpui_kit::FontWeight::SEMIBOLD))
+            .child(
+                Label::new(format!("Port kanonik {}", engine.canonical_port()))
+                    .text_xs()
+                    .text_color(theme.muted_foreground),
+            )
+            .when_some(reason, |this, reason| {
+                this.child(
+                    Label::new(reason)
                         .text_xs()
                         .text_color(theme.muted_foreground),
                 )
-                .when_some(reason, |this, reason| {
-                    this.child(
-                        Label::new(reason)
-                            .text_xs()
-                            .text_color(theme.muted_foreground),
-                    )
-                });
-            match (disabled, focus) {
-                (false, Some(focus)) => {
-                    super::components::apply_focus_ring(card, &focus, window, cx)
-                }
-                _ => card,
-            }
-        });
+            });
+        match (disabled, focus) {
+            (false, Some(focus)) => super::components::apply_focus_ring(card, &focus, window, cx),
+            _ => card,
+        }
+    });
     h_flex().gap_2p5().flex_wrap().children(cards)
 }
 
@@ -293,9 +287,7 @@ fn render_versions(
                 )
             });
         list = list.child(match (version_unavailable, focus) {
-            (false, Some(focus)) => {
-                super::components::apply_focus_ring(row, &focus, window, cx)
-            }
+            (false, Some(focus)) => super::components::apply_focus_ring(row, &focus, window, cx),
             _ => row,
         });
     }

@@ -46,10 +46,13 @@ No hue was changed; saturation/value were adjusted minimally until every checked
 ## Keyboard and accessibility
 
 - `Ctrl/Cmd+N` new instance, `Ctrl/Cmd+Shift+C` copy URI, `Ctrl/Cmd+Enter` start/stop, `Ctrl/Cmd+K`/`Ctrl/Cmd+Shift+P` command palette, `Ctrl/Cmd+,` Settings, `Escape` closes the top overlay.
+- The palette finds an instance by name **or** by engine/version/port (row keywords); a start/stop/copy command that does not apply is listed disabled with a plain-text reason, never hidden.
 - Text through `Label` (gpui-component) so it is exposed to accessibility. No bare string children for visible UI text.
-- Focus order follows visual/task order; focus is visible; overlay close restores focus via gpui-component dialog/palette behaviour.
+- Focus order follows visual/task order; focus is visible as a **ring** (the theme's `ring` colour, ≥ 3:1 against every surface it is drawn on), never only a background tint. Dialogs and the palette take focus on open and return it to the opener on Escape/cancel.
+- Hand-built clickable rows (create dialog engine cards, version rows) are real tab stops (`components::apply_focus_ring`) and activate on Enter/Space; every dialog opens with focus inside it.
 - Status is never colour alone: running filled circle, stopped hollow circle, failed triangle, busy half circle, always accompanied by the status word.
 - No hover-only destructive/essential action. Primary actions are visible buttons; secondary/overflow actions use menus.
+- Theme override: `DBLOCAL_THEME=light|dark|system` forces a theme for a screenshot run or a test without touching the user's real desktop setting; the app otherwise follows the system appearance, including a live change.
 
 ## Live screens
 
