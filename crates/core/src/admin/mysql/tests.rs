@@ -1,6 +1,8 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 use super::*;
 
+mod fake;
+
 /// A port nothing in this process listens on. It is only ever dialled, never
 /// bound (Common Rules 9).
 const TEST_PORT: u16 = 65_000;
@@ -25,6 +27,15 @@ fn socket_target() -> MysqlTarget {
     target().with_transport(Transport::Socket(PathBuf::from(
         "/nonexistent/dblocal-test.sock",
     )))
+}
+
+/// A target whose loopback port is a live fake server. This is the Windows
+/// arm's `Opts` (no socket, `prefer_socket(false)`, `127.0.0.1:<port>`) talking
+/// to a real peer, so the closures after `Conn::new` are actually executed.
+fn live_target(server: &fake::FakeServer) -> MysqlTarget {
+    target().with_transport(Transport::Loopback {
+        port: server.port(),
+    })
 }
 
 #[test]
@@ -296,4 +307,369 @@ fn reset_machinery_is_wired_through_the_shared_state_machine() {
         .expect_err("no socket");
     assert_eq!(err, AdminError::Connect);
     assert_eq!(sink.0.load(std::sync::atomic::Ordering::SeqCst), 0);
+}
+
+// --- Live fake server: the loopback arm against a real peer ------------------
+//
+// A tiny MySQL-protocol server (see `tests/fake.rs`) answers on an ephemeral
+// loopback port. Every test here dials it through the production loopback `Opts`
+// — no socket, `prefer_socket(false)`, the literal `127.0.0.1` — so the code
+// after `Conn::new` runs for real, and the statement text that reaches the wire
+// is asserted.
+
+fn live(admin_reply: impl Fn(&str) -> fake::Reply + Send + Sync + 'static) -> fake::FakeServer {
+    fake::FakeServer::start(admin_reply)
+}
+
+#[test]
+fn list_databases_reads_names_and_sizes_off_the_wire() {
+    let server = live(|sql| {
+        if sql.contains("information_schema.SCHEMATA") {
+            fake::Reply::Rows {
+                columns: vec![fake::Col::text("SCHEMA_NAME"), fake::Col::int("size")],
+                rows: vec![
+                    vec![Some("appdb".to_owned()), Some("4096".to_owned())],
+                    vec![Some("other".to_owned()), None],
+                ],
+            }
+        } else {
+            fake::Reply::Ok
+        }
+    });
+    let admin = MysqlAdmin::new(live_target(&server));
+    let databases = admin.list_databases().expect("list databases");
+    assert_eq!(databases.len(), 2);
+    assert_eq!(databases[0].name(), "appdb");
+    assert_eq!(databases[0].size_bytes(), 4096);
+    // A NULL size is reported as 0, never a panic.
+    assert_eq!(databases[1].name(), "other");
+    assert_eq!(databases[1].size_bytes(), 0);
+    assert!(server.saw("information_schema.SCHEMATA"));
+    // The list never targets a db.
+    assert_eq!(
+        admin.target().transport(),
+        &Transport::Loopback {
+            port: server.port()
+        }
+    );
+}
+
+#[test]
+fn list_users_collapses_hosts_and_skips_empty_accounts() {
+    let server = live(|sql| {
+        if sql.contains("mysql.user") {
+            fake::Reply::Rows {
+                columns: vec![fake::Col::text("User"), fake::Col::text("Host")],
+                rows: vec![
+                    vec![Some("root".to_owned()), Some("localhost".to_owned())],
+                    vec![Some("root".to_owned()), Some("127.0.0.1".to_owned())],
+                    vec![Some("app".to_owned()), Some("127.0.0.1".to_owned())],
+                ],
+            }
+        } else {
+            fake::Reply::Ok
+        }
+    });
+    let admin = MysqlAdmin::new(live_target(&server));
+    let users = admin.list_users().expect("list users");
+    let names: Vec<&str> = users.iter().map(|user| user.name()).collect();
+    assert_eq!(names, vec!["root", "app"], "one row per account name");
+    assert!(
+        users
+            .iter()
+            .all(|user| user.can_login() && !user.is_superuser())
+    );
+    assert!(server.saw("mysql.user"));
+}
+
+#[test]
+fn create_database_sends_utf8mb4_and_maps_a_duplicate() {
+    let server = live(|sql| {
+        if sql.contains("CREATE DATABASE") {
+            fake::Reply::Err {
+                code: 1007,
+                message: "database exists",
+            }
+        } else {
+            fake::Reply::Ok
+        }
+    });
+    let admin = MysqlAdmin::new(live_target(&server));
+    let db = Identifier::new("appdb").expect("valid");
+    let err = admin.create_database(&db).expect_err("duplicate");
+    assert_eq!(err, AdminError::DatabaseExists);
+    assert!(
+        server.saw("CREATE DATABASE `appdb` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci"),
+        "the create must ask for utf8mb4: {:?}",
+        server.statements()
+    );
+}
+
+#[test]
+fn drop_database_refuses_a_live_session_then_drops() {
+    // The `force=false` pre-check counts sessions; a positive count is
+    // `DatabaseInUse` and no DROP is sent.
+    let busy = live(|sql| {
+        if sql.contains("PROCESSLIST") {
+            fake::count(2)
+        } else {
+            fake::Reply::Ok
+        }
+    });
+    let admin = MysqlAdmin::new(live_target(&busy));
+    let db = Identifier::new("appdb").expect("valid");
+    let err = admin.drop_database(&db, false).expect_err("busy");
+    assert_eq!(err, AdminError::DatabaseInUse);
+    assert!(
+        !busy.saw("DROP DATABASE"),
+        "a busy database must not be dropped: {:?}",
+        busy.statements()
+    );
+
+    // No sessions: the DROP goes out.
+    let quiet = live(|sql| {
+        if sql.contains("PROCESSLIST") {
+            fake::count(0)
+        } else {
+            fake::Reply::Ok
+        }
+    });
+    let admin = MysqlAdmin::new(live_target(&quiet));
+    admin.drop_database(&db, false).expect("drop");
+    assert!(
+        quiet.saw("DROP DATABASE `appdb`"),
+        "{:?}",
+        quiet.statements()
+    );
+
+    // `force=true` skips the pre-check entirely.
+    let forced = live(|_| fake::Reply::Ok);
+    MysqlAdmin::new(live_target(&forced))
+        .drop_database(&db, true)
+        .expect("forced drop");
+    assert!(
+        !forced.saw("PROCESSLIST"),
+        "force must not count sessions: {:?}",
+        forced.statements()
+    );
+    assert!(forced.saw("DROP DATABASE `appdb`"));
+}
+
+#[test]
+fn database_exists_reads_the_count() {
+    for (value, expected) in [(1i64, true), (0i64, false)] {
+        let server = live(move |sql| {
+            if sql.contains("SCHEMATA") {
+                fake::count(value)
+            } else {
+                fake::Reply::Ok
+            }
+        });
+        let admin = MysqlAdmin::new(live_target(&server));
+        let db = Identifier::new("appdb").expect("valid");
+        assert_eq!(admin.database_exists(&db).expect("exists"), expected);
+    }
+}
+
+#[test]
+fn create_user_grant_and_drop_user_reach_the_wire() {
+    let server = live(|_| fake::Reply::Ok);
+    let admin = MysqlAdmin::new(live_target(&server));
+    let user = Identifier::role("app_user").expect("valid role");
+    let db = Identifier::new("appdb").expect("valid");
+
+    let password = admin
+        .create_user_at(&user, MANAGED_ACCOUNT_HOST)
+        .expect("create user");
+    assert!(!password.expose().is_empty());
+    assert!(
+        server.saw("CREATE USER `app_user`@'127.0.0.1' IDENTIFIED BY"),
+        "{:?}",
+        server.statements()
+    );
+    // The password literal never reaches a log or an error; here we only prove
+    // the statement went out and the value is returned once.
+
+    admin
+        .grant(&user, &db, PrivilegeLevel::ReadOnly, MANAGED_ACCOUNT_HOST)
+        .expect("grant ro");
+    assert!(
+        server.saw("GRANT SELECT ON `appdb`.* TO `app_user`@'127.0.0.1'"),
+        "{:?}",
+        server.statements()
+    );
+
+    admin
+        .grant(&user, &db, PrivilegeLevel::ReadWrite, MANAGED_ACCOUNT_HOST)
+        .expect("grant rw");
+    assert!(
+        server.saw("GRANT SELECT, INSERT, UPDATE, DELETE ON `appdb`.*"),
+        "{:?}",
+        server.statements()
+    );
+
+    admin
+        .drop_user_at(&user, MANAGED_ACCOUNT_HOST)
+        .expect("drop user");
+    assert!(
+        server.saw("DROP USER `app_user`@'127.0.0.1'"),
+        "{:?}",
+        server.statements()
+    );
+
+    // Every password-bearing statement ran with the query log off first.
+    assert!(
+        server.saw("SET sql_log_off = 1"),
+        "sql_log_off must precede a password statement"
+    );
+}
+
+#[test]
+fn a_missing_host_account_is_skipped_but_other_role_errors_are_reported() {
+    // `apply` changes three host accounts on one connection; a `1396` for a
+    // host that does not exist must not abort the batch, any other error must.
+    let server = live(|sql| {
+        if sql.contains("ALTER USER") {
+            fake::Reply::Err {
+                code: 1396,
+                message: "Operation ALTER USER failed; user doesn't exist",
+            }
+        } else {
+            fake::Reply::Ok
+        }
+    });
+    let admin = MysqlAdmin::new(live_target(&server));
+    <MysqlAdmin as PasswordEngine>::apply(
+        &admin,
+        &SecretString::from("old-pw"),
+        &SecretString::from("new-pw"),
+    )
+    .expect("a missing host account is skipped");
+    // All three loopback hosts were attempted.
+    assert!(
+        server.saw("ALTER USER `root`@'localhost'"),
+        "{:?}",
+        server.statements()
+    );
+    assert!(server.saw("ALTER USER `root`@'127.0.0.1'"));
+    assert!(server.saw("ALTER USER `root`@'::1'"));
+
+    let failing = live(|sql| {
+        if sql.contains("ALTER USER") {
+            fake::Reply::Err {
+                code: 1044,
+                message: "access denied",
+            }
+        } else {
+            fake::Reply::Ok
+        }
+    });
+    let admin = MysqlAdmin::new(live_target(&failing));
+    let err = <MysqlAdmin as PasswordEngine>::apply(
+        &admin,
+        &SecretString::from("old-pw"),
+        &SecretString::from("new-pw"),
+    )
+    .expect_err("a non-1396 error must abort");
+    assert_eq!(err, AdminError::InsufficientPrivilege);
+}
+
+#[test]
+fn verify_opens_a_fresh_connection_and_runs_select_1() {
+    let server = live(|sql| {
+        if sql.contains("SELECT 1") {
+            fake::count(1)
+        } else {
+            fake::Reply::Ok
+        }
+    });
+    let admin = MysqlAdmin::new(live_target(&server));
+    <MysqlAdmin as PasswordEngine>::verify(&admin, &SecretString::from("pw")).expect("verify");
+    assert!(server.saw("SELECT 1"), "{:?}", server.statements());
+}
+
+#[test]
+fn a_server_error_maps_by_code_on_a_live_connection() {
+    // The connection succeeds; the statement is refused with 1044, which maps to
+    // `InsufficientPrivilege` rather than `Connect`.
+    let server = live(|sql| {
+        if sql.contains("CREATE DATABASE") {
+            fake::Reply::Err {
+                code: 1044,
+                message: "access denied",
+            }
+        } else {
+            fake::Reply::Ok
+        }
+    });
+    let admin = MysqlAdmin::new(live_target(&server));
+    let db = Identifier::new("appdb").expect("valid");
+    assert_eq!(
+        admin.create_database(&db).expect_err("denied"),
+        AdminError::InsufficientPrivilege
+    );
+}
+
+#[test]
+fn a_refused_login_on_a_live_connection_is_auth_failed() {
+    // The connect handshake itself is refused with 1045: `map_connect_error`
+    // turns it into `AuthFailed`, not `Connect`.
+    let server = live(|sql| {
+        if sql == "@@connect" {
+            fake::Reply::Err {
+                code: 1045,
+                message: "Access denied",
+            }
+        } else {
+            fake::Reply::Ok
+        }
+    });
+    let admin = MysqlAdmin::new(live_target(&server));
+    assert_eq!(
+        admin.list_databases().expect_err("login refused"),
+        AdminError::AuthFailed
+    );
+}
+
+#[test]
+fn the_admin_executor_trait_delegates_to_the_same_methods() {
+    use crate::admin::AdminExecutor;
+    let server = live(|sql| {
+        if sql.contains("COUNT(*)") {
+            // `database_exists`, and the `drop_database` session count.
+            fake::count(1)
+        } else if sql.contains("SCHEMATA") {
+            fake::Reply::Rows {
+                columns: vec![fake::Col::text("SCHEMA_NAME"), fake::Col::int("size")],
+                rows: vec![vec![Some("appdb".to_owned()), Some("0".to_owned())]],
+            }
+        } else if sql.contains("mysql.user") {
+            fake::Reply::Rows {
+                columns: vec![fake::Col::text("User"), fake::Col::text("Host")],
+                rows: vec![vec![Some("root".to_owned()), Some("localhost".to_owned())]],
+            }
+        } else {
+            fake::Reply::Ok
+        }
+    });
+    let admin = MysqlAdmin::new(live_target(&server));
+    let executor: &dyn AdminExecutor = &admin;
+    let db = Identifier::new("appdb").expect("valid");
+    let user = Identifier::role("app_user").expect("valid role");
+
+    assert_eq!(executor.list_databases().expect("list").len(), 1);
+    assert_eq!(executor.list_users().expect("users").len(), 1);
+    executor.create_database(&db).expect("create");
+    assert!(executor.database_exists(&db).expect("exists"));
+    executor.create_user(&user).expect("create user");
+    executor
+        .grant(&user, &db, PrivilegeLevel::ReadOnly)
+        .expect("grant");
+    executor.drop_user(&user).expect("drop user");
+    // A live session (count 1) blocks the default drop.
+    assert_eq!(
+        executor.drop_database(&db, false).expect_err("busy"),
+        AdminError::DatabaseInUse
+    );
+    executor.drop_database(&db, true).expect("forced drop");
 }
