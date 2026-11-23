@@ -135,6 +135,19 @@ impl Workspace {
             UiEvent::OperationFinished { id, result } => Some((id.clone(), result.is_ok())),
             _ => None,
         };
+        // `F2`: the stop a pending "Restart sekarang" queued failed, so that
+        // restart can never happen. Drop it here — matching the operation id,
+        // never clearing on an unrelated operation — instead of leaving it to
+        // fire on the next manual stop.
+        if let UiEvent::OperationFinished {
+            id,
+            result: Err(_),
+        } = &event
+            && self.config_restart_stop_op.as_ref() == Some(id)
+        {
+            self.config_restart_after_stop = None;
+            self.config_restart_stop_op = None;
+        }
         let finished = quit_stop_finished.is_some();
         let removed = removed_id.is_some();
         self.apply_event(event);
@@ -182,26 +195,44 @@ impl Workspace {
         }
     }
 
-    /// After a start/stop: invalidate the Databases rows and run a pending
-    /// "Restart sekarang" once the stop has settled.
+    /// After a start/stop: invalidate the Databases rows, run a pending
+    /// "Restart sekarang" once the stop has settled, and retire the "Tersimpan"
+    /// banner once the change is in effect (`F4`).
     fn after_status_change(&mut self, id: &InstanceId, cx: &mut Context<Self>) {
+        use dblocal_core::model::InstanceStatus;
         self.admin.invalidate(id);
         if self.database_tab_visible(id) {
             self.reload_admin_bg(id, cx);
         }
+        let status = self.instance(id).map(|v| v.status);
         // A Config apply's "Restart sekarang" waits for the stop to settle:
         // starting a `Stopping` instance would be refused, so the start runs
-        // here, on the transition to `Stopped` (`F-CFG-01` AC2).
-        let waiting = self
-            .config_restart_after_stop
-            .as_ref()
-            .is_some_and(|target| target == id)
-            && self
-                .instance(id)
-                .is_some_and(|v| v.status == dblocal_core::model::InstanceStatus::Stopped);
-        if waiting {
-            self.config_restart_after_stop = None;
-            self.start_instance(id.clone(), cx);
+        // here, on the transition to `Stopped`, and only for the stop it queued
+        // (`F-CFG-01` AC2, `F2`).
+        if self.config_restart_after_stop.as_ref() == Some(id) {
+            match status {
+                Some(InstanceStatus::Stopped) => {
+                    self.config_restart_after_stop = None;
+                    self.config_restart_stop_op = None;
+                    self.start_instance(id.clone(), cx);
+                }
+                // The instance left `Stopping` for anything but `Stopped`; this
+                // stop will never complete the restart. Drop it rather than let
+                // the next manual stop start the instance by itself.
+                Some(InstanceStatus::Running | InstanceStatus::Failed)
+                    if self.config_restart_stop_op.is_some() =>
+                {
+                    self.clear_pending_restart_for(id);
+                }
+                _ => {}
+            }
+        }
+        // `F4`: once the instance is running again the applied config is in
+        // effect, so the "Tersimpan. Berlaku setelah restart." banner is stale.
+        // The stop half of our own queued restart keeps it, so the banner does
+        // not flicker between stop and start.
+        if status == Some(InstanceStatus::Running) {
+            self.config.entry(id).applied = None;
         }
     }
 }

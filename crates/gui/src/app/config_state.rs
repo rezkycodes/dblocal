@@ -55,17 +55,15 @@ pub struct InstanceConfig {
     pub applied: Option<ConfigApplied>,
     /// A `ConfigChanged` arrived while this instance had unsaved edits.
     pub touched_outside: bool,
+    /// A re-read is in flight while the last good view stays on screen, so a
+    /// refresh never blanks the form or drops the focused field (`F7b`).
+    pub refreshing: bool,
 }
 
 impl InstanceConfig {
     /// The view, when the last read succeeded.
     pub fn view(&self) -> Option<&ConfigView> {
         self.data.ready()
-    }
-
-    /// Whether the first read has not landed, so the card must say so.
-    pub fn pending(&self) -> bool {
-        matches!(self.data, Loadable::Idle | Loadable::Loading)
     }
 
     /// Whether `action` is in flight right now.
@@ -139,9 +137,16 @@ impl InstanceConfig {
             .collect()
     }
 
-    /// Whether "Terapkan" is enabled: something changed and nothing is in flight.
+    /// Whether "Terapkan" is enabled.
+    ///
+    /// Something must have changed, nothing may be in flight, and no field may
+    /// carry a validation error: a blue button that silently does nothing while
+    /// `DBL-8601` sits under a field is the defect this pins (`F5`).
     pub fn can_apply(&self) -> bool {
-        !self.any_busy() && self.data.ready().is_some() && !self.changed_pairs().is_empty()
+        !self.any_busy()
+            && self.data.ready().is_some()
+            && self.errors.is_empty()
+            && !self.changed_pairs().is_empty()
     }
 
     /// Whether "Batalkan perubahan" is enabled.
@@ -207,6 +212,13 @@ impl InstanceConfig {
     /// flag is only raised when an edit actually survived, so the banner says
     /// "File berubah di luar aplikasi" only when there is a field to protect.
     pub fn rebase(&mut self, view: ConfigView) {
+        // Whether the file itself differs between the view on screen and the one
+        // just read. A re-read that returned the same file must never raise the
+        // "changed outside" banner (`F7c`); comparing the whole read model also
+        // covers a change to a key nobody has an edit on.
+        let file_changed = self
+            .view()
+            .is_none_or(|old| view_values(old) != view_values(&view));
         self.data = Loadable::Ready(view.clone());
         let current: BTreeMap<&str, &str> = view
             .settings
@@ -216,11 +228,52 @@ impl InstanceConfig {
         self.edits
             .retain(|key, text| current.get(key.as_str()) != Some(&text.as_str()));
         self.errors.clear();
-        // The banner shows whenever the file changed outside and the user still
-        // has an unsaved edit to protect; when every edit already matches the new
-        // file, there is nothing to warn about.
-        self.touched_outside = !self.edits.is_empty();
+        // The banner shows only when the file really changed outside and the user
+        // still has an unsaved edit to protect; when the read returned the same
+        // file, or every edit already matches the new one, there is nothing to
+        // warn about.
+        self.touched_outside = file_changed && !self.edits.is_empty();
     }
+
+    /// Marks a re-read as started without blanking the view on screen.
+    ///
+    /// A refresh keeps the last good `Ready` rows (and every field entity and
+    /// its focus) visible; only a tab that has nothing yet goes to `Loading`, so
+    /// its card can honestly say "Memuat..." (`F7b`).
+    pub fn begin_refresh(&mut self) {
+        self.refreshing = true;
+        if self.data.ready().is_none() {
+            self.data = Loadable::Loading;
+        }
+        self.error = None;
+    }
+
+    /// Marks the re-read as finished and records its outcome.
+    ///
+    /// A fresh view re-bases the edits (only what really differs survives); a
+    /// failure is the card error while the previous rows stay on screen.
+    pub fn end_refresh_ok(&mut self, view: ConfigView) {
+        self.refreshing = false;
+        self.rebase(view);
+    }
+
+    /// Records a failed re-read; the rows on screen are kept, never blanked.
+    pub fn end_refresh_failed(&mut self, err: UserFacingError) {
+        self.refreshing = false;
+        if self.data.ready().is_none() {
+            self.data = Loadable::Failed(err.clone());
+        }
+        self.error = Some(err);
+    }
+}
+
+/// Every current value of a view, keyed by setting, for the "did the file
+/// change" comparison in [`InstanceConfig::rebase`].
+fn view_values(view: &ConfigView) -> BTreeMap<&str, Option<&str>> {
+    view.settings
+        .iter()
+        .map(|s| (s.key.as_str(), s.current.as_deref()))
+        .collect()
 }
 
 /// Every instance's Config tab state, keyed by instance.

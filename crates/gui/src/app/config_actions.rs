@@ -20,6 +20,18 @@ use gpui_kit::{AppContext as _, Context, Entity, SharedString, Window};
 use super::Workspace;
 use super::config_state::ConfigAction;
 
+/// What a restore does after the file is back: nothing, or a start.
+///
+/// A `bool` would read backwards at the call site (`true` = start?); the two
+/// variants say exactly which service call follows the restore (`F1`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RestoreFollowUp {
+    /// "Pulihkan konfigurasi sebelumnya" from the dialog: only the file changes.
+    FileOnly,
+    /// The failure banner's "Pulihkan konfigurasi dan mulai ulang": restore, start.
+    Start,
+}
+
 impl Workspace {
     /// Reads the config view for one instance, off the GPUI thread.
     pub(crate) fn reload_config_bg(&mut self, id: &InstanceId, cx: &mut Context<Self>) {
@@ -28,45 +40,51 @@ impl Workspace {
         }
         let service = self.service.clone();
         let iid = id.clone();
-        let config = self.config.entry(id);
-        config.data = super::admin_state::Loadable::Loading;
-        config.error = None;
+        // Keep the last good rows visible while the read is in flight: a blank
+        // form on every refresh drops the focus of the field being typed in and
+        // flickers the whole card (`F7b`).
+        self.config.entry(id).begin_refresh();
         self.bg(cx, move || {
             let view = service.config_view(&iid);
-            let raw = service.config_raw_path(&iid);
             move |this: &mut Workspace, cx: &mut Context<Workspace>| {
                 let config = this.config.entry(&iid);
-                match (view, raw) {
-                    (Ok(view), _) => {
+                match view {
+                    Ok(view) => {
                         // A re-read that lands while there are edits re-bases
                         // them, exactly as a `ConfigChanged` would.
-                        if config.edits.is_empty() {
-                            config.data = super::admin_state::Loadable::Ready(view);
-                        } else {
-                            config.rebase(view);
-                        }
+                        config.end_refresh_ok(view);
                         // The fields are (re)built by `Render::render` from the
                         // pure state; only the text needs re-syncing here.
                         this.sync_config_fields(&iid, cx);
                     }
-                    (Err(err), _) => {
-                        config.data = super::admin_state::Loadable::Failed(err.clone());
-                        config.error = Some(err);
-                    }
+                    Err(err) => config.end_refresh_failed(err),
                 }
                 cx.notify();
             }
         });
     }
 
-    /// Reads the tab on entry: the first time and after any invalidation.
+    /// Reads the tab on entry: every time, so an edit by the CLI, a second
+    /// DBLocal or the external editor is seen (`F7a`).
+    ///
+    /// Re-reading unconditionally is what makes "Buka file konfigurasi" useful:
+    /// the whole point of that button is that something else changes the file.
     pub(crate) fn enter_config_tab(&mut self, id: &InstanceId, cx: &mut Context<Self>) {
-        let needs_read = match self.config.get(id) {
-            None => true,
-            Some(config) => !config.pending() && config.view().is_none(),
+        if self.instance(id).is_none() {
+            return;
+        }
+        self.reload_config_bg(id, cx);
+    }
+
+    /// Re-reads the visible Config tab when the window becomes active again, so
+    /// an edit made while another window was focused is visible on return
+    /// (`F7a`).
+    pub(crate) fn refresh_config_on_activation(&mut self, cx: &mut Context<Self>) {
+        let Some(id) = self.tabs.selected_instance().cloned() else {
+            return;
         };
-        if needs_read {
-            self.reload_config_bg(id, cx);
+        if self.config_tab_visible(&id) {
+            self.reload_config_bg(&id, cx);
         }
     }
 
@@ -285,7 +303,11 @@ impl Workspace {
         self.config.entry(id).applied = None;
         if crate::format::can_stop(view.status) {
             self.config_restart_after_stop = Some(id.clone());
-            self.stop_instance(id.clone(), cx);
+            // Track this stop's own operation id: a pending restart may only be
+            // consumed by the stop it queued, never by an unrelated operation,
+            // and a stop that fails must drop it instead of leaving a restart
+            // that fires on the next manual stop (`F2`).
+            self.stop_instance_tracked(id.clone(), cx);
         } else if crate::format::can_start(view.status) {
             // Already stopped: the restart is just a start.
             self.start_instance(id.clone(), cx);
@@ -308,22 +330,25 @@ impl Workspace {
         let Some(id) = self.config_restore_confirm.take() else {
             return;
         };
-        self.restore_config_now(&id, None, cx);
+        // The Confirm button takes the dialog away like Escape and Cancel do, so
+        // it must return the focus the same way (`F6`).
+        self.restore_dialog_focus_after_close();
+        self.restore_config_now(&id, RestoreFollowUp::FileOnly, cx);
     }
 
-    /// Restores, optionally starting afterwards (the failure banner's action).
+    /// Restores, then starts the instance (the failure banner's action).
     ///
     /// A restore then a start are two service calls, and either can fail; both
     /// are reported typed (`F-CFG-01` AC3).
     pub(crate) fn restore_and_restart(&mut self, id: &InstanceId, cx: &mut Context<Self>) {
-        self.restore_config_now(id, Some(()), cx);
+        self.restore_config_now(id, RestoreFollowUp::Start, cx);
     }
 
     /// The shared restore path: restore, then optionally start.
     fn restore_config_now(
         &mut self,
         id: &InstanceId,
-        start_after: Option<()>,
+        follow_up: RestoreFollowUp,
         cx: &mut Context<Self>,
     ) {
         if self.config.get(id).is_some_and(|config| config.any_busy()) {
@@ -334,37 +359,38 @@ impl Workspace {
         self.config.entry(id).begin(ConfigAction::Restore);
         self.bg(cx, move || {
             let restored = service.config_restore(&iid);
-            // The start is a separate call and a separate result; it runs only
-            // when the restore succeeded, so the engine reads the restored file.
-            let started = if start_after.is_some() {
-                Some(service.start_instance(&iid))
-            } else {
-                None
+            // The start is a separate call and a separate result. It runs only
+            // when the restore succeeded, so the engine reads the restored file
+            // and a failed restore never starts the engine on a broken config.
+            let started = match (&restored, follow_up) {
+                (Ok(()), RestoreFollowUp::Start) => Some(service.start_instance(&iid)),
+                _ => None,
             };
             move |this: &mut Workspace, cx: &mut Context<Workspace>| {
                 let config = this.config.entry(&iid);
                 config.end(ConfigAction::Restore);
                 match restored {
                     Ok(()) => {
-                        if start_after.is_some() {
-                            match started {
-                                Some(Ok(_)) => {
-                                    this.toast =
-                                        Some(SharedString::from(strings::UI_TOAST_START_REQUESTED));
-                                }
-                                Some(Err(err)) => {
-                                    // The restore worked but the start did not;
-                                    // report the real typed failure of the start.
-                                    let facing = UserFacingError::from(&err);
-                                    config.error = Some(facing.clone());
-                                    this.report_user_facing_error(&facing);
-                                }
-                                None => {}
+                        match started {
+                            Some(Ok(_)) => {
+                                this.toast =
+                                    Some(SharedString::from(strings::UI_TOAST_START_REQUESTED));
                             }
+                            Some(Err(err)) => {
+                                // The restore worked but the start did not;
+                                // report the real typed failure of the start.
+                                let facing = UserFacingError::from(&err);
+                                config.error = Some(facing.clone());
+                                this.report_user_facing_error(&facing);
+                            }
+                            None => {}
                         }
                         this.reload_config_bg(&iid, cx);
                     }
                     Err(err) => {
+                        // The restore itself failed (`DBL-8604` busy, `DBL-8605`
+                        // no backup, an IO error): report it typed and do
+                        // nothing else, the file is untouched.
                         config.error = Some(err.clone());
                         this.report_user_facing_error(&err);
                     }
@@ -387,7 +413,6 @@ impl Workspace {
         self.config.entry(id).begin(ConfigAction::OpenRaw);
         self.bg(cx, move || {
             let result = service.config_open_raw(&iid);
-            let path = service.config_raw_path(&iid).ok();
             move |this: &mut Workspace, cx: &mut Context<Workspace>| {
                 let config = this.config.entry(&iid);
                 config.end(ConfigAction::OpenRaw);
@@ -399,12 +424,16 @@ impl Workspace {
                     }
                     Err(err) => {
                         // The typed message is shown, and the path is rendered
-                        // next to it by the card so the user can open it by hand.
+                        // next to it by the card (from the view) so the user can
+                        // open it by hand.
                         config.error = Some(err.clone());
                         this.report_user_facing_error(&err);
                     }
                 }
-                let _ = path;
+                // The launch is how the file changes: re-read now the launcher
+                // has returned, so the editor's edit is visible on return even
+                // when the window never loses activation (`F7a`).
+                this.reload_config_bg(&iid, cx);
                 cx.notify();
             }
         });
@@ -431,12 +460,46 @@ impl Workspace {
     pub(crate) fn forget_config_fields(&mut self, id: &InstanceId) {
         let instance = id.clone();
         self.config_fields.retain(|(iid, _), _| iid != &instance);
-        if self.config_restart_after_stop.as_ref() == Some(id) {
-            self.config_restart_after_stop = None;
-        }
+        self.clear_pending_restart_for(id);
         if self.config_restore_confirm.as_ref() == Some(id) {
             self.config_restore_confirm = None;
         }
+    }
+
+    /// Drops a pending "Restart sekarang" that can no longer be the stop it
+    /// waited for, whatever took it away (`F2`).
+    pub(crate) fn clear_pending_restart_for(&mut self, id: &InstanceId) {
+        if self.config_restart_after_stop.as_ref() == Some(id) {
+            self.config_restart_after_stop = None;
+            self.config_restart_stop_op = None;
+        }
+    }
+
+    /// Stops one instance and records the operation id a pending restart waits
+    /// on, so the start runs only once this stop has settled (`F2`).
+    pub(crate) fn stop_instance_tracked(&mut self, id: InstanceId, cx: &mut Context<Self>) {
+        let service = self.service.clone();
+        let iid = id.clone();
+        self.bg(cx, move || {
+            let result = service.stop_instance(&iid);
+            move |this: &mut Workspace, cx: &mut Context<Workspace>| {
+                match result {
+                    Ok(op) => {
+                        // Only a queued restart for this instance waits on it.
+                        if this.config_restart_after_stop.as_ref() == Some(&iid) {
+                            this.config_restart_stop_op = Some(op);
+                        }
+                        this.toast = Some(SharedString::from(strings::UI_TOAST_STOP_REQUESTED));
+                    }
+                    Err(err) => {
+                        // The stop never started, so this restart cannot happen.
+                        this.clear_pending_restart_for(&iid);
+                        this.report_error(&err);
+                    }
+                }
+                cx.notify();
+            }
+        });
     }
 
     /// The per-instance Config state, for the view.

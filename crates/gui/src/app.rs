@@ -198,6 +198,9 @@ pub struct Workspace {
     /// An instance the Config tab asked to restart after an apply; the restart
     /// runs when its stop completes, never a new service call (`F-CFG-01` AC2).
     config_restart_after_stop: Option<InstanceId>,
+    /// The operation id of the stop that pending restart queued, so only that
+    /// stop can consume it and a failed stop drops it (`F2`).
+    config_restart_stop_op: Option<dblocal_core::service::OperationId>,
     /// The database-create field of the Databases tab.
     ///
     /// Created once with the workspace, not on first tab click: the tab can be
@@ -262,6 +265,9 @@ pub struct Workspace {
     pending_preview: bool,
     tray_needs_refresh: bool,
     _appearance: Option<Subscription>,
+    /// Fires when the window is activated, so the visible Config tab re-reads a
+    /// file something else may have changed (`F7a`).
+    _activation: Option<Subscription>,
     _event_task: Option<Task<()>>,
 }
 
@@ -310,6 +316,18 @@ impl Workspace {
             focus_handle,
         });
         workspace.startup_load(cx);
+        // `F7a`: the external editor DBLocal launches, the CLI and a second
+        // window all write the file without an in-process `ConfigChanged`. On
+        // the way back to this window the visible Config tab re-reads, so the
+        // form is never stale.
+        workspace._activation = Some(cx.observe_window_activation(
+            window,
+            |this, window, cx| {
+                if window.is_window_active() {
+                    this.refresh_config_on_activation(cx);
+                }
+            },
+        ));
         // No per-window event pump: the app-level loop is the single consumer of
         // the one bridge and forwards each event here (R3). Two pumps on one
         // flume channel would split the stream between them.
@@ -339,6 +357,16 @@ impl Workspace {
         });
         workspace.tray_note_shown = true;
         workspace.tray_note = Some(SharedString::from(strings::UI_TRAY_UNAVAILABLE_NOTE));
+        // The same activation re-read the live window installs (`F7a`), so a
+        // test can prove the return-to-window path.
+        workspace._activation = Some(cx.observe_window_activation(
+            window,
+            |this, window, cx| {
+                if window.is_window_active() {
+                    this.refresh_config_on_activation(cx);
+                }
+            },
+        ));
         workspace
     }
 
@@ -388,6 +416,7 @@ impl Workspace {
             config_restore_confirm: None,
             config_fields: HashMap::new(),
             config_restart_after_stop: None,
+            config_restart_stop_op: None,
             db_name_input: parts.db_name_input,
             user_name_input: parts.user_name_input,
             user_db_choice: None,
@@ -418,6 +447,7 @@ impl Workspace {
             pending_preview: false,
             tray_needs_refresh: false,
             _appearance: None,
+            _activation: None,
             _event_task: None,
         }
     }

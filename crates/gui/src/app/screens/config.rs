@@ -223,11 +223,13 @@ impl Workspace {
         theme: &Theme,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        let card_selector = config_action_id("config-card", &view.id);
         let mut body = v_flex()
             .rounded(px(8.))
             .border_1()
             .border_color(theme.border)
             .bg(theme.popover)
+            .debug_selector(|| card_selector)
             .child(
                 h_flex()
                     .px(px(18.))
@@ -321,8 +323,12 @@ impl Workspace {
     ) -> AnyElement {
         let mono = theme.mono_font_family.clone();
         let changed = config.edits.contains_key(&setting.key);
+        // `min_w(px(0.))` is what lets this column actually flex: without it the
+        // text's intrinsic width wins and every row pushes its field to a
+        // different x (`F3`).
         let left = v_flex()
             .flex_1()
+            .min_w(px(0.))
             .gap_0p5()
             .child(
                 h_flex()
@@ -362,44 +368,77 @@ impl Workspace {
                     .text_color(theme.muted_foreground),
             );
 
-        let mut right = h_flex().gap_3().items_center();
+        // A fixed grid shared by every row (`F3`): the field is always the same
+        // width and the same distance from the card's left edge, so the whole
+        // card lines up instead of every row starting its field where its own
+        // text happens to end. The default/unit cell has a fixed width too and
+        // wraps (or truncates) rather than pushing past the card border.
+        let mut right = h_flex().flex_none().gap_3().items_center();
         if setting.readonly {
             right = right
                 .child(
-                    div().w(px(220.)).child(
-                        Label::new(setting.current.clone().unwrap_or_default())
-                            .id(SharedString::from(config_row_id(
-                                "config-readonly-value",
-                                &view.id,
-                                &setting.key,
-                            )))
-                            .font_family(mono.clone()),
-                    ),
+                    div()
+                        .w(px(FIELD_W))
+                        .flex_none()
+                        .debug_selector(|| field_selector(view, &setting.key))
+                        .child(
+                            Label::new(setting.current.clone().unwrap_or_default())
+                                .id(SharedString::from(config_row_id(
+                                    "config-readonly-value",
+                                    &view.id,
+                                    &setting.key,
+                                )))
+                                .font_family(mono.clone()),
+                        ),
                 )
                 .child(
-                    Label::new(readonly_reason(&setting.key))
-                        .id(SharedString::from(config_row_id(
-                            "config-readonly-reason",
-                            &view.id,
-                            &setting.key,
-                        )))
-                        .w(px(240.))
-                        .text_xs()
-                        .text_color(theme.muted_foreground),
+                    div()
+                        .w(px(SIDE_W))
+                        .flex_none()
+                        .debug_selector(|| side_selector(view, &setting.key))
+                        .child(
+                            Label::new(readonly_reason(&setting.key))
+                                .id(SharedString::from(config_row_id(
+                                    "config-readonly-reason",
+                                    &view.id,
+                                    &setting.key,
+                                )))
+                                .text_xs()
+                                .text_color(theme.muted_foreground),
+                        ),
                 );
         } else {
             let field = self.render_config_field(view, setting, theme, cx);
-            let mut default_note = h_flex().w(px(200.)).gap_1p5().items_center().child(
-                Label::new(strings::config_default(&setting.default))
-                    .id(SharedString::from(config_row_id(
-                        "config-default",
-                        &view.id,
-                        &setting.key,
-                    )))
-                    .font_family(mono.clone())
-                    .text_sm()
-                    .text_color(theme.muted_foreground),
-            );
+            let mut default_note = v_flex()
+                .w(px(SIDE_W))
+                .flex_none()
+                .min_w(px(0.))
+                .gap_0p5()
+                .debug_selector(|| side_selector(view, &setting.key))
+                .child(
+                    Label::new(strings::config_default(&setting.default))
+                        .id(SharedString::from(config_row_id(
+                            "config-default",
+                            &view.id,
+                            &setting.key,
+                        )))
+                        .font_family(mono.clone())
+                        .text_sm()
+                        .text_color(theme.muted_foreground),
+                );
+            // The unit lives under the default, inside the same fixed cell.
+            if let Some(unit) = strings::config_unit(&setting.unit) {
+                default_note = default_note.child(
+                    Label::new(unit)
+                        .id(SharedString::from(config_row_id(
+                            "config-unit",
+                            &view.id,
+                            &setting.key,
+                        )))
+                        .text_xs()
+                        .text_color(theme.muted_foreground),
+                );
+            }
             // An unset key shows "bawaan" so the default is clearly in effect.
             if setting.current.is_none() {
                 default_note = default_note.child(
@@ -414,19 +453,6 @@ impl Workspace {
                 );
             }
             right = right.child(field).child(default_note);
-            if let Some(unit) = strings::config_unit(&setting.unit) {
-                right = right.child(
-                    Label::new(unit)
-                        .id(SharedString::from(config_row_id(
-                            "config-unit",
-                            &view.id,
-                            &setting.key,
-                        )))
-                        .w(px(140.))
-                        .text_xs()
-                        .text_color(theme.muted_foreground),
-                );
-            }
         }
 
         let mut content = v_flex()
@@ -468,22 +494,26 @@ impl Workspace {
         view: &InstanceView,
         setting: &ConfigSetting,
         theme: &Theme,
-        cx: &mut Context<Self>,
+        _cx: &mut Context<Self>,
     ) -> AnyElement {
         // The field entity is built by `Render::render` before the frame, so it
         // exists by the time a row draws; the fallback keeps the frame honest on
         // the very first paint before the read lands.
-        let _ = cx;
         let key = setting.key.clone();
+        let selector = field_selector(view, &setting.key);
         match self.config_field_handle(&view.id, &setting.key) {
             Some(entity) => div()
-                .w(px(220.))
+                .w(px(FIELD_W))
+                .flex_none()
+                .debug_selector(|| selector)
                 .child(Input::new(&entity).small())
                 .into_any_element(),
             None => {
                 let text = setting.current.clone().unwrap_or_default();
                 div()
-                    .w(px(220.))
+                    .w(px(FIELD_W))
+                    .flex_none()
+                    .debug_selector(|| selector)
                     .child(
                         Label::new(text)
                             .id(SharedString::from(config_row_id(
@@ -612,6 +642,26 @@ impl Workspace {
         }
         footer.into_any_element()
     }
+}
+
+/// The field column's width: fixed for every editable and read-only row, so all
+/// fields share one x and one width (`F3`).
+const FIELD_W: f32 = 220.0;
+
+/// The default/unit column's width: fixed, and it wraps instead of growing, so
+/// nothing (the Valkey `save` default, a `"satuan: ..."` label) runs past the
+/// card border (`F3`).
+const SIDE_W: f32 = 150.0;
+
+/// A stable debug selector for one row's field cell, readable through
+/// `VisualTestContext::debug_bounds` (the bounds evidence `F3` wants).
+fn field_selector(view: &InstanceView, key: &str) -> String {
+    config_row_id("config-field-cell", &view.id, key)
+}
+
+/// A stable debug selector for one row's default/unit (or read-only reason) cell.
+fn side_selector(view: &InstanceView, key: &str) -> String {
+    config_row_id("config-side-cell", &view.id, key)
 }
 
 /// Why a read-only row cannot be edited here (`docs/architecture/config.md` §4).
