@@ -239,6 +239,15 @@ pub enum ServiceEvent {
         /// package manager instead.
         can_self_update: bool,
     },
+    /// The config file of one instance changed (`F-CFG-01`), so the Config tab
+    /// re-reads it through [`DblService::config_view`].
+    ///
+    /// Carries no content: a config file can hold a secret (`requirepass`) and an
+    /// event must never carry one.
+    ConfigChanged {
+        /// Instance whose config changed.
+        id: InstanceId,
+    },
 }
 
 /// The only surface the GUI and the CLI use.
@@ -396,6 +405,45 @@ pub trait DblService: Send + Sync + 'static {
         dry_run: bool,
     ) -> ServiceResult<LaunchPlan> {
         let _ = (id, client, dry_run);
+        not_implemented()
+    }
+
+    // --- Config editor (F-CFG-01, F-CFG-02) ---------------------------------
+
+    /// The editable settings of an instance, their defaults and the newest
+    /// backup (`F-CFG-01` AC1). Never contains a secret value.
+    fn config_view(&self, id: &InstanceId) -> ServiceResult<crate::config::ConfigView> {
+        let _ = id;
+        not_implemented()
+    }
+
+    /// Applies a batch of `key=value` settings atomically (`F-CFG-01` AC2/AC3).
+    ///
+    /// Every key must be editable and every value must validate before anything
+    /// is written; one refused entry refuses the whole call. A backup of the
+    /// current file is taken first. The change is for the next start, so the
+    /// result is always `restart_required = true`.
+    fn config_apply(
+        &self,
+        id: &InstanceId,
+        changes: Vec<(String, String)>,
+    ) -> ServiceResult<crate::config::ConfigApplied> {
+        let _ = (id, changes);
+        not_implemented()
+    }
+
+    /// Restores the newest backup of the config file (`F-CFG-01` AC3).
+    fn config_restore(&self, id: &InstanceId) -> ServiceResult<()> {
+        let _ = id;
+        not_implemented()
+    }
+
+    /// The raw config file path, for "open in the OS editor" (`F-CFG-02` AC1).
+    ///
+    /// Opening the file is the caller's job through the existing `open`
+    /// machinery; this only returns the path and never writes anything.
+    fn config_raw_path(&self, id: &InstanceId) -> ServiceResult<std::path::PathBuf> {
+        let _ = id;
         not_implemented()
     }
 

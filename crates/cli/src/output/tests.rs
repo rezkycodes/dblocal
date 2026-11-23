@@ -68,6 +68,7 @@ impl FakeService {
                     message: "engine failed".to_owned(),
                     diagnosis: dblocal_core::model::StartFailure::PortInUse,
                     log_tail: Vec::new(),
+                    restore_available: false,
                 });
             }
         }

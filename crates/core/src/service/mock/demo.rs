@@ -202,6 +202,7 @@ impl MockService {
                             .rev()
                             .map(|l| (*l).to_owned())
                             .collect(),
+                        restore_available: false,
                     },
                 );
             }

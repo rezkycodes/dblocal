@@ -307,5 +307,64 @@ fn section_end(lines: &[Line], name: &str) -> Option<usize> {
     Some(end)
 }
 
+/// Reads the current value of `key` from `text`, as the engine would.
+///
+/// Returns the value of the **last** uncommented assignment, with a trailing
+/// inline comment and surrounding single or double quotes removed. `None` means
+/// the file does not assign the key (the engine default is in effect).
+pub fn read_value(dialect: Dialect, text: &str, key: &str) -> Option<String> {
+    let mut value = None;
+    for line in split_lines(text) {
+        if assignment_key(dialect, &line.content).as_deref() == Some(key) {
+            value = Some(extract_value(dialect, &line.content, key));
+        }
+    }
+    value
+}
+
+/// Extracts the value portion of an assignment line.
+fn extract_value(dialect: Dialect, line: &str, key: &str) -> String {
+    let trimmed = line.trim();
+    let after_key = match dialect {
+        Dialect::Ini => trimmed
+            .split_once('=')
+            .map(|(_, value)| value)
+            .unwrap_or_default(),
+        Dialect::Postgresql => {
+            let rest = &trimmed[key.len()..];
+            rest.trim_start()
+                .strip_prefix('=')
+                .unwrap_or(rest)
+                .trim_start()
+        }
+        Dialect::Valkey => trimmed[key.len()..].trim_start(),
+    };
+    let without_comment = strip_inline_comment(after_key);
+    strip_quotes(without_comment.trim()).to_owned()
+}
+
+/// Removes a trailing `#`/`;` comment (a comment char preceded by whitespace).
+fn strip_inline_comment(value: &str) -> &str {
+    let bytes = value.as_bytes();
+    for index in 1..bytes.len() {
+        if matches!(bytes[index], b'#' | b';') && bytes[index - 1].is_ascii_whitespace() {
+            return value[..index].trim_end();
+        }
+    }
+    value
+}
+
+fn strip_quotes(value: &str) -> &str {
+    for quote in ['\'', '"'] {
+        if let Some(inner) = value
+            .strip_prefix(quote)
+            .and_then(|v| v.strip_suffix(quote))
+        {
+            return inner;
+        }
+    }
+    value
+}
+
 #[cfg(test)]
 mod tests;

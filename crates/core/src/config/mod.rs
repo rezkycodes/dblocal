@@ -24,8 +24,8 @@ pub mod messages;
 pub mod schema;
 pub mod view;
 
-pub use backup::{BackupInfo, BackupStore};
-pub use editor::{Dialect, Edit, EditError, Insertion, apply_edit};
+pub use backup::{BackupInfo, BackupStore, KEEP};
+pub use editor::{Dialect, Edit, EditError, Insertion, apply_edit, read_value as read_value_of};
 pub use error::{CODE_RANGE, ConfigError};
 pub use schema::{
     ApplyTime, DEFAULTS_PROVENANCE, SettingSpec, ValueKind, format_size, is_managed_key,

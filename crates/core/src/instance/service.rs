@@ -36,6 +36,7 @@ use std::collections::HashMap;
 
 use super::admin_ops;
 use super::clients_ops::{self, ClientCache};
+use super::config_ops;
 use super::helpers::buffered_events;
 use super::log_watch::LogWatchers;
 use super::registry::Ops;
@@ -870,6 +871,32 @@ impl DblService for LocalService {
         id: &InstanceId,
     ) -> crate::service::ServiceResult<SecretString> {
         admin_ops::reset_superuser_password(&self.inner, id)
+    }
+
+    fn config_view(
+        &self,
+        id: &InstanceId,
+    ) -> crate::service::ServiceResult<crate::config::ConfigView> {
+        config_ops::view(&self.inner, id)
+    }
+
+    fn config_apply(
+        &self,
+        id: &InstanceId,
+        changes: Vec<(String, String)>,
+    ) -> crate::service::ServiceResult<crate::config::ConfigApplied> {
+        config_ops::apply(&self.inner, id, &changes)
+    }
+
+    fn config_restore(&self, id: &InstanceId) -> crate::service::ServiceResult<()> {
+        config_ops::restore(&self.inner, id)
+    }
+
+    fn config_raw_path(
+        &self,
+        id: &InstanceId,
+    ) -> crate::service::ServiceResult<std::path::PathBuf> {
+        config_ops::raw_path(&self.inner, id)
     }
 
     fn check_update(&self) -> crate::service::ServiceResult<crate::service::UpdateStatus> {

@@ -360,6 +360,7 @@ fn only_a_port_conflict_offers_the_one_click_fix() {
             message: strings::ERR_PORT_IN_USE.to_owned(),
             diagnosis: StartFailure::PortInUse,
             log_tail: vec!["bind failed".to_owned()],
+            restore_available: false,
         },
     );
     assert!(offers_port_fix(&failed));
@@ -374,6 +375,7 @@ fn only_a_port_conflict_offers_the_one_click_fix() {
             message: strings::ERR_ENGINE.to_owned(),
             diagnosis: StartFailure::Unknown,
             log_tail: vec![],
+            restore_available: false,
         });
     assert!(!offers_port_fix(&other));
 

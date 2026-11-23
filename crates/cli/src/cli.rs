@@ -168,6 +168,41 @@ pub enum Command {
         #[arg(long = "dry-run")]
         dry_run: bool,
     },
+    /// Menampilkan, mengubah, dan memulihkan konfigurasi engine (F-CFG).
+    Config {
+        #[command(subcommand)]
+        command: ConfigCommand,
+    },
+}
+
+/// `dblocal config ...` subcommands.
+#[derive(Debug, Subcommand)]
+pub enum ConfigCommand {
+    /// Menampilkan setelan penting instance beserta nilai dan bawaannya.
+    Show {
+        /// Nama instance.
+        name: String,
+        /// Cetak JSON yang bisa dipipe.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Mengubah satu atau beberapa setelan (`key=nilai`).
+    Set {
+        /// Nama instance.
+        name: String,
+        /// Pasangan `key=nilai`, mis. `max_connections=200`.
+        changes: Vec<String>,
+    },
+    /// Mengembalikan konfigurasi dari salinan terbaru.
+    Restore {
+        /// Nama instance.
+        name: String,
+    },
+    /// Mencetak path berkas konfigurasi mentah.
+    Path {
+        /// Nama instance.
+        name: String,
+    },
 }
 
 /// `dblocal db ...` subcommands.

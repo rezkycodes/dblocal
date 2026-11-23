@@ -16,6 +16,12 @@ pub struct FailureInfo {
     pub diagnosis: StartFailure,
     /// Last 20 log lines, rendered inline without asking the user to open logs.
     pub log_tail: Vec<String>,
+    /// Whether the config file changed since the last successful start, so the
+    /// UI can offer "restore the previous configuration" (`F-CFG-01` AC3).
+    ///
+    /// Additive and defaulted: a caller that builds `FailureInfo` without this
+    /// field keeps working for the other cases.
+    pub restore_available: bool,
 }
 
 /// What the GUI and CLI need to render one row in the instance list.
@@ -145,6 +151,7 @@ mod tests {
                 message: "engine failed".to_owned(),
                 diagnosis: StartFailure::PortInUse,
                 log_tail: vec!["line 1".into(), "line 2".into()],
+                restore_available: false,
             });
         assert_eq!(view.auth, AuthMode::Password);
         assert!(!view.autostart);
