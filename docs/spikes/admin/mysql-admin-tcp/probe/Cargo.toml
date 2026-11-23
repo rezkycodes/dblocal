@@ -1,0 +1,19 @@
+[workspace]
+
+[package]
+name = "mysql-admin-tcp-probe"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+# Type-checks the real crates/core/src/admin/mysql.rs for a Windows target on a
+# Linux host, where `cargo check -p dblocal-core --target x86_64-pc-windows-gnu`
+# stops in aws-lc-sys/libz-sys/libsqlite3-sys/liblzma-sys (no mingw C compiler).
+# The module is included by path, not copied, so it can never drift.
+# `minimal-rust` keeps flate2 on its pure-Rust backend, so no C toolchain is
+# needed for the probe itself. Not a member of the main Cargo workspace.
+# See ./README.md.
+
+[dependencies]
+mysql_async = { version = "0.37", default-features = false, features = ["minimal-rust"] }
+tokio = { version = "1.54", features = ["rt", "rt-multi-thread", "time"] }

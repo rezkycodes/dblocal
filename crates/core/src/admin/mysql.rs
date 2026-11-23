@@ -1,14 +1,23 @@
-//! MySQL / MariaDB admin execution over the instance unix socket.
+//! MySQL / MariaDB admin execution over the instance unix socket (unix) or
+//! loopback TCP (Windows).
 //!
-//! All connections go over the instance's **unix socket**, never TCP. This is
-//! deliberate and unconditional: the socket is a secure (never-transmitted)
-//! channel, so no byte — the password included — crosses the loopback TCP
-//! stream, and it routes admin as `root@localhost`, the only account MariaDB's
-//! bootstrap configures. (`mysql_async` would itself perform the
-//! `caching_sha2_password` RSA public-key exchange over TCP, so the socket is not
-//! *required* to complete the handshake — but it is the only path that keeps the
-//! traffic off TCP.) The password never appears in argv, a log line, an error or
-//! `Debug` output.
+//! On unix, every connection goes over the instance's **unix socket**, never
+//! TCP. This is deliberate and unconditional: the socket is a secure
+//! (never-transmitted) channel, so no byte — the password included — crosses the
+//! loopback TCP stream, and it routes admin as `root@localhost`, the only
+//! account MariaDB's bootstrap configures. (`mysql_async` would itself perform
+//! the `caching_sha2_password` RSA public-key exchange over TCP, so the socket is
+//! not *required* to complete the handshake — but it is the only path that keeps
+//! the traffic off TCP.) The password never appears in argv, a log line, an error
+//! or `Debug` output.
+//!
+//! On Windows there is no unix socket: `mysqld` does not create one and
+//! `mysql_async`'s `Conn::new` returns `NamedPipesDisabled` for any `Opts` that
+//! carries a socket path. Admin therefore dials `127.0.0.1:<instance port>`,
+//! which the adapters' own `my.cnf`/`my.ini` binds (`bind-address=127.0.0.1`,
+//! never `0.0.0.0`), and completes `caching_sha2_password` with the driver's RSA
+//! public-key exchange. See [`Transport`] for the one decision and
+//! `docs/architecture/admin.md` for the residual loopback-TCP risk.
 //!
 //! Statements that carry a password literal (`CREATE USER ... IDENTIFIED BY`) run
 //! with `sql_log_off = 1` on the session so a failing statement never reaches the
@@ -21,6 +30,7 @@
 //! no live socket and stays `Send + Sync`.
 
 use std::future::Future;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use mysql_async::prelude::Queryable;
@@ -38,20 +48,62 @@ use super::sql::{
     grant_privileges_mysql_at, is_mysql_system_schema,
 };
 
+#[cfg(test)]
+mod tests;
+
 /// The host an admin-managed account is created on. A client connecting with the
 /// service URI does so over TCP to `127.0.0.1`, so a managed account lives at
-/// `user@'127.0.0.1'` (not `localhost`, which is the socket account). The admin
-/// connection itself still uses the socket as the superuser.
+/// `user@'127.0.0.1'` (not `localhost`, which is the socket account). The same
+/// literal is the loopback TCP transport host, so the account and the transport
+/// can never drift apart.
 pub const MANAGED_ACCOUNT_HOST: &str = "127.0.0.1";
+
+/// How admin reaches the engine.
+///
+/// A closed two-variant value, chosen once by
+/// [`Transport::for_platform`]: a unix host always uses the socket, a non-unix
+/// host always uses loopback TCP. There is no runtime fallback between them, so
+/// a unix host can never be moved onto TCP by a missing socket and a Windows
+/// host can never be moved onto a named pipe.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Transport {
+    /// The instance's unix socket.
+    Socket(PathBuf),
+    /// Loopback TCP on the instance port, dialled as the literal `127.0.0.1`.
+    Loopback {
+        /// The instance's TCP port.
+        port: u16,
+    },
+}
+
+impl Transport {
+    /// The transport for one platform.
+    ///
+    /// `unix` is the platform fact (`cfg!(unix)` in production, a parameter so
+    /// both arms are provable on one host). On unix the socket wins even when a
+    /// port is available; off unix the socket path is discarded.
+    pub fn for_platform(unix: bool, socket: &Path, port: u16) -> Self {
+        if unix {
+            Self::Socket(socket.to_path_buf())
+        } else {
+            Self::Loopback { port }
+        }
+    }
+}
 
 /// Connection description for MySQL/MariaDB admin operations.
 ///
 /// Immutable: the builders return a new value.
 #[derive(Clone)]
 pub struct MysqlTarget {
-    /// The instance's unix socket. Admin **always** connects over it; there is no
-    /// TCP path (see [`MysqlTarget::opts`]).
-    socket: std::path::PathBuf,
+    /// The instance's unix socket, reported for diagnostics. It is only dialled
+    /// on the [`Transport::Socket`] arm.
+    socket: PathBuf,
+    /// The instance's TCP port (dialled on the loopback arm only).
+    port: u16,
+    /// The transport this target dials: the socket on unix, loopback TCP on
+    /// Windows (see [`MysqlTarget::opts`]).
+    transport: Transport,
     superuser: String,
     password: SecretString,
     connect_timeout: Duration,
@@ -64,14 +116,19 @@ impl MysqlTarget {
     /// Default statement timeout.
     pub const DEFAULT_STATEMENT_TIMEOUT: Duration = Duration::from_secs(30);
 
-    /// Creates a target that dials `socket` as `superuser`.
+    /// Creates a target for this platform that dials `socket` (unix) or
+    /// `127.0.0.1:<port>` (non-unix) as `superuser`.
     pub fn new(
-        socket: impl Into<std::path::PathBuf>,
+        socket: impl Into<PathBuf>,
+        port: u16,
         superuser: impl Into<String>,
         password: SecretString,
     ) -> Self {
+        let socket = socket.into();
         Self {
-            socket: socket.into(),
+            transport: Transport::for_platform(cfg!(unix), &socket, port),
+            socket,
+            port,
             superuser: superuser.into(),
             password,
             connect_timeout: Self::DEFAULT_CONNECT_TIMEOUT,
@@ -79,9 +136,20 @@ impl MysqlTarget {
         }
     }
 
-    /// The unix socket this target dials.
-    pub fn socket(&self) -> &std::path::Path {
+    /// The unix socket this instance configured. Only dialled when
+    /// [`transport`](Self::transport) is [`Transport::Socket`].
+    pub fn socket(&self) -> &Path {
         &self.socket
+    }
+
+    /// The instance TCP port (the loopback transport's port off unix).
+    pub fn port(&self) -> u16 {
+        self.port
+    }
+
+    /// The transport this target uses.
+    pub fn transport(&self) -> &Transport {
+        &self.transport
     }
 
     /// Superuser name.
@@ -114,20 +182,43 @@ impl MysqlTarget {
         next
     }
 
+    /// Returns a copy whose transport is `transport`.
+    ///
+    /// Only unit tests use it, to prove the non-unix arm on a unix host:
+    /// production never chooses a transport, [`MysqlTarget::new`] derives it
+    /// from the platform alone.
+    #[cfg(test)]
+    fn with_transport(mut self, transport: Transport) -> Self {
+        self.transport = transport;
+        self
+    }
+
     /// The `mysql_async` connection options for this target.
     ///
-    /// Always the unix socket, never TCP: the socket is a secure channel, so the
-    /// `caching_sha2_password` handshake needs no RSA exchange and no password or
-    /// statement text ever crosses the loopback TCP stream. There is no TCP
-    /// fallback — a fallback nothing reaches would be a lie in the docs.
+    /// The arm is fully determined by [`Self::transport`], and each arm pins the
+    /// driver away from the other one:
+    ///
+    /// - Socket: the socket is set and `prefer_socket` is on (harmless there),
+    ///   so `mysql_async` makes its socket connection and never looks at a TCP
+    ///   address.
+    /// - Loopback: no socket is set and `prefer_socket` is **off**, so the driver
+    ///   does not read `@@socket` and silently reconnect over a named pipe or a
+    ///   `localhost` resolver; the host is the literal `127.0.0.1`.
     fn opts(&self, db_name: Option<&str>) -> Opts {
         let builder = OptsBuilder::default()
             .user(Some(self.superuser.as_str()))
             .pass(Some(self.password.expose()))
-            .socket(Some(self.socket.to_string_lossy().into_owned()))
-            .prefer_socket(true)
             .stmt_cache_size(0)
             .db_name(Some(db_name.unwrap_or("")));
+        let builder = match &self.transport {
+            Transport::Socket(socket) => builder
+                .socket(Some(socket.to_string_lossy().into_owned()))
+                .prefer_socket(true),
+            Transport::Loopback { port } => builder
+                .ip_or_hostname(MANAGED_ACCOUNT_HOST)
+                .tcp_port(*port)
+                .prefer_socket(false),
+        };
         Opts::from(builder)
     }
 }
@@ -136,6 +227,7 @@ impl std::fmt::Debug for MysqlTarget {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("MysqlTarget")
             .field("socket", &self.socket)
+            .field("transport", &self.transport)
             .field("superuser", &self.superuser)
             .field("password", &"[REDACTED]")
             .field("connect_timeout", &self.connect_timeout)
@@ -343,7 +435,7 @@ impl MysqlAdmin {
         }
     }
 
-    /// Opens a fresh socket connection and runs `SELECT 1`.
+    /// Opens a fresh connection and runs `SELECT 1`.
     fn probe(&self) -> AdminResult<()> {
         self.with_client(self.target.opts(None), |mut conn| async move {
             conn.query_drop("SELECT 1")
@@ -466,198 +558,5 @@ impl super::executor::AdminExecutor for MysqlAdmin {
     }
     fn reset_superuser_password(&self, sink: &dyn CredentialSink) -> AdminResult<SecretString> {
         MysqlAdmin::reset_superuser_password(self, sink)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    #![allow(clippy::unwrap_used, clippy::expect_used)]
-    use super::*;
-
-    fn target() -> MysqlTarget {
-        // A non-existent socket: calls fail at connect, never at a live server.
-        MysqlTarget::new(
-            "/nonexistent/dblocal-test.sock",
-            "root",
-            SecretString::from("secret-canary-pw"),
-        )
-    }
-
-    #[test]
-    fn debug_and_display_never_leak_the_password() {
-        let target = target().with_timeouts(Duration::from_secs(1), Duration::from_secs(2));
-        let rendered = format!("{target:?}");
-        assert!(!rendered.contains("secret-canary-pw"), "{rendered}");
-        assert!(rendered.contains("[REDACTED]"));
-        assert_eq!(target.superuser(), "root");
-        assert_eq!(target.connect_timeout(), Duration::from_secs(1));
-        assert_eq!(target.statement_timeout(), Duration::from_secs(2));
-        assert_eq!(
-            target.socket(),
-            std::path::Path::new("/nonexistent/dblocal-test.sock")
-        );
-    }
-
-    #[test]
-    fn opts_use_the_socket_and_never_tcp() {
-        let opts = target().opts(Some("appdb"));
-        assert_eq!(opts.socket(), Some("/nonexistent/dblocal-test.sock"));
-        assert!(opts.prefer_socket());
-        assert_eq!(opts.db_name(), Some("appdb"));
-        // A named db for the statement, none for the admin connection.
-        assert_eq!(target().opts(None).db_name(), Some(""));
-        // There is no TCP fallback: an empty socket path is the only way to make
-        // the target TCP, and nothing constructs one, so `opts` always carries the
-        // socket. Pinned by the fact that the type has no port to dial.
-    }
-
-    #[test]
-    fn a_system_schema_is_refused_before_connecting() {
-        let admin = MysqlAdmin::new(target());
-        for name in ["mysql", "sys", "information_schema", "performance_schema"] {
-            let db = Identifier::new(name).expect("valid identifier");
-            // These names pass the allowlist (`mysql`, `sys` are not reserved by
-            // `Identifier::new`), so the guard is what must reject them.
-            let err = MysqlAdmin::create_database(&admin, &db).expect_err(name);
-            assert!(matches!(err, AdminError::SystemSchema), "{name}: {err:?}");
-            let err = MysqlAdmin::drop_database(&admin, &db, true).expect_err(name);
-            assert!(matches!(err, AdminError::SystemSchema), "{name}: {err:?}");
-        }
-    }
-
-    #[test]
-    fn connection_to_a_missing_socket_is_a_typed_connect_error() {
-        let admin = MysqlAdmin::new(target());
-        // No live server: every method must not panic and must map to Connect,
-        // covering each method's pre-connect glue.
-        let db = Identifier::new("appdb").expect("valid");
-        let user = Identifier::role("app_user").expect("valid");
-        assert_eq!(
-            MysqlAdmin::list_databases(&admin).expect_err("db"),
-            AdminError::Connect
-        );
-        assert_eq!(
-            MysqlAdmin::list_users(&admin).expect_err("users"),
-            AdminError::Connect
-        );
-        assert_eq!(
-            MysqlAdmin::create_database(&admin, &db).expect_err("create"),
-            AdminError::Connect
-        );
-        assert_eq!(
-            MysqlAdmin::drop_database(&admin, &db, true).expect_err("drop"),
-            AdminError::Connect
-        );
-        // force=false counts connections first, which also fails at Connect.
-        assert_eq!(
-            MysqlAdmin::drop_database(&admin, &db, false).expect_err("drop soft"),
-            AdminError::Connect
-        );
-        assert_eq!(
-            MysqlAdmin::database_exists(&admin, &db).expect_err("exists"),
-            AdminError::Connect
-        );
-        assert_eq!(
-            MysqlAdmin::create_user_at(&admin, &user, "127.0.0.1").expect_err("create user"),
-            AdminError::Connect
-        );
-        assert_eq!(
-            MysqlAdmin::grant(&admin, &user, &db, PrivilegeLevel::ReadOnly, "127.0.0.1")
-                .expect_err("grant"),
-            AdminError::Connect
-        );
-        assert_eq!(
-            MysqlAdmin::drop_user_at(&admin, &user, "127.0.0.1").expect_err("drop user"),
-            AdminError::Connect
-        );
-    }
-
-    #[test]
-    fn server_error_codes_map_without_leaking_text() {
-        let make = |code: u16, message: &str| {
-            mysql_async::Error::Server(ServerError {
-                code,
-                message: message.to_owned(),
-                state: "HY000".to_owned(),
-            })
-        };
-        assert_eq!(
-            map_connect_error(make(1045, "Access denied")),
-            AdminError::AuthFailed
-        );
-        assert_eq!(
-            map_connect_error(make(1049, "Unknown database")),
-            AdminError::DatabaseNotFound
-        );
-        assert_eq!(
-            map_connect_error(make(2003, "can't connect")),
-            AdminError::Connect
-        );
-        assert_eq!(
-            map_query_error(make(1007, "exists")),
-            AdminError::DatabaseExists
-        );
-        assert_eq!(
-            map_query_error(make(1008, "no db")),
-            AdminError::DatabaseNotFound
-        );
-        assert_eq!(
-            map_query_error(make(1142, "denied")),
-            AdminError::InsufficientPrivilege
-        );
-        assert_eq!(
-            map_query_error(make(9999, "weird")),
-            AdminError::QueryFailed(None)
-        );
-        // A non-server error is a payload-free query failure, and the driver text
-        // (which could be a leaked statement) is dropped.
-        let driver = mysql_async::Error::Driver(mysql_async::DriverError::UnexpectedPacket {
-            payload: b"secret-canary-pw".to_vec(),
-        });
-        let mapped = map_query_error(driver);
-        assert_eq!(mapped, AdminError::QueryFailed(None));
-        let surfaces = format!("{mapped:?} {mapped} {}", mapped.user_message());
-        assert!(!surfaces.contains("secret-canary-pw"), "{surfaces}");
-    }
-
-    #[test]
-    fn role_error_distinguishes_missing_from_duplicate() {
-        let make = |message: &str| {
-            mysql_async::Error::Server(ServerError {
-                code: 1396,
-                message: message.to_owned(),
-                state: "HY000".to_owned(),
-            })
-        };
-        assert_eq!(
-            map_user_error(make("Operation CREATE USER failed for 'u'@'localhost'")),
-            AdminError::UserExists
-        );
-        assert_eq!(
-            map_user_error(make(
-                "Operation DROP USER failed for 'u'@'localhost'; user doesn't exist"
-            )),
-            AdminError::UserNotFound
-        );
-    }
-
-    #[test]
-    fn reset_machinery_is_wired_through_the_shared_state_machine() {
-        // A reset against a missing socket fails at the first apply (connect), and
-        // nothing reaches the sink.
-        let admin = MysqlAdmin::new(target());
-        struct RecordingSink(std::sync::atomic::AtomicUsize);
-        impl CredentialSink for RecordingSink {
-            fn store(&self, _password: &SecretString) -> crate::error::Result<()> {
-                self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                Ok(())
-            }
-        }
-        let sink = RecordingSink(std::sync::atomic::AtomicUsize::new(0));
-        let err = admin
-            .reset_superuser_password(&sink)
-            .expect_err("no socket");
-        assert_eq!(err, AdminError::Connect);
-        assert_eq!(sink.0.load(std::sync::atomic::Ordering::SeqCst), 0);
     }
 }

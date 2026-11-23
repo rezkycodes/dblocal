@@ -1,0 +1,3 @@
+# The probe is not built in-tree; its target dir is external, keep the spike source only.
+Cargo.lock
+/target/

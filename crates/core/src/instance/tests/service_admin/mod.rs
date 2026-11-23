@@ -121,6 +121,9 @@ impl crate::admin::AdminExecutor for FakeAdmin {
 }
 
 /// A harness whose admin calls hit `FakeAdmin`.
+///
+/// The instance is moved to `Running`: a created row settles as `Stopped`, and
+/// the admin path now refuses to dial a row that is not running (F2).
 fn harness_with_admin(engine: EngineKey, admin: Arc<FakeAdmin>) -> (Harness, InstanceId) {
     let h = Harness::with_options(engine, move |options| {
         options.admin_factory = Some(Arc::new(move |_instance, _password| {
@@ -130,7 +133,19 @@ fn harness_with_admin(engine: EngineKey, admin: Arc<FakeAdmin>) -> (Harness, Ins
     });
     let name = format!("adm{}", test_port() % 1000);
     let instance = created(&h, &name);
+    mark_running(&h, instance.id());
     (h, instance.id().clone())
+}
+
+/// Moves an existing row to `Running` the way a completed start would.
+///
+/// Admin only dials a running instance, so every admin test seeds that state
+/// explicitly. The supervisor sees a `Running` row with no recorded identity and
+/// leaves it alone (`identity_of` is `None`), so it cannot flip it to `Failed`.
+fn mark_running(h: &Harness, id: &InstanceId) {
+    h.store()
+        .update_status(id, crate::model::InstanceStatus::Running)
+        .expect("mark running");
 }
 
 /// A boxed executor that borrows the shared fake.
@@ -509,15 +524,18 @@ fn a_failed_reset_leaves_the_credential_untouched() {
     assert_eq!(before, after, "the pointer must not move on a failed reset");
 }
 
-/// Seeds a row directly through the store, so an engine test does not have to
-/// download its runtime. Returns the harness and the new id.
+/// Seeds a `Running` row directly through the store, so an engine test does not
+/// have to download its runtime. Returns the new id.
+///
+/// `Running` because the admin path refuses to dial any other status (F2) and
+/// every admin case here expects to reach the (fake) executor.
 fn seed_row(h: &Harness, engine: EngineKey, name: &str) -> InstanceId {
     let spec = h.spec(name, engine, test_port());
     let id = InstanceId::new();
     let instance = Instance::new(
         &spec,
         id.clone(),
-        crate::model::InstanceStatus::Stopped,
+        crate::model::InstanceStatus::Running,
         std::time::SystemTime::now(),
     );
     let reference = crate::secrets::credential_ref_for(
@@ -631,7 +649,7 @@ fn a_no_password_postgres_instance_reports_its_own_error() {
     let instance = Instance::new(
         &spec,
         id.clone(),
-        crate::model::InstanceStatus::Stopped,
+        crate::model::InstanceStatus::Running,
         std::time::SystemTime::now(),
     );
     h.store().insert_instance(&instance).expect("seed row");
@@ -699,6 +717,9 @@ fn an_instance_without_a_credential_is_typed_not_found() {
     });
     let name = format!("nocred{}", test_port() % 1000);
     let instance = created(&h, &name);
+    // Running, so the credential read is what fails; a Stopped row would be
+    // refused by the running gate before any read.
+    mark_running(&h, instance.id());
     // Drop the pointer the admin path reads.
     h.secrets
         .unreadable
@@ -711,3 +732,5 @@ fn an_instance_without_a_credential_is_typed_not_found() {
     assert_eq!(err.code, crate::error::CODE_UNSUPPORTED);
     assert!(admin.calls().is_empty());
 }
+
+mod admin_gates;
