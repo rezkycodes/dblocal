@@ -304,3 +304,51 @@ fn a_non_mysql_engine_is_unsupported_not_a_connect_failure() {
     assert_ne!(err, AdminError::Connect);
     assert_eq!(err.code(), crate::admin::error::CODE_UNSUPPORTED);
 }
+
+// --- F4: the engine answer must not depend on the state ----------------------
+//
+// The Running gate used to run before the engine gate, so a stopped Valkey said
+// "start the server" (DBL-8100) and a running one said "not supported"
+// (DBL-8111). Starting Valkey cannot make named databases or login roles appear,
+// so both states must give the engine answer, before any credential read or
+// factory call.
+
+#[test]
+fn valkey_is_unsupported_in_every_state_from_every_admin_call() {
+    for status in [
+        crate::model::InstanceStatus::Stopped,
+        crate::model::InstanceStatus::Running,
+        crate::model::InstanceStatus::Starting,
+        crate::model::InstanceStatus::Stopping,
+        crate::model::InstanceStatus::Failed,
+    ] {
+        let (h, id, factory_calls) = harness_counting_admin(EngineKey::Valkey);
+        h.store().update_status(&id, status).expect("set status");
+        let gets_before = h.secrets.file.get_calls();
+
+        for (name, result) in every_admin_call(&h, &id) {
+            let err = result.expect_err(name);
+            assert_eq!(
+                err.code,
+                crate::admin::error::CODE_UNSUPPORTED,
+                "Valkey in {status:?} must answer {name} with DBL-8111, not a state-dependent code"
+            );
+            assert_ne!(
+                err.code,
+                crate::admin::error::CODE_CONNECT,
+                "Valkey in {status:?}: a stopped engine must not turn 'not supported' into DBL-8100"
+            );
+        }
+
+        assert_eq!(
+            factory_calls.load(std::sync::atomic::Ordering::SeqCst),
+            0,
+            "Valkey in {status:?}: the executor factory must never be built"
+        );
+        assert_eq!(
+            h.secrets.file.get_calls(),
+            gets_before,
+            "Valkey in {status:?}: the credential must never be read"
+        );
+    }
+}

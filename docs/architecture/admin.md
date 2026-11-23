@@ -430,7 +430,11 @@ and limits:
   server already produced by failing to connect. The gate runs **before** the
   credential read and **before** the factory builds an executor, so an admin call
   to a Stopped, Starting, Stopping or Failed row never reads the superuser
-  password and never dials. (Before the fix the docs claimed this but the code
+  password and never dials. The **engine gate runs first** (W4-A3 fix 2): a
+  Valkey instance answers `Unsupported` (`DBL-8111`) whether it is running or
+  stopped, because starting it cannot create named databases or login roles. So
+  the gate order is engine → running → password, and only the engine answer is
+  state-independent. (Before the fix the docs claimed this but the code
   never checked: `dblocal db list <stopped>` on an immediately reused port — the
   user's own MySQL on 3306 is the obvious case — would have handed the password
   to whatever now listens there. This affected PostgreSQL on every OS and MySQL
@@ -576,6 +580,17 @@ The reviewer found three things this section now records honestly:
   `AdminError::Unsupported` (`DBL-8111`) again, pinned by
   `a_non_mysql_engine_is_unsupported_not_a_connect_failure` (mutating it back to
   `Connect` is red).
+
+### W4-A3 fix 2 — the gate order (F4)
+
+Fix 1 put the running gate in front of the engine gate, so a stopped Valkey
+instance answered `DBL-8100` "start the server" and a running one `DBL-8111`
+"not supported" — the answer depended on the state. `executor_for` now runs
+**engine → running → password**: Valkey is `Unsupported` in every state, then a
+non-`Running` row is `Connect`, then a no-password instance is `NoPassword`.
+`valkey_is_unsupported_in_every_state_from_every_admin_call` proves all five
+statuses give `DBL-8111` from every admin call, with a factory-call count of 0 and
+no credential read; moving the running gate back in front is red.
 
 Proven on Linux (the unix host is where every commit and gate runs):
 

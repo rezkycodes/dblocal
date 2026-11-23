@@ -158,8 +158,8 @@ pub(crate) fn admin_socket(
     if unix { resolve().map(Some) } else { Ok(None) }
 }
 
-/// Runs `f` against the executor for `instance`, after the running gate, the
-/// engine gate and the credential read.
+/// Runs `f` against the executor for `instance`, after the engine gate, the
+/// running gate and the credential read.
 fn with_admin<T>(
     inner: &Inner,
     id: &InstanceId,
@@ -170,23 +170,28 @@ fn with_admin<T>(
     Ok(f(executor.as_ref())?)
 }
 
-/// Builds the executor for `instance`, enforcing the running, engine and
+/// Builds the executor for `instance`, enforcing the engine, running and
 /// password gates first, in that order.
 ///
-/// The running gate comes first and before any credential read: an admin dial
-/// carries the superuser password, and a stopped instance's port may now belong
-/// to something else (a stopped MySQL's freed 3306, say). Refusing here means an
+/// The **engine gate comes first**: the answer must not depend on the state, so
+/// a stopped Valkey instance says "not supported" (`DBL-8111`) exactly like a
+/// running one — Valkey never has named databases or login roles, and starting
+/// it cannot change that (W4-A3 fix 2).
+///
+/// The running gate then runs before any credential read: an admin dial carries
+/// the superuser password, and a stopped instance's port may now belong to
+/// something else (a stopped MySQL's freed 3306, say). Refusing here means an
 /// admin call to a non-`Running` row never reads the password and never dials.
 fn executor_for(inner: &Inner, instance: &Instance) -> ServiceResult<Box<dyn AdminExecutor>> {
-    if instance.status() != InstanceStatus::Running {
-        // The same DBL-8100 "Pastikan server sedang berjalan" a stopped server
-        // already produced by failing to connect, so no caller changes.
-        return Err(AdminError::Connect.into());
-    }
     if instance.engine() == EngineKey::Valkey {
         // Valkey has no named databases or login roles: a typed "not supported",
         // not an empty list. PostgreSQL, MySQL and MariaDB are all supported.
         return Err(AdminError::Unsupported.into());
+    }
+    if instance.status() != InstanceStatus::Running {
+        // The same DBL-8100 "Pastikan server sedang berjalan" a stopped server
+        // already produced by failing to connect, so no caller changes.
+        return Err(AdminError::Connect.into());
     }
     if instance.auth() != AuthMode::Password {
         // The engine *is* supported; this instance was created without a
