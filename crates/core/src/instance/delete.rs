@@ -418,8 +418,11 @@ pub(crate) fn delete_instance(
 /// service over the same home and prove reconciliation does not take the row
 /// over. The hook is one-shot, like the reconcile hooks.
 #[cfg(test)]
-fn data_gone_hook() -> &'static std::sync::Mutex<Option<Box<dyn FnOnce() + Send>>> {
-    static HOOK: std::sync::OnceLock<std::sync::Mutex<Option<Box<dyn FnOnce() + Send>>>> =
+type DataGoneHook = Box<dyn FnOnce() + Send>;
+
+#[cfg(test)]
+fn data_gone_hook() -> &'static std::sync::Mutex<Option<DataGoneHook>> {
+    static HOOK: std::sync::OnceLock<std::sync::Mutex<Option<DataGoneHook>>> =
         std::sync::OnceLock::new();
     HOOK.get_or_init(|| std::sync::Mutex::new(None))
 }
