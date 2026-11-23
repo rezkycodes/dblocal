@@ -792,8 +792,8 @@ impl Render for Workspace {
                     .min_h_0()
                     .w_full()
                     .overflow_hidden()
-                    .child(self.render_sidebar(cx))
-                    .child(self.render_center(cx)),
+                    .child(self.render_sidebar(window, cx))
+                    .child(self.render_center(window, cx)),
             )
             .child(self.render_status_bar(cx))
             .when(creating, |this| {

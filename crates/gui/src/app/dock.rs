@@ -11,7 +11,7 @@ use gpui_kit::component::button::ButtonVariants;
 use gpui_kit::component::label::Label;
 use gpui_kit::component::{ActiveTheme, Sizable, Theme, h_flex, input::Input, v_flex};
 use gpui_kit::prelude::*;
-use gpui_kit::{Context, Div, IntoElement, ParentElement, SharedString, Styled, div, px};
+use gpui_kit::{Context, Div, IntoElement, ParentElement, SharedString, Styled, Window, div, px};
 
 use crate::format::{self, StatusGlyph};
 
@@ -22,7 +22,11 @@ use super::components::{engine_badge, icon, section_label, status_glyph};
 pub const DOCK_WIDTH: f32 = 272.0;
 
 impl Workspace {
-    pub(crate) fn render_sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    pub(crate) fn render_sidebar(
+        &self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
         let theme = cx.theme().clone();
         let query = self.filter_text(cx);
         let visible = format::filter_instances(&self.state.instances, &query);
@@ -44,7 +48,7 @@ impl Workspace {
             );
         }
         for group in groups {
-            tree = tree.child(self.render_group(&group, &theme, cx));
+            tree = tree.child(self.render_group(&group, &theme, window, cx));
         }
 
         v_flex()
@@ -104,10 +108,14 @@ impl Workspace {
     }
 
     /// One engine group: a collapsible header with its instance count.
+    ///
+    /// `F4`: the header is a keyboard tab stop (Enter/Space expands/collapses)
+    /// and it draws the ring like every other control.
     fn render_group(
         &self,
         group: &format::EngineGroup<'_>,
         theme: &Theme,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Div {
         let engine = group.engine;
@@ -118,6 +126,11 @@ impl Workspace {
         } else {
             IconName::ChevronDown
         };
+        let header_focus = super::components::keyed_focus(
+            SharedString::from(format!("group-focus-{}", engine.as_str())),
+            window,
+            cx,
+        );
         let header = h_flex()
             .id(SharedString::from(format!("group-{}", engine.as_str())))
             .h(px(30.))
@@ -140,21 +153,26 @@ impl Workspace {
                     .text_color(theme.muted_foreground)
                     .child(format!("{count}")),
             );
+        let header = super::components::apply_focus_ring(header, &header_focus, window, cx);
 
         let mut group_box = v_flex().gap_0p5().child(header);
         if !collapsed {
             for view in &group.instances {
-                group_box = group_box.child(self.render_row(view, theme, cx));
+                group_box = group_box.child(self.render_row(view, theme, window, cx));
             }
         }
         group_box
     }
 
     /// One instance row: glyph, name, status, short version and `:port`.
+    ///
+    /// `F4`: a keyboard tab stop (Enter/Space opens the instance) that draws the
+    /// ring like the rest of the shell.
     fn render_row(
         &self,
         view: &dblocal_core::service::InstanceView,
         theme: &Theme,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let selected = self.tabs.selected_instance() == Some(&view.id);
@@ -169,7 +187,12 @@ impl Workspace {
         let mono = theme.mono_font_family.clone();
         let accessible = format!("{} — {}", view.name, format::status_label(view.status));
         let tooltip_label = accessible.clone();
-        h_flex()
+        let row_focus = super::components::keyed_focus(
+            SharedString::from(format!("row-focus-{}", view.id)),
+            window,
+            cx,
+        );
+        let row = h_flex()
             .id(SharedString::from(format!("row-{}", view.id)))
             .h(px(30.))
             .pl(px(36.))
@@ -206,7 +229,8 @@ impl Workspace {
                     .font_family(mono)
                     .text_color(port_colour)
                     .child(format!(":{}", view.port)),
-            )
+            );
+        super::components::apply_focus_ring(row, &row_focus, window, cx)
     }
 
     /// The runtime list: title, instance count, "tak terpakai" when unused.

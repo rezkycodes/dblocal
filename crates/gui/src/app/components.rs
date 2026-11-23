@@ -263,3 +263,18 @@ pub fn apply_focus_ring<E: InteractiveElement + Styled + ParentElement + 'static
         row
     }
 }
+
+/// A stable, keyed focus handle for a page row that must survive re-renders.
+///
+/// Used for the dock's engine-group headers and instance rows and the instance
+/// tabs, so Tab reaches them in visual order (`F4`) and the ring persists.
+pub fn keyed_focus(
+    key: impl Into<gpui_kit::ElementId>,
+    window: &mut Window,
+    cx: &mut gpui_kit::App,
+) -> FocusHandle {
+    window
+        .use_keyed_state(key, cx, |_, cx| cx.focus_handle())
+        .read(cx)
+        .clone()
+}
