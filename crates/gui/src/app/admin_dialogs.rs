@@ -173,6 +173,7 @@ pub(super) fn render_drop(
                     ),
             )
             .child(body),
+        workspace,
         window,
         cx,
     )
@@ -249,6 +250,7 @@ pub(super) fn render_reset(
                     ),
             )
             .child(body),
+        workspace,
         window,
         cx,
     )
@@ -345,6 +347,7 @@ pub(super) fn render_secret(
                     ),
             )
             .child(body),
+        workspace,
         window,
         cx,
     )

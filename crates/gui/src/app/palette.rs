@@ -30,12 +30,15 @@ pub(super) fn render(
     let theme = cx.theme().clone();
     // `F2`: the palette is a modal variant, so a focus trap keeps Tab inside
     // its query field and rows instead of walking the page behind the scrim.
-    let trap = window
-        .use_keyed_state(SharedString::from("modal-focus-palette"), cx, |_, cx| {
-            cx.focus_handle()
-        })
-        .read(cx)
-        .clone();
+    // The container handle comes from `open_palette` (`begin_modal`).
+    let trap = workspace.modal_focus().unwrap_or_else(|| {
+        window
+            .use_keyed_state(SharedString::from("modal-focus-palette"), cx, |_, cx| {
+                cx.focus_handle()
+            })
+            .read(cx)
+            .clone()
+    });
     let items = workspace.palette_items();
     let entries = items.into_iter().map(|item| {
         let label = SharedString::from(item.label.clone());

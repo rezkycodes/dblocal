@@ -133,7 +133,9 @@ impl Workspace {
 
     /// Opens the palette and focuses its query field.
     pub(crate) fn open_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.dialog_focus.opened(window.focused(cx));
+        // `F1`/`F2`: capture the opener for the focus return and make the modal
+        // container so the palette traps Tab inside it.
+        self.begin_modal(window, cx);
         self.palette_open = true;
         let command_state = self.command_state.clone();
         command_state.update(cx, |state, cx| state.focus(window, cx));

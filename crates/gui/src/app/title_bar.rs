@@ -83,8 +83,8 @@ pub(super) fn render(workspace: &Workspace, cx: &mut Context<Workspace>) -> impl
                     .icon(IconName::Settings)
                     .tooltip(strings::UI_SETTINGS)
                     .accessibility_label(strings::UI_SETTINGS)
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.open_settings(cx);
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.open_settings(window, cx);
                         cx.notify();
                     })),
             )

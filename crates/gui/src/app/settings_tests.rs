@@ -41,7 +41,7 @@ fn settle(cx: &mut gpui_kit::VisualTestContext) {
 #[gpui_kit::test]
 fn opening_settings_starts_with_no_answer(cx: &mut TestAppContext) {
     let (view, _service, cx) = fixture(cx);
-    view.update(cx, |this, cx| this.open_settings(cx));
+    view.update_in(cx, |this, window, cx| this.open_settings(window, cx));
     settle(cx);
     assert!(view.read_with(cx, |this, _| this.settings_state().open));
     assert!(
@@ -53,8 +53,8 @@ fn opening_settings_starts_with_no_answer(cx: &mut TestAppContext) {
 #[gpui_kit::test]
 fn check_now_shows_the_available_version(cx: &mut TestAppContext) {
     let (view, service, cx) = fixture(cx);
-    view.update(cx, |this, cx| {
-        this.open_settings(cx);
+    view.update_in(cx, |this, window, cx| {
+        this.open_settings(window, cx);
         this.check_updates(cx);
     });
     settle(cx);
@@ -78,8 +78,8 @@ fn a_package_manager_install_shows_the_hint_not_the_install_button(cx: &mut Test
     service.set(|script| {
         script.update = Ok(package_manager_status());
     });
-    view.update(cx, |this, cx| {
-        this.open_settings(cx);
+    view.update_in(cx, |this, window, cx| {
+        this.open_settings(window, cx);
         this.check_updates(cx);
     });
     settle(cx);
@@ -97,8 +97,8 @@ fn a_package_manager_install_shows_the_hint_not_the_install_button(cx: &mut Test
 #[gpui_kit::test]
 fn install_applies_the_update(cx: &mut TestAppContext) {
     let (view, service, cx) = fixture(cx);
-    view.update(cx, |this, cx| {
-        this.open_settings(cx);
+    view.update_in(cx, |this, window, cx| {
+        this.open_settings(window, cx);
         this.check_updates(cx);
     });
     settle(cx);
@@ -117,8 +117,8 @@ fn a_failed_check_is_a_typed_error(cx: &mut TestAppContext) {
     service.set(|script| {
         script.update = Err(UserFacingError::new("DBL-8003", "offline"));
     });
-    view.update(cx, |this, cx| {
-        this.open_settings(cx);
+    view.update_in(cx, |this, window, cx| {
+        this.open_settings(window, cx);
         this.check_updates(cx);
     });
     settle(cx);

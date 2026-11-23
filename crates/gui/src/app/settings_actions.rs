@@ -13,7 +13,7 @@ use std::sync::Arc;
 
 use dblocal_core::service::UserFacingError;
 use dblocal_core::strings;
-use gpui_kit::Context;
+use gpui_kit::{Context, Window};
 
 use super::Workspace;
 use super::login_item::{HostLoginItem, LoginItemControl};
@@ -21,8 +21,13 @@ use super::settings_state::{InstallState, LoginState, SettingsState, UpdateCheck
 
 impl Workspace {
     /// Opens the dialog and reads the login-item state (never the network).
-    pub(crate) fn open_settings(&mut self, cx: &mut Context<Self>) {
+    ///
+    /// `F1`/`F2`: captures the opener, makes the modal container and gives the
+    /// keyboard to it, so a dialog of only buttons takes focus without a click.
+    pub(crate) fn open_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.settings.open();
+        self.begin_modal(window, cx);
+        self.focus_modal_root();
         self.read_login_status(cx);
         cx.notify();
     }

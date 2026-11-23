@@ -107,6 +107,7 @@ pub(super) fn render(
                     .child(updates)
                     .child(login),
             ),
+        workspace,
         window,
         cx,
     )

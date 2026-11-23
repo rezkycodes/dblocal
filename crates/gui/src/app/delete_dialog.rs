@@ -134,6 +134,7 @@ pub(super) fn render(
                     ),
             )
             .child(body),
+        workspace,
         window,
         cx,
     )

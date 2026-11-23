@@ -120,6 +120,7 @@ pub(super) fn render(
                     .child(body),
             )
             .child(footer),
+        workspace,
         window,
         cx,
     )
@@ -491,18 +492,24 @@ pub(super) fn overlay(
     overlay_id: &'static str,
     panel_id: &'static str,
     panel: impl IntoElement,
+    workspace: &Workspace,
     window: &mut Window,
     cx: &mut Context<Workspace>,
 ) -> AnyElement {
     use gpui_kit::component::FocusTrapElement as _;
-    let container = window
-        .use_keyed_state(
-            SharedString::from(format!("modal-focus-{overlay_id}")),
-            cx,
-            |_, cx| cx.focus_handle(),
-        )
-        .read(cx)
-        .clone();
+    // The modal's container handle comes from `begin_modal` so `open_*` can focus
+    // it on open; fall back to a keyed handle if a preview drew the dialog
+    // without going through an open path.
+    let container = workspace.modal_focus().unwrap_or_else(|| {
+        window
+            .use_keyed_state(
+                SharedString::from(format!("modal-focus-fallback-{overlay_id}")),
+                cx,
+                |_, cx| cx.focus_handle(),
+            )
+            .read(cx)
+            .clone()
+    });
     gpui_kit::deferred(
         div()
             .id(overlay_id)

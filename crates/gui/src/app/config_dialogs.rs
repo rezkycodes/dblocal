@@ -100,6 +100,7 @@ pub(super) fn render_restore(
                     ),
             )
             .child(body),
+        workspace,
         window,
         cx,
     )

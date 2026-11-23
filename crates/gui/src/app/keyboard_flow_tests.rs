@@ -91,6 +91,63 @@ fn tab_forward(cx: &mut VisualTestContext, n: usize) -> bool {
     focused
 }
 
+/// Whether the window currently has any focused element.
+fn has_focus(cx: &mut VisualTestContext) -> bool {
+    cx.update(|window, cx| window.focused(cx).is_some())
+}
+
+/// Types `text` one character at a time into the focused element (real input).
+fn type_text(cx: &mut VisualTestContext, text: &str) {
+    for ch in text.chars() {
+        let s = ch.to_string();
+        let key = Keystroke {
+            modifiers: Default::default(),
+            key: s.clone(),
+            key_char: Some(s),
+        };
+        cx.update(|window, cx| window.dispatch_keystroke(key, cx));
+        draw(cx);
+    }
+}
+
+/// The container focus handle of the active focus trap, if any (`F2`).
+fn active_trap(cx: &mut VisualTestContext) -> Option<FocusHandle> {
+    cx.update(|window, cx| gpui_kit::base::active_focus_trap(window, cx))
+}
+
+/// Asserts that `n` real `Tab` presses (`forward` true) or Shift+Tab (false) keep
+/// focus inside the active modal focus trap and never reach the page, and that
+/// the walk wraps (returns to a stop already visited) rather than escaping.
+///
+/// Uses a real `Keystroke` so the `Root`'s Tab action — and therefore the focus
+/// trap — runs; `window.focus_next` alone would bypass the containment logic.
+fn assert_trapped(cx: &mut VisualTestContext, forward: bool, n: usize, label: &str) {
+    let trap = active_trap(cx).unwrap_or_else(|| panic!("{label}: no active focus trap"));
+    let key = if forward { "tab" } else { "shift-tab" };
+    let mut visited: Vec<String> = Vec::new();
+    let mut wrapped = false;
+    for _ in 0..n {
+        press(cx, key);
+        let inside = cx.update(|window, cx| trap.contains_focused(window, cx));
+        assert!(
+            inside,
+            "{label}: focus left the modal focus trap after a {key} (F2)"
+        );
+        let id = cx.update(|window, cx| window.focused(cx).map(|f| format!("{f:?}")));
+        let id = id.unwrap_or_default();
+        if visited.contains(&id) {
+            wrapped = true;
+            break;
+        }
+        visited.push(id);
+    }
+    assert!(
+        wrapped,
+        "{label}: {key} never wrapped within the trap over {n} presses (visited {} stops)",
+        visited.len()
+    );
+}
+
 /// The create form's engine-card handle for `engine`.
 fn engine_handle(
     view: &Entity<Workspace>,
@@ -293,15 +350,14 @@ fn palette_disables_inapplicable_commands_with_a_reason(cx: &mut TestAppContext)
     );
 }
 
-/// F-PLH-01 AC2: the palette finds an instance by name and engine, and runs
-/// start on it with a keyboard query and Enter only.
+/// F-PLH-01 AC2: the palette finds an instance by name and engine, runs start on
+/// it with **Enter on the filtered row** (not a direct call), and the keyboard is
+/// alive again right after the confirm (`F1`).
 #[gpui_kit::test]
 fn palette_starts_an_instance_with_the_keyboard(cx: &mut TestAppContext) {
     let (view, service, cx) = harness(cx);
     let stopped = service.id_with(InstanceStatus::Stopped);
-    let starts_before = service.calls();
 
-    // Open the palette with the bound key on the focused workspace.
     let root_focus = view.read_with(cx, |this, cx| {
         use gpui_kit::Focusable as _;
         this.focus_handle(cx)
@@ -313,37 +369,157 @@ fn palette_starts_an_instance_with_the_keyboard(cx: &mut TestAppContext) {
         "ctrl-k must open the palette"
     );
 
-    // Query by the engine word (a keyword, not the label) and confirm the
-    // start row for the stopped instance runs on Enter.
-    let index = view.read_with(cx, |this, _| this.command_state().clone());
-    cx.update(|window, cx| {
-        index.update(cx, |state, cx| state.set_query("postgres", window, cx));
+    // Type the instance name so the first (selected) row is "Mulai pg-stop",
+    // then confirm with Enter. This exercises the filtered-index ->
+    // original-index mapping the earlier direct call skipped.
+    type_text(cx, "pg-stop");
+    let (matched, selected) = view.read_with(cx, |this, cx| {
+        let state = this.command_state().read(cx);
+        (state.matched_count(), state.selected_index())
     });
-    draw(cx);
-    // Find the "Mulai <stopped>" row index in the full (unfiltered) list.
-    let start_index = view.read_with(cx, |this, _| {
-        this.palette_actions()
-            .iter()
-            .position(|action| {
-                matches!(
-                    action,
-                    Some(crate::format::PaletteAction::Start(id)) if *id == stopped.to_string()
-                )
-            })
-            .expect("a start row for the stopped instance")
-    });
-    cx.update(|window, cx| {
-        view.update(cx, |this, cx| {
-            this.run_palette_action(start_index, window, cx)
-        });
-    });
+    assert!(
+        matched >= 1 && selected.is_some(),
+        "typing 'pg-stop' must leave a runnable row selected (matched={matched})"
+    );
+    press(cx, "enter");
     cx.run_until_parked();
     assert!(
-        service.calls() > starts_before,
-        "Enter on the start row must reach the service"
+        !view.read_with(cx, |this, _| this.palette_is_open()),
+        "Enter confirms and closes the palette"
+    );
+    assert_eq!(
+        service.started(),
+        vec![stopped.clone()],
+        "Enter on the start row must start exactly the stopped instance"
+    );
+    // `F1`: the keyboard is not dead after the confirm — ctrl-k opens again.
+    assert!(has_focus(cx), "focus must survive the palette confirm");
+    press(cx, "ctrl-k");
+    assert!(
+        view.read_with(cx, |this, _| this.palette_is_open()),
+        "ctrl-k must reopen the palette after a confirm (no dead keyboard)"
+    );
+}
+
+/// `F1`: a fresh window with no prior focus still responds to `ctrl-k`.
+///
+/// The real window needed a mouse click before `ctrl-k`/`ctrl-n` worked; the
+/// fix focuses the root when nothing holds focus, so no click is needed.
+#[gpui_kit::test]
+fn a_fresh_window_opens_the_palette_without_a_click(cx: &mut TestAppContext) {
+    let (view, _service, cx) = harness(cx);
+    // Do NOT focus anything: assert the harness left focus unset, then press the
+    // shortcut. (A click would focus; this proves the app does it.)
+    assert!(
+        has_focus(cx),
+        "the workspace must take focus on the first frame (F1 startup)"
+    );
+    press(cx, "ctrl-k");
+    assert!(
+        view.read_with(cx, |this, _| this.palette_is_open()),
+        "ctrl-k must open the palette with no prior click"
+    );
+}
+
+/// `F1`: after the create dialog closes by confirming, `ctrl-n` opens it again.
+#[gpui_kit::test]
+fn create_confirm_keeps_the_keyboard_alive(cx: &mut TestAppContext) {
+    let (view, _service, cx) = harness(cx);
+    let root_focus = view.read_with(cx, |this, cx| {
+        use gpui_kit::Focusable as _;
+        this.focus_handle(cx)
+    });
+    focus(cx, &root_focus);
+    press(cx, "ctrl-n");
+    assert!(view.read_with(cx, |this, _| this.create_form().is_some()));
+    // Confirm by focusing "Buat" and pressing Enter.
+    let submit = view
+        .read_with(cx, |this, _| {
+            this.create_form().map(|f| f.submit_focus.clone())
+        })
+        .expect("submit focus");
+    focus(cx, &submit);
+    press(cx, "enter");
+    cx.run_until_parked();
+    assert!(
+        view.read_with(cx, |this, _| this.create_form().is_none()),
+        "Enter on Buat closes the dialog"
+    );
+    assert!(has_focus(cx), "focus must survive the create confirm");
+    press(cx, "ctrl-n");
+    assert!(
+        view.read_with(cx, |this, _| this.create_form().is_some()),
+        "ctrl-n must reopen the create dialog after a confirm (no dead keyboard)"
+    );
+}
+
+/// `F2`: Tab and Shift+Tab stay inside the create dialog and wrap.
+#[gpui_kit::test]
+fn tab_is_contained_in_the_create_dialog(cx: &mut TestAppContext) {
+    let (view, _service, cx) = harness(cx);
+    press(cx, "ctrl-n");
+    assert!(view.read_with(cx, |this, _| this.create_form().is_some()));
+    draw(cx);
+    assert!(
+        active_trap(cx).is_some(),
+        "the create dialog must register a focus trap"
+    );
+    // 40 forward and 40 backward; every stop stays inside the dialog and the
+    // walk wraps rather than reaching the page behind the scrim.
+    assert_trapped(cx, true, 40, "create dialog Tab");
+    assert_trapped(cx, false, 40, "create dialog Shift+Tab");
+}
+
+/// `F2`: Tab stays inside the palette.
+#[gpui_kit::test]
+fn tab_is_contained_in_the_palette(cx: &mut TestAppContext) {
+    let (view, _service, cx) = harness(cx);
+    press(cx, "ctrl-k");
+    assert!(view.read_with(cx, |this, _| this.palette_is_open()));
+    draw(cx);
+    assert!(
+        active_trap(cx).is_some(),
+        "the palette must register a focus trap"
+    );
+    assert_trapped(cx, true, 40, "palette Tab");
+    assert_trapped(cx, false, 40, "palette Shift+Tab");
+}
+
+/// `F2`: Tab stays inside the Settings dialog (which has only buttons).
+#[gpui_kit::test]
+fn tab_is_contained_in_the_settings_dialog(cx: &mut TestAppContext) {
+    let (view, _service, cx) = harness(cx);
+    cx.update(|window, cx| {
+        view.update(cx, |this, cx| this.open_settings(window, cx));
+    });
+    draw(cx);
+    assert!(
+        view.read_with(cx, |this, _| this.settings_state().open),
+        "settings dialog open"
     );
     assert!(
-        !view.read_with(cx, |this, _| this.palette_is_open()),
-        "confirming a command closes the palette"
+        active_trap(cx).is_some(),
+        "settings must register a focus trap"
     );
+    assert_trapped(cx, true, 40, "settings Tab");
+    assert_trapped(cx, false, 40, "settings Shift+Tab");
+}
+
+/// `F2`: Tab stays inside the delete dialog.
+#[gpui_kit::test]
+fn tab_is_contained_in_the_delete_dialog(cx: &mut TestAppContext) {
+    let (view, service, cx) = harness(cx);
+    let id = service.id_with(InstanceStatus::Stopped);
+    cx.update(|window, cx| {
+        view.update(cx, |this, cx| {
+            this.open_delete_dialog(id.clone(), window, cx)
+        });
+    });
+    draw(cx);
+    assert!(
+        active_trap(cx).is_some(),
+        "delete dialog must register a focus trap"
+    );
+    assert_trapped(cx, true, 40, "delete Tab");
+    assert_trapped(cx, false, 40, "delete Shift+Tab");
 }

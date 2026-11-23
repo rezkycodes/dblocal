@@ -180,6 +180,7 @@ impl Workspace {
     pub(crate) fn quit_keep_running(&mut self, cx: &mut Context<Self>) {
         let action = self.quit.apply(QuitEvent::KeepRunning);
         self.handle_quit_action(action, cx);
+        self.restore_focus_if_quit_closed();
     }
 
     pub(crate) fn quit_stop_all(&mut self, cx: &mut Context<Self>) {
@@ -190,6 +191,15 @@ impl Workspace {
     pub(crate) fn quit_cancel(&mut self, cx: &mut Context<Self>) {
         let action = self.quit.apply(QuitEvent::Cancel);
         self.handle_quit_action(action, cx);
+        self.restore_focus_if_quit_closed();
+    }
+
+    /// `F1`: when the quit dialog is no longer confirming, the keyboard returns to
+    /// the opener (or the root fallback).
+    pub(crate) fn restore_focus_if_quit_closed(&mut self) {
+        if !self.quit.is_confirming() {
+            self.restore_dialog_focus_after_close();
+        }
     }
 
     pub(crate) fn quit_force_exit(&mut self, cx: &mut Context<Self>) {
@@ -238,6 +248,12 @@ impl Workspace {
             )
             .read(cx)
             .clone();
+        // `F1`/`F2`: the quit dialog opens without an open path that has a
+        // window, so take the keyboard on this frame when nothing inside it is
+        // focused (the first frame it draws). After that the trap keeps focus in.
+        if !trap.contains_focused(window, cx) {
+            trap.focus(window, cx);
+        }
         let (body, stopping, failed) = match self.quit.state() {
             QuitState::Confirming { .. } => (strings::UI_QUIT_BODY.to_owned(), false, false),
             QuitState::StoppingAll { .. } => (strings::UI_QUIT_STOPPING.to_owned(), true, false),

@@ -242,6 +242,13 @@ pub struct Workspace {
     /// A focus return the next frame must apply; set by a close path that had no
     /// window (Escape) and consumed by `render`.
     pending_focus_restore: Option<FocusHandle>,
+    /// The container focus handle of the topmost open modal, if any (`F2`).
+    ///
+    /// Created when a modal opens and dropped when it closes; the modal's render
+    /// registers a `focus_trap` on it and `open_*` uses it to put the keyboard
+    /// inside the dialog immediately (so a dialog of only buttons — Settings,
+    /// Quit — takes focus without a click). `None` when no modal is open.
+    modal_focus: Option<FocusHandle>,
     /// Clients detected for the "Open in…" menu; `None` until the first read.
     clients: Option<Result<Vec<DetectedClient>, UserFacingError>>,
     /// An instance whose "Open in…" launch is in flight.
@@ -446,6 +453,7 @@ impl Workspace {
             secret_dialog: None,
             dialog_focus: dialog_focus::DialogFocus::default(),
             pending_focus_restore: None,
+            modal_focus: None,
             clients: None,
             opening: None,
             settings: settings_state::SettingsState::default(),
@@ -659,6 +667,8 @@ impl Workspace {
             .closed()
             .unwrap_or_else(|| self.focus_handle.clone());
         self.pending_focus_restore = Some(target);
+        // No modal is open now; the trap handle is stale.
+        self.modal_focus = None;
     }
 
     /// Closes the create dialog after a successful submit and returns focus.
@@ -668,6 +678,35 @@ impl Workspace {
     /// form and keeps focus in it, so it does not.
     pub(crate) fn finish_create_overlay(&mut self) {
         self.restore_dialog_focus_after_close();
+    }
+
+    /// Opens a modal: captures the opener for the focus return (`F1`) and makes a
+    /// fresh container handle that its render traps Tab inside (`F2`).
+    ///
+    /// The opener is captured here, once, through `dialog_focus::opened`, which
+    /// ignores a stacked open so the original opener is the one restored.
+    pub(crate) fn begin_modal(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> FocusHandle {
+        self.dialog_focus.opened(window.focused(cx));
+        let handle = cx.focus_handle();
+        self.modal_focus = Some(handle.clone());
+        handle
+    }
+
+    /// Gives the keyboard to an element inside a just-opened modal on the next
+    /// frame (it does not exist in the focus tree until it is drawn once).
+    pub(crate) fn focus_modal_root(&mut self) {
+        if let Some(handle) = self.modal_focus.clone() {
+            self.pending_focus_restore = Some(handle);
+        }
+    }
+
+    /// The container focus handle of the open modal, for its render and tests.
+    pub(crate) fn modal_focus(&self) -> Option<FocusHandle> {
+        self.modal_focus.clone()
     }
 }
 
@@ -726,8 +765,8 @@ impl Render for Workspace {
                 this.toggle_palette_in(window, cx);
                 cx.notify();
             }))
-            .on_action(cx.listener(|this, _: &actions::OpenSettings, _window, cx| {
-                this.open_settings(cx);
+            .on_action(cx.listener(|this, _: &actions::OpenSettings, window, cx| {
+                this.open_settings(window, cx);
             }))
             .on_action(cx.listener(|this, _: &actions::NewInstance, window, cx| {
                 this.open_new_instance(window, cx);

@@ -10,6 +10,7 @@
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use dblocal_core::error::Result;
@@ -58,6 +59,12 @@ pub(crate) struct QuietService {
     instances: Arc<Vec<InstanceView>>,
     runtimes: Arc<Vec<Runtime>>,
     calls: Arc<AtomicUsize>,
+    /// Every `create_instance` spec, in order (F3: assert the spec chosen by key).
+    created: Arc<Mutex<Vec<InstanceSpec>>>,
+    /// Every `start_instance` id, in order (F3: assert the started instance).
+    started: Arc<Mutex<Vec<InstanceId>>>,
+    /// Every `connection_uri` request `(id, format)`, in order (F3: copy URI).
+    uris: Arc<Mutex<Vec<(InstanceId, UriFormat)>>>,
     tx: broadcast::Sender<ServiceEvent>,
 }
 
@@ -92,6 +99,9 @@ impl QuietService {
             instances: Arc::new(instances),
             runtimes: Arc::new(Vec::new()),
             calls: Arc::new(AtomicUsize::new(0)),
+            created: Arc::new(Mutex::new(Vec::new())),
+            started: Arc::new(Mutex::new(Vec::new())),
+            uris: Arc::new(Mutex::new(Vec::new())),
             tx,
         }
     }
@@ -99,6 +109,21 @@ impl QuietService {
     /// Number of service calls served so far.
     pub(crate) fn calls(&self) -> usize {
         self.calls.load(Ordering::SeqCst)
+    }
+
+    /// Every `create_instance` spec, in call order.
+    pub(crate) fn created(&self) -> Vec<InstanceSpec> {
+        self.created.lock().expect("created lock").clone()
+    }
+
+    /// Every `start_instance` id, in call order.
+    pub(crate) fn started(&self) -> Vec<InstanceId> {
+        self.started.lock().expect("started lock").clone()
+    }
+
+    /// Every `connection_uri` request, in call order.
+    pub(crate) fn uris(&self) -> Vec<(InstanceId, UriFormat)> {
+        self.uris.lock().expect("uris lock").clone()
     }
 
     /// The id of the first instance in the given status.
@@ -140,12 +165,14 @@ impl DblService for QuietService {
         self.bump();
         Port::new(5433)
     }
-    fn create_instance(&self, _spec: InstanceSpec) -> Result<OperationId> {
+    fn create_instance(&self, spec: InstanceSpec) -> Result<OperationId> {
         self.bump();
+        self.created.lock().expect("created lock").push(spec);
         Ok(OperationId::new("op-create"))
     }
-    fn start_instance(&self, _id: &InstanceId) -> Result<OperationId> {
+    fn start_instance(&self, id: &InstanceId) -> Result<OperationId> {
         let n = self.calls.fetch_add(1, Ordering::SeqCst);
+        self.started.lock().expect("started lock").push(id.clone());
         Ok(OperationId::new(format!("op-start-{n}")))
     }
     fn stop_instance(&self, _id: &InstanceId) -> Result<OperationId> {
@@ -174,6 +201,10 @@ impl DblService for QuietService {
     }
     fn connection_uri(&self, id: &InstanceId, format: UriFormat) -> Result<SecretString> {
         self.bump();
+        self.uris
+            .lock()
+            .expect("uris lock")
+            .push((id.clone(), format));
         let engine = self
             .instances
             .iter()

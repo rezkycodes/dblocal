@@ -348,10 +348,10 @@ impl Workspace {
             submit_focus: cx.focus_handle(),
             cancel_focus: cx.focus_handle(),
         });
-        // `F-PLH-01` AC1: the dialog takes the keyboard when it opens, so a
-        // keyboard user lands on the name field instead of nowhere; Escape and
-        // cancel give focus back to the opener (`dialog_focus` owns the rule).
-        self.dialog_focus.opened(window.focused(cx));
+        // `F-PLH-01` AC1 + `F2`: capture the opener, register the modal's focus
+        // trap container, and land the keyboard on the name field (inside the
+        // dialog, so the trap is active at once).
+        self.begin_modal(window, cx);
         name_input.update(cx, |state, cx| state.focus(window, cx));
         // Port suggestion is a service call; do it in background.
         let service = self.service.clone();
@@ -548,10 +548,12 @@ impl Workspace {
         });
         self.delete_target = Some(id.clone());
         self.delete_mode = DeleteMode::ArchiveData;
-        // `F-PLH-01` AC1: the dialog takes the keyboard so the type-the-name
-        // confirmation can be typed without a click first.
-        self.dialog_focus.opened(window.focused(cx));
-        name_input.update(cx, |state, cx| state.focus(window, cx));
+        // `F-PLH-01` AC1 + `F2`: capture the opener and modal container, then
+        // put the keyboard inside the dialog. The type-the-name field only exists
+        // in Purge mode, so focus the dialog container (its mode cards and
+        // buttons are the tab stops in Archive mode).
+        self.begin_modal(window, cx);
+        self.focus_modal_root();
         self.delete_name_input = Some(name_input);
         self.delete_size = 0;
         let service = self.service.clone();
