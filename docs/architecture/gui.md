@@ -7,7 +7,7 @@ Owner: W1-G. This document describes the `crates/gui` shell built against `dbloc
 - `crates/gui` is a **library** (`dblocal_gui::run()`); `crates/cli` is the only binary, and no-args launches the GUI.
 - The UI talks only to `Arc<dyn DblService>`. No direct state/engine/process access from GUI code.
 - `tokio` work (mock timers, simulated downloads, future service I/O) runs on its own runtime. It never runs on the GPUI executor. UI updates cross into GPUI through a `flume` channel that a GPUI task `await`s, so the loop wakes only on real activity — there is **no idle timer**.
-- Every user-facing string lives in `crates/core/src/strings.rs` (including the Vulkan pre-flight text and the port-taken validation sentence). `crates/gui` contains no literal UI sentence.
+- Every user-facing string lives in the `crates/core/src/strings` module (`strings/mod.rs`, plus `strings/admin.rs` for the W4-B Databases/Open-in/Settings strings; both re-exported as `strings::UI_...`), including the Vulkan pre-flight text and the port-taken validation sentence. `crates/gui` contains no literal UI sentence.
 
 ## Modules
 
@@ -27,6 +27,7 @@ Owner: W1-G. This document describes the `crates/gui` shell built against `dbloc
 | `app/palette.rs` | Command palette on `gpui_component::command::Command` | layout | 70% (layout) |
 | `app/create_dialog.rs` | Create-instance form on `InputState` | layout + render | 82% |
 | `app/delete_dialog.rs` | Delete modal with the two D-18 actions | layout + render | 81% |
+| `core/strings/admin.rs` | W4-B Databases/Open-in/Settings strings, re-exported from `strings` | n/a (consts) | n/a |
 | `app/admin_state.rs` | Pure Databases-tab state (`F-DBU-01..03`): loadable rows, in-flight actions, id derivation | unit, thorough | — |
 | `app/admin_actions.rs` | Databases-tab handlers, all on `Workspace::bg` | unit (render) | — |
 | `app/admin_dialogs.rs` | Drop confirmation, reset confirmation, one-time secret dialog | unit + render | — |
