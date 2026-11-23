@@ -471,14 +471,20 @@ fn a_corrupt_row_cannot_delete_outside_the_home() {
 /// `InFlightMarker::create` seam records the nonce the production code actually
 /// wrote for each, so the assertion catches a call-site regression to
 /// `{pid}-{op_id}` or `{pid}-{id}` (both collapse to one distinct value).
+///
+/// The row is inserted **directly** (rather than through `h.create`), which is
+/// the whole point: it consumes no operation id and leaves no data directory, so
+/// both services really are at `op-1`. Note that `second_service` also starts a
+/// supervisor and a startup reconciliation over the same home, which is exactly
+/// what flake 8 caught taking service A's `Deleting` row over: the fix is that
+/// A's in-flight marker now lives outside the instance directory A removes.
 #[test]
 fn two_services_deleting_one_instance_write_distinct_marker_nonces() {
     let h = Harness::new(EngineKey::Postgresql);
     let port = test_port();
     let spec = h.spec("nonce-services", EngineKey::Postgresql, port);
     let id = crate::model::InstanceId::new();
-    let name = spec.name().clone();
-    let instance_dir = h.paths.instance_dir(&name);
+    let marker = super::super::delete::marker_path(&h.paths, &id);
     let second =
         super::harness::second_service(&h.paths, Arc::clone(&h.procs), Arc::clone(&h.secrets));
 
@@ -510,7 +516,7 @@ fn two_services_deleting_one_instance_write_distinct_marker_nonces() {
         run_b.result()
     );
 
-    let mut nonces = super::super::delete::take_created_nonces(&instance_dir);
+    let mut nonces = super::super::delete::take_created_nonces(&marker);
     nonces.sort();
     nonces.dedup();
     assert_eq!(

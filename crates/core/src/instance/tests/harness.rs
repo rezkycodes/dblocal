@@ -334,6 +334,34 @@ impl Harness {
         self.service.supervisor_alive_for_test()
     }
 
+    /// Waits until the supervisor has completed a tick **after** this call.
+    ///
+    /// A test that takes the instance lock and then asserts "no tick acted on
+    /// this row" races any tick that read `is_busy == false` before the lock
+    /// existed. Waiting for a tick to start and finish after the call proves
+    /// that window is closed: the next tick cannot begin before this one ends,
+    /// and the lock is taken immediately after.
+    pub fn wait_for_supervisor_tick(&self) {
+        let ticks = || {
+            self.service
+                .inner()
+                .supervisor_ticks
+                .load(std::sync::atomic::Ordering::SeqCst)
+        };
+        let before = ticks();
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            if ticks() > before {
+                return;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the supervisor completed no tick within the deadline"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+
     /// Acquires the per-instance operation lock, for a test that must prove the
     /// supervisor skips a busy row.
     pub fn lock_instance(&self, id: &InstanceId) -> super::super::registry::InstanceLock {

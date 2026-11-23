@@ -11,7 +11,7 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
-use crate::model::{EngineKey, InstanceStatus};
+use crate::model::{DeleteMode, EngineKey, InstanceStatus};
 use crate::process::identity::ProcessState;
 use crate::service::{DblService, ServiceEvent};
 
@@ -186,7 +186,7 @@ fn a_delete_claim_from_a_stale_status_is_refused_and_changes_nothing() {
 
 #[test]
 fn the_in_flight_marker_trusts_identity_not_a_bare_pid() {
-    use crate::instance::delete::{IN_FLIGHT_MARKER, delete_in_flight};
+    use crate::instance::delete::delete_in_flight;
 
     let h = Harness::new(EngineKey::Postgresql);
     let port = test_port();
@@ -201,7 +201,7 @@ fn the_in_flight_marker_trusts_identity_not_a_bare_pid() {
         )
         .expect("deleting");
 
-    let marker = h.paths.instance_dir(instance.name()).join(IN_FLIGHT_MARKER);
+    let marker = crate::instance::delete::marker_path(&h.paths, instance.id());
     std::fs::create_dir_all(marker.parent().expect("dir")).expect("dir");
 
     // A live process, but the marker names a *different* start time: a PID reused
@@ -249,6 +249,97 @@ fn the_in_flight_marker_trusts_identity_not_a_bare_pid() {
 
 #[allow(dead_code)]
 fn _unused(_: &FakeSecrets, _: &FakeTerminator, _: Ordering) {}
+
+/// Flake 8: a live delete removes the instance directory (data, logs, shell)
+/// before it removes the row, so an in-flight marker stored **inside** that
+/// directory vanished while the delete still ran. A sibling service reconciling
+/// at that instant saw `Deleting` with no owner, treated it as an interrupted
+/// delete and removed the row underneath the running delete, which surfaced as
+/// `operation start: NotFound` on a row the test had just re-inserted.
+///
+/// Deterministic: the delete is parked by the `on_data_gone` seam after its data
+/// is gone and before its row, and while it is parked a second service is built
+/// over the same home. Its startup reconciliation must leave the row alone. The
+/// delete is then released and must finish normally.
+///
+/// Mutation check: put the marker back inside `instances/<name>/` (or remove it
+/// before the row) and the second service's reconciliation finds no owner and
+/// removes the row, failing with
+///   "a live delete must keep its row while another service reconciles".
+#[test]
+fn a_live_delete_keeps_its_row_while_another_service_reconciles() {
+    let h = Harness::new(EngineKey::Postgresql);
+    let port = test_port();
+    let spec = h.spec("live-delete", EngineKey::Postgresql, port);
+    h.create(spec);
+    let instance = h.instances().into_iter().next().expect("instance");
+    let id = instance.id().clone();
+
+    // Park the delete exactly in the window the bug lived in: data gone, row
+    // still `Deleting`, and the marker still held by the live operation.
+    let (parked_tx, parked_rx) = std::sync::mpsc::channel::<()>();
+    let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+    crate::instance::delete::on_data_gone(&id, move || {
+        let _ = parked_tx.send(());
+        let _ = release_rx.recv_timeout(Duration::from_secs(30));
+    });
+
+    // Subscribe before the call so the terminal event is not missed.
+    let mut receiver = h.receiver();
+    let op = h
+        .service
+        .delete_instance(&id, DeleteMode::PurgeData)
+        .expect("delete start");
+    parked_rx
+        .recv_timeout(Duration::from_secs(30))
+        .expect("the delete never reached the data-gone window");
+
+    // The instance directory is gone; the marker outside it still names the
+    // live delete, and the row is still `Deleting`.
+    assert!(
+        !h.paths.data_dir(instance.name()).exists(),
+        "the delete must have removed the data before the seam"
+    );
+    assert_eq!(
+        h.instance(&id).map(|row| row.status()),
+        Some(InstanceStatus::Deleting),
+        "the row must still be `Deleting` while the delete runs"
+    );
+
+    // A second service over the same home reconciles at startup. It must read
+    // the live marker and leave the row alone instead of finishing the delete
+    // for it. The supervisor only starts after reconciliation, so one completed
+    // tick proves both have run.
+    let second =
+        super::harness::second_service(&h.paths, Arc::clone(&h.procs), Arc::clone(&h.secrets));
+    second.wait_for_supervisor_tick();
+    let status = second
+        .service
+        .list_instances()
+        .expect("list")
+        .into_iter()
+        .find(|view| view.id == id)
+        .map(|view| view.status);
+    assert_eq!(
+        status,
+        Some(InstanceStatus::Deleting),
+        "a live delete must keep its row while another service reconciles"
+    );
+
+    // Release the delete; it must finish normally and remove the row itself.
+    let _ = release_tx.send(());
+    let run = h.run_on(&mut receiver, op);
+    assert!(
+        matches!(run.result(), Some(Ok(()))),
+        "the parked delete must succeed: {:?}",
+        run.result()
+    );
+    assert!(h.instance(&id).is_none(), "the row is gone at the end");
+    assert!(
+        !crate::instance::delete::marker_path(&h.paths, &id).exists(),
+        "the finished delete removes its own marker"
+    );
+}
 
 #[test]
 fn a_rollback_through_a_symlinked_instance_directory_removes_nothing() {
@@ -367,10 +458,22 @@ fn the_supervisor_skips_a_running_row_while_an_operation_holds_it() {
     assert!(matches!(start_run.result(), Some(Ok(()))));
     h.wait_for_status(&id, InstanceStatus::Running);
 
-    // Phase 1: hold the instance lock and arm the gate. The supervisor must not
-    // validate this `Running` row while the operation owns it.
+    // Phase 1: hold the instance lock, then let the supervisor reach a tick
+    // boundary, then arm the gate. The supervisor must not validate this
+    // `Running` row while the operation owns it.
+    //
+    // Ordering matters under load. A supervisor tick that started **before** the
+    // lock may have already read `is_busy == false`; if it then reached
+    // `validate` after the gate was armed, the test failed with a legitimately
+    // late tick, not a product defect (that is what flake 8 observed: the trace
+    // showed `is_busy = false` evaluated before `lock_instance`). Taking the lock
+    // first and only then waiting for a **completed** tick closes that window:
+    // every tick still in flight when we lock has finished before the arm, and
+    // every tick that starts afterwards observes the held lock. So a tick that
+    // reaches `validate` can only be one that ignored the guard.
     let lock = h.lock_instance(&id);
     gated.reset();
+    h.wait_for_supervisor_tick();
     gated.arm();
     let reached_while_busy = gated.wait_reached(Duration::from_millis(200));
     // Whatever happened, release the gate so no parked task outlives this test.

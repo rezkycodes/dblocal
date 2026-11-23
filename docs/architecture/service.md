@@ -227,10 +227,19 @@ by the service, never from user text. The archive id is stable
 (`arch-<instance-id-prefix>`, not time-derived) so two writers land on one row.
 A finished delete ends with `ServiceEvent::InstanceRemoved`.
 
-While it runs, the delete writes `delete.inflight` inside the instance directory,
-carrying its PID and a per-operation nonce. That is what lets another process (or
-a sibling service in the same process) tell "a delete is running" from "the app
-died mid-delete", which is the input to the recovery table below.
+While it runs, the delete writes `instances/.<instance-id>.delete.inflight`,
+carrying its PID, start time, executable and a per-operation nonce. That is what
+lets another process (or a sibling service in the same process) tell "a delete is
+running" from "the app died mid-delete", which is the input to the recovery table
+below. The marker sits **beside** the instance directories, not inside one: a
+delete removes `instances/<name>/` (data, logs, shell) before it removes the row,
+so a marker stored in there would be destroyed by the very operation it
+announces, and a sibling service reconciling in that window would "finish" a
+delete that is still running and remove the row underneath it (`flake 8`). The
+file name is keyed by the instance id; an instance name cannot collide with it
+because it must start with `[a-z0-9]`. A delete removes its own marker on
+completion, and reconciliation removes a stale one after it has decided the
+delete is over.
 
 If the engine survives the pre-delete stop, the delete **fails** rather than
 removing the row: an orphan with no identity left could never be stopped.
