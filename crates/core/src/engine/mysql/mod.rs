@@ -13,6 +13,7 @@ use std::process::{Command, Stdio};
 use std::time::Duration;
 
 use crate::consts;
+use crate::engine::sockdir;
 use crate::engine::uri::{self, exe_name};
 use crate::engine::{Credential, EngineAdapter, Health, InitContext, RunContext};
 use crate::error::{DblError, Result};
@@ -67,7 +68,12 @@ impl EngineAdapter for MysqlAdapter {
         if let Err(err) = outcome {
             let _ = fs::remove_dir_all(&ctx.data_dir);
             let _ = fs::remove_file(init_file_path(&run_dir));
-            cleanup_fallback_socket(&socket, &run_dir, ctx.port.get());
+            sockdir::cleanup_socket(
+                &socket,
+                ctx.port.get(),
+                std::env::var_os("XDG_RUNTIME_DIR"),
+                sockdir::current_uid(),
+            );
             return Err(err);
         }
         let _ = fs::remove_file(init_file_path(&run_dir));
@@ -114,11 +120,7 @@ impl EngineAdapter for MysqlAdapter {
                 ),
             })
         };
-        cleanup_fallback_socket_from_my_cnf(
-            &my_cnf_path(&ctx.run_dir),
-            &ctx.run_dir,
-            ctx.port.get(),
-        );
+        cleanup_fallback_socket_from_my_cnf(&my_cnf_path(&ctx.run_dir), ctx.port.get());
         result
     }
 
@@ -509,17 +511,12 @@ pub fn tmpdir_path(run_dir: &Path) -> PathBuf {
 mod socket;
 
 pub(in crate::engine::mysql) use socket::{
-    cleanup_fallback_socket, cleanup_fallback_socket_from_my_cnf, prepare_runtime_dirs_for_start,
+    cleanup_fallback_socket_from_my_cnf, prepare_runtime_dirs_for_start,
 };
-#[cfg(test)]
-pub(in crate::engine::mysql) use socket::{
-    cleanup_fallback_socket_from_my_cnf_with_candidates, cleanup_fallback_socket_with_candidates,
-    ensure_fallback_socket_dir_for, ensure_verified_private_dir_for_test,
-    fallback_socket_dir_candidates, is_fallback_socket_name_for_port,
-    prepare_runtime_dirs_for_start_with_env, resolve_socket_path_for,
-    resolve_socket_path_with_fallback_dir, socket_path_from_my_cnf, verify_secure_dir_for_test,
+pub use socket::{
+    resolve_socket_path, socket_path, socket_path_from_my_cnf, socket_path_limit,
+    validate_socket_path_len,
 };
-pub use socket::{resolve_socket_path, socket_path, socket_path_limit, validate_socket_path_len};
 
 pub fn prepare_run(ctx: &RunContext) -> Result<()> {
     prepare_runtime_dirs_for_start(&ctx.run_dir, ctx.port.get())
@@ -577,8 +574,10 @@ pub fn sibling_dir(data_dir: &Path, leaf: &str) -> PathBuf {
 ///
 /// Admin connects over this socket instead of TCP so a
 /// `caching_sha2_password` handshake counts as a secure channel and the
-/// password is never sent over a plaintext TCP stream (the RSA public-key
-/// exchange over TCP would still be unencrypted).
+/// password is never sent over a plaintext TCP stream. Both steps delegate to
+/// the shared [`crate::engine::sockdir`] (`socket_path_from_my_cnf` reads the
+/// directive, `resolve_socket_path` applies the same fallback `initialize`
+/// uses), so this adds no socket logic of its own.
 pub fn configured_socket_path(run_dir: &Path, port: u16, instance_dir: &Path) -> Result<PathBuf> {
     if let Some(socket) = socket::socket_path_from_my_cnf(&my_cnf_path(run_dir)) {
         return Ok(socket);

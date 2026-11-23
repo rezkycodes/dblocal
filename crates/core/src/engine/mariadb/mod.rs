@@ -5,7 +5,6 @@
 //! SIGTERM (graceful, bounded), and diagnoses start failures from real log text.
 
 mod identity;
-pub mod socket;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
@@ -21,6 +20,7 @@ use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 use crate::consts;
+use crate::engine::sockdir;
 use crate::engine::uri::{self, exe_name};
 use crate::engine::{AdminOps, Credential, EngineAdapter, Health, InitContext, RunContext};
 use crate::error::{DblError, Result};
@@ -50,8 +50,8 @@ impl EngineAdapter for MariaDbAdapter {
 
     fn initialize(&self, ctx: &InitContext) -> Result<()> {
         prepare_dirs(ctx)?;
-        let sock = socket::choose_socket_path(&ctx.data_dir, ctx.port.get())?;
-        socket::validate_socket_path_len(&sock)?;
+        let sock = resolve_socket_path(&ctx.data_dir, ctx.port.get())?;
+        sockdir::validate_socket_path_len(&sock)?;
         let conf = config_path(&ctx.data_dir);
         let rendered = render_config(&config_params(ctx, &sock)?);
         write_private_config(&conf, rendered.expose())?;
@@ -152,7 +152,31 @@ fn tmpdir_path(data_dir: &Path) -> PathBuf {
 
 #[cfg(test)]
 fn socket_path(data_dir: &Path, port: u16) -> PathBuf {
-    socket::natural_socket_path(data_dir, port)
+    natural_socket_path(data_dir, port)
+}
+
+/// Natural socket path under the instance run directory.
+fn natural_socket_path(data_dir: &Path, port: u16) -> PathBuf {
+    sibling_run_dir(data_dir).join(format!("mariadb-{port}.sock"))
+}
+
+/// Chooses the socket path for an instance.
+///
+/// Returns the natural run-dir path when it fits, otherwise the first verified
+/// short fallback directory whose `m<port>-<12 hex>.sock` fits.
+fn resolve_socket_path(data_dir: &Path, port: u16) -> Result<PathBuf> {
+    let natural = natural_socket_path(data_dir, port);
+    sockdir::resolve_socket_path(
+        &natural,
+        port,
+        data_dir,
+        std::env::var_os("XDG_RUNTIME_DIR"),
+        sockdir::current_uid(),
+    )
+}
+
+fn sibling_run_dir(data_dir: &Path) -> PathBuf {
+    sibling_dir(data_dir, consts::DIR_RUN)
 }
 
 fn sibling_dir(data_dir: &Path, leaf: &str) -> PathBuf {
@@ -187,90 +211,20 @@ fn prepare_dirs(ctx: &InitContext) -> Result<()> {
             reason: format!("cannot create {label} directory {}: {e}", dir.display()),
         })?;
     }
-    ensure_private_tmpdir(&tmp)?;
+    sockdir::prepare_tmpdir(&tmp, sockdir::current_uid())?;
     Ok(())
 }
 
-fn ensure_private_tmpdir(dir: &Path) -> Result<()> {
-    if dir.exists() {
-        let meta = fs::symlink_metadata(dir).map_err(|e| DblError::Engine {
-            reason: format!("cannot inspect tmpdir {}: {e}", dir.display()),
-        })?;
-        if meta.file_type().is_symlink() || !meta.is_dir() {
-            return Err(DblError::Engine {
-                reason: format!("tmpdir {} is not a real directory", dir.display()),
-            });
-        }
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::{MetadataExt, PermissionsExt};
-            if meta.uid() != nix::unistd::geteuid().as_raw() {
-                return Err(DblError::Engine {
-                    reason: format!("tmpdir {} has wrong owner", dir.display()),
-                });
-            }
-            let mode = meta.mode() & 0o777;
-            if mode != 0o700 {
-                fs::set_permissions(dir, fs::Permissions::from_mode(0o700)).map_err(|e| {
-                    DblError::Engine {
-                        reason: format!("cannot secure tmpdir {}: {e}", dir.display()),
-                    }
-                })?;
-            }
-        }
-        clean_stale_tmpdir(dir)?;
-        return Ok(());
-    }
-    crate::fsutil::ensure_private_dir(dir).map_err(|e| DblError::Engine {
-        reason: format!("cannot create tmpdir {}: {e}", dir.display()),
-    })?;
-    Ok(())
-}
-
-fn clean_stale_tmpdir(dir: &Path) -> Result<()> {
-    let entries = fs::read_dir(dir).map_err(|e| DblError::Engine {
-        reason: format!("cannot read tmpdir {}: {e}", dir.display()),
-    })?;
-    for entry in entries {
-        let entry = entry.map_err(|e| DblError::Engine {
-            reason: format!("cannot read tmpdir entry in {}: {e}", dir.display()),
-        })?;
-        let path = entry.path();
-        let ft = entry.file_type().map_err(|e| DblError::Engine {
-            reason: format!("cannot inspect tmpdir entry {}: {e}", path.display()),
-        })?;
-        if ft.is_dir() {
-            fs::remove_dir_all(&path).map_err(|e| DblError::Engine {
-                reason: format!("cannot remove stale tmpdir entry {}: {e}", path.display()),
-            })?;
-        } else {
-            fs::remove_file(&path).map_err(|e| DblError::Engine {
-                reason: format!("cannot remove stale tmpdir entry {}: {e}", path.display()),
-            })?;
-        }
-    }
-    Ok(())
-}
-
-fn read_config_socket_path(data_dir: &Path) -> Result<PathBuf> {
-    let path = config_path(data_dir);
-    let contents = fs::read_to_string(&path).map_err(|e| DblError::Engine {
-        reason: format!("cannot read {}: {e}", path.display()),
-    })?;
-    for line in contents.lines() {
-        let trimmed = line.trim_start();
-        let value = trimmed
-            .strip_prefix("socket=")
-            .or_else(|| trimmed.strip_prefix("socket ="));
-        let Some(value) = value else { continue };
-        let value = value.trim();
-        if !value.is_empty() {
-            return Ok(PathBuf::from(value));
-        }
-    }
-    Err(DblError::Engine {
-        reason: format!("{} has no `socket` directive", path.display()),
-    })
+fn prepare_run_spec(data_dir: &Path, port: u16) -> Result<()> {
+    let spec = sockdir::PrepareSpec {
+        config: &config_path(data_dir),
+        natural_socket: &natural_socket_path(data_dir, port),
+        port,
+        tmpdir: &tmpdir_path(data_dir),
+        xdg_runtime_dir: std::env::var_os("XDG_RUNTIME_DIR"),
+        uid: sockdir::current_uid(),
+    };
+    sockdir::prepare_run(&spec)
 }
 
 /// The socket path the instance's `my.cnf` names, or the path `initialize`
@@ -278,46 +232,19 @@ fn read_config_socket_path(data_dir: &Path) -> Result<PathBuf> {
 ///
 /// Admin connects over this socket so the password is never sent over a
 /// plaintext TCP stream and the bootstrap's `root@localhost` account (which
-/// only the socket can reach) is the one used.
+/// only the socket can reach) is the one used. Expressed over the shared
+/// [`sockdir`] (a `socket=` directive read, then the same fallback resolution
+/// `initialize` uses), so it never re-implements socket logic.
 pub fn configured_socket_path(data_dir: &Path, port: u16) -> Result<PathBuf> {
-    if let Ok(socket) = read_config_socket_path(data_dir) {
-        return Ok(socket);
+    if let Some(socket) = sockdir::read_directive(&config_path(data_dir), "socket") {
+        return Ok(PathBuf::from(socket));
     }
-    socket::choose_socket_path(data_dir, port)
+    resolve_socket_path(data_dir, port)
 }
 
 /// Prepares volatile runtime directories before every start.
 pub fn prepare_run(ctx: &RunContext) -> Result<()> {
-    let tmp = tmpdir_path(&ctx.data_dir);
-    ensure_private_tmpdir(&tmp)?;
-
-    let socket = read_config_socket_path(&ctx.data_dir)?;
-    let socket_dir = socket.parent().ok_or_else(|| DblError::Engine {
-        reason: format!("socket path {} has no parent", socket.display()),
-    })?;
-    let natural_dir = sibling_dir(&ctx.data_dir, consts::DIR_RUN);
-    if socket_dir != natural_dir {
-        socket::ensure_secure_runtime_dir(socket_dir)?;
-    } else {
-        crate::fsutil::ensure_private_dir(socket_dir).map_err(|e| DblError::Engine {
-            reason: format!("cannot create run directory {}: {e}", socket_dir.display()),
-        })?;
-    }
-    if socket.exists() {
-        let meta = fs::symlink_metadata(&socket).map_err(|e| DblError::Engine {
-            reason: format!("cannot inspect socket {}: {e}", socket.display()),
-        })?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::FileTypeExt;
-            if meta.file_type().is_socket() {
-                fs::remove_file(&socket).map_err(|e| DblError::Engine {
-                    reason: format!("cannot remove stale socket {}: {e}", socket.display()),
-                })?;
-            }
-        }
-    }
-    Ok(())
+    prepare_run_spec(&ctx.data_dir, ctx.port.get())
 }
 
 fn write_private_config(path: &Path, contents: &str) -> Result<()> {
@@ -631,8 +558,8 @@ pub fn sync_port(data_dir: &Path, port: u16) -> Result<()> {
     })?;
     let mut replaced_port = false;
     let mut out = String::with_capacity(contents.len() + 32);
-    let sock = socket::choose_socket_path(data_dir, port)?;
-    socket::validate_socket_path_len(&sock)?;
+    let sock = resolve_socket_path(data_dir, port)?;
+    sockdir::validate_socket_path_len(&sock)?;
     for line in contents.lines() {
         let trimmed = line.trim_start();
         if trimmed.starts_with("port=") || trimmed.starts_with("port =") {

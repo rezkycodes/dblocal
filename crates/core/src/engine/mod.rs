@@ -8,6 +8,7 @@ pub mod glibc;
 pub mod mariadb;
 mod mysql;
 mod postgres;
+pub mod sockdir;
 pub mod uri;
 mod valkey;
 
@@ -22,6 +23,7 @@ pub use mysql::{
     my_cnf_path, parse_handshake_payload as parse_mysql_handshake_payload,
     pidfile_path as mysql_pidfile_path, prepare_run as prepare_mysql_run,
     read_handshake as read_mysql_handshake, socket_path as mysql_socket_path,
+    socket_path_from_my_cnf as mysql_socket_path_from_my_cnf,
     socket_path_limit as mysql_socket_path_limit, sync_port as sync_mysql_port,
     validate_socket_path_len as validate_mysql_socket_path_len,
 };

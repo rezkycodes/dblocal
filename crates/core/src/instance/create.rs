@@ -44,9 +44,14 @@ pub(crate) fn create_instance(inner: &Arc<Inner>, spec: InstanceSpec) -> Result<
     let inner = Arc::clone(inner);
     let op_task = op.clone();
     inner.handle().spawn(async move {
-        let _lock = lock;
+        let lock = lock;
         emit_stage(&inner, &op_task, OperationStage::Queued);
         let result = run_create(Arc::clone(&inner), &op_task, id, spec, token).await;
+        // Release the instance lock before announcing completion, like start/stop/
+        // delete: a consumer that reacts to `OperationFinished` by starting the new
+        // instance (the GUI's auto-start, or a CLI chaining create then start) must
+        // not be refused as busy against a lock that is held for another instant.
+        drop(lock);
         finish_operation(&inner, &op_task, result);
     });
 

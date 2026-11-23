@@ -79,9 +79,9 @@ fn config_paths_are_derived_from_instance_layout() {
 #[test]
 fn socket_path_length_is_checked() {
     let short = Path::new("/tmp/m.sock");
-    assert!(socket::validate_socket_path_len(short).is_ok());
+    assert!(sockdir::validate_socket_path_len(short).is_ok());
     let long = PathBuf::from(format!("/tmp/{}", "a".repeat(120)));
-    let err = socket::validate_socket_path_len(&long).expect_err("too long");
+    let err = sockdir::validate_socket_path_len(&long).expect_err("too long");
     assert!(matches!(
         err,
         DblError::InvalidInput {
@@ -892,13 +892,13 @@ fn bootstrap_password_errors_without_password() {
 }
 
 #[test]
-fn read_config_socket_path_errors_on_missing_directive() {
+fn prepare_run_errors_when_the_config_has_no_socket_directive() {
     let dir = tempdir().expect("tmp");
     let data = dir.path().join("data");
     fs::create_dir_all(&data).expect("data");
     write_private_config(&config_path(&data), "[mysqld]\nport=3307\n").expect("conf");
-    let err = read_config_socket_path(&data).expect_err("no socket");
-    assert!(matches!(err, DblError::Engine { .. }));
+    let err = prepare_run_spec(&data, 3307).expect_err("no socket");
+    assert!(matches!(err, DblError::Engine { .. }), "{err:?}");
 }
 
 #[test]
@@ -921,8 +921,10 @@ fn escape_sql_handles_control_chars() {
 
 #[cfg(unix)]
 #[test]
-fn prepare_run_keeps_regular_file_named_like_socket_dir_and_ignores_regular_socket() {
-    // A regular file at the socket path must be left alone (only real sockets are removed).
+fn prepare_run_refuses_a_regular_file_at_the_socket_path_without_deleting_it() {
+    // Only a real stale socket is removed. A regular file at the configured
+    // socket path is a start failure: the engine could not bind there, and the
+    // file may belong to someone else.
     let dir = tempdir().expect("tmp");
     let root = dir.path();
     let data = root.join("inst/data");
@@ -935,7 +937,7 @@ fn prepare_run_keeps_regular_file_named_like_socket_dir_and_ignores_regular_sock
         use std::os::unix::fs::PermissionsExt;
         fs::set_permissions(&fallback, fs::Permissions::from_mode(0o700)).expect("chmod");
     }
-    let sock = fallback.join("mariadb-3307-aabb.sock");
+    let sock = fallback.join("m3307-abc123def456.sock");
     fs::write(&sock, b"not a socket").expect("regular at socket path");
     let conf = format!(
         "[mysqld]\nsocket={}\ntmpdir={}\n",
@@ -954,8 +956,9 @@ fn prepare_run_keeps_regular_file_named_like_socket_dir_and_ignores_regular_sock
         auth: AuthMode::None,
         credential: None,
     };
-    prepare_run(&ctx).expect("prepare");
-    assert!(sock.exists(), "regular file at socket path is left alone");
+    let err = prepare_run(&ctx).expect_err("a regular file at the socket path must fail");
+    assert!(err.to_string().contains("is not a socket"), "{err}");
+    assert!(sock.exists(), "the foreign regular file is not deleted");
 }
 
 #[test]
@@ -990,23 +993,23 @@ fn prepare_run_creates_natural_run_dir_when_socket_is_natural() {
 
 #[cfg(unix)]
 #[test]
-fn ensure_private_tmpdir_errors_on_non_directory() {
+fn prepare_tmpdir_rejects_a_non_directory() {
     let dir = tempdir().expect("tmp");
     let file = dir.path().join("tmp");
     fs::write(&file, b"x").expect("file");
-    let err = ensure_private_tmpdir(&file).expect_err("non-dir");
-    assert!(matches!(err, DblError::Engine { .. }));
+    let err = sockdir::prepare_tmpdir(&file, sockdir::current_uid()).expect_err("non-dir");
+    assert!(matches!(err, DblError::Engine { .. }), "{err:?}");
 }
 
 #[cfg(unix)]
 #[test]
-fn ensure_private_tmpdir_fixes_wrong_mode() {
+fn prepare_tmpdir_tightens_a_directory_we_own() {
     use std::os::unix::fs::{MetadataExt, PermissionsExt};
     let dir = tempdir().expect("tmp");
     let tmp = dir.path().join("tmp");
     fs::create_dir_all(&tmp).expect("tmp");
     fs::set_permissions(&tmp, fs::Permissions::from_mode(0o755)).expect("chmod");
-    ensure_private_tmpdir(&tmp).expect("secure");
+    sockdir::prepare_tmpdir(&tmp, sockdir::current_uid()).expect("secure");
     let meta = fs::metadata(&tmp).expect("meta");
     assert_eq!(meta.mode() & 0o777, 0o700);
     assert_eq!(meta.uid(), nix::unistd::geteuid().as_raw());
@@ -1088,4 +1091,42 @@ fn greeting_error_from_io_error_wraps() {
 #[test]
 fn parse_greeting_rejects_empty_payload() {
     assert!(parse_greeting(&[]).is_err());
+}
+
+/// `initialize` and `sync_port` both resolve the socket through
+/// `resolve_socket_path(data_dir, port)` with `data_dir` as the identity, so a
+/// `change_port` rewrites `socket=` to exactly the path the server was started
+/// with, including on a deep home that needs the fallback directory.
+#[test]
+fn sync_port_keeps_the_fallback_socket_path_it_started_with() {
+    let dir = tempdir().expect("tmp");
+    let deep = dir.path().join("d".repeat(120));
+    let data = deep.join("inst/data");
+    fs::create_dir_all(&data).expect("data");
+    let old_sock = resolve_socket_path(&data, 3307).expect("old socket");
+    assert_ne!(
+        old_sock,
+        socket_path(&data, 3307),
+        "the deep natural path must need the fallback"
+    );
+    let ctx = InitContext {
+        instance_name: "m".into(),
+        runtime_dir: dir.path().join("rt"),
+        data_dir: data.clone(),
+        port: Port::new(3307).expect("port"),
+        superuser: "root".into(),
+        auth: AuthMode::None,
+        password: None,
+    };
+    let conf = render_config(&config_params(&ctx, &old_sock).expect("params"));
+    write_private_config(&config_path(&data), conf.expose()).expect("write");
+
+    sync_port(&data, 43111).expect("sync");
+    let expected = resolve_socket_path(&data, 43111).expect("new socket");
+    let updated = fs::read_to_string(config_path(&data)).expect("read");
+    assert!(updated.contains("port=43111"));
+    assert!(
+        updated.contains(&format!("socket={}", expected.display())),
+        "sync_port must write the same resolver's socket:\n{updated}"
+    );
 }
