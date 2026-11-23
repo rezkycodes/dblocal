@@ -201,6 +201,7 @@ inside the range, unique, and reached by a variant.
 | 8114 | `RollbackFailed` | rollback failed, state inconsistent |
 | 8115 | `PasswordGenerate` | OS RNG failed |
 | 8117 | `NoPassword` | the instance was created without a password; admin needs one created with a password (W4-A fix 1) |
+| 8118 | `SystemSchema` | the database is one MySQL/MariaDB own (`mysql`, `sys`, `information_schema`, `performance_schema`); admin must not manage it (W4-A2) |
 
 `NoPassword` is deliberately distinct from `Unsupported` (8111): the engine is
 PostgreSQL (supported), but an instance created with `--no-password` has no
