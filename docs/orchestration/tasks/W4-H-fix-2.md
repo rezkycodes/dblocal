@@ -19,6 +19,15 @@ Every size row shows `128MB` / `4MB` with "satuan: bytes" under the default. The
 
 `begin_refresh` sets `error = None` on every read, so a failed apply or a failed open shows its `DBL-86xx` banner only until the window is re-activated or the tab re-entered. Keep the card error through a re-read that succeeds when it belongs to a failed apply/restore/open (the next user action or "Muat ulang" clears it); only a failed READ error is replaced by the next read. Test both.
 
+## Mutation gaps (addendum, reviewer's 20 mutations on `ed5c6b3`: 18 red, 2 green)
+
+All 14 behaviours of the first table and the fix behaviours F1-F7 are pinned (restore-after-failed-restore, pending restart vs another op / another instance, banner retirement, `can_apply`, focus after Confirm, re-entry re-read, activation re-read, refresh not blanking, same-file banner, grid `min_w(0)` and cell width). Two stay green; pin each, red against the mutation then green (paste both):
+
+| # | Mutation | Behaviour to pin |
+|---|---|---|
+| N13 | `open_config_raw` without its `reload_config_bg` after the launcher returns | after "Buka file konfigurasi" returns, the form shows what the service now reads (script `config_view` to change between the open and its completion, assert the new value is in the state) even when no window activation happens |
+| N14 | `stop_instance_tracked` Err branch without `clear_pending_restart_for` | a stop that cannot even be requested (`stop_instance` returns `Err`, script it) leaves no pending restart, reports the typed error, and a later manual stop does not start the instance |
+
 ## Bar
 
 fmt, clippy (also `--features demo`), deny, new tests x20 from a private copy of the lib binary, a11y_tree and render, `cargo xtask ci` under the heavy lock on the final head, and a real-window check for F8 only (the reproduction above; a second window can be a `python3 -c "import tkinter ..."` window). Clean up engines, GUI and `/tmp/dblocal-w4h*`. `worker_done` with the red/green output pasted.
