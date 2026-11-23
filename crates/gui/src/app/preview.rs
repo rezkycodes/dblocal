@@ -206,6 +206,27 @@ impl Workspace {
         workspace
     }
 
+    /// Two instances each with their Config tab opened; the second is selected.
+    ///
+    /// Every Config row id is derived from the instance and the key, so two
+    /// instances that share `max_connections` cannot collide in the a11y tree
+    /// (the W2-B2 trap) even in one frame that draws the tab strip plus a card.
+    pub fn preview_two_configs(
+        service: Arc<dyn DblService>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let mut workspace = Self::preview(service, window, cx);
+        for view in workspace.state.instances.clone() {
+            workspace.open_tab_sync(view.id.clone());
+            workspace
+                .tabs
+                .set_inner(workspace.tabs.selected_index(), InnerTab::Config);
+            workspace.load_config_sync(cx);
+        }
+        workspace
+    }
+
     /// Preview of the product build: no demo content in the placeholder tabs.
     pub fn preview_product_databases(
         service: Arc<dyn DblService>,

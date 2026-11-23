@@ -119,6 +119,101 @@ fn an_invalid_value_is_refused_locally_with_the_service_message(cx: &mut TestApp
 }
 
 #[gpui_kit::test]
+fn the_tab_renders_every_engine_from_the_view(cx: &mut TestAppContext) {
+    // All four engines' views, built from the real schema, must be readable: the
+    // screen hard-codes nothing per engine, so the editable rows and defaults
+    // come straight from `settings_for`.
+    let _ = cx;
+    for engine in EngineKey::ALL {
+        let mut view = ConfigView::new(
+            dblocal_core::model::InstanceId::new(),
+            engine,
+            std::path::PathBuf::from("/mock/conf"),
+        );
+        for spec in dblocal_core::config::settings_for(engine) {
+            view.settings.push(dblocal_core::config::ConfigSetting {
+                key: spec.key.to_owned(),
+                current: None,
+                default: spec.default.to_owned(),
+                unit: spec.unit.to_owned(),
+                restart_required: true,
+                description: spec.description.to_owned(),
+                readonly: false,
+            });
+        }
+        let config = crate::app::config_state::InstanceConfig {
+            data: Loadable::Ready(view),
+            ..Default::default()
+        };
+        assert!(
+            !config.editable().is_empty(),
+            "{engine:?} must expose at least one editable row"
+        );
+        assert!(config.editable().iter().all(|s| !s.description.is_empty()));
+        assert!(
+            config.editable().iter().any(|s| !s.default.is_empty()),
+            "{engine:?} must show at least one default"
+        );
+    }
+}
+
+#[gpui_kit::test]
+fn a_restore_available_failure_offers_the_banner_action(cx: &mut TestAppContext) {
+    use dblocal_core::model::StartFailure;
+    use dblocal_core::service::FailureInfo;
+    // F-CFG-01 AC3: a failure whose config file changed offers the restore from
+    // the Overview banner as well as the Config tab.
+    let (view, service, cx) = fixture(cx);
+    let id = service.id_with(InstanceStatus::Stopped);
+    view.update(cx, |this, cx| {
+        let mut changed = this.instance(&id).cloned().expect("instance view");
+        changed.status = InstanceStatus::Failed;
+        changed.failure = Some(FailureInfo {
+            code: "DBL-8601".to_owned(),
+            message: "nilai salah".to_owned(),
+            diagnosis: StartFailure::Unknown,
+            log_tail: Vec::new(),
+            restore_available: true,
+        });
+        this.state.upsert_instance(changed);
+        this.open_tab(id.clone(), cx);
+    });
+    let offered = view.read_with(cx, |this, _| {
+        this.instance(&id)
+            .map(crate::format::offers_restore)
+            .unwrap_or(false)
+    });
+    assert!(offered, "the banner must offer the restore");
+    view.update(cx, |this, cx| this.restore_and_restart(&id, cx));
+    settle(cx);
+    assert_eq!(service.mutations().config_restores, vec![id]);
+}
+
+#[gpui_kit::test]
+fn a_config_change_mid_edit_rebases_through_the_event(cx: &mut TestAppContext) {
+    // The event path (not the direct re-read) must preserve an edit to a key the
+    // new file value does not match, and raise the outside-changed banner.
+    let (view, service, cx) = fixture(cx);
+    let id = open_config(&view, &service, cx);
+    view.update(cx, |this, _| {
+        this.config.entry(&id).set_field("shared_buffers", "512MB");
+    });
+    view.update(cx, |this, cx| {
+        this.apply_event_with_cx(UiEvent::ConfigChanged(id.clone()), cx);
+    });
+    settle(cx);
+    let (edit, outside) = view.read_with(cx, |this, _| {
+        let config = this.config_state_for(&id).expect("config state");
+        (
+            config.edits.get("shared_buffers").cloned(),
+            config.touched_outside,
+        )
+    });
+    assert_eq!(edit.as_deref(), Some("512MB"));
+    assert!(outside);
+}
+
+#[gpui_kit::test]
 fn apply_sends_only_the_changed_fields_and_shows_the_restart_offer(cx: &mut TestAppContext) {
     let (view, service, cx) = fixture(cx);
     let id = open_config(&view, &service, cx);
