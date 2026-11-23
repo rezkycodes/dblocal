@@ -110,6 +110,40 @@ fn palette_a_busy_instance_cannot_start_stop_or_copy() {
 }
 
 #[test]
+fn palette_offers_delete_for_every_instance_even_when_busy() {
+    // `F-INS-05`: the delete row opens a dialog that shows the data size and
+    // both modes, so it is always offered — a busy instance included, since the
+    // dialog explains the consequence rather than the row guessing.
+    let busy = view(
+        "boot",
+        EngineKey::Postgresql,
+        InstanceStatus::Starting,
+        5432,
+    );
+    let stopped = view("stop", EngineKey::Mysql, InstanceStatus::Stopped, 3306);
+    let items = palette_items(&[busy.clone(), stopped.clone()]);
+    let rows: Vec<&PaletteItem> = items
+        .iter()
+        .filter(|i| i.label.starts_with(strings::UI_PALETTE_DELETE))
+        .collect();
+    assert_eq!(rows.len(), 2, "one delete row per instance (got {rows:?})");
+    for (row, instance) in rows.iter().zip([busy, stopped]) {
+        assert!(row.is_enabled(), "delete is always runnable: {}", row.label);
+        assert!(row.reason.is_none(), "no reason on an enabled row");
+        assert_eq!(
+            row.action,
+            Some(PaletteAction::Delete(instance.id.to_string())),
+            "the row names its own instance"
+        );
+        assert!(
+            row.label.contains(&instance.name),
+            "the row names the instance: {}",
+            row.label
+        );
+    }
+}
+
+#[test]
 fn palette_filter_is_case_insensitive_substring() {
     let items = palette_items(&[view(
         "shop",

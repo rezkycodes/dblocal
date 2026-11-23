@@ -237,6 +237,11 @@ impl Workspace {
                     self.copy_uri(id, UriFormat::Uri, window, cx);
                 }
             }
+            Some(PaletteAction::Delete(value)) => {
+                if let Ok(id) = value.parse::<InstanceId>() {
+                    self.open_delete_dialog(id, window, cx);
+                }
+            }
             // A disabled row or an out-of-range index: close without running.
             None => {}
         }
@@ -282,6 +287,19 @@ impl Workspace {
 
     pub(crate) fn delete_name_input(&self) -> Option<&Entity<InputState>> {
         self.delete_name_input.as_ref()
+    }
+
+    /// The instance header's "Hapus" button handle (`F-INS-05`), so a keyboard
+    /// test can walk Tab onto it and confirm the real control opens the dialog.
+    #[cfg(test)]
+    pub(crate) fn delete_button_focus(&self) -> gpui_kit::FocusHandle {
+        self.delete_focus.clone()
+    }
+
+    /// The instance the open delete dialog targets, for assertions.
+    #[cfg(test)]
+    pub(crate) fn delete_target_id(&self) -> Option<InstanceId> {
+        self.delete_target.clone()
     }
 
     pub(crate) fn submit_create_action(&mut self, window: &mut Window, cx: &mut Context<Self>) {
