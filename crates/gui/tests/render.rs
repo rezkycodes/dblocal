@@ -59,12 +59,12 @@ fn seeded_service() -> Arc<dyn DblService> {
 
 type Build = fn(Arc<dyn DblService>, &mut gpui_kit::Window, &mut Context<Workspace>) -> Workspace;
 
+#[path = "render/both_themes.rs"]
+mod both_themes;
 #[path = "render/frame.rs"]
 mod frame;
 #[path = "render/watchdog.rs"]
 mod watchdog;
-#[path = "render/both_themes.rs"]
-mod both_themes;
 
 use frame::Frame;
 
