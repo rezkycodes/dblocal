@@ -55,16 +55,6 @@ impl InnerTab {
     pub fn from_index(index: usize) -> Self {
         Self::ALL.get(index).copied().unwrap_or_default()
     }
-
-    /// Whether this tab is still an honest placeholder (`D-25`).
-    ///
-    /// Always `false` now: `F-DBU`/`F-OPN` became real screens in `W4-B` and the
-    /// Config tab in `W4-H`. Kept for the placeholder test that pins every tab
-    /// live; remove it with the last caller.
-    #[cfg(test)]
-    pub fn is_placeholder(self) -> bool {
-        false
-    }
 }
 
 /// One open tab in the centre pane.
@@ -484,7 +474,7 @@ mod tests {
     }
 
     #[test]
-    fn inner_tabs_are_labelled_indexed_and_flag_the_placeholders() {
+    fn inner_tabs_are_labelled_and_indexed() {
         assert_eq!(InnerTab::default(), InnerTab::Overview);
         for (index, tab) in InnerTab::ALL.iter().enumerate() {
             assert_eq!(tab.index(), index);
@@ -492,9 +482,6 @@ mod tests {
             assert!(!tab.label().is_empty());
         }
         assert_eq!(InnerTab::from_index(99), InnerTab::Overview);
-        for tab in InnerTab::ALL {
-            assert!(!tab.is_placeholder(), "{tab:?} is live, not a placeholder");
-        }
     }
 
     #[test]
