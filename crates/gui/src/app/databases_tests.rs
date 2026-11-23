@@ -18,6 +18,7 @@ use gpui_kit::TestAppContext;
 use crate::app::admin_state::{AdminAction, Loadable};
 use crate::app::scripted_service::ScriptedService;
 use crate::app::{InnerTab, Workspace};
+use crate::service_bridge::UiEvent;
 
 fn fixture(
     cx: &mut TestAppContext,
@@ -152,21 +153,26 @@ fn a_failed_read_is_a_typed_error_not_a_panic(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
-fn a_stopped_instance_is_ready_with_no_read(cx: &mut TestAppContext) {
+fn a_stopped_instance_is_not_read_and_has_no_error(cx: &mut TestAppContext) {
     let (view, service, cx) = fixture(cx);
     let id = service.id_with(InstanceStatus::Stopped);
     view.update(cx, |this, cx| this.open_tab(id.clone(), cx));
     cx.run_until_parked();
     view.update(cx, |this, cx| this.set_inner_tab(InnerTab::Databases, cx));
     settle(cx);
-    let (ready, error) = view.read_with(cx, |this, _| {
+    let (idle, rows, error) = view.read_with(cx, |this, _| {
         let admin = this.admin_state_for(&id).expect("admin state");
         (
-            matches!(admin.data, Loadable::Ready(_)),
+            matches!(admin.data, Loadable::Idle),
+            admin.rows().len(),
             admin.error.is_some(),
         )
     });
-    assert!(ready, "a stopped instance is an empty ready state");
+    assert!(
+        idle,
+        "a stopped instance is 'not read', never a fake empty answer (F1)"
+    );
+    assert_eq!(rows, 0);
     assert!(
         !error,
         "a stopped instance must not show a connection error"
@@ -176,6 +182,68 @@ fn a_stopped_instance_is_ready_with_no_read(cx: &mut TestAppContext) {
         0,
         "a stopped instance has no server to read"
     );
+}
+
+/// F1: an instance that starts while its Databases tab is open must re-read.
+///
+/// The reported defect: the tab was entered while the server was stopped, the
+/// start flipped the status to `Running`, and the tab kept the empty list until
+/// some unrelated `AdminChanged` arrived.
+#[gpui_kit::test]
+fn a_started_instance_re_reads_the_visible_tab(cx: &mut TestAppContext) {
+    let (view, service, cx) = fixture(cx);
+    let id = service.id_with(InstanceStatus::Stopped);
+    view.update(cx, |this, cx| this.open_tab(id.clone(), cx));
+    cx.run_until_parked();
+    view.update(cx, |this, cx| this.set_inner_tab(InnerTab::Databases, cx));
+    settle(cx);
+    assert_eq!(
+        service.counts().list_databases,
+        0,
+        "a stopped instance has no server to read"
+    );
+
+    // The status arrives as an event, the way a CLI start reaches the GUI.
+    view.update(cx, |this, cx| {
+        let mut changed = this.instance(&id).cloned().expect("instance view");
+        changed.status = InstanceStatus::Running;
+        this.apply_event_with_cx(UiEvent::InstanceChanged(changed), cx);
+    });
+    settle(cx);
+
+    let rows = view.read_with(cx, |this, _| {
+        this.admin_state_for(&id)
+            .map(|admin| admin.rows().len())
+            .unwrap_or(0)
+    });
+    assert_eq!(rows, 2, "the started instance must show the service's rows");
+    assert_eq!(service.counts().list_databases, 1);
+}
+
+/// F1: the reverse transition must not keep showing rows that are now stale.
+#[gpui_kit::test]
+fn a_stopped_instance_drops_its_rows_again(cx: &mut TestAppContext) {
+    let (view, service, cx) = fixture(cx);
+    let id = open_databases(&view, &service, cx);
+    assert!(!view.read_with(cx, |this, _| {
+        this.admin_state_for(&id)
+            .map(|admin| admin.rows().is_empty())
+            .unwrap_or(true)
+    }));
+
+    view.update(cx, |this, cx| {
+        let mut changed = this.instance(&id).cloned().expect("instance view");
+        changed.status = InstanceStatus::Stopped;
+        this.apply_event_with_cx(UiEvent::InstanceChanged(changed), cx);
+    });
+    settle(cx);
+
+    let (rows, idle) = view.read_with(cx, |this, _| {
+        let admin = this.admin_state_for(&id).expect("admin state");
+        (admin.rows().len(), matches!(admin.data, Loadable::Idle))
+    });
+    assert_eq!(rows, 0, "a stopped instance must not keep its rows");
+    assert!(idle, "the stopped state must be 'not read', not a fake empty read");
 }
 
 #[gpui_kit::test]

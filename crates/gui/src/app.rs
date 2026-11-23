@@ -511,6 +511,18 @@ impl Workspace {
             UiEvent::AdminChanged(id) => Some(id.clone()),
             _ => None,
         };
+        // F1: a start or stop changes whether the Databases tab can be read at
+        // all, so the rows read before the transition are stale even though no
+        // `AdminChanged` was emitted. Record the transition here, where the
+        // status is still visible before `apply_event` overwrites it.
+        let status_changed = match &event {
+            UiEvent::InstanceChanged(view) => self
+                .instance(&view.id)
+                .map(|current| current.status != view.status)
+                .unwrap_or(false)
+                .then(|| view.id.clone()),
+            _ => None,
+        };
         let quit_stop_finished = match &event {
             UiEvent::OperationFinished { id, result } => Some((id.clone(), result.is_ok())),
             _ => None,
@@ -535,11 +547,17 @@ impl Workspace {
         if needs_catalog {
             self.reload_catalog_bg(cx);
         }
+        if let Some(id) = status_changed {
+            self.admin.invalidate(&id);
+            if self.database_tab_visible(&id) {
+                self.reload_admin_bg(&id, cx);
+            }
+        }
         if let Some(id) = admin_changed {
-            // Re-read only the visible instance's Databases tab; an event for a
-            // background instance just clears its "ready" state in
+            // Re-read only the instance whose Databases tab is on screen; an
+            // event for a background instance just clears its "ready" state in
             // `apply_event`, and it is read again when the user opens it.
-            if self.tabs.selected_instance() == Some(&id) {
+            if self.database_tab_visible(&id) {
                 self.reload_admin_bg(&id, cx);
             }
         }
@@ -553,6 +571,17 @@ impl Workspace {
 
     pub(crate) fn instance(&self, id: &InstanceId) -> Option<&InstanceView> {
         self.state.instances.iter().find(|view| &view.id == id)
+    }
+
+    /// Whether this instance's Databases tab is the one on screen.
+    ///
+    /// The tab must be both selected and showing Databases: a row re-read for a
+    /// tab the user has on Overview would be work nobody sees, and the tab is
+    /// re-read on entry anyway.
+    pub(crate) fn database_tab_visible(&self, id: &InstanceId) -> bool {
+        self.tabs
+            .selected_tab()
+            .is_some_and(|tab| &tab.instance == id && tab.inner == InnerTab::Databases)
     }
 
     fn close_tab_by_instance(&mut self, id: &InstanceId, cx: &mut Context<Self>) {

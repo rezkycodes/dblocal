@@ -25,6 +25,8 @@ pub const UI_DATABASES_DROP_TITLE: &str = "Hapus database";
 /// Databases tab: delete dialog explanation.
 pub const UI_DATABASES_DROP_PROMPT: &str =
     "Database dan seluruh isinya dihapus permanen. Ketik nama database untuk mengonfirmasi.";
+/// Databases tab: delete dialog short danger line under the explanation.
+pub const UI_DATABASES_DROP_WARNING: &str = "Tindakan ini tidak dapat dibatalkan.";
 /// Databases tab: delete dialog confirm action.
 pub const UI_DATABASES_DROP_CONFIRM: &str = "Hapus database";
 /// Databases tab: delete dialog input placeholder.
@@ -75,6 +77,8 @@ pub const UI_DATABASES_RESET_FAILED_NOTE: &str = "Password lama tetap berlaku.";
 pub const UI_DATABASES_RESET_DONE: &str = "Password superuser diperbarui.";
 /// Databases tab: the create-user password succeeded.
 pub const UI_DATABASES_USER_DONE: &str = "User {name} dibuat.";
+/// Databases tab: toast after a database is dropped.
+pub const UI_DATABASES_DROPPED: &str = "Database {name} dihapus";
 
 /// Formats the databases heading with its row count.
 pub fn databases_heading(count: usize) -> String {
@@ -84,6 +88,11 @@ pub fn databases_heading(count: usize) -> String {
 /// Formats the user-created confirmation.
 pub fn databases_user_created(name: &str) -> String {
     UI_DATABASES_USER_DONE.replace("{name}", name)
+}
+
+/// Formats the database-dropped confirmation.
+pub fn databases_dropped(name: &str) -> String {
+    UI_DATABASES_DROPPED.replace("{name}", name)
 }
 
 // --- Open in… menu, live over DblService (F-OPN-01..02) ---------------------

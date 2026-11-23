@@ -107,6 +107,15 @@ impl InstanceAdmin {
             .unwrap_or_default()
     }
 
+    /// Whether the view should show the "Membaca database…" line.
+    ///
+    /// `Idle` counts: on a running instance the read is issued when the tab is
+    /// entered, so a frame drawn before it lands must not claim the list is
+    /// empty. A stopped instance never reaches the table (it has its own state).
+    pub fn pending(&self) -> bool {
+        matches!(self.data, Loadable::Idle | Loadable::Loading)
+    }
+
     /// Whether `action` is in flight right now.
     pub fn is_busy(&self, action: AdminAction) -> bool {
         self.busy.contains(&action)
@@ -146,6 +155,25 @@ impl AdminState {
     /// Drops the state of a removed instance.
     pub fn forget(&mut self, id: &InstanceId) {
         self.instances.remove(id);
+    }
+
+    /// Marks an instance's rows unread after its status changed.
+    ///
+    /// A read taken while the server was stopped (or before it started) says
+    /// nothing about the server that is running now, so the rows go back to
+    /// "not read" and the next entry issues a fresh read. A read already in
+    /// flight keeps its slot: its answer is newer than this transition.
+    pub fn invalidate(&mut self, id: &InstanceId) {
+        let Some(admin) = self.instances.get_mut(id) else {
+            return;
+        };
+        if !admin.data.is_loading() {
+            admin.data = Loadable::Idle;
+        }
+        // A failure or a "the old password still works" note describes the
+        // server that just went away; neither survives the transition.
+        admin.error = None;
+        admin.reset_failed = false;
     }
 }
 

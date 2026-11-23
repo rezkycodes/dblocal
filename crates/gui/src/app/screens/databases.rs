@@ -129,7 +129,7 @@ impl Workspace {
         let admin = self.admin_state_for(&view.id);
         let rows = admin.map(|admin| admin.rows().to_vec()).unwrap_or_default();
         let busy = admin.is_some_and(|admin| admin.is_busy(AdminAction::CreateDatabase));
-        let loading = admin.is_none_or(|admin| admin.data.is_loading());
+        let loading = admin.is_none_or(|admin| admin.pending());
         let mono = theme.mono_font_family.clone();
         let id_create = view.id.clone();
 
@@ -330,7 +330,7 @@ impl Workspace {
         let users = admin
             .map(|admin| admin.users().to_vec())
             .unwrap_or_default();
-        let loading = admin.is_none_or(|admin| admin.data.is_loading());
+        let loading = admin.is_none_or(|admin| admin.pending());
         let busy = admin.is_some_and(|admin| admin.is_busy(AdminAction::CreateUser));
         let mono = theme.mono_font_family.clone();
         let databases: Vec<String> = admin

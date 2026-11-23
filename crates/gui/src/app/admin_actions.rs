@@ -34,7 +34,12 @@ impl Workspace {
         if !crate::format::is_running(view.status) {
             // A stopped instance has no server to ask; the view shows the
             // empty state with a Start button instead of a connection error.
-            self.admin.entry(id).data = Loadable::Ready(AdminData::default());
+            // This is "not read", never a `Ready` with zero rows: a fake empty
+            // read would look like an answer forever (the F1 defect).
+            let admin = self.admin.entry(id);
+            admin.data = Loadable::Idle;
+            admin.error = None;
+            admin.reset_failed = false;
             return;
         }
         let service = self.service.clone();
@@ -65,19 +70,16 @@ impl Workspace {
         });
     }
 
-    /// Reads the tab's rows once, on first entry, and again after a failure.
+    /// Reads the tab's rows on entry: the first time, and again whenever the
+    /// rows are not a current answer (never read, a failure, or a read
+    /// invalidated by a status change).
     ///
     /// The text fields already exist (they are built with the workspace), so
     /// entry needs no window and works from any path that selects the tab.
     pub(crate) fn enter_databases_tab(&mut self, id: &InstanceId, cx: &mut Context<Self>) {
         let needs_read = match self.admin.get(id) {
             None => true,
-            Some(admin) => {
-                matches!(admin.data, Loadable::Idle)
-                    || (admin.data.ready().is_none()
-                        && !admin.data.is_loading()
-                        && admin.error.is_some())
-            }
+            Some(admin) => !admin.data.is_loading() && admin.data.ready().is_none(),
         };
         if needs_read {
             self.reload_admin_bg(id, cx);
