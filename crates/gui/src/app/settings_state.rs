@@ -252,8 +252,10 @@ mod tests {
 
     #[test]
     fn installing_offers_the_button_only_for_a_self_updatable_install() {
-        let mut state = SettingsState::default();
-        state.check = UpdateCheckState::Checked(status(Some(available(true)), portable()));
+        let mut state = SettingsState {
+            check: UpdateCheckState::Checked(status(Some(available(true)), portable())),
+            ..SettingsState::default()
+        };
         assert!(can_install(&state));
         assert!(package_manager_hint(&state).is_none());
 
@@ -270,8 +272,10 @@ mod tests {
 
     #[test]
     fn no_release_means_no_install_and_an_up_to_date_line() {
-        let mut state = SettingsState::default();
-        state.check = UpdateCheckState::Checked(status(None, portable()));
+        let state = SettingsState {
+            check: UpdateCheckState::Checked(status(None, portable())),
+            ..SettingsState::default()
+        };
         assert!(!can_install(&state));
         assert_eq!(
             check_headline(&state).as_deref(),
@@ -281,8 +285,10 @@ mod tests {
 
     #[test]
     fn a_found_release_names_the_version() {
-        let mut state = SettingsState::default();
-        state.check = UpdateCheckState::Checked(status(Some(available(true)), portable()));
+        let state = SettingsState {
+            check: UpdateCheckState::Checked(status(Some(available(true)), portable())),
+            ..SettingsState::default()
+        };
         assert_eq!(
             check_headline(&state).as_deref(),
             Some("Versi 0.9.0 tersedia.")
@@ -291,11 +297,13 @@ mod tests {
 
     #[test]
     fn a_failed_enable_never_shows_enabled() {
-        let mut state = SettingsState::default();
-        state.login = LoginState::Known(LoginStatus {
-            enabled: false,
-            location: std::path::PathBuf::from("/tmp/x"),
-        });
+        let mut state = SettingsState {
+            login: LoginState::Known(LoginStatus {
+                enabled: false,
+                location: std::path::PathBuf::from("/tmp/x"),
+            }),
+            ..SettingsState::default()
+        };
         assert!(!state.login_enabled());
 
         // The user flips the switch; the write fails.
@@ -313,8 +321,10 @@ mod tests {
 
     #[test]
     fn busy_flags_follow_the_in_flight_states() {
-        let mut state = SettingsState::default();
-        state.check = UpdateCheckState::Checking;
+        let mut state = SettingsState {
+            check: UpdateCheckState::Checking,
+            ..SettingsState::default()
+        };
         assert!(state.is_checking());
         state.check = UpdateCheckState::Idle;
         assert!(!state.is_checking());

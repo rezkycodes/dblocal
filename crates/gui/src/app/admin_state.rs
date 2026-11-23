@@ -299,8 +299,10 @@ mod tests {
 
     #[test]
     fn busy_tracks_one_action_without_affecting_the_others() {
-        let mut admin = InstanceAdmin::default();
-        admin.error = Some(UserFacingError::new("DBL-8104", "exists"));
+        let mut admin = InstanceAdmin {
+            error: Some(UserFacingError::new("DBL-8104", "exists")),
+            ..InstanceAdmin::default()
+        };
         admin.begin(AdminAction::CreateDatabase);
         assert!(admin.is_busy(AdminAction::CreateDatabase));
         assert!(!admin.is_busy(AdminAction::CreateUser));

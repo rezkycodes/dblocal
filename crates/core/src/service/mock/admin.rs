@@ -70,7 +70,7 @@ fn take_once(g: &mut Inner, wanted: impl Fn(&AdminScenario) -> bool) -> Option<A
     let index = g
         .admin_scenarios
         .iter()
-        .position(|scenario| wanted(scenario))?;
+        .position(wanted)?;
     g.admin_scenarios.remove(index)
 }
 
@@ -117,14 +117,14 @@ pub(crate) fn list_databases(
     if let Some(scenario) = sticky(&g) {
         return Ok(match scenario {
             AdminScenario::Empty => Vec::new(),
-            AdminScenario::ManyRows(count) => many_databases(&owner, *count),
-            _ => seeded_databases(&owner),
+            AdminScenario::ManyRows(count) => many_databases(owner, *count),
+            _ => seeded_databases(owner),
         });
     }
     Ok(g.databases
         .get(id)
         .cloned()
-        .unwrap_or_else(|| seeded_databases(&owner)))
+        .unwrap_or_else(|| seeded_databases(owner)))
 }
 
 pub(crate) fn list_users(
