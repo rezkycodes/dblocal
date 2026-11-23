@@ -503,3 +503,36 @@ fn removing_an_instance_forgets_its_whole_config_tab(cx: &mut TestAppContext) {
     assert!(!confirm, "M11: the open confirmation is gone");
     assert!(!pending, "M11: the pending restart is gone");
 }
+
+/// `M17`: a second restore or open while one is in flight does nothing; the
+/// service sees a single call, not two racing ones.
+#[gpui_kit::test]
+fn a_second_restore_or_open_while_busy_does_nothing(cx: &mut TestAppContext) {
+    let (view, service, cx) = fixture(cx);
+    service.set(|script| script.config_view = Ok(view_with_backup()));
+    let id = open_config(&view, &service, cx);
+
+    // Two restores back to back: the second is refused while the first is busy.
+    view.update(cx, |this, cx| {
+        this.restore_and_restart(&id, cx);
+        this.restore_and_restart(&id, cx);
+    });
+    settle(cx);
+    assert_eq!(
+        service.counts().config_restore,
+        1,
+        "M17: a restore during a restore is a no-op"
+    );
+
+    // Two opens back to back: the same.
+    view.update(cx, |this, cx| {
+        this.open_config_raw(&id, cx);
+        this.open_config_raw(&id, cx);
+    });
+    settle(cx);
+    assert_eq!(
+        service.counts().config_open_raw,
+        1,
+        "M17: an open during an open is a no-op"
+    );
+}
