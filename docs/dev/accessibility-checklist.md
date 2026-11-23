@@ -31,13 +31,22 @@ clean at `git status --short`.
 | **F3**: the palette Start arm does nothing | `keyboard_flow_tests::full_first_session_creates_starts_and_copies` | `FAILED` — "the palette start command must start the stopped instance, got []" |
 | **F4**: the dock instance-row focus removed | `keyboard_flow_tests::tab_and_enter_reaches_a_sidebar_row_and_opens_it` | `FAILED` — "Tab + Enter ... must reach a sidebar instance row and open it" |
 | `submit_create` made a no-op | `keyboard_flow_tests::create_confirm_keeps_the_keyboard_alive`, `full_first_session_creates_starts_and_copies` | `FAILED` (the created-specs assertion) |
+| **G1**: `StartSelected`/`StopSelected` handler body emptied | `keyboard_flow_tests::keyboard_fix2_tests::ctrl_shift_s_x_start_and_stop_the_selected_instance` | `FAILED` — "Ctrl+Shift+S must start exactly the selected stopped instance" |
+| **G1**: `start_selected` without the `can_start` status check | `keyboard_flow_tests::keyboard_fix2_tests::ctrl_shift_s_x_are_noops_for_wrong_status_or_no_selection` | `FAILED` — "Ctrl+Shift+S on a running instance must be a no-op" |
+| **G2**: version-row ring drawn only on the top edge | `render::focus_ring::a_focused_version_row_draws_a_full_outline` | `FAILED` — "bbox height 3 < 60 (top-edge-only mutation)" |
+| **G3a**: `confirm_delete` success without the restore | `keyboard_flow_tests::keyboard_fix2_tests::delete_confirm_restores_focus_and_keeps_the_keyboard_alive` | `FAILED` — "ctrl-k must open after a delete confirm" |
+| **G3b**: `restore_focus_if_quit_closed` made a no-op | `keyboard_flow_tests::keyboard_fix2_tests::quit_cancel_restores_focus_and_keeps_the_keyboard_alive` | `FAILED` — "cancel must return focus to the exact opener child" |
+| **G3c**: `.focus_trap(...)` removed from the quit dialog | `keyboard_flow_tests::keyboard_fix2_tests::tab_is_contained_in_the_quit_dialog` | `FAILED` — "the quit dialog must register a focus trap (G3c)" |
+| **G3d**: the group header's `apply_inset_focus_ring` removed (drops its `track_focus`) | `keyboard_flow_tests::keyboard_fix2_tests::tab_reaches_the_group_header_and_enter_toggles_it` | `FAILED` — "Tab + Enter must reach the group header and toggle it (G3d)" |
+| **G3e**: the palette `CopyUri` arm does nothing | `keyboard_flow_tests::keyboard_fix2_tests::palette_copy_uri_puts_the_uri_on_the_clipboard` | `FAILED` — "must copy the URI, got \"\"" |
 
-The focus-ring *pixels* are now sampled: `tests/render/focus_ring.rs` renders the
-real create dialog with the MySQL card focused and counts the pixels that are the
-theme `ring` colour in the focused frame but not at the same point in the
-unfocused frame (2028 at scale 2), so removing the ring from a control kind is
-red (0). The `focus_ring_pairs` contrast test still proves `theme.ring` clears 3:1
-on every surface it is drawn on.
+The focus-ring *pixels* are sampled by `tests/render/focus_ring.rs`: for an engine
+card it counts pixels the theme `ring` colour in the focused frame but not at the
+same point unfocused (2028 at scale 2); for a **version row** and a **group
+header** it asserts the bounding box of the newly-added ring pixels spans the
+row's full width **and** height (version row 1351×81 device px, header 509×59),
+which a one-edge line (height ≈ 3) fails. The `focus_ring_pairs` contrast test
+still proves `theme.ring` clears 3:1 on every surface it is drawn on.
 
 ## What "good" means (acceptance, verbatim intent)
 
@@ -61,18 +70,23 @@ on every surface it is drawn on.
 | `Ctrl/Cmd+N` | open the create dialog | root |
 | `Ctrl/Cmd+Shift+C` | copy the selected instance URI | root |
 | `Ctrl/Cmd+Enter` | start/stop the selected instance | root |
-| `Ctrl/Cmd+Shift+S` / `Ctrl/Cmd+Shift+X` | start / stop the selected instance | root |
+| `Ctrl/Cmd+Shift+S` / `Ctrl/Cmd+Shift+X` | start / stop the **selected** instance, gated on its status (start only a stopped/failed instance, stop only a running one; otherwise a no-op) | root |
 | `Ctrl/Cmd+K`, `Ctrl/Cmd+Shift+P` | open the command palette | root |
 | `Ctrl/Cmd+,` | open Settings | root |
 | `Up`/`Down`/`Enter` | move and confirm in the palette | palette |
 | `Escape` (empty query) | close the palette and return focus | palette |
 
-The focus indicator is **a ring/outline**, not a background tint: gpui-component
-draws `theme.ring` at its edge (or a contrasting inside line on filled
-controls). `apply_focus_ring` (the helpers documented in
-`docs/architecture/gui.md`) calls `focus_ring_style` on a focused row, and the
-`focus_ring_pairs` contrast test proves `theme.ring` clears 3:1 on every surface
-it is drawn on.
+The focus indicator is **a ring/outline**, not a background tint. The default is
+gpui-component's `focus_ring_style` (`apply_focus_ring`: a `theme.ring` border
+plus the outside ring). Where the row sits in a **clipped** container — the
+create dialog's version list has `overflow_hidden`, so an outside ring is cut off
+to a single edge line — the row and the dock's engine-group header use
+`apply_inset_focus_ring` instead: a 2px `theme.ring` border painted on **all four
+sides inside** the row bounds, which cannot be clipped. Both are verified by
+`tests/render/focus_ring.rs` (the version-row and group-header tests assert the
+new ring's bounding box spans the row's full width **and** height, so a
+one-edge line fails). `focus_ring_pairs` proves `theme.ring` clears 3:1 on every
+surface it is drawn on.
 
 ## Automated here (Linux, headless, CI)
 
@@ -82,19 +96,19 @@ when the test **fails without the code it tests** (see the mutation checks above
 | Screen / state | What is checked | How | Result | Test |
 |---|---|---|---|---|
 | Shell, all overlays | no duplicate a11y node ids in a rendered frame | headless a11y tree | pass (27 cases) | `tests/a11y_tree.rs` |
-| Sidebar tree + filter | engine-group headers and instance rows are tab stops with the ring; Enter/Space expands a group or opens an instance | headless key events | pass (F4) | `keyboard_flow_tests::tab_and_enter_reaches_a_sidebar_row_and_opens_it` |
+| Sidebar tree + filter | engine-group headers and instance rows are tab stops with the ring; Enter/Space expands a group or opens an instance | headless key events | pass (F4/G3d) | `keyboard_flow_tests::tab_and_enter_reaches_a_sidebar_row_and_opens_it`, `keyboard_fix2_tests::tab_reaches_the_group_header_and_enter_toggles_it` |
 | Instance tabs | each tab is a tab stop with the ring; Enter/Space selects it; close `Button` is its own stop | headless key events | pass (F4) | `keyboard_flow_tests::tab_and_enter_selects_an_instance_tab` |
 | Overview (every card + failure banner) | status text + glyph; copy/reveal are `Button`s (tab stops, Enter/Space) | code audit + render | pass | `tests/render.rs` |
 | Logs | follow/copy are `Button`s; list scrolls by wheel/keyboard | code audit | pass | `tests/render.rs` |
 | Databases (tables, drop/secret/reset dialogs) | drop and reset dialogs take focus on open, return it on close, and trap Tab inside | unit + key events | pass (F1/F2) | `app/admin_fix_tests.rs`, `keyboard_flow_tests.rs` |
 | Config (W4-H) | fields are `Input`s; Apply/Restore/Open are `Button`s; "perlu restart" is text | code audit + render | pass | `tests/render.rs` |
-| Create dialog | focused on open; Tab/Shift+Tab **contained** inside the modal and wrap; engine cards + version rows are tab stops that draw the ring and activate on Enter/Space; Batal/Buat are tab stops | headless key events + render pixels | pass (F2/F3) | `keyboard_flow_tests.rs`, `tests/render/focus_ring.rs` |
+| Create dialog | focused on open; Tab/Shift+Tab **contained** inside the modal and wrap; engine cards + version rows are tab stops; **version-row and engine-card rings** drawn; activate on Enter/Space; Batal/Buat are tab stops | headless key events + render pixels | pass (F2/F3/G2) | `keyboard_flow_tests.rs`, `tests/render/focus_ring.rs` |
 | Create dialog → first session | full session by key only, no pointer: choose engine+version → create (exact spec asserted) → copy URI (clipboard text + service call) → start (service call) | headless key events | pass (F3) | `keyboard_flow_tests::full_first_session_creates_starts_and_copies` |
-| Delete dialog | takes focus on open, traps Tab inside, returns focus on confirm; type-the-name; Batal/Hapus are tab stops | unit + key events | pass (F1/F2) | `keyboard_flow_tests.rs`, `app/instance_actions_tests.rs` |
-| Quit dialog | three named `Button`s, primary default; takes focus on open, traps Tab, Escape cancels and returns focus | code audit + render | pass | `tests/render.rs` |
+| Delete dialog | takes focus on open, traps Tab inside, returns focus on confirm; type-the-name; Batal/Hapus are tab stops | unit + key events | pass (F1/F2/G3a) | `keyboard_fix2_tests::delete_confirm_restores_focus_and_keeps_the_keyboard_alive` |
+| Quit dialog | three named `Button`s, primary default; takes focus on open, **traps Tab and wraps**, cancel returns focus to the exact opener child | headless key events | pass (G3b/G3c) | `keyboard_fix2_tests::tab_is_contained_in_the_quit_dialog`, `quit_cancel_restores_focus_and_keeps_the_keyboard_alive` |
 | Settings dialog | Check/Pasang/Close `Button`s, login `Switch`; takes focus on open, traps Tab inside, close returns focus | key events + render | pass (F1/F2) | `keyboard_flow_tests.rs`, `app/settings_tests.rs` |
 | Open in… menu | `DropdownButton` builds on `PopupMenuItem`s (menu items are keyboard-navigable) | code audit | pass | `app/open_in_tests.rs` |
-| Command palette | Ctrl/Cmd+K opens + focuses query (stale query cleared); typing filters by name/engine/version/port (keywords); Up/Down/Enter run; disabled rows carry a text reason and Enter on one does nothing; confirm/Enter returns focus so ctrl-k works again | headless key events + unit | pass (F1/F3) | `keyboard_flow_tests.rs`, `format/tests.rs` |
+| Command palette | Ctrl/Cmd+K opens + focuses query (stale query cleared); typing filters by name/engine/version/port (keywords); Up/Down/Enter run; disabled rows carry a text reason and Enter on one does nothing; **Copy URI** copies via keys; confirm/Enter returns focus so ctrl-k works again | headless key events + unit | pass (F1/F3/G3e) | `keyboard_flow_tests.rs`, `keyboard_fix2_tests::palette_copy_uri_puts_the_uri_on_the_clipboard`, `format/tests.rs` |
 | Toasts | a `Label` in the status bar (text, not colour) | code audit | pass | — |
 | Status bar | every counter is text + glyph; pending/tray notes are text | code audit | pass | `tests/render.rs` |
 | Tray menu labels | `TrayMenuModel` rows carry shape+word status | unit | pass | `tray::tests` |
