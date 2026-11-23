@@ -43,7 +43,19 @@ Do: (a) re-read on EVERY entry to the Config tab and when the window becomes act
 
 ## Mutation gaps to close
 
-The reviewer's mutation pass on `a6f4255` (result appended below when it finishes) decides which of the Config behaviours have no test that turns red. Close every one that stays green, with the test named after the behaviour, red then green pasted.
+The reviewer mutated `a6f4255` 14 times (GUI lib suite, 358 tests, each mutation on a scratch copy). Seven are red (ConfigChanged not invalidating a background instance, ConfigChanged not re-reading the visible tab, apply keeping the edits, restore enabled without a backup, outside-change banner never raised, Escape not closing the restore dialog, a field set back to the file value keeping an edit). **Seven stay GREEN, so nothing pins them. Close each with a test named after the behaviour, red against the mutation, then green (paste both):**
+
+| # | Mutation (file, what) | Behaviour to pin |
+|---|---|---|
+| M5 | `format::offers_restore` without the `status == Failed` test | a Running or Stopped instance that still carries a failure with `restore_available` shows no restore banner |
+| M6 | `offers_restore` ignoring `failure.restore_available` (`\|_failure\| true`) | a Failed instance whose failure has `restore_available == false` (a port conflict) shows no restore banner |
+| M8 | `render_config_applied`: `if running` replaced by `if true` | "Restart sekarang" exists in the tree only for a running instance, absent for a stopped one |
+| M9 | `record_config_field` no longer calls `validate` | typing an invalid value shows `DBL-8601` under the field BEFORE any Terapkan (the real window does; only the apply path is tested today) |
+| M11 | `InstanceRemoved` no longer calls `config.forget` / `forget_config_fields` | after the instance is removed its Config state, its field entities, a pending restart and an open restore confirmation are gone |
+| M12 | `overview.rs`: `if offers_restore(view)` replaced by `if false` | the Overview of a Failed instance with `restore_available` draws "Pulihkan konfigurasi dan mulai ulang" and clicking it calls `config_restore` (the existing test calls the handler directly, never the banner) |
+| M17 | the `any_busy` guard removed from `restore_config_now` and `open_config_raw` | a second restore or open while one is in flight does nothing (service call counts stay 1) |
+
+After F1-F7 the same table must still hold; the reviewer reruns all 14 on the final head.
 
 ## Bar
 
