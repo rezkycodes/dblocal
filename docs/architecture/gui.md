@@ -27,6 +27,15 @@ Owner: W1-G. This document describes the `crates/gui` shell built against `dbloc
 | `app/palette.rs` | Command palette on `gpui_component::command::Command` | layout | 70% (layout) |
 | `app/create_dialog.rs` | Create-instance form on `InputState` | layout + render | 82% |
 | `app/delete_dialog.rs` | Delete modal with the two D-18 actions | layout + render | 81% |
+| `app/admin_state.rs` | Pure Databases-tab state (`F-DBU-01..03`): loadable rows, in-flight actions, id derivation | unit, thorough | — |
+| `app/admin_actions.rs` | Databases-tab handlers, all on `Workspace::bg` | unit (render) | — |
+| `app/admin_dialogs.rs` | Drop confirmation, reset confirmation, one-time secret dialog | unit + render | — |
+| `app/open_in.rs` | Pure "Open in…" menu model from detected clients (`F-OPN-01..02`) | unit | — |
+| `app/open_in_actions.rs` | Detection cache and launch handlers | unit (render) | — |
+| `app/settings_state.rs` | Pure Settings state (`F-PKG-05`, `F-AUT-01`) | unit, thorough | — |
+| `app/settings_dialog.rs` / `app/settings_actions.rs` | Settings dialog view and its background handlers | render | — |
+| `app/login_item.rs` | The `F-AUT-01` login-item seam over the W4-D autostart core API | unit | — |
+| `app/screens/config.rs` | Config placeholder (`F-CFG`, Phase 3) and the demo-only config table | render | — |
 | `format.rs` | Pure view-models (grouping, labels, bytes/speed/ETA, masking, palette, validation) | unit, thorough | 98.5% |
 | `logs.rs` | Per-instance `LogStore` of `LogBuffer`s, follow, copy | unit, thorough | 99.5% |
 | `service_bridge.rs` | Event bridge, no polling, Resync on lag | unit | 92.1% |

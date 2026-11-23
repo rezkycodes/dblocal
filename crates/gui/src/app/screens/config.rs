@@ -93,53 +93,14 @@ fn placeholder_card(
     spec: &PlaceholderCard,
     theme: &Theme,
 ) -> impl IntoElement {
-    // The prototype's Databases create card puts title + field + button on one
-    // header row. Detect that shape so we don't stack them and crush padding.
-    let header_row = spec.title.is_some()
-        && spec.controls.len() == 2
-        && spec.controls[0].kind == format::PlaceholderControlKind::Field
-        && spec.controls[1].kind == format::PlaceholderControlKind::Button;
-
-    let mut card_box = if header_row {
-        let mut hdr = h_flex().gap_2().items_center();
-        if let Some(title) = spec.title {
-            hdr = hdr.child(
-                div().flex_1().child(
-                    Label::new(title.to_owned())
-                        .text_sm()
-                        .font_weight(gpui_kit::FontWeight::SEMIBOLD),
-                ),
-            );
-        }
+    let mut card_box = card(spec.title, Some(&format!("placeholder-{index}")), theme);
+    if !spec.controls.is_empty() {
+        let mut row = h_flex().gap_2().items_center().flex_wrap();
         for (control_index, control) in spec.controls.iter().enumerate() {
-            hdr = hdr.child(placeholder_control(
-                tab,
-                index,
-                control_index,
-                control,
-                theme,
-            ));
+            row = row.child(placeholder_control(tab, index, control_index, control));
         }
-        let mut c = card(None, Some(&format!("placeholder-{index}")), theme);
-        c = c.child(hdr);
-        c
-    } else {
-        let mut c = card(spec.title, Some(&format!("placeholder-{index}")), theme);
-        if !spec.controls.is_empty() {
-            let mut row = h_flex().gap_2().items_center().flex_wrap();
-            for (control_index, control) in spec.controls.iter().enumerate() {
-                row = row.child(placeholder_control(
-                    tab,
-                    index,
-                    control_index,
-                    control,
-                    theme,
-                ));
-            }
-            c = c.child(row);
-        }
-        c
-    };
+        card_box = card_box.child(row);
+    }
 
     if let Some(columns) = spec.columns {
         card_box = card_box.child(
@@ -173,37 +134,19 @@ fn placeholder_card(
     card_box
 }
 
-/// One disabled control: a button, or a text field drawn with its placeholder.
+/// One disabled control: the placeholder only ever draws buttons now that
+/// Config has no field (`W4-B`).
 fn placeholder_control(
     tab: PlaceholderTab,
     card_index: usize,
     control_index: usize,
     control: &format::PlaceholderControl,
-    theme: &Theme,
 ) -> AnyElement {
     let id = format!("placeholder-{tab:?}-{card_index}-{control_index}");
-    match control.kind {
-        format::PlaceholderControlKind::Button => Button::new(id)
-            .label(control.label)
-            .disabled(control.disabled)
-            .into_any_element(),
-        format::PlaceholderControlKind::Field => div()
-            .h(px(32.))
-            .w(px(200.))
-            .px(px(10.))
-            .flex()
-            .items_center()
-            .rounded(px(6.))
-            .border_1()
-            .border_color(theme.table_row_border)
-            .bg(theme.background)
-            .child(
-                Label::new(control.label)
-                    .text_sm()
-                    .text_color(theme.muted_foreground),
-            )
-            .into_any_element(),
-    }
+    Button::new(id)
+        .label(control.label)
+        .disabled(control.disabled)
+        .into_any_element()
 }
 
 /// The demo Config layout: current value beside the default.

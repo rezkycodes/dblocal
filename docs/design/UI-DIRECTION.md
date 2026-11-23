@@ -15,10 +15,10 @@ Decision D-25 (supersedes D-23's "write our own Zed-style shell"; the layout is 
 |---|---|---|
 | Client-side title bar | App mark, "DBLocal", breadcrumb `Engine > instance`, catalog freshness word, "+" new instance, window controls per platform | `crates/gui/src/app/title_bar.rs` |
 | Left dock | `INSTANCES` with "+", filter, collapsible engine groups with counts, status glyph + label + name + version + `:port` (failed port in danger), `RUNTIMES` with unused marker, primary "Instance baru" | `crates/gui/src/app/dock.rs`, `crates/gui/src/format.rs` |
-| Centre pane tabs | One tab per opened instance (status glyph + close). Header: engine badge, name, status chip, subtitle, Start/Stop, Restart, "Open in…" (placeholder), sub-tabs Overview/Logs/Databases/Config | `crates/gui/src/app/screens.rs` |
+| Centre pane tabs | One tab per opened instance (status glyph + close). Header: engine badge, name, status chip, subtitle, Start/Stop, Restart, "Open in…", sub-tabs Overview/Logs/Databases/Config | `crates/gui/src/app/screens.rs` |
 | Overview | Connection (masked URI, Show/Hide, Copy URI, Copy .env, loopback note, credential location), Detail, Process (PID placeholder, health, detached mode, credential ref, autostart through `set_autostart`), recent logs | `crates/gui/src/app/screens/overview.rs` |
 | Logs | Per-instance `LogStore` tail via `uniform_list`, follow toggle, copy, diagnosis banner for typed port-in-use with "Pindah ke port berikutnya & start" = `suggest_port` + `change_port` + `start_instance` | `crates/gui/src/app/screens/logs.rs`, `crates/gui/src/logs.rs` |
-| Databases / Config | Honest placeholders in the product build: "belum tersedia di versi ini" + disabled controls, no sample rows. Demo build renders the prototype layout for review only | `crates/gui/src/app/screens/databases.rs` |
+| Databases / Config | Databases is live (`W4-B`, see below); Config is still an honest placeholder in the product build: "belum tersedia di versi ini" + disabled controls, no sample rows. Demo build renders the prototype Config layout for review only | `crates/gui/src/app/screens/databases.rs`, `crates/gui/src/app/screens/config.rs` |
 | Status bar | Counts (running/stopped/failed), data dir + total size, credential backend, `os arch`, tray note, downloads popover, toast, version | `crates/gui/src/app/status_bar.rs` |
 | Modals | New instance (engine cards, version list with Terpasang/Unduh badges, validation through `validate_spec`, no-password warning, download footer only when needed), Delete (Archive default / Purge, type-the-name) | `crates/gui/src/app/create_dialog.rs`, `crates/gui/src/app/delete_dialog.rs` |
 | Command palette | `Ctrl/Cmd+K` / `Ctrl/Cmd+Shift+P`, kept from W1-G | `crates/gui/src/app/palette.rs` |
@@ -45,19 +45,22 @@ No hue was changed; saturation/value were adjusted minimally until every checked
 
 ## Keyboard and accessibility
 
-- `Ctrl/Cmd+N` new instance, `Ctrl/Cmd+Shift+C` copy URI, `Ctrl/Cmd+Enter` start/stop, `Ctrl/Cmd+K`/`Ctrl/Cmd+Shift+P` command palette, `Escape` closes the top overlay.
+- `Ctrl/Cmd+N` new instance, `Ctrl/Cmd+Shift+C` copy URI, `Ctrl/Cmd+Enter` start/stop, `Ctrl/Cmd+K`/`Ctrl/Cmd+Shift+P` command palette, `Ctrl/Cmd+,` Settings, `Escape` closes the top overlay.
 - Text through `Label` (gpui-component) so it is exposed to accessibility. No bare string children for visible UI text.
 - Focus order follows visual/task order; focus is visible; overlay close restores focus via gpui-component dialog/palette behaviour.
 - Status is never colour alone: running filled circle, stopped hollow circle, failed triangle, busy half circle, always accompanied by the status word.
 - No hover-only destructive/essential action. Primary actions are visible buttons; secondary/overflow actions use menus.
 
-## Honest placeholders (no backend in the frozen service)
+## Live screens and the one honest placeholder
+
+`W4-B` makes the Databases tab and the "Open in…" menu real over `DblService`; only
+Config still has no backend.
 
 | Surface | Phase | Product build | Demo build |
 |---|---|---|---|
-| Databases tab (`F-DBU`) | 2 | Prototype card structure (Database, "User & hak akses", "Password superuser", boundary footer with disabled "Open in…"); every control disabled; empty-state copy "belum tersedia di versi ini (Fase 2)"; no sample rows | Prototype layout with sample rows, review only |
+| Databases tab (`F-DBU`) | live (W4-B) | Live: database table with owner/size, create with the core allowlist, type-the-name delete, create user with a one-time password, reset superuser password with a one-time URI. A stopped instance shows an empty state with Start; a Valkey or no-password instance shows the service's typed message. | Same live view over the mock, with scripted rows (empty, many, slow, failing). |
 | Config tab (`F-CFG`) | 3 | Prototype card structure (restart-required banner, "Setting penting" with column header, footer actions); every control disabled; empty-state copy "belum tersedia di versi ini (Fase 3)"; no sample rows | Prototype layout with sample config rows, review only |
-| "Open in…" (`F-OPN`) | 2 | Menu item disabled with placeholder reason | Menu entries visible but disabled |
+| "Open in…" (`F-OPN`) | live (W4-B) | Live: the instance header and the Overview Connection card open a grouped GUI/CLI menu from `detect_clients`, launch via `open_in_client`, and fall back to "Salin URI" when nothing is detected. | Same live menu over the mock (`no_clients` renders the fallback). |
 
 ## Rules
 

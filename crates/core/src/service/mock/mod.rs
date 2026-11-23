@@ -69,6 +69,10 @@ pub enum AdminScenario {
     /// `reset_superuser_password` fails and leaves the stored password as it
     /// was (`F-DBU-03` AC2).
     ResetFailure,
+    /// The next `list_databases` sleeps for this long before answering, so a
+    /// demo or a test can show the loading state and prove the call is off the
+    /// GPUI thread.
+    SlowRead(std::time::Duration),
 }
 
 /// Controls simulated timing and deterministic randomness.

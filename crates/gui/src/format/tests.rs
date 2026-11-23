@@ -725,28 +725,9 @@ fn create_footer_note_depends_on_whether_a_download_is_needed() {
 
 #[test]
 fn placeholder_layouts_match_the_prototype_structure() {
-    // Defect 1: Databases/Config placeholders must not reuse the create-dialog
-    // labels, and they must carry the prototype's card/control structure with
-    // every control disabled and no sample rows.
-    let db = placeholder_layout(PlaceholderTab::Databases);
-    let db_labels = placeholder_labels(PlaceholderTab::Databases);
-    assert_eq!(
-        db_labels,
-        vec![
-            strings::UI_DATABASES_NAME_PLACEHOLDER,
-            strings::UI_DATABASES_CREATE,
-            strings::UI_DATABASES_NEW_USER,
-            strings::UI_DATABASES_RESET,
-            strings::UI_ACTION_OPEN_IN,
-        ]
-    );
-    assert!(
-        db.iter()
-            .all(|card| { card.controls.iter().all(|c| c.disabled) })
-    );
-    assert!(!db_labels.contains(&strings::UI_CREATE_SUBMIT));
-    assert!(!db_labels.contains(&strings::UI_CANCEL));
-
+    // Only Config is still a placeholder; `F-DBU` and `F-OPN` now have their
+    // view (`W4-B`). The Config layout keeps the prototype's card/control
+    // structure with every control disabled and no sample rows.
     let cfg = placeholder_layout(PlaceholderTab::Config);
     let cfg_labels = placeholder_labels(PlaceholderTab::Config);
     assert_eq!(
@@ -762,9 +743,10 @@ fn placeholder_layouts_match_the_prototype_structure() {
     );
     assert!(
         cfg.iter()
-            .all(|card| card.controls.iter().all(|c| c.disabled))
+            .all(|card| { card.controls.iter().all(|c| c.disabled) })
     );
-    assert_eq!(placeholder_phase_label(PlaceholderTab::Databases), "2");
+    assert!(!cfg_labels.contains(&strings::UI_CREATE_SUBMIT));
+    assert!(!cfg_labels.contains(&strings::UI_CANCEL));
     assert_eq!(placeholder_phase_label(PlaceholderTab::Config), "3");
 }
 

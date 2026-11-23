@@ -7,10 +7,11 @@ use dblocal_core::strings;
 use super::*;
 
 /// Which honest placeholder tab a descriptor describes.
+///
+/// Only Config is left: `F-DBU` and `F-OPN` now have their view, so the
+/// Databases tab never renders the "belum tersedia" state (`W4-B`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PlaceholderTab {
-    /// Databases (`F-DBU`, Phase 2).
-    Databases,
     /// Config (`F-CFG`, Phase 3).
     Config,
 }
@@ -20,8 +21,6 @@ pub enum PlaceholderTab {
 pub enum PlaceholderControlKind {
     /// A disabled button with the label.
     Button,
-    /// A disabled text field drawn with the label as its placeholder.
-    Field,
 }
 
 /// One disabled control inside a placeholder card.
@@ -31,7 +30,7 @@ pub struct PlaceholderControl {
     pub label: &'static str,
     /// Whether the control is disabled (always true in the product build).
     pub disabled: bool,
-    /// Button or field shape.
+    /// Control shape (currently all buttons; kept so a field can be added back).
     pub kind: PlaceholderControlKind,
 }
 
@@ -41,14 +40,6 @@ impl PlaceholderControl {
             label,
             disabled: true,
             kind: PlaceholderControlKind::Button,
-        }
-    }
-
-    fn field(label: &'static str) -> Self {
-        Self {
-            label,
-            disabled: true,
-            kind: PlaceholderControlKind::Field,
         }
     }
 }
@@ -75,39 +66,6 @@ pub struct PlaceholderCard {
 /// the demo build has its own content path.
 pub fn placeholder_layout(tab: PlaceholderTab) -> Vec<PlaceholderCard> {
     match tab {
-        PlaceholderTab::Databases => vec![
-            PlaceholderCard {
-                title: Some(strings::UI_DATABASES_HEADING),
-                body: None,
-                columns: None,
-                empty: Some(strings::UI_PLACEHOLDER_DATABASES),
-                controls: vec![
-                    PlaceholderControl::field(strings::UI_DATABASES_NAME_PLACEHOLDER),
-                    PlaceholderControl::button(strings::UI_DATABASES_CREATE),
-                ],
-            },
-            PlaceholderCard {
-                title: Some(strings::UI_DATABASES_USERS),
-                body: None,
-                columns: None,
-                empty: Some(strings::UI_PLACEHOLDER_DATABASES),
-                controls: vec![PlaceholderControl::button(strings::UI_DATABASES_NEW_USER)],
-            },
-            PlaceholderCard {
-                title: Some(strings::UI_DATABASES_PASSWORD_HEADING),
-                body: Some(strings::UI_DATABASES_PASSWORD_BODY),
-                columns: None,
-                empty: None,
-                controls: vec![PlaceholderControl::button(strings::UI_DATABASES_RESET)],
-            },
-            PlaceholderCard {
-                title: None,
-                body: Some(strings::UI_DATABASES_BOUNDARY),
-                columns: None,
-                empty: None,
-                controls: vec![PlaceholderControl::button(strings::UI_ACTION_OPEN_IN)],
-            },
-        ],
         PlaceholderTab::Config => vec![
             PlaceholderCard {
                 title: None,
@@ -154,7 +112,6 @@ pub fn placeholder_labels(tab: PlaceholderTab) -> Vec<&'static str> {
 /// The phase label a placeholder carries (`Fase 2`, `Fase 3`).
 pub fn placeholder_phase_label(tab: PlaceholderTab) -> &'static str {
     match tab {
-        PlaceholderTab::Databases => "2",
         PlaceholderTab::Config => "3",
     }
 }

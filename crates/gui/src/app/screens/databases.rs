@@ -23,7 +23,6 @@
 //! typed message the service returns; the view never invents text.
 
 use dblocal_core::admin::PrivilegeLevel;
-use dblocal_core::model::EngineKey;
 use dblocal_core::service::InstanceView;
 use dblocal_core::strings;
 use gpui_kit::component::button::{Button, ButtonVariants};
@@ -48,18 +47,11 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let theme = cx.theme().clone();
-        // Valkey has no named databases or SQL roles; the service says so with a
-        // typed message, and so does the tab, without invented rows.
-        if view.engine == EngineKey::Valkey {
-            return page()
-                .child(
-                    card(None, Some("valkey-note"), &theme).child(
-                        Label::new(strings::UI_DATABASES_VALKEY_NOTE)
-                            .text_color(theme.muted_foreground),
-                    ),
-                )
-                .into_any_element();
-        }
+        // A stopped instance has no server to ask; the view offers a Start
+        // rather than a connection error. A running engine that cannot do
+        // admin (Valkey, or a PostgreSQL without a stored password) is not
+        // special-cased: the service answers with a typed message and the
+        // retry-able error card shows exactly that text, never an invented one.
         if !crate::format::is_running(view.status) {
             return page()
                 .child(self.render_databases_stopped(view, &theme, cx))
@@ -67,7 +59,7 @@ impl Workspace {
         }
         page()
             .child(self.render_databases_table(view, &theme, cx))
-            .when_some(self.render_admin_error(view, &theme), |this, error| {
+            .when_some(self.render_admin_error(view, &theme, cx), |this, error| {
                 this.child(error)
             })
             .child(
@@ -559,13 +551,21 @@ impl Workspace {
     }
 
     /// The last card-level error, rendered under the tables when one is set.
+    ///
+    /// The typed message is exactly what the service returned (`DBL-xxxx` plus
+    /// its Indonesian sentence). "Muat ulang" re-reads, so a transient failure
+    /// (a server that stopped, a no-password instance) is recoverable without a
+    /// restart, and a no-password or Valkey instance shows the service's own
+    /// reason instead of an invented note.
     pub(crate) fn render_admin_error(
         &self,
         view: &InstanceView,
         theme: &Theme,
+        cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
         let admin = self.admin_state_for(&view.id)?;
         let err = admin.error.as_ref().or_else(|| admin.data.error())?;
+        let retry_id = view.id.clone();
         Some(
             h_flex()
                 .id(SharedString::from(row_part_id(
@@ -589,8 +589,23 @@ impl Workspace {
                             "row",
                             "text",
                         )))
+                        .flex_1()
                         .text_xs()
                         .text_color(theme.danger),
+                )
+                .child(
+                    Button::new(SharedString::from(row_part_id(
+                        "admin-error",
+                        &view.id,
+                        "row",
+                        "retry",
+                    )))
+                    .label(strings::UI_DATABASES_RETRY)
+                    .small()
+                    .compact()
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.retry_admin(&retry_id, cx);
+                    })),
                 )
                 .into_any_element(),
         )

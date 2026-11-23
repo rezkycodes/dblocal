@@ -918,3 +918,92 @@ fn mock_open_in_client_returns_a_plan() {
         .code()
     );
 }
+
+// --- W4-B: scripted admin and client scenarios for the GUI -------------------
+
+#[test]
+fn mock_admin_empty_scenario_is_sticky_and_hides_rows_and_users() {
+    let (service, id) = seeded_pg();
+    service.push_admin_scenario(super::AdminScenario::Empty);
+    assert!(service.list_databases(&id).expect("list").is_empty());
+    assert!(service.list_users(&id).expect("users").is_empty());
+    // Sticky: a second read still returns nothing.
+    assert!(service.list_databases(&id).expect("list again").is_empty());
+}
+
+#[test]
+fn mock_admin_many_rows_returns_the_asked_number() {
+    let (service, id) = seeded_pg();
+    service.push_admin_scenario(super::AdminScenario::ManyRows(40));
+    let databases = service.list_databases(&id).expect("list");
+    assert_eq!(databases.len(), 40);
+    assert_eq!(databases[0].name(), "db_00");
+    assert_eq!(databases[39].name(), "db_39");
+}
+
+#[test]
+fn mock_admin_fail_next_mutation_is_consumed_by_one_call() {
+    let (service, id) = seeded_pg();
+    service.push_admin_scenario(super::AdminScenario::FailNextMutation);
+    let err = service.create_database(&id, "shop_db").expect_err("fails");
+    assert_eq!(err.code, crate::admin::error::CODE_UNSUPPORTED);
+    // Consumed: the next create succeeds, so one scripted failure does not wedge
+    // the tab.
+    service.create_database(&id, "shop_db").expect("second works");
+}
+
+#[test]
+fn mock_admin_reset_failure_leaves_the_old_password_working() {
+    let (service, id) = seeded_pg();
+    let before = service
+        .connection_uri(&id, UriFormat::Uri)
+        .expect("uri before")
+        .expose()
+        .to_owned();
+    service.push_admin_scenario(super::AdminScenario::ResetFailure);
+    let err = service
+        .reset_superuser_password(&id)
+        .expect_err("reset fails");
+    assert_eq!(err.code, crate::admin::error::CODE_PASSWORD_VERIFY);
+    let after = service
+        .connection_uri(&id, UriFormat::Uri)
+        .expect("uri after")
+        .expose()
+        .to_owned();
+    assert_eq!(before, after, "a failed reset must not change the URI");
+}
+
+#[test]
+fn mock_admin_slow_read_delays_one_list_call() {
+    let (service, id) = seeded_pg();
+    service.push_admin_scenario(super::AdminScenario::SlowRead(
+        std::time::Duration::from_millis(80),
+    ));
+    let start = std::time::Instant::now();
+    service.list_databases(&id).expect("slow list");
+    assert!(
+        start.elapsed() >= std::time::Duration::from_millis(80),
+        "the slow scenario must actually sleep"
+    );
+    // One-shot: the next read is immediate again.
+    let fast = std::time::Instant::now();
+    service.list_databases(&id).expect("fast list");
+    assert!(fast.elapsed() < std::time::Duration::from_millis(60));
+}
+
+#[test]
+fn mock_no_clients_renders_the_copy_uri_fallback_state() {
+    let (service, id) = seeded_pg();
+    service.set_no_clients(true);
+    assert!(service.detect_clients(false).expect("detect").is_empty());
+    let err = service
+        .open_in_client(&id, ClientKind::TablePlus, true)
+        .expect_err("nothing to launch");
+    assert_eq!(
+        err.code,
+        crate::clients::ClientError::ClientNotFound {
+            name: String::new()
+        }
+        .code()
+    );
+}

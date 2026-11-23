@@ -104,6 +104,14 @@ pub(crate) fn list_databases(
     if let Some(err) = unsupported(&instance) {
         return Err(err);
     }
+    // A queued `SlowRead` models a driver round trip that takes real time, so
+    // the demo and the GUI tests can see the loading state.
+    let slow = take_once(&mut lock(inner), |scenario| {
+        matches!(scenario, AdminScenario::SlowRead(_))
+    });
+    if let Some(AdminScenario::SlowRead(delay)) = slow {
+        std::thread::sleep(delay);
+    }
     let g = lock(inner);
     let owner = instance.superuser();
     if let Some(scenario) = sticky(&g) {

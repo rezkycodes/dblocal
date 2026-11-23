@@ -519,9 +519,6 @@ pub const UI_DATABASES_RESET: &str = "Reset password";
 pub const UI_DATABASES_CREATED: &str = "Database {name} dibuat (UTF-8)";
 /// Databases tab: toast after the superuser password is reset.
 pub const UI_DATABASES_PASSWORD_RESET: &str = "Password baru tersimpan di Keychain";
-/// Databases tab: why the list is empty on an engine without named databases.
-pub const UI_DATABASES_VALKEY_NOTE: &str =
-    "Valkey tidak punya database bernama atau user SQL. Gunakan indeks 0–15 langsung dari URI.";
 /// Databases tab: why the list is empty while the instance is not running.
 pub const UI_DATABASES_STOPPED: &str = "Jalankan instance untuk melihat dan mengelola database.";
 
@@ -743,8 +740,6 @@ pub const UI_DATABASES_RESET_FAILED_NOTE: &str = "Password lama tetap berlaku.";
 pub const UI_DATABASES_RESET_DONE: &str = "Password superuser diperbarui.";
 /// Databases tab: the create-user password succeeded.
 pub const UI_DATABASES_USER_DONE: &str = "User {name} dibuat.";
-/// Databases tab: a busy action's label suffix while the call is in flight.
-pub const UI_DATABASES_WORKING: &str = "Memproses…";
 
 /// Formats the databases heading with its row count.
 pub fn databases_heading(count: usize) -> String {
@@ -766,12 +761,8 @@ pub const UI_OPEN_IN_CLI_GROUP: &str = "Terminal (CLI)";
 pub const UI_OPEN_IN_REFRESH: &str = "Perbarui daftar client";
 /// Menu: detection failed, with the typed error underneath.
 pub const UI_OPEN_IN_FAILED: &str = "Deteksi client gagal.";
-/// Menu action when nothing was detected (F-OPN-01 AC2).
-pub const UI_OPEN_IN_NONE: &str = "Tidak ada client terdeteksi.";
 /// Launcher result: the client was started.
 pub const UI_OPEN_IN_LAUNCHED: &str = "{client} dibuka.";
-/// Menu: a launch is in flight.
-pub const UI_OPEN_IN_LAUNCHING: &str = "Membuka…";
 
 /// Formats the launch confirmation.
 pub fn open_in_launched(client: &str) -> String {
@@ -804,10 +795,6 @@ pub const UI_SETTINGS_INSTALL: &str = "Pasang";
 pub const UI_SETTINGS_INSTALLING: &str = "Memasang…";
 /// Settings updates: the update was applied.
 pub const UI_SETTINGS_INSTALLED: &str = "Pembaruan terpasang. Mulai ulang DBLocal.";
-/// Settings updates: release-notes heading.
-pub const UI_SETTINGS_RELEASE_NOTES: &str = "Catatan rilis";
-/// Settings updates: the release size.
-pub const UI_SETTINGS_RELEASE_SIZE: &str = "Ukuran unduhan";
 /// Settings section heading: run at login.
 pub const UI_SETTINGS_AUTOSTART: &str = "Jalankan saat login";
 /// Settings autostart: explanation of what turning it on does (F-AUT-01 AC1).

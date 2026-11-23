@@ -84,6 +84,12 @@ impl Workspace {
         }
     }
 
+    /// Re-reads the tab after a failure ("Muat ulang").
+    pub(crate) fn retry_admin(&mut self, id: &InstanceId, cx: &mut Context<Self>) {
+        self.reload_admin_bg(id, cx);
+        cx.notify();
+    }
+
     /// The database-name field's value.
     fn db_name_text(&self, cx: &App) -> String {
         self.db_name_input.read(cx).value().to_string()
