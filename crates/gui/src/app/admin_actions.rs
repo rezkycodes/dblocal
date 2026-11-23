@@ -161,20 +161,23 @@ impl Workspace {
         target: Entity<InputState>,
     ) {
         // Capture what has focus *before* moving it: that field gets it back.
-        self.dialog_focus.opened(window.focused(cx));
+        // `begin_modal` also makes the container handle the dialog traps Tab on.
+        self.begin_modal(window, cx);
         target.update(cx, |state, cx| state.focus(window, cx));
     }
 
     /// Takes focus for a SecretDialog, which has no text field of its own.
     ///
     /// The dialog's Copy and "Sudah saya simpan" buttons are its Tab stops, so
-    /// focusing the dialog itself puts the keyboard inside it while leaving the
-    /// covered field behind (F3).
+    /// focusing the dialog container puts the keyboard inside it while leaving
+    /// the covered field behind (F3), and the trap keeps Tab inside (F2).
     pub(crate) fn focus_dialog_buttons(&mut self, cx: &mut Context<Self>) {
         let entity_id = cx.entity().entity_id();
         cx.with_window(entity_id, |window, cx| {
             self.dialog_focus.opened(window.focused(cx));
-            window.focus_next(cx);
+            let handle = cx.focus_handle();
+            self.modal_focus = Some(handle.clone());
+            self.pending_focus_restore = Some(handle);
         });
     }
 

@@ -18,7 +18,9 @@ use gpui_kit::component::label::Label;
 use gpui_kit::component::switch::Switch;
 use gpui_kit::component::{ActiveTheme, Disableable, Sizable, h_flex, v_flex};
 use gpui_kit::prelude::*;
-use gpui_kit::{AnyElement, Context, IntoElement, ParentElement, SharedString, Styled, div, px};
+use gpui_kit::{
+    AnyElement, Context, IntoElement, ParentElement, SharedString, Styled, Window, div, px,
+};
 
 use super::Workspace;
 use super::create_dialog::overlay;
@@ -28,7 +30,11 @@ use super::settings_state::{
 use crate::app::components::{icon, section_label};
 
 /// Renders the Settings dialog.
-pub(super) fn render(workspace: &Workspace, cx: &mut Context<Workspace>) -> AnyElement {
+pub(super) fn render(
+    workspace: &Workspace,
+    window: &mut Window,
+    cx: &mut Context<Workspace>,
+) -> AnyElement {
     let theme = cx.theme().clone();
 
     let updates = v_flex()
@@ -89,8 +95,7 @@ pub(super) fn render(workspace: &Workspace, cx: &mut Context<Workspace>) -> AnyE
                             .compact()
                             .label(strings::UI_SETTINGS_CLOSE)
                             .on_click(cx.listener(|this, _, _, cx| {
-                                this.close_settings();
-                                cx.notify();
+                                this.close_settings(cx);
                             })),
                     ),
             )
@@ -102,6 +107,8 @@ pub(super) fn render(workspace: &Workspace, cx: &mut Context<Workspace>) -> AnyE
                     .child(updates)
                     .child(login),
             ),
+        workspace,
+        window,
         cx,
     )
 }

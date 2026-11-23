@@ -10,6 +10,7 @@
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use dblocal_core::error::Result;
@@ -19,12 +20,38 @@ use dblocal_core::model::{
 };
 use dblocal_core::secret::SecretString;
 use dblocal_core::service::{
-    CatalogView, DblService, InstanceView, OperationId, ServiceEvent, UriFormat,
+    CatalogView, DblService, EngineEntry, InstanceView, OperationId, ServiceEvent, UriFormat,
+    VersionEntry,
 };
 use tokio::sync::broadcast;
 
 /// The password every URI this service returns carries.
 pub(crate) const SECRET: &str = "p@ss:w/rd%";
+
+/// A deterministic platform-filtered catalog with one engine (PostgreSQL) and
+/// two versions, the newer installed. Enough for the create dialog to draw
+/// engine cards and version rows without a network.
+pub(crate) fn test_catalog() -> Vec<EngineEntry> {
+    vec![EngineEntry {
+        engine: EngineKey::Postgresql,
+        available: true,
+        unavailable_reason: None,
+        versions: vec![
+            VersionEntry {
+                version: "17.4".to_owned(),
+                eol: false,
+                installed: true,
+                size_bytes: 0,
+            },
+            VersionEntry {
+                version: "16.6".to_owned(),
+                eol: false,
+                installed: false,
+                size_bytes: 1024,
+            },
+        ],
+    }]
+}
 
 /// An emit-free service with a fixed set of instances.
 #[derive(Clone)]
@@ -32,6 +59,14 @@ pub(crate) struct QuietService {
     instances: Arc<Vec<InstanceView>>,
     runtimes: Arc<Vec<Runtime>>,
     calls: Arc<AtomicUsize>,
+    /// Every `create_instance` spec, in order (F3: assert the spec chosen by key).
+    created: Arc<Mutex<Vec<InstanceSpec>>>,
+    /// Every `start_instance` id, in order (F3: assert the started instance).
+    started: Arc<Mutex<Vec<InstanceId>>>,
+    /// Every `stop_instance` id, in order (G1: assert the stopped instance).
+    stopped: Arc<Mutex<Vec<InstanceId>>>,
+    /// Every `connection_uri` request `(id, format)`, in order (F3: copy URI).
+    uris: Arc<Mutex<Vec<(InstanceId, UriFormat)>>>,
     tx: broadcast::Sender<ServiceEvent>,
 }
 
@@ -66,6 +101,10 @@ impl QuietService {
             instances: Arc::new(instances),
             runtimes: Arc::new(Vec::new()),
             calls: Arc::new(AtomicUsize::new(0)),
+            created: Arc::new(Mutex::new(Vec::new())),
+            started: Arc::new(Mutex::new(Vec::new())),
+            stopped: Arc::new(Mutex::new(Vec::new())),
+            uris: Arc::new(Mutex::new(Vec::new())),
             tx,
         }
     }
@@ -73,6 +112,26 @@ impl QuietService {
     /// Number of service calls served so far.
     pub(crate) fn calls(&self) -> usize {
         self.calls.load(Ordering::SeqCst)
+    }
+
+    /// Every `create_instance` spec, in call order.
+    pub(crate) fn created(&self) -> Vec<InstanceSpec> {
+        self.created.lock().expect("created lock").clone()
+    }
+
+    /// Every `start_instance` id, in call order.
+    pub(crate) fn started(&self) -> Vec<InstanceId> {
+        self.started.lock().expect("started lock").clone()
+    }
+
+    /// Every `stop_instance` id, in call order.
+    pub(crate) fn stopped(&self) -> Vec<InstanceId> {
+        self.stopped.lock().expect("stopped lock").clone()
+    }
+
+    /// Every `connection_uri` request, in call order.
+    pub(crate) fn uris(&self) -> Vec<(InstanceId, UriFormat)> {
+        self.uris.lock().expect("uris lock").clone()
     }
 
     /// The id of the first instance in the given status.
@@ -99,7 +158,7 @@ impl DblService for QuietService {
         Ok(CatalogView {
             status: dblocal_core::model::CatalogStatus::Fresh,
             banner: None,
-            engines: Vec::new(),
+            engines: test_catalog(),
         })
     }
     fn refresh_catalog(&self, _force: bool) -> Result<OperationId> {
@@ -114,16 +173,19 @@ impl DblService for QuietService {
         self.bump();
         Port::new(5433)
     }
-    fn create_instance(&self, _spec: InstanceSpec) -> Result<OperationId> {
+    fn create_instance(&self, spec: InstanceSpec) -> Result<OperationId> {
         self.bump();
+        self.created.lock().expect("created lock").push(spec);
         Ok(OperationId::new("op-create"))
     }
-    fn start_instance(&self, _id: &InstanceId) -> Result<OperationId> {
+    fn start_instance(&self, id: &InstanceId) -> Result<OperationId> {
         let n = self.calls.fetch_add(1, Ordering::SeqCst);
+        self.started.lock().expect("started lock").push(id.clone());
         Ok(OperationId::new(format!("op-start-{n}")))
     }
-    fn stop_instance(&self, _id: &InstanceId) -> Result<OperationId> {
+    fn stop_instance(&self, id: &InstanceId) -> Result<OperationId> {
         let n = self.calls.fetch_add(1, Ordering::SeqCst);
+        self.stopped.lock().expect("stopped lock").push(id.clone());
         Ok(OperationId::new(format!("op-stop-{n}")))
     }
     fn delete_instance(&self, _id: &InstanceId, _mode: DeleteMode) -> Result<OperationId> {
@@ -148,6 +210,10 @@ impl DblService for QuietService {
     }
     fn connection_uri(&self, id: &InstanceId, format: UriFormat) -> Result<SecretString> {
         self.bump();
+        self.uris
+            .lock()
+            .expect("uris lock")
+            .push((id.clone(), format));
         let engine = self
             .instances
             .iter()
@@ -222,7 +288,7 @@ mod tests {
         .expect("spec");
 
         assert_eq!(service.list_instances().expect("instances").len(), 3);
-        assert!(service.catalog().expect("catalog").engines.is_empty());
+        assert!(!service.catalog().expect("catalog").engines.is_empty());
         assert_eq!(
             service.refresh_catalog(false).expect("refresh").as_str(),
             "op-refresh"

@@ -26,7 +26,7 @@ use gpui_kit::component::{
     v_flex,
 };
 use gpui_kit::prelude::*;
-use gpui_kit::{Context, IntoElement, ParentElement, SharedString, Styled, div, px};
+use gpui_kit::{Context, IntoElement, ParentElement, SharedString, Styled, Window, div, px};
 
 use crate::format;
 
@@ -36,7 +36,11 @@ use super::state::InnerTab;
 
 impl Workspace {
     /// The centre pane: welcome screen, select-instance prompt, or a tab.
-    pub(crate) fn render_center(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    pub(crate) fn render_center(
+        &self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
         let theme = cx.theme().clone();
         if self.tabs.is_empty() {
             if self.instances().is_empty() {
@@ -51,7 +55,7 @@ impl Workspace {
             .h_full()
             .min_w_0()
             .bg(theme.background)
-            .child(self.render_instance_tabs(&theme, cx))
+            .child(self.render_instance_tabs(&theme, window, cx))
             .when_some(self.catalog_banner_el(cx), |this, b| this.child(b))
             .child(self.render_selected(cx))
             .into_any_element()
@@ -116,7 +120,15 @@ impl Workspace {
     }
 
     /// One tab per opened instance, with its status glyph and a close button.
-    fn render_instance_tabs(&self, theme: &Theme, cx: &mut Context<Self>) -> impl IntoElement {
+    ///
+    /// `F4`: the tab itself is a keyboard tab stop (Enter/Space selects it) with
+    /// the ring; the close button is its own stop.
+    fn render_instance_tabs(
+        &self,
+        theme: &Theme,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
         h_flex()
             .id("instance-tabs")
             .h(px(36.))
@@ -134,7 +146,12 @@ impl Workspace {
                     .map(|view| view.status)
                     .unwrap_or(InstanceStatus::Stopped);
                 let id = tab.instance.clone();
-                h_flex()
+                let tab_focus = super::components::keyed_focus(
+                    SharedString::from(format!("itab-focus-{index}")),
+                    window,
+                    cx,
+                );
+                let tab_row = h_flex()
                     .id(SharedString::from(format!("itab-{index}")))
                     .h_full()
                     .gap_2()
@@ -170,7 +187,8 @@ impl Workspace {
                                 let _ = id;
                                 this.close_tab(index, cx);
                             })),
-                    )
+                    );
+                super::components::apply_focus_ring(tab_row, &tab_focus, window, cx)
             }))
     }
 

@@ -190,6 +190,41 @@ impl Workspace {
         }
     }
 
+    /// `Ctrl/Cmd+Shift+S`: start the selected instance, but only when the same
+    /// predicate the palette uses allows it (stopped/failed). `G1`: a selection
+    /// in the wrong state, or no selection, is a no-op — never a call, dialog or
+    /// panic. The verb itself is [`Self::start_instance`], not a copy.
+    pub(crate) fn start_selected(&mut self, cx: &mut Context<Self>) {
+        let Some(id) = self.selected_instance_id() else {
+            return;
+        };
+        let Some(view) = self.instance(&id) else {
+            return;
+        };
+        if crate::format::can_start(view.status) {
+            self.start_instance(id, cx);
+        }
+    }
+
+    /// `Ctrl/Cmd+Shift+X`: stop the selected instance, only when it is running.
+    /// Same predicate as the palette's stop rows; otherwise a no-op (`G1`).
+    pub(crate) fn stop_selected(&mut self, cx: &mut Context<Self>) {
+        let Some(id) = self.selected_instance_id() else {
+            return;
+        };
+        let Some(view) = self.instance(&id) else {
+            return;
+        };
+        if crate::format::can_stop(view.status) {
+            self.stop_instance(id, cx);
+        }
+    }
+
+    /// The instance of the selected centre-pane tab, if any.
+    fn selected_instance_id(&self) -> Option<InstanceId> {
+        self.tabs.selected_instance().cloned()
+    }
+
     pub(crate) fn report_error(&mut self, err: &dblocal_core::DblError) {
         let facing = UserFacingError::from(err);
         self.report_user_facing_error(&facing);
@@ -327,14 +362,32 @@ impl Workspace {
             cx.new(|cx| InputState::new(window, cx).placeholder(strings::UI_FIELD_PORT.to_owned()));
         let name = crate::format::suggested_name(engine, &version);
         name_input.update(cx, |state, cx| state.set_value(name, window, cx));
+        // One focus handle per engine card and per version row, plus the footer
+        // buttons, built here so the view and the keyboard tests share them.
+        let engine_focus = self
+            .catalog
+            .engines
+            .iter()
+            .map(|entry| (entry.engine, cx.focus_handle()))
+            .collect();
+        let version_focus = self.version_focus_for(engine, cx);
         self.create = Some(CreateForm {
             engine,
             version,
             auth: AuthMode::Password,
             suggested_port: None,
-            name_input: Some(name_input),
+            name_input: Some(name_input.clone()),
             port_input: Some(port_input.clone()),
+            engine_focus,
+            version_focus,
+            submit_focus: cx.focus_handle(),
+            cancel_focus: cx.focus_handle(),
         });
+        // `F-PLH-01` AC1 + `F2`: capture the opener, register the modal's focus
+        // trap container, and land the keyboard on the name field (inside the
+        // dialog, so the trap is active at once).
+        self.begin_modal(window, cx);
+        name_input.update(cx, |state, cx| state.focus(window, cx));
         // Port suggestion is a service call; do it in background.
         let service = self.service.clone();
         self.bg(cx, move || {
@@ -348,6 +401,29 @@ impl Workspace {
             }
         });
         cx.notify();
+    }
+
+    /// The version-row focus handles for `engine`, in catalog order.
+    ///
+    /// Rebuilt whenever the selected engine changes, because each engine has its
+    /// own version list (`F-PLH-01` AC1: Tab reaches every version row).
+    fn version_focus_for(
+        &self,
+        engine: EngineKey,
+        cx: &mut Context<Self>,
+    ) -> Vec<(String, gpui_kit::FocusHandle)> {
+        self.catalog
+            .engines
+            .iter()
+            .find(|entry| entry.engine == engine)
+            .map(|entry| {
+                entry
+                    .versions
+                    .iter()
+                    .map(|version| (version.version.clone(), cx.focus_handle()))
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 
     pub(crate) fn default_engine_version(&self, engine: EngineKey) -> (String, Option<Port>) {
@@ -369,10 +445,14 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         let (version, _) = self.default_engine_version(engine);
+        // The version rows belong to the newly chosen engine, so rebuild their
+        // focus handles too (`F-PLH-01` AC1).
+        let version_focus = self.version_focus_for(engine, cx);
         if let Some(form) = self.create.as_mut() {
             form.engine = engine;
             form.version = version.clone();
             form.suggested_port = None;
+            form.version_focus = version_focus;
         }
         let name = crate::format::suggested_name(engine, &version);
         self.set_create_field_texts(&name, "", window, cx);
@@ -437,6 +517,10 @@ impl Workspace {
 
     pub(crate) fn cancel_create(&mut self) {
         self.create = None;
+        // Give focus back to whatever opened the dialog (`F-PLH-01` AC1);
+        // `render` parks and applies the handle because this runs from a
+        // listener that may have no window.
+        self.restore_dialog_focus_after_close();
     }
 
     pub(crate) fn submit_create(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -466,6 +550,10 @@ impl Workspace {
             move |this: &mut Workspace, cx: &mut Context<Workspace>| match result {
                 Ok(submitted) => {
                     this.state.downloads.push(submitted.download);
+                    // `F1`: the dialog closed by confirming; return the keyboard
+                    // to the opener (or the root) so `ctrl-n`/`ctrl-k` keep
+                    // working without a mouse click.
+                    this.finish_create_overlay();
                     cx.notify();
                 }
                 Err(create_submit::SubmitError::Invalid(message)) => {
@@ -495,6 +583,12 @@ impl Workspace {
         });
         self.delete_target = Some(id.clone());
         self.delete_mode = DeleteMode::ArchiveData;
+        // `F-PLH-01` AC1 + `F2`: capture the opener and modal container, then
+        // put the keyboard inside the dialog. The type-the-name field only exists
+        // in Purge mode, so focus the dialog container (its mode cards and
+        // buttons are the tab stops in Archive mode).
+        self.begin_modal(window, cx);
+        self.focus_modal_root();
         self.delete_name_input = Some(name_input);
         self.delete_size = 0;
         let service = self.service.clone();
@@ -545,6 +639,8 @@ impl Workspace {
                         this.close_tab_by_instance(&id, cx);
                         this.delete_target = None;
                         this.delete_name_input = None;
+                        // `F1`: a confirm dismisses the overlay; return the keyboard.
+                        this.restore_dialog_focus_after_close();
                         this.toast = Some(SharedString::from(strings::UI_TOAST_DELETED));
                         this.refresh_instances_bg(cx);
                     }

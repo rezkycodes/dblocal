@@ -7,6 +7,9 @@ use dblocal_core::service::FailureInfo;
 
 use super::*;
 
+#[path = "palette_tests.rs"]
+mod palette_tests;
+
 fn view(name: &str, engine: EngineKey, status: InstanceStatus, port: u16) -> InstanceView {
     view_version(name, engine, "17.4", status, port)
 }
@@ -77,6 +80,53 @@ fn every_status_has_a_glyph_and_a_nonempty_label() {
         assert!(is_busy(busy));
     }
     assert!(!is_busy(InstanceStatus::Running));
+}
+
+/// `F-PLH-02` AC2: status is never colour alone — every status maps to a
+/// non-empty label **and** a glyph shape, and no two status families share a
+/// shape. This is the table the requirement names: a label per variant, and a
+/// distinct glyph per family so the shape alone also distinguishes them.
+#[test]
+fn every_status_has_a_label_and_the_glyph_families_are_distinct() {
+    let all = [
+        InstanceStatus::Running,
+        InstanceStatus::Stopped,
+        InstanceStatus::Failed,
+        InstanceStatus::Provisioning,
+        InstanceStatus::Initializing,
+        InstanceStatus::Starting,
+        InstanceStatus::Stopping,
+        InstanceStatus::Deleting,
+        InstanceStatus::Draft,
+    ];
+    // Every variant: a non-empty label (never colour alone).
+    for status in all {
+        assert!(
+            !status_label(status).trim().is_empty(),
+            "{status:?} must have a text label, not colour alone"
+        );
+    }
+    // The four glyph shapes are pairwise distinct, so the shape is a second,
+    // colour-blind-safe signal.
+    let glyphs = [
+        StatusGlyph::Running,
+        StatusGlyph::Stopped,
+        StatusGlyph::Failed,
+        StatusGlyph::Busy,
+    ];
+    for (i, a) in glyphs.iter().enumerate() {
+        for b in &glyphs[i + 1..] {
+            assert_ne!(a, b, "glyph shapes must be distinct: {a:?} vs {b:?}");
+        }
+    }
+    // Each family is reachable from at least one status, so none is dead.
+    let mapped: Vec<StatusGlyph> = all.iter().map(|s| status_glyph(*s)).collect();
+    for glyph in glyphs {
+        assert!(
+            mapped.contains(&glyph),
+            "glyph {glyph:?} is never used by any status"
+        );
+    }
 }
 
 #[test]
@@ -422,46 +472,6 @@ fn runtime_rows_name_users_or_say_unused() {
     assert_eq!(unused.users, 0);
     assert_eq!(unused.usage, strings::UI_RUNTIME_UNUSED);
     assert_eq!(runtime_engine(&runtimes[0]), EngineKey::Postgresql);
-}
-
-#[test]
-fn palette_lists_start_stop_open_and_copy() {
-    let running = view("run", EngineKey::Postgresql, InstanceStatus::Running, 5432);
-    let stopped = view("stop", EngineKey::Mysql, InstanceStatus::Stopped, 3306);
-    let items = palette_items(&[running, stopped]);
-    let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
-    assert!(labels.contains(&strings::UI_PALETTE_NEW));
-    assert!(
-        labels
-            .iter()
-            .any(|l| l.starts_with(strings::UI_PALETTE_START) && l.contains("stop"))
-    );
-    assert!(
-        labels
-            .iter()
-            .any(|l| l.starts_with(strings::UI_PALETTE_STOP) && l.contains("run"))
-    );
-    assert!(
-        labels
-            .iter()
-            .any(|l| l.starts_with(strings::UI_PALETTE_COPY_URI))
-    );
-    assert!(matches!(items[0].action, PaletteAction::NewInstance));
-}
-
-#[test]
-fn palette_filter_is_case_insensitive_substring() {
-    let items = palette_items(&[view(
-        "shop",
-        EngineKey::Mysql,
-        InstanceStatus::Stopped,
-        3306,
-    )]);
-    assert_eq!(filter_palette(&items, "").len(), items.len());
-    let hits = filter_palette(&items, "SHOP");
-    assert!(!hits.is_empty());
-    assert!(hits.iter().all(|i| i.label.contains("shop")));
-    assert!(filter_palette(&items, "zzz").is_empty());
 }
 
 #[test]

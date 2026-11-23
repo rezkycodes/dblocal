@@ -19,7 +19,7 @@ use gpui_kit::component::label::Label;
 use gpui_kit::component::{ActiveTheme, Theme, h_flex, input::Input, v_flex};
 use gpui_kit::{
     AnyElement, Context, InteractiveElement, IntoElement, MouseButton, ParentElement, SharedString,
-    Styled, div, prelude::*, px,
+    Styled, Window, div, prelude::*, px,
 };
 
 use crate::format;
@@ -28,7 +28,15 @@ use super::Workspace;
 use super::components::{engine_badge, icon, section_label};
 
 /// Renders the create-instance modal when a form is open.
-pub(super) fn render(workspace: &Workspace, cx: &mut Context<Workspace>) -> AnyElement {
+///
+/// `window` is threaded in so each engine card and version row can take a
+/// keyboard focus handle and draw the theme's focus ring when focused
+/// (`F-PLH-01` AC1: reach any choice by Tab, confirm with Enter/Space).
+pub(super) fn render(
+    workspace: &Workspace,
+    window: &mut Window,
+    cx: &mut Context<Workspace>,
+) -> AnyElement {
     let theme = cx.theme().clone();
     let Some(form) = workspace.create_form().cloned() else {
         return div().into_any_element();
@@ -59,7 +67,7 @@ pub(super) fn render(workspace: &Workspace, cx: &mut Context<Workspace>) -> AnyE
             v_flex()
                 .gap_2()
                 .child(section_label(strings::UI_FIELD_ENGINE).text_color(theme.muted_foreground))
-                .child(render_engine_cards(&entries, &form, &theme, cx)),
+                .child(render_engine_cards(&entries, &form, &theme, window, cx)),
         )
         .child(
             v_flex()
@@ -68,7 +76,13 @@ pub(super) fn render(workspace: &Workspace, cx: &mut Context<Workspace>) -> AnyE
                     section_label(format::create_versions(form.engine.display_name()))
                         .text_color(theme.muted_foreground),
                 )
-                .child(render_versions(selected_entry.as_ref(), &form, &theme, cx)),
+                .child(render_versions(
+                    selected_entry.as_ref(),
+                    &form,
+                    &theme,
+                    window,
+                    cx,
+                )),
         )
         .child(render_fields(workspace, &form, &theme, cx))
         .child(render_no_password(&form, &theme, cx));
@@ -106,6 +120,8 @@ pub(super) fn render(workspace: &Workspace, cx: &mut Context<Workspace>) -> AnyE
                     .child(body),
             )
             .child(footer),
+        workspace,
+        window,
         cx,
     )
 }
@@ -115,65 +131,74 @@ fn render_engine_cards(
     entries: &[EngineEntry],
     form: &super::CreateForm,
     theme: &Theme,
+    window: &mut Window,
     cx: &mut Context<Workspace>,
 ) -> impl IntoElement {
-    let cards = crate::format::create_engine_cards(entries)
-        .into_iter()
-        .map(|entry| {
-            let engine = entry.engine;
-            let selected = engine == form.engine;
-            let disabled = !entry.available;
-            let reason = format::engine_unavailable_reason(entry).map(str::to_owned);
-            v_flex()
-                .id(SharedString::from(format!("engine-{}", engine.as_str())))
-                .flex_1()
-                .min_w(px(140.))
-                .gap_2()
-                .p(px(12.))
-                .rounded(px(8.))
-                .border_1()
-                .cursor_pointer()
-                .border_color(if selected {
-                    theme.primary
-                } else {
-                    theme.border
-                })
-                .bg(if selected {
-                    crate::theme::tokens::tint(theme.primary, 0.08)
-                } else {
-                    theme.background
-                })
-                .hover(|s| s.border_color(theme.primary))
-                .on_click(cx.listener(move |this, _, window, cx| {
-                    if !disabled {
-                        this.choose_engine_action(engine, window, cx);
-                    }
-                }))
-                .child(
-                    h_flex()
-                        .items_center()
-                        .child(engine_badge(engine, 28.0, theme))
-                        .child(div().flex_1())
-                        .when(selected, |this| {
-                            this.child(icon(IconName::Check, 16.0, theme.primary))
-                        }),
-                )
-                .child(
-                    Label::new(engine.display_name()).font_weight(gpui_kit::FontWeight::SEMIBOLD),
-                )
-                .child(
-                    Label::new(format!("Port kanonik {}", engine.canonical_port()))
+    let cards = crate::format::create_engine_cards(entries);
+    // One focus handle per engine card, taken from the form so the keyboard
+    // tests focus the exact same control the view draws (`F-PLH-01` AC1).
+    let cards = cards.into_iter().map(|entry| {
+        let engine = entry.engine;
+        let focus = form
+            .engine_focus
+            .iter()
+            .find(|(key, _)| *key == engine)
+            .map(|(_, handle)| handle.clone());
+        let selected = engine == form.engine;
+        let disabled = !entry.available;
+        let reason = format::engine_unavailable_reason(entry).map(str::to_owned);
+        let card = v_flex()
+            .id(SharedString::from(format!("engine-{}", engine.as_str())))
+            .flex_1()
+            .min_w(px(140.))
+            .gap_2()
+            .p(px(12.))
+            .rounded(px(8.))
+            .border_1()
+            .cursor_pointer()
+            .border_color(if selected {
+                theme.primary
+            } else {
+                theme.border
+            })
+            .bg(if selected {
+                crate::theme::tokens::tint(theme.primary, 0.08)
+            } else {
+                theme.background
+            })
+            .hover(|s| s.border_color(theme.primary))
+            .on_click(cx.listener(move |this, _, window, cx| {
+                if !disabled {
+                    this.choose_engine_action(engine, window, cx);
+                }
+            }))
+            .child(
+                h_flex()
+                    .items_center()
+                    .child(engine_badge(engine, 28.0, theme))
+                    .child(div().flex_1())
+                    .when(selected, |this| {
+                        this.child(icon(IconName::Check, 16.0, theme.primary))
+                    }),
+            )
+            .child(Label::new(engine.display_name()).font_weight(gpui_kit::FontWeight::SEMIBOLD))
+            .child(
+                Label::new(format!("Port kanonik {}", engine.canonical_port()))
+                    .text_xs()
+                    .text_color(theme.muted_foreground),
+            )
+            .when_some(reason, |this, reason| {
+                this.child(
+                    Label::new(reason)
                         .text_xs()
                         .text_color(theme.muted_foreground),
                 )
-                .when_some(reason, |this, reason| {
-                    this.child(
-                        Label::new(reason)
-                            .text_xs()
-                            .text_color(theme.muted_foreground),
-                    )
-                })
-        });
+            });
+        match (disabled, focus) {
+            (false, Some(focus)) => super::components::apply_focus_ring(card, &focus, window, cx),
+            _ => card,
+        }
+    });
     h_flex().gap_2p5().flex_wrap().children(cards)
 }
 
@@ -182,6 +207,7 @@ fn render_versions(
     entry: Option<&EngineEntry>,
     form: &super::CreateForm,
     theme: &Theme,
+    window: &mut Window,
     cx: &mut Context<Workspace>,
 ) -> impl IntoElement {
     let theme = theme.clone();
@@ -200,6 +226,11 @@ fn render_versions(
     };
     let unavailable = format::version_unavailable_reason(entry).map(str::to_owned);
     for (index, version) in entry.versions.iter().enumerate() {
+        let focus = form
+            .version_focus
+            .iter()
+            .find(|(tag, _)| tag == &version.version)
+            .map(|(_, handle)| handle.clone());
         let selected = version.version == form.version;
         let tag = version.version.clone();
         let version_unavailable = unavailable.is_some();
@@ -213,52 +244,56 @@ fn render_versions(
                 theme.muted_foreground,
             ))
         };
-        list = list.child(
-            h_flex()
-                .id(SharedString::from(format!("version-{tag}")))
-                .h(px(42.))
-                .px(px(14.))
-                .gap_3()
-                .cursor_pointer()
-                .border_t_1()
-                .border_color(theme.table_row_border)
-                .bg(if selected {
-                    crate::theme::tokens::tint(theme.primary, 0.10)
-                } else {
-                    theme.background
-                })
-                .hover(|s| s.bg(theme.muted))
-                .on_click(cx.listener(move |this, _, window, cx| {
-                    if !version_unavailable {
-                        this.choose_version_action(tag.clone(), window, cx);
-                    }
-                    let _ = index;
-                }))
-                .child(radio_marker(selected, version_unavailable, &theme))
-                .child(
-                    Label::new(version.version.clone())
-                        .w(px(90.))
-                        .font_weight(gpui_kit::FontWeight::MEDIUM),
+        let row = h_flex()
+            .id(SharedString::from(format!("version-{tag}")))
+            .h(px(42.))
+            .px(px(14.))
+            .gap_3()
+            .cursor_pointer()
+            .border_t_1()
+            .border_color(theme.table_row_border)
+            .bg(if selected {
+                crate::theme::tokens::tint(theme.primary, 0.10)
+            } else {
+                theme.background
+            })
+            .hover(|s| s.bg(theme.muted))
+            .on_click(cx.listener(move |this, _, window, cx| {
+                if !version_unavailable {
+                    this.choose_version_action(tag.clone(), window, cx);
+                }
+                let _ = index;
+            }))
+            .child(radio_marker(selected, version_unavailable, &theme))
+            .child(
+                Label::new(version.version.clone())
+                    .w(px(90.))
+                    .font_weight(gpui_kit::FontWeight::MEDIUM),
+            )
+            .child(div().flex_1())
+            .when_some(badge, |this, (text, colour)| {
+                this.child(
+                    Label::new(text)
+                        .px_2()
+                        .rounded_full()
+                        .bg(theme.muted)
+                        .text_xs()
+                        .text_color(colour),
                 )
-                .child(div().flex_1())
-                .when_some(badge, |this, (text, colour)| {
-                    this.child(
-                        Label::new(text)
-                            .px_2()
-                            .rounded_full()
-                            .bg(theme.muted)
-                            .text_xs()
-                            .text_color(colour),
-                    )
-                })
-                .when_some(unavailable.clone(), |this, reason| {
-                    this.child(
-                        Label::new(reason)
-                            .text_xs()
-                            .text_color(theme.muted_foreground),
-                    )
-                }),
-        );
+            })
+            .when_some(unavailable.clone(), |this, reason| {
+                this.child(
+                    Label::new(reason)
+                        .text_xs()
+                        .text_color(theme.muted_foreground),
+                )
+            });
+        list = list.child(match (version_unavailable, focus) {
+            (false, Some(focus)) => {
+                super::components::apply_inset_focus_ring(row, &focus, window, cx)
+            }
+            _ => row,
+        });
     }
     list
 }
@@ -408,7 +443,6 @@ fn render_footer(
     } else {
         theme.muted_foreground
     };
-    let _ = form;
     h_flex()
         .gap_3()
         .px(px(20.))
@@ -419,6 +453,7 @@ fn render_footer(
         .child(
             Button::new("ni-cancel")
                 .label(strings::UI_CANCEL)
+                .track_focus(&form.cancel_focus)
                 .on_click(cx.listener(|this, _, _, cx| {
                     this.cancel_create_action();
                     cx.notify();
@@ -428,6 +463,7 @@ fn render_footer(
             Button::new("ni-create")
                 .primary()
                 .label(strings::UI_CREATE_SUBMIT_PROTOTYPE)
+                .track_focus(&form.submit_focus)
                 .on_click(cx.listener(|this, _, window, cx| {
                     this.submit_create_action(window, cx);
                 })),
@@ -447,14 +483,35 @@ fn input_or_empty(
     }
 }
 
-/// Shared modal chrome: a full-screen backdrop that closes on click, and a
-/// centred panel that swallows clicks.
+/// Shared modal chrome: a full-screen backdrop that closes on click, a centred
+/// panel that swallows clicks, and a **focus trap** (`F2`).
+///
+/// The panel registers a `gpui-base` focus trap on a per-overlay keyed handle,
+/// so when it holds focus, `Tab`/`Shift+Tab` cycle inside the dialog only — the
+/// modal no longer lets Tab reach the header, sidebar and status bar behind its
+/// scrim. `window` is needed for the keyed handle.
 pub(super) fn overlay(
     overlay_id: &'static str,
     panel_id: &'static str,
     panel: impl IntoElement,
+    workspace: &Workspace,
+    window: &mut Window,
     cx: &mut Context<Workspace>,
 ) -> AnyElement {
+    use gpui_kit::component::FocusTrapElement as _;
+    // The modal's container handle comes from `begin_modal` so `open_*` can focus
+    // it on open; fall back to a keyed handle if a preview drew the dialog
+    // without going through an open path.
+    let container = workspace.modal_focus().unwrap_or_else(|| {
+        window
+            .use_keyed_state(
+                SharedString::from(format!("modal-focus-fallback-{overlay_id}")),
+                cx,
+                |_, cx| cx.focus_handle(),
+            )
+            .read(cx)
+            .clone()
+    });
     gpui_kit::deferred(
         div()
             .id(overlay_id)
@@ -475,7 +532,8 @@ pub(super) fn overlay(
                 div()
                     .id(panel_id)
                     .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                    .child(panel),
+                    .child(panel)
+                    .focus_trap(SharedString::from(format!("trap-{overlay_id}")), &container),
             ),
     )
     .with_priority(10)

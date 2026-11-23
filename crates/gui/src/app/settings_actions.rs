@@ -13,7 +13,7 @@ use std::sync::Arc;
 
 use dblocal_core::service::UserFacingError;
 use dblocal_core::strings;
-use gpui_kit::Context;
+use gpui_kit::{Context, Window};
 
 use super::Workspace;
 use super::login_item::{HostLoginItem, LoginItemControl};
@@ -21,15 +21,24 @@ use super::settings_state::{InstallState, LoginState, SettingsState, UpdateCheck
 
 impl Workspace {
     /// Opens the dialog and reads the login-item state (never the network).
-    pub(crate) fn open_settings(&mut self, cx: &mut Context<Self>) {
+    ///
+    /// `F1`/`F2`: captures the opener, makes the modal container and gives the
+    /// keyboard to it, so a dialog of only buttons takes focus without a click.
+    pub(crate) fn open_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.settings.open();
+        self.begin_modal(window, cx);
+        self.focus_modal_root();
         self.read_login_status(cx);
         cx.notify();
     }
 
     /// Closes the dialog; an in-flight install keeps its state.
-    pub(crate) fn close_settings(&mut self) {
+    ///
+    /// `F1`: closing returns the keyboard (opener, or the root fallback).
+    pub(crate) fn close_settings(&mut self, cx: &mut Context<Self>) {
         self.settings.close();
+        self.restore_dialog_focus_after_close();
+        cx.notify();
     }
 
     /// The login-item seam, built once and reused.

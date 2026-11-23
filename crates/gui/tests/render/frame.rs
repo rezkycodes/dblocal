@@ -117,4 +117,22 @@ impl Frame {
         }
         colours.len()
     }
+
+    /// Perceptual luminance averaged over the whole frame (sRGB weights).
+    ///
+    /// A light theme renders to a higher mean than its dark counterpart; the
+    /// both-theme matrix test uses this to prove the two are actually different
+    /// screens, not the same frame drawn twice.
+    pub(crate) fn mean_luminance(&self) -> f64 {
+        let (w, h) = self.dims();
+        let mut sum = 0.0;
+        for y in 0..h {
+            for x in 0..w {
+                let p = self.px(x, y);
+                sum +=
+                    0.2126 * f64::from(p[0]) + 0.7152 * f64::from(p[1]) + 0.0722 * f64::from(p[2]);
+            }
+        }
+        sum / (f64::from(w) * f64::from(h))
+    }
 }

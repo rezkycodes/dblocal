@@ -374,6 +374,62 @@ impl Workspace {
         workspace
     }
 
+    /// Preview of the create modal with the **MySQL** engine card focused (not
+    /// the default-selected PostgreSQL), so a render test can prove the ring is
+    /// drawn: the selected card's border is already the primary colour, so only a
+    /// focused *unselected* card shows the ring as new pixels (`F3`).
+    pub fn preview_create_engine_focused(
+        service: Arc<dyn DblService>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let workspace = Self::preview_create(service, window, cx);
+        if let Some(handle) = workspace.create_form().and_then(|form| {
+            form.engine_focus
+                .iter()
+                .find(|(key, _)| *key == dblocal_core::model::EngineKey::Mysql)
+                .map(|(_, h)| h.clone())
+        }) {
+            handle.focus(window, cx);
+        }
+        workspace
+    }
+
+    /// Preview of the create modal with the version row **17.4** focused but not
+    /// selected (the dialog selects 16.6), so a render test can prove the
+    /// version-row ring is a full outline on all four edges (`G2`).
+    pub fn preview_version_row_focused(
+        service: Arc<dyn DblService>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let workspace = Self::preview_create(service, window, cx);
+        if let Some(handle) = workspace.create_form().and_then(|form| {
+            form.version_focus
+                .iter()
+                .find(|(tag, _)| tag == "17.4")
+                .map(|(_, h)| h.clone())
+        }) {
+            handle.focus(window, cx);
+        }
+        workspace
+    }
+
+    /// Preview with the PostgreSQL engine-group header focused, so a render test
+    /// can prove the group-header ring is a full outline on all four edges (`G2`).
+    pub fn preview_dock_group_focused(
+        service: Arc<dyn DblService>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let workspace = Self::preview(service, window, cx);
+        if let Some(handle) = workspace.dock_group_focus(dblocal_core::model::EngineKey::Postgresql)
+        {
+            handle.focus(window, cx);
+        }
+        workspace
+    }
+
     /// Preview with the delete modal open on the first instance.
     pub fn preview_delete(
         service: Arc<dyn DblService>,

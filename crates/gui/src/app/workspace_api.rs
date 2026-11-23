@@ -111,9 +111,51 @@ impl Workspace {
         self.demo_content
     }
 
+    /// Flips the palette flag; a test shortcut. The real toggle is
+    /// [`Self::toggle_palette_in`], which also moves focus.
+    #[cfg(test)]
     pub(crate) fn toggle_palette(&mut self) {
         self.palette_open = !self.palette_open;
-        self.palette_query.clear();
+    }
+
+    /// Opens or closes the palette, taking and returning keyboard focus.
+    ///
+    /// `F-PLH-01` AC1/AC2: the palette is keyboard-driven, so opening it must
+    /// move focus into its query field and closing it must give focus back to
+    /// wherever it came from (`dialog_focus` owns the capture/restore rule).
+    pub(crate) fn toggle_palette_in(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.palette_open {
+            self.close_palette(cx);
+        } else {
+            self.open_palette(window, cx);
+        }
+    }
+
+    /// Opens the palette and focuses its query field.
+    pub(crate) fn open_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // `F1`/`F2`: capture the opener for the focus return and make the modal
+        // container so the palette traps Tab inside it.
+        self.begin_modal(window, cx);
+        self.palette_open = true;
+        let command_state = self.command_state.clone();
+        // Clear any query left from a previous open so the list starts fresh and
+        // typing does not append to stale text.
+        command_state.update(cx, |state, cx| {
+            state.set_query("", window, cx);
+            state.focus(window, cx);
+        });
+    }
+
+    /// Closes the palette and gives focus back to the element that opened it.
+    pub(crate) fn close_palette(&mut self, cx: &mut Context<Self>) {
+        if !self.palette_open {
+            return;
+        }
+        self.palette_open = false;
+        // The close often runs from a listener without a window (the palette's
+        // own Escape); `render` applies the parked handle on the next frame.
+        let _ = cx;
+        self.restore_dialog_focus_after_close();
     }
 
     #[cfg(test)]
@@ -121,28 +163,47 @@ impl Workspace {
         self.palette_open
     }
 
+    #[cfg(test)]
     pub(crate) fn set_palette_open(&mut self, open: bool) {
         self.palette_open = open;
-        self.palette_query.clear();
     }
 
     pub(crate) fn command_state(&self) -> &Entity<CommandState> {
         &self.command_state
     }
 
-    pub(crate) fn palette_actions(&self) -> Vec<PaletteAction> {
-        let items = format::palette_items(&self.state.instances);
-        format::filter_palette(&items, &self.palette_query)
+    /// The palette rows the command renders, in order (`F-PLH-01` AC2).
+    ///
+    /// `CommandState` filters these locally and reports the *original* row index
+    /// on confirm, so the list `run_palette_action` indexes is this unfiltered
+    /// one — never `palette_query`-filtered, or the indices would drift once the
+    /// user types.
+    pub(crate) fn palette_items(&self) -> Vec<format::PaletteItem> {
+        format::palette_items(&self.state.instances)
+    }
+
+    /// The runnable actions of the palette rows, `None` for a disabled row.
+    pub(crate) fn palette_actions(&self) -> Vec<Option<PaletteAction>> {
+        self.palette_items()
             .into_iter()
-            .map(|item| item.action.clone())
+            .map(|item| item.action)
             .collect()
     }
 
+    #[cfg(test)]
     pub(crate) fn palette_labels(&self) -> Vec<String> {
-        let items = format::palette_items(&self.state.instances);
-        format::filter_palette(&items, &self.palette_query)
+        self.palette_items()
             .into_iter()
-            .map(|item| item.label.clone())
+            .map(|item| item.label)
+            .collect()
+    }
+
+    /// The reason a disabled palette row shows, or `None` when it is runnable.
+    #[cfg(test)]
+    pub(crate) fn palette_reasons(&self) -> Vec<Option<String>> {
+        self.palette_items()
+            .into_iter()
+            .map(|item| item.reason)
             .collect()
     }
 
@@ -152,34 +213,40 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let actions = self.palette_actions();
-        let Some(action) = actions.get(index).cloned() else {
-            self.palette_open = false;
-            return;
-        };
+        let action = self.palette_actions().get(index).cloned().flatten();
         self.palette_open = false;
         match action {
-            PaletteAction::NewInstance => self.open_new_instance(window, cx),
-            PaletteAction::Open(value) => {
+            Some(PaletteAction::NewInstance) => self.open_new_instance(window, cx),
+            Some(PaletteAction::Open(value)) => {
                 if let Ok(id) = value.parse::<InstanceId>() {
                     self.open_tab(id, cx);
                 }
             }
-            PaletteAction::Start(value) => {
+            Some(PaletteAction::Start(value)) => {
                 if let Ok(id) = value.parse::<InstanceId>() {
                     self.start_instance(id, cx);
                 }
             }
-            PaletteAction::Stop(value) => {
+            Some(PaletteAction::Stop(value)) => {
                 if let Ok(id) = value.parse::<InstanceId>() {
                     self.stop_instance(id, cx);
                 }
             }
-            PaletteAction::CopyUri(value) => {
+            Some(PaletteAction::CopyUri(value)) => {
                 if let Ok(id) = value.parse::<InstanceId>() {
                     self.copy_uri(id, UriFormat::Uri, window, cx);
                 }
             }
+            // A disabled row or an out-of-range index: close without running.
+            None => {}
+        }
+        // `F1`: a confirm is a dismissal, but an action that opened another
+        // overlay (NewInstance -> create dialog) owns its own focus capture, so
+        // only restore when no overlay is open now. Returning focus here (or to
+        // the root fallback) is what keeps `ctrl-k` working right after a
+        // command ran; without it the keyboard was dead until a mouse click.
+        if !self.any_overlay_open() {
+            self.restore_dialog_focus_after_close();
         }
         cx.notify();
     }
@@ -341,6 +408,11 @@ impl Workspace {
     /// Whether an engine group is collapsed in the dock.
     pub(crate) fn is_collapsed(&self, engine: EngineKey) -> bool {
         self.collapsed.contains(&engine)
+    }
+
+    /// The stable focus handle of an engine-group header (`F4`, `G2`).
+    pub(crate) fn dock_group_focus(&self, engine: EngineKey) -> Option<gpui_kit::FocusHandle> {
+        self.dock_focus.get(&engine).cloned()
     }
 
     pub(crate) fn toggle_collapsed(&mut self, engine: EngineKey) {

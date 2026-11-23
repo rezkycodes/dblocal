@@ -4,9 +4,14 @@
 //! `CommandState` owns the query, filtering and keyboard navigation; we only
 //! supply the entries and run the confirmed action. `Ctrl/Cmd+K` stays from
 //! W1-G and the palette is restyled in the prototype's language.
+//!
+//! Every instance offers start/stop/open/copy-URI. A command that does not
+//! apply right now (start on a running instance, stop on a stopped one) is
+//! listed but **disabled with its reason as text**, so the palette explains
+//! itself instead of hiding rows and the reason is never colour alone.
 
 use gpui_kit::component::{
-    ActiveTheme,
+    ActiveTheme, Disableable as _,
     command::{Command, CommandGroup, CommandItem},
 };
 use gpui_kit::{IntoElement, ParentElement, SharedString, Styled, div, prelude::*};
@@ -18,16 +23,51 @@ use super::Workspace;
 /// Renders the command palette overlay.
 pub(super) fn render(
     workspace: &Workspace,
+    window: &mut gpui_kit::Window,
     cx: &mut gpui_kit::Context<Workspace>,
 ) -> impl IntoElement {
+    use gpui_kit::component::FocusTrapElement as _;
     let theme = cx.theme().clone();
-    let labels = workspace.palette_labels();
-    let items = labels
-        .iter()
-        .map(|label| CommandItem::new().label(SharedString::from(label.clone())));
+    // `F2`: the palette is a modal variant, so a focus trap keeps Tab inside
+    // its query field and rows instead of walking the page behind the scrim.
+    // The container handle comes from `open_palette` (`begin_modal`).
+    let trap = workspace.modal_focus().unwrap_or_else(|| {
+        window
+            .use_keyed_state(SharedString::from("modal-focus-palette"), cx, |_, cx| {
+                cx.focus_handle()
+            })
+            .read(cx)
+            .clone()
+    });
+    let items = workspace.palette_items();
+    let entries = items.into_iter().map(|item| {
+        let label = SharedString::from(item.label.clone());
+        let mut command_item = CommandItem::new().label(label.clone());
+        match item.action {
+            Some(_) => command_item = command_item.keywords(item.keywords),
+            None => {
+                // A disabled row shows its label plus its reason as muted text
+                // and never runs: the reason is a plain sentence, so the "this
+                // does not apply" signal is text, never colour alone
+                // (F-PLH-01 AC2).
+                let reason = item.reason.unwrap_or_default();
+                command_item = command_item.child(move |_, cx| {
+                    let muted = cx.theme().muted_foreground;
+                    gpui_kit::component::h_flex()
+                        .gap_2()
+                        .items_center()
+                        .child(label.clone())
+                        .child(SharedString::from(reason.clone()))
+                        .text_color(muted)
+                });
+                command_item = command_item.disabled(true);
+            }
+        }
+        command_item
+    });
     let group = CommandGroup::new()
         .label(dblocal_core::strings::UI_PALETTE_PLACEHOLDER)
-        .items(items);
+        .items(entries);
     let state = workspace.command_state().clone();
     let owner = cx.weak_entity();
 
@@ -50,7 +90,7 @@ pub(super) fn render(
             let owner = owner.clone();
             move |_window: &mut gpui_kit::Window, cx: &mut gpui_kit::App| {
                 let _ = owner.update(cx, |this, cx| {
-                    this.set_palette_open(false);
+                    this.close_palette(cx);
                     cx.notify();
                 });
             }
@@ -66,8 +106,8 @@ pub(super) fn render(
         .bg(tokens::scrim_from(&theme))
         .on_mouse_down(
             gpui_kit::MouseButton::Left,
-            cx.listener(|this, _, _window, cx| {
-                this.set_palette_open(false);
+            cx.listener(|this, _, _, cx| {
+                this.close_palette(cx);
                 cx.notify();
             }),
         )
@@ -84,7 +124,8 @@ pub(super) fn render(
                 .on_mouse_down(gpui_kit::MouseButton::Left, |_, _, cx| {
                     cx.stop_propagation()
                 })
-                .child(palette),
+                .child(palette)
+                .focus_trap(SharedString::from("trap-palette"), &trap),
         )
         .into_any_element()
 }

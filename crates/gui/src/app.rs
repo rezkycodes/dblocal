@@ -52,6 +52,7 @@ mod instance_actions;
 #[path = "app/instance_actions_tests.rs"]
 mod instance_actions_tests;
 mod login_item;
+mod modal_focus;
 mod open_in;
 mod open_in_actions;
 #[cfg(test)]
@@ -132,6 +133,17 @@ fn databases_tab_inputs(
     (db, user)
 }
 
+/// One stable focus handle per engine-group header, for every `EngineKey::ALL`.
+///
+/// Built with the workspace so a header keeps its tab-stop identity across
+/// re-renders (`F4`) and a render test can focus one to check its ring (`G2`).
+fn dock_focus_handles(cx: &mut Context<Workspace>) -> HashMap<EngineKey, FocusHandle> {
+    EngineKey::ALL
+        .into_iter()
+        .map(|engine| (engine, cx.focus_handle()))
+        .collect()
+}
+
 /// What the create dialog currently has selected.
 #[derive(Clone)]
 pub struct CreateForm {
@@ -148,6 +160,17 @@ pub struct CreateForm {
     pub name_input: Option<Entity<InputState>>,
     /// Port field state; see [`CreateForm::name_input`].
     pub port_input: Option<Entity<InputState>>,
+    /// Per-engine-card keyboard focus handles, in catalog order. Owned by the
+    /// form so the view and the keyboard tests share one handle per card rather
+    /// than each reaching into window element state (`F-PLH-01` AC1).
+    pub engine_focus: Vec<(EngineKey, FocusHandle)>,
+    /// Per-version-row keyboard focus handles, for the currently selected
+    /// engine's versions, in list order.
+    pub version_focus: Vec<(String, FocusHandle)>,
+    /// The footer "Buat" (create) button's focus handle.
+    pub submit_focus: FocusHandle,
+    /// The footer "Batal" (cancel) button's focus handle.
+    pub cancel_focus: FocusHandle,
 }
 
 pub use create_submit::{CreateDraft, SubmitError, Submitted};
@@ -169,6 +192,10 @@ pub struct Workspace {
     filter_input: Option<Entity<InputState>>,
     /// Collapsed engine groups in the dock.
     collapsed: HashSet<EngineKey>,
+    /// Stable focus handle per engine-group header, one for each
+    /// [`EngineKey::ALL`] entry. Created once so a header is a persistent tab stop
+    /// (`F4`) and a render test can focus one to check its ring (`G2`).
+    dock_focus: HashMap<EngineKey, FocusHandle>,
     /// Data size per instance, read on demand for the Overview card.
     data_sizes: HashMap<InstanceId, u64>,
     /// Cached dotenv blocks fetched in background (never on render path).
@@ -231,6 +258,13 @@ pub struct Workspace {
     /// A focus return the next frame must apply; set by a close path that had no
     /// window (Escape) and consumed by `render`.
     pending_focus_restore: Option<FocusHandle>,
+    /// The container focus handle of the topmost open modal, if any (`F2`).
+    ///
+    /// Created when a modal opens and dropped when it closes; the modal's render
+    /// registers a `focus_trap` on it and `open_*` uses it to put the keyboard
+    /// inside the dialog immediately (so a dialog of only buttons — Settings,
+    /// Quit — takes focus without a click). `None` when no modal is open.
+    modal_focus: Option<FocusHandle>,
     /// Clients detected for the "Open in…" menu; `None` until the first read.
     clients: Option<Result<Vec<DetectedClient>, UserFacingError>>,
     /// An instance whose "Open in…" launch is in flight.
@@ -240,7 +274,6 @@ pub struct Workspace {
     /// The login-item seam; `Err` when this host has no usable backend.
     login: Option<Result<Arc<dyn login_item::LoginItemControl>, UserFacingError>>,
     palette_open: bool,
-    palette_query: String,
     command_state: Entity<CommandState>,
     last_failure_mirror: Option<UserFacingError>,
     toast: Option<SharedString>,
@@ -287,6 +320,7 @@ struct Parts {
     db_name_input: Entity<InputState>,
     user_name_input: Entity<InputState>,
     focus_handle: FocusHandle,
+    dock_focus: HashMap<EngineKey, FocusHandle>,
 }
 
 impl Workspace {
@@ -312,6 +346,7 @@ impl Workspace {
             .new(|cx| InputState::new(window, cx).placeholder(strings::UI_DOCK_FILTER.to_owned()));
         cx.observe(&filter_input, |_, _, cx| cx.notify()).detach();
         let (db_name_input, user_name_input) = databases_tab_inputs(window, cx);
+        let dock_focus = dock_focus_handles(cx);
         let mut workspace = Self::assemble(Parts {
             service,
             tray_available,
@@ -320,6 +355,7 @@ impl Workspace {
             db_name_input,
             user_name_input,
             focus_handle,
+            dock_focus,
         });
         workspace.startup_load(cx);
         // `F7a`: the external editor DBLocal launches, the CLI and a second
@@ -331,9 +367,19 @@ impl Workspace {
                 this.refresh_config_on_activation(cx);
             }
         }));
-        // No per-window event pump: the app-level loop is the single consumer of
-        // the one bridge and forwards each event here (R3). Two pumps on one
-        // flume channel would split the stream between them.
+        // `F-PLH-02` AC1: follow the system appearance while running. A change
+        // to the OS light/dark setting re-applies the matching theme, unless an
+        // explicit `DBLOCAL_THEME` override is set (then the override wins).
+        workspace._appearance = Some(window.observe_window_appearance(|window, cx| {
+            if crate::theme::theme_override().is_none() {
+                let wanted = if crate::app::appearance_is_dark(window.appearance()) {
+                    crate::theme::DARK_THEME
+                } else {
+                    crate::theme::LIGHT_THEME
+                };
+                crate::theme::apply_named(cx, wanted);
+            }
+        }));
         workspace
     }
 
@@ -349,6 +395,7 @@ impl Workspace {
             .new(|cx| InputState::new(window, cx).placeholder(strings::UI_DOCK_FILTER.to_owned()));
         cx.observe(&filter_input, |_, _, cx| cx.notify()).detach();
         let (db_name_input, user_name_input) = databases_tab_inputs(window, cx);
+        let dock_focus = dock_focus_handles(cx);
         let mut workspace = Self::assemble(Parts {
             service,
             tray_available: false,
@@ -357,6 +404,7 @@ impl Workspace {
             db_name_input,
             user_name_input,
             focus_handle,
+            dock_focus,
         });
         workspace.tray_note_shown = true;
         workspace.tray_note = Some(SharedString::from(strings::UI_TRAY_UNAVAILABLE_NOTE));
@@ -392,6 +440,7 @@ impl Workspace {
             logs: LogStore::new(),
             log_scroll: gpui_kit::UniformListScrollHandle::new(),
             collapsed: HashSet::new(),
+            dock_focus: parts.dock_focus,
             data_sizes: HashMap::new(),
             dotenv_cache: HashMap::new(),
             port_suggestions: HashMap::new(),
@@ -426,12 +475,12 @@ impl Workspace {
             secret_dialog: None,
             dialog_focus: dialog_focus::DialogFocus::default(),
             pending_focus_restore: None,
+            modal_focus: None,
             clients: None,
             opening: None,
             settings: settings_state::SettingsState::default(),
             login: None,
             palette_open: false,
-            palette_query: String::new(),
             last_failure_mirror: None,
             toast: None,
             quit: QuitMachine::new(),
@@ -560,46 +609,6 @@ impl Workspace {
     pub(crate) fn set_toast(&mut self, text: SharedString) {
         self.toast = Some(text);
     }
-
-    pub(crate) fn close_modals(&mut self) {
-        self.palette_open = false;
-        self.create = None;
-        self.delete_target = None;
-        self.delete_name_input = None;
-        // The top overlay only: Escape closes the topmost dialog, so a secret
-        // dialog closes first, then the confirmation under it stays open.
-        if self.secret_dialog.take().is_some() {
-            self.restore_dialog_focus_after_close();
-            return;
-        }
-        if self.drop_dialog.take().is_some() {
-            self.restore_dialog_focus_after_close();
-            return;
-        }
-        if self.reset_confirm.take().is_some() {
-            self.restore_dialog_focus_after_close();
-            return;
-        }
-        if self.config_restore_confirm.take().is_some() {
-            self.restore_dialog_focus_after_close();
-            return;
-        }
-        if self.settings.open {
-            self.settings.close();
-        }
-    }
-
-    /// Gives focus back to the field a Databases dialog covered (F3).
-    ///
-    /// `close_modals` runs from the Escape listener with no window of its own,
-    /// so the focus goes through the entity's current window, which GPUI
-    /// resolves from the frame the workspace last rendered in.
-    fn restore_dialog_focus_after_close(&mut self) {
-        let Some(target) = self.dialog_focus.closed() else {
-            return;
-        };
-        self.pending_focus_restore = Some(target);
-    }
 }
 
 impl Focusable for Workspace {
@@ -619,10 +628,27 @@ impl Render for Workspace {
         }
         let deleting = self.delete_target.is_some();
         let creating = self.create.is_some();
+        // `G3b`/`F1`: the quit dialog has no open path that captures focus, so
+        // capture the opener on the first frame it draws (this runs before the
+        // root-focus fallback below and before `render_quit_dialog` focuses its
+        // trap), so a cancel returns the exact element that had focus.
+        if self.quit.is_confirming() && self.dialog_focus.is_empty() {
+            self.dialog_focus.opened(window.focused(cx));
+        }
         // F3: a close from a listener with no window (Escape) parks the handle
         // here; the frame is the first place it can be focused.
         if let Some(target) = self.pending_focus_restore.take() {
             target.focus(window, cx);
+        }
+        // `F1`: when nothing holds focus (startup, or a dismissal whose opener
+        // is gone, or a background event that dropped focus) the keyboard is
+        // dead — Tab and every shortcut do nothing until a mouse click. Focus
+        // the root once so `ctrl-k`/`ctrl-n` work on a fresh window. Only when
+        // nothing is focused, so it never steals focus from a control the user
+        // or a dialog placed.
+        if window.focused(cx).is_none() {
+            let root = self.focus_handle.clone();
+            root.focus(window, cx);
         }
         // The Config tab's text fields are GPUI entities created once; build any
         // the visible tab needs before the frame reads them (`F-CFG-01`).
@@ -643,12 +669,12 @@ impl Render for Workspace {
             .bg(colours.background)
             .text_color(colours.foreground)
             .font_family(colours.font_family.clone())
-            .on_action(cx.listener(|this, _: &actions::OpenPalette, _window, cx| {
-                this.toggle_palette();
+            .on_action(cx.listener(|this, _: &actions::OpenPalette, window, cx| {
+                this.toggle_palette_in(window, cx);
                 cx.notify();
             }))
-            .on_action(cx.listener(|this, _: &actions::OpenSettings, _window, cx| {
-                this.open_settings(cx);
+            .on_action(cx.listener(|this, _: &actions::OpenSettings, window, cx| {
+                this.open_settings(window, cx);
             }))
             .on_action(cx.listener(|this, _: &actions::NewInstance, window, cx| {
                 this.open_new_instance(window, cx);
@@ -660,6 +686,16 @@ impl Render for Workspace {
             }))
             .on_action(cx.listener(|this, _: &actions::ToggleRun, _window, cx| {
                 this.toggle_run_selected(cx);
+                cx.notify();
+            }))
+            .on_action(
+                cx.listener(|this, _: &actions::StartSelected, _window, cx| {
+                    this.start_selected(cx);
+                    cx.notify();
+                }),
+            )
+            .on_action(cx.listener(|this, _: &actions::StopSelected, _window, cx| {
+                this.stop_selected(cx);
                 cx.notify();
             }))
             .on_action(cx.listener(|this, _: &actions::CloseOverlay, _window, cx| {
@@ -674,32 +710,36 @@ impl Render for Workspace {
                     .min_h_0()
                     .w_full()
                     .overflow_hidden()
-                    .child(self.render_sidebar(cx))
-                    .child(self.render_center(cx)),
+                    .child(self.render_sidebar(window, cx))
+                    .child(self.render_center(window, cx)),
             )
             .child(self.render_status_bar(cx))
-            .when(creating, |this| this.child(create_dialog::render(self, cx)))
-            .when(deleting, |this| this.child(delete_dialog::render(self, cx)))
+            .when(creating, |this| {
+                this.child(create_dialog::render(self, window, cx))
+            })
+            .when(deleting, |this| {
+                this.child(delete_dialog::render(self, window, cx))
+            })
             .when(self.palette_open, |this| {
-                this.child(palette::render(self, cx))
+                this.child(palette::render(self, window, cx))
             })
             .when(self.settings.open, |this| {
-                this.child(settings_dialog::render(self, cx))
+                this.child(settings_dialog::render(self, window, cx))
             })
             .when(self.drop_dialog.is_some(), |this| {
-                this.child(admin_dialogs::render_drop(self, cx))
+                this.child(admin_dialogs::render_drop(self, window, cx))
             })
             .when(self.reset_confirm.is_some(), |this| {
-                this.child(admin_dialogs::render_reset(self, cx))
+                this.child(admin_dialogs::render_reset(self, window, cx))
             })
             .when(self.secret_dialog.is_some(), |this| {
-                this.child(admin_dialogs::render_secret(self, cx))
+                this.child(admin_dialogs::render_secret(self, window, cx))
             })
             .when(self.config_restore_confirm.is_some(), |this| {
-                this.child(config_dialogs::render_restore(self, cx))
+                this.child(config_dialogs::render_restore(self, window, cx))
             })
             .when(self.quit.is_confirming(), |this| {
-                this.child(self.render_quit_dialog(cx))
+                this.child(self.render_quit_dialog(window, cx))
             })
     }
 }
@@ -738,3 +778,7 @@ pub(crate) fn masked_env_rows(
 #[cfg(test)]
 #[path = "app/event_tests.rs"]
 mod event_tests;
+
+#[cfg(test)]
+#[path = "app/keyboard_flow_tests.rs"]
+mod keyboard_flow_tests;

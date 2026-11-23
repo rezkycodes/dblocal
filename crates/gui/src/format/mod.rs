@@ -11,6 +11,9 @@ use dblocal_core::model::{
 use dblocal_core::service::{CatalogView, EngineEntry, InstanceView};
 use dblocal_core::strings;
 
+mod palette;
+pub use palette::*;
+
 /// The four run-states a status glyph encodes (`F-PLH-02` AC2).
 ///
 /// The prototype draws a different shape per state, so status never depends on
@@ -567,73 +570,6 @@ pub fn runtime_rows(runtimes: &[Runtime], instances: &[InstanceView]) -> Vec<Run
 /// Convenience wrapper so the GUI never imports the runtime type name twice.
 pub fn runtime_engine(runtime: &Runtime) -> EngineKey {
     runtime.engine()
-}
-
-/// One command palette entry.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum PaletteAction {
-    /// Open the create-instance dialog.
-    NewInstance,
-    /// Open an instance tab.
-    Open(String),
-    /// Start an instance.
-    Start(String),
-    /// Stop an instance.
-    Stop(String),
-    /// Copy an instance URI.
-    CopyUri(String),
-}
-
-/// A palette row: a label and the action it runs.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PaletteItem {
-    /// Text shown and searched.
-    pub label: String,
-    /// Action to run on confirm.
-    pub action: PaletteAction,
-}
-
-/// Builds the full palette list for the current instances.
-pub fn palette_items(instances: &[InstanceView]) -> Vec<PaletteItem> {
-    let mut items = vec![PaletteItem {
-        label: strings::UI_PALETTE_NEW.to_owned(),
-        action: PaletteAction::NewInstance,
-    }];
-    for view in instances {
-        if matches!(
-            view.status,
-            InstanceStatus::Stopped | InstanceStatus::Failed
-        ) {
-            items.push(PaletteItem {
-                label: format!("{} {}", strings::UI_PALETTE_START, view.name),
-                action: PaletteAction::Start(view.id.to_string()),
-            });
-        }
-        if view.status == InstanceStatus::Running {
-            items.push(PaletteItem {
-                label: format!("{} {}", strings::UI_PALETTE_STOP, view.name),
-                action: PaletteAction::Stop(view.id.to_string()),
-            });
-        }
-        items.push(PaletteItem {
-            label: format!("{} {}", strings::UI_PALETTE_OPEN, view.name),
-            action: PaletteAction::Open(view.id.to_string()),
-        });
-        items.push(PaletteItem {
-            label: format!("{} {}", strings::UI_PALETTE_COPY_URI, view.name),
-            action: PaletteAction::CopyUri(view.id.to_string()),
-        });
-    }
-    items
-}
-
-/// Case-insensitive substring filter used by the palette.
-pub fn filter_palette<'a>(items: &'a [PaletteItem], query: &str) -> Vec<&'a PaletteItem> {
-    let query = query.trim().to_lowercase();
-    items
-        .iter()
-        .filter(|item| query.is_empty() || item.label.to_lowercase().contains(&query))
-        .collect()
 }
 
 /// Result of validating the create form before it is submitted.

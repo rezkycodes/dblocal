@@ -45,6 +45,11 @@ impl DialogFocus {
     pub fn return_target(&self) -> Option<&FocusHandle> {
         self.previous.as_ref()
     }
+
+    /// Whether nothing has been captured yet (a modal has not opened).
+    pub fn is_empty(&self) -> bool {
+        self.previous.is_none()
+    }
 }
 
 #[cfg(test)]

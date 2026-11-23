@@ -52,14 +52,48 @@ pub fn merged_theme_set() -> String {
 }
 
 /// Registers both themes and selects the one matching the system appearance.
+///
+/// `F-PLH-02` AC1: the app follows the system appearance. `DBLOCAL_THEME` is an
+/// explicit override (`light`, `dark`, or `system`); it exists so the override
+/// can be forced in a test or a screenshot run without touching the user's real
+/// desktop theme, and it is documented in `docs/architecture/gui.md`.
 pub fn init(cx: &mut App) {
     let set = merged_theme_set();
     if let Err(err) = ThemeRegistry::global_mut(cx).load_themes_from_str(&set) {
         tracing::error!("could not register the DBLocal themes: {err}");
     }
-    sync_to_system(cx);
+    apply_from_environment_or_system(cx);
     apply_explicit_fonts(cx);
     log_resolved_fonts(cx);
+}
+
+/// The theme override named by `DBLOCAL_THEME`, if any.
+///
+/// `light` and `dark` force a theme; `system` (or an unset/garbage value) means
+/// "follow the OS". The value is read once per call so a test can set it in the
+/// process environment before `init`.
+pub fn theme_override() -> Option<&'static str> {
+    override_for(std::env::var("DBLOCAL_THEME").ok().as_deref())
+}
+
+/// The theme name a `DBLOCAL_THEME` value selects, or `None` to follow the OS.
+///
+/// Split from [`theme_override`] so the mapping is unit-tested without mutating
+/// the process environment (which other parallel tests would see).
+fn override_for(value: Option<&str>) -> Option<&'static str> {
+    match value {
+        Some(v) if v.eq_ignore_ascii_case("dark") => Some(DARK_THEME),
+        Some(v) if v.eq_ignore_ascii_case("light") => Some(LIGHT_THEME),
+        _ => None,
+    }
+}
+
+/// Applies the override if one is set, else the system appearance.
+pub fn apply_from_environment_or_system(cx: &mut App) {
+    match theme_override() {
+        Some(name) => apply_named(cx, name),
+        None => sync_to_system(cx),
+    }
 }
 
 /// The sane UI font stack, in preference order.
@@ -330,5 +364,18 @@ mod tests {
         let soft = tokens::tint(base, 0.14);
         assert!((soft.a - 0.14).abs() < f32::EPSILON);
         assert_eq!((soft.h, soft.s, soft.l), (base.h, base.s, base.l));
+    }
+
+    #[test]
+    fn the_theme_override_maps_light_and_dark_and_ignores_system() {
+        assert_eq!(override_for(Some("dark")), Some(DARK_THEME));
+        assert_eq!(override_for(Some("DARK")), Some(DARK_THEME));
+        assert_eq!(override_for(Some("light")), Some(LIGHT_THEME));
+        assert_eq!(override_for(Some("Light")), Some(LIGHT_THEME));
+        // "system", an unset value and garbage all mean "follow the OS".
+        assert_eq!(override_for(Some("system")), None);
+        assert_eq!(override_for(Some("")), None);
+        assert_eq!(override_for(Some("solarized")), None);
+        assert_eq!(override_for(None), None);
     }
 }
