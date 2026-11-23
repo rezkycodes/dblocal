@@ -29,8 +29,6 @@ impl AssetSource for GuiAssets {
     }
 }
 
-const WIDTH: f32 = 1280.0;
-const HEIGHT: f32 = 820.0;
 const LOGICAL_W: u32 = 1280;
 const LOGICAL_H: u32 = 820;
 
@@ -65,6 +63,8 @@ mod both_themes;
 mod focus_ring;
 #[path = "render/frame.rs"]
 mod frame;
+#[path = "render/log_rows.rs"]
+mod log_rows;
 #[path = "render/palette_panel.rs"]
 mod palette_panel;
 #[path = "render/watchdog.rs"]
@@ -139,6 +139,11 @@ fn shutdown_headless(mut app: HeadlessAppContext) {
 }
 
 fn render(mode_dark: bool, name: &str, build: Build) -> Frame {
+    render_sized(mode_dark, name, build, LOGICAL_W, LOGICAL_H)
+}
+
+/// Renders at an explicit logical size, for the minimum-window-width checks.
+fn render_sized(mode_dark: bool, name: &str, build: Build, width: u32, height: u32) -> Frame {
     let (guard, watchdog) = watchdog::lock_then_arm(
         &GPU,
         name,
@@ -146,7 +151,7 @@ fn render(mode_dark: bool, name: &str, build: Build) -> Frame {
         || std::process::abort(),
     );
     let mut app = headless_app(mode_dark);
-    let frame = draw_and_capture(&mut app, name, build);
+    let frame = draw_and_capture(&mut app, name, build, width, height);
     // Release the render mutex before shutting the context down: shutdown parks
     // on the test scheduler, and holding the mutex through it serialises every
     // other case behind a park.
@@ -175,12 +180,18 @@ fn a11y_node_count_and_dups(json: &str) -> (usize, Vec<String>) {
 
 /// The actual render: window, frames, screenshot, PNG. The caller owns the
 /// mutex and the context lifetime.
-fn draw_and_capture(app: &mut HeadlessAppContext, name: &str, build: Build) -> Frame {
+fn draw_and_capture(
+    app: &mut HeadlessAppContext,
+    name: &str,
+    build: Build,
+    width: u32,
+    height: u32,
+) -> Frame {
     let service = seeded_service();
     let handle: AnyWindowHandle = {
         let bounds = Bounds {
             origin: gpui_kit::point(px(0.0), px(0.0)),
-            size: size(px(WIDTH), px(HEIGHT)),
+            size: size(px(width as f32), px(height as f32)),
         };
         let window = app
             .update(|cx| {
@@ -228,12 +239,12 @@ fn draw_and_capture(app: &mut HeadlessAppContext, name: &str, build: Build) -> F
         .capture_screenshot(handle)
         .expect("headless wgpu renderer must produce a frame");
     assert!(image.width() > 0 && image.height() > 0, "empty frame");
-    let scale = image.width() / LOGICAL_W;
+    let scale = image.width() / width;
     assert!(scale >= 1, "unexpected render width {}", image.width());
     assert_eq!(
         (image.width() / scale, image.height() / scale),
-        (LOGICAL_W, LOGICAL_H),
-        "render must match the prototype logical size"
+        (width, height),
+        "render must match the requested logical size"
     );
     let colours = Frame::count_colours(&image);
     let (path, tracked) = output_path(name);

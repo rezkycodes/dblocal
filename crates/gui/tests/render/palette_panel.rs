@@ -38,8 +38,8 @@ fn exact(px: [u8; 4], rgb: [u8; 3]) -> bool {
 /// 2-device-px border counts once.
 fn panel_span(frame: &Frame, border: [u8; 3], label: &str) -> ((u32, u32), u32) {
     let s = frame.scale;
-    let x0 = ((LOGICAL_W / 2 - 90) * s) as u32;
-    let x1 = ((LOGICAL_W / 2 + 90) * s) as u32;
+    let x0 = (LOGICAL_W / 2 - 90) * s;
+    let x1 = (LOGICAL_W / 2 + 90) * s;
     let (w, h) = frame.dims();
     let x1 = x1.min(w);
     let span = (x1 - x0).max(1);
@@ -66,7 +66,7 @@ fn panel_span(frame: &Frame, border: [u8; 3], label: &str) -> ((u32, u32), u32) 
 fn measure(frame: &Frame, border: [u8; 3], label: &str) -> (u32, u32) {
     let ((top, bottom), scale) = panel_span(frame, border, label);
     let height = (bottom.saturating_sub(top)) / scale;
-    let gap = (LOGICAL_H as u32).saturating_sub(bottom / scale);
+    let gap = LOGICAL_H.saturating_sub(bottom / scale);
     eprintln!(
         "PALETTE-HEIGHT {label}: top={top} bottom={bottom} panel_h_logical={height} \
          gap_to_window_bottom={gap}"

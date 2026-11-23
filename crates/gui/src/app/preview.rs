@@ -179,6 +179,44 @@ impl Workspace {
         workspace
     }
 
+    /// Preview of the Logs tab with a short line and, beside it, a 300-character
+    /// engine log line (W4-I D3). `UniformList` rows are one line tall, so a
+    /// wrapped long line would overprint its neighbour; a render test measures
+    /// that each row keeps its height and that no two rows share pixels.
+    pub fn preview_logs_long_line(
+        service: Arc<dyn DblService>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let mut workspace = Self::preview(service, window, cx);
+        workspace
+            .tabs
+            .set_inner(workspace.tabs.selected_index(), InnerTab::Logs);
+        if let Some(id) = workspace.tabs.selected_instance().cloned() {
+            // A real PostgreSQL startup shape: a long path makes the
+            // `listening on IPv4 address` line cross 300 characters (the prefix
+            // is ~110, plus an id and 240 filter bytes).
+            let long = format!(
+                "LOG:  listening on IPv4 address \"127.0.0.1\", port 5432  \
+                 startup-packet /var/lib/dblocal/instances/{id}/data/pg_stat_tmp/{}",
+                "x".repeat(240)
+            );
+            workspace.logs.load(
+                &id,
+                vec![
+                    "baris pendek sebelum".to_owned(),
+                    long,
+                    "baris pendek sesudah".to_owned(),
+                ],
+            );
+            if let Some(buffer) = workspace.logs.get_mut(&id) {
+                buffer.set_following(true);
+            }
+            workspace.log_scroll.scroll_to_bottom();
+        }
+        workspace
+    }
+
     /// Preview of the Config tab on the demo service (`F-CFG-01`, `F-CFG-02`).
     pub fn preview_product_config(
         service: Arc<dyn DblService>,

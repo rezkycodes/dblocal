@@ -267,6 +267,21 @@ mod tests {
         assert!(buffer.line(0).is_none());
     }
 
+    /// W4-I D3: the log view truncates for display but "Salin log" must copy the
+    /// **complete** lines, so a truncated long line is not lost.
+    #[test]
+    fn copy_text_keeps_a_long_line_whole() {
+        let long = "LOG:  listening on IPv4 address ".to_owned() + &"x".repeat(300);
+        let mut buffer = LogBuffer::new();
+        buffer.append([long.clone()]);
+        let copied = buffer.copy_text();
+        assert_eq!(
+            copied, long,
+            "the copied log must carry the full line, not the ellipsised view"
+        );
+        assert!(copied.chars().count() >= 300);
+    }
+
     #[test]
     fn store_keeps_one_buffer_per_instance() {
         let mut store = LogStore::new();

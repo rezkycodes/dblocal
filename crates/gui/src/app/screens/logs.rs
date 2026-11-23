@@ -23,6 +23,10 @@ use super::Workspace;
 use super::page_fill;
 use crate::app::components::{banner, icon, mono_themed};
 
+/// Height of one log row, in logical px (W4-I D3). `UniformList` gives every row
+/// this height, which is why a line must never wrap into the next row.
+const LOG_ROW_HEIGHT: f32 = 18.0;
+
 impl Workspace {
     pub(crate) fn render_logs(
         &self,
@@ -238,6 +242,15 @@ impl Workspace {
     /// `size_full` gives the list a definite height inside the flex viewer; without
     /// it the default `Auto` sizing collapses to zero in a `min_h_0` chain and no
     /// lines paint (the "8 baris" footer proved the buffer had lines).
+    ///
+    /// Rows are **one line, never wrapped** (W4-I D3): `UniformList` gives every
+    /// row the same height, so a wrapped line painted a second visual line into
+    /// the next row's box and the two overprinted (PostgreSQL's ~120-char
+    /// `LOG: ... listening on IPv4 address` line was unreadable). The row is
+    /// clipped and its text ellipsised; horizontal scrolling was rejected because
+    /// it would need a second scroll axis inside the uniform virtual list and
+    /// break the fixed-row-height model it relies on. The full line is still
+    /// available: "Salin log" copies the complete buffer lines unchanged.
     fn render_log_lines(&self, buffer: &LogBuffer, theme: &Theme) -> gpui_kit::AnyElement {
         let lines = buffer.clone();
         let mono = theme.mono_font_family.clone();
@@ -252,9 +265,18 @@ impl Workspace {
                         .unwrap_or_else(|| SharedString::from(""));
                     div()
                         .id(("log-line", index))
-                        .h(px(18.))
+                        .h(px(LOG_ROW_HEIGHT))
+                        .w_full()
+                        .min_w_0()
                         .px(px(8.))
-                        .child(Label::new(text).font_family(mono.clone()).text_xs())
+                        .overflow_hidden()
+                        .child(
+                            Label::new(text)
+                                .font_family(mono.clone())
+                                .text_xs()
+                                .w_full()
+                                .truncate(),
+                        )
                 })
                 .collect::<Vec<_>>()
         })
