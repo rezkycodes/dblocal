@@ -73,35 +73,51 @@ completable from the keyboard, with the focus always visible. The rules:
 - **Every clickable row is a focusable tab stop.** gpui synthesises an `on_click`
   from `Enter`/`Space` on a *focused* element, so a row that already has
   `on_click` becomes keyboard-activatable once it holds focus. The create
-  dialog's engine cards and version rows go through
-  `components::apply_focus_ring`, which calls `track_focus`, sets `tab_stop(true)`
-  and, when focused, draws the theme's own focus appearance (`focus_ring_style`:
-  a `theme.ring` border plus the outside ring — a ring, never just a background
-  tint).
+  dialog's engine cards and version rows, the dock's engine-group headers and
+  instance rows, and the instance tabs all go through
+  `components::apply_focus_ring` (with `components::keyed_focus` for a stable
+  handle), which calls `track_focus`, sets `tab_stop(true)` and, when focused,
+  draws the theme's own focus appearance (`focus_ring_style`: a `theme.ring`
+  border plus the outside ring — a ring, never just a background tint).
+- **One dismissal helper returns the keyboard, always (`F1`).** Every overlay
+  close — Escape, a Cancel/close button, a *confirm*, or a background action that
+  finished — funnels through `Workspace::restore_dialog_focus_after_close`. It
+  restores the captured opener, and when the opener was never captured (nothing
+  was focused when the dialog opened, as at startup) or is gone, it **falls back
+  to the Workspace root**, then parks the handle for `render` to apply on the next
+  frame. This is the fix for the real-window "dead keyboard": after a confirm the
+  focus used to be `None` and `ctrl-k`/`Tab` did nothing until a mouse click. The
+  confirming paths that used to skip it now call it: `run_palette_action`
+  (palette confirm), `submit_create`'s success arm (`finish_create_overlay`),
+  `confirm_delete`, `close_settings`, `confirm_drop`, the quit cancel/keep paths.
+  `render` additionally focuses the root whenever nothing holds focus, so a fresh
+  window answers `ctrl-k`/`ctrl-n` with no click.
+- **Modals contain Tab (`F2`).** Each modal registers a `gpui-base` focus trap
+  (`FocusTrapElement::focus_trap`) on its container handle, which `begin_modal`
+  creates and `open_*` focuses. `Root`'s Tab action then cycles inside the
+  dialog and wraps — it can no longer walk to the header, sidebar or status bar
+  behind the scrim. This covers the shared `overlay()` (create, delete, settings,
+  admin, config-restore dialogs), the palette and the quit dialog.
 - **Dialogs take the keyboard on open and return it on close.**
-  `dialog_focus::DialogFocus` captures what had focus before the first overlay
-  opened, ignores a stacked open, and hands the exact handle back on the last
-  close. `open_create_dialog`, `open_drop_dialog`, `focus_dialog_buttons` and the
-  palette use it; `Workspace::render` applies the parked restore on the next
-  frame (Escape runs from a listener with no window). `close_modals` closes the
-  top overlay only and routes the restore.
-- **The command palette** (`Ctrl/Cmd+K`) focuses its query field on open and
-  gives focus back on Escape/scrim. Each row carries keywords (engine name,
-  version, port) so a query finds an instance by any of them; a start/stop/copy
-  command that does not apply is listed **disabled with a plain-text reason**
-  (`ui_palette::...` strings), never hidden, so the palette explains itself.
+  `dialog_focus::DialogFocus` (via `begin_modal`) captures what had focus before
+  the first overlay opened, ignores a stacked open, and hands the exact handle
+  back on the last close. `close_modals` closes the top overlay only and routes
+  the restore.
+- **The command palette** (`Ctrl/Cmd+K`) focuses its query field on open (clearing
+  any stale query) and gives focus back on Escape/scrim/confirm. Each row carries
+  keywords (engine name, version, port) so a query finds an instance by any of
+  them; a start/stop/copy command that does not apply is listed **disabled with a
+  plain-text reason**, never hidden, and Enter on it does nothing.
 - Controls owned by `gpui-component` (Button, Checkbox, Switch, Input, the
   palette rows) already carry focus handles, tab stops and Enter/Space
   activation; the app adds them only to the hand-built rows.
 
-The keyboard tests are `crates/gui/src/app/keyboard_flow_tests.rs`:
-`ctrl_n_opens_the_create_dialog`, `keyboard_only_first_session`,
-`palette_disables_inapplicable_commands_with_a_reason`,
-`palette_starts_an_instance_with_the_keyboard`, and
-`escape_returns_focus_to_the_opener`. They drive focus with
-`Window::focus_next`/`focus_prev` and activation with real `Keystroke`
-down/up pairs; a pointer event is never sent. `docs/dev/accessibility-checklist.md`
-lists the mutation checks that turn each red.
+The keyboard tests are `crates/gui/src/app/keyboard_flow_tests.rs`. They drive
+focus with `Window::focus_next`/`focus_prev` **and** real `Keystroke` Tab presses
+(so the trap runs), and activation with real `Keystroke` down/up pairs; a pointer
+event is never sent. The ring pixel check is `tests/render/focus_ring.rs`. The
+real-window transcript (Xvfb) and every mutation that turns a test red are in
+`docs/dev/accessibility-checklist.md`.
 
 ## Themes and contrast (`F-PLH-02`, W4-G)
 
