@@ -91,20 +91,17 @@ pub(super) fn render_drop(workspace: &Workspace, cx: &mut Context<Workspace>) ->
         .gap_3()
         .p(px(20.))
         .child(
-            Label::new(format!("{} — {}", strings::UI_DATABASES_DROP_TITLE, name))
-                .id(SharedString::from(format!("{ids}-title")))
-                .text_sm()
-                .font_weight(gpui_kit::FontWeight::SEMIBOLD),
-        )
-        .child(
             Label::new(strings::UI_DATABASES_DROP_PROMPT)
                 .id(SharedString::from(format!("{ids}-prompt")))
                 .text_xs()
                 .text_color(theme.muted_foreground),
         )
+        // One distinct danger line under the explanation: the sentence above is
+        // rendered once, and the heading names the database instead of repeating
+        // the title (F4).
         .child(
-            Label::new(strings::UI_DATABASES_DROP_PROMPT)
-                .id(SharedString::from(format!("{ids}-type-name")))
+            Label::new(strings::UI_DATABASES_DROP_WARNING)
+                .id(SharedString::from(format!("{ids}-warning")))
                 .text_xs()
                 .text_color(theme.danger),
         )
@@ -159,6 +156,16 @@ pub(super) fn render_drop(workspace: &Workspace, cx: &mut Context<Workspace>) ->
                             .id(SharedString::from(format!("{ids}-heading")))
                             .text_sm()
                             .font_weight(gpui_kit::FontWeight::SEMIBOLD),
+                    )
+                    .child(div().flex_1())
+                    .child(
+                        // The heading names the database; the body no longer
+                        // repeats it (F4).
+                        Label::new(name)
+                            .id(SharedString::from(format!("{ids}-subject")))
+                            .text_sm()
+                            .font_family(theme.mono_font_family.clone())
+                            .text_color(theme.muted_foreground),
                     ),
             )
             .child(body),
@@ -371,5 +378,31 @@ mod tests {
         // `SecretString` redacts itself, so a stray `{dialog:?}` is safe even
         // though the whole struct derives nothing.
         assert!(!format!("{:?}", dialog.value).contains("canary-password"));
+    }
+
+    /// F4: the danger line must not repeat the prompt sentence.
+    #[test]
+    fn the_drop_dialog_renders_the_explanation_once() {
+        assert_ne!(
+            strings::UI_DATABASES_DROP_PROMPT,
+            strings::UI_DATABASES_DROP_WARNING,
+            "the danger line must be a distinct short warning, not the sentence again"
+        );
+        assert!(
+            !strings::UI_DATABASES_DROP_WARNING.contains(strings::UI_DATABASES_DROP_PROMPT),
+            "the warning repeats the explanation"
+        );
+        // Two instances with a database of the same name still get distinct ids
+        // for the prompt, the warning and the subject line.
+        let one = InstanceId::new();
+        let two = InstanceId::new();
+        let a = dialog_row_id("drop-db", &one, "app");
+        let b = dialog_row_id("drop-db", &two, "app");
+        assert_ne!(
+            format!("{a}-warning"),
+            format!("{b}-warning"),
+            "the warning id must carry the instance"
+        );
+        assert_ne!(format!("{a}-prompt"), format!("{a}-warning"));
     }
 }

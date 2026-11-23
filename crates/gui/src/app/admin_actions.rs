@@ -111,8 +111,10 @@ impl Workspace {
                 return;
             }
         };
+        let input = self.db_name_input.clone();
         let service = self.service.clone();
         let iid = id.clone();
+        let created = name.clone();
         self.admin.entry(id).begin(AdminAction::CreateDatabase);
         self.admin.entry(id).error = None;
         self.bg(cx, move || {
@@ -122,7 +124,12 @@ impl Workspace {
                 admin.end(AdminAction::CreateDatabase);
                 match result {
                     Ok(()) => {
-                        this.toast = Some(SharedString::from(strings::databases_created(&name)));
+                        // F6: the field is cleared on success, so the next click
+                        // does not hit "already exists" with the old name.
+                        this.clear_input(&input, cx);
+                        this.toast = Some(SharedString::from(strings::databases_created(
+                            &created,
+                        )));
                     }
                     Err(err) => {
                         admin.error = Some(err.clone());
@@ -133,6 +140,15 @@ impl Workspace {
             }
         });
         cx.notify();
+    }
+
+    /// Empties a text field without a window, for a success path in `bg`.
+    fn clear_input(&mut self, input: &Entity<InputState>, cx: &mut Context<Self>) {
+        let entity_id = cx.entity().entity_id();
+        let input = input.clone();
+        cx.with_window(entity_id, |window, cx| {
+            input.update(cx, |state, cx| state.set_value(String::new(), window, cx));
+        });
     }
 
     /// Gives a dialog the keyboard and remembers where to return it (F3).
@@ -246,9 +262,16 @@ impl Workspace {
             move |this: &mut Workspace, cx: &mut Context<Workspace>| {
                 let admin = this.admin.entry(&iid);
                 admin.end(AdminAction::DropDatabase);
-                if let Err(err) = &result {
-                    admin.error = Some(err.clone());
-                    this.report_user_facing_error(err);
+                match &result {
+                    Ok(()) => {
+                        // F6: a drop gets its own confirmation, replacing the
+                        // "created" line the earlier action left in the bar.
+                        this.toast = Some(SharedString::from(strings::databases_dropped(&name)));
+                    }
+                    Err(err) => {
+                        admin.error = Some(err.clone());
+                        this.report_user_facing_error(err);
+                    }
                 }
                 cx.notify();
             }
@@ -280,14 +303,15 @@ impl Workspace {
                 return;
             }
         };
+        // No database chosen is unreachable here: the submit button is disabled
+        // until `user_db_choice` is set (`render_users_card`), so this branch is
+        // the handler's own guard, not a user-facing path. It has no `DBL-` code
+        // of the core registry: `DBL-8106` means "database in use" (F5).
         let Some(db) = self.user_db_choice.clone() else {
-            let err =
-                UserFacingError::new("DBL-8106", strings::UI_DATABASES_USER_DATABASE.to_owned());
-            self.admin.entry(id).error = Some(err);
-            cx.notify();
             return;
         };
         let level = self.user_level;
+        let input = self.user_name_input.clone();
         let service = self.service.clone();
         let iid = id.clone();
         let user_name = name.clone();
@@ -310,6 +334,8 @@ impl Workspace {
                         // keyboard user acts on next, so the dialog takes focus
                         // away from the field behind it.
                         this.focus_dialog_buttons(cx);
+                        // F6: the next create starts from an empty name.
+                        this.clear_input(&input, cx);
                         this.toast = Some(SharedString::from(strings::databases_user_created(
                             &user_name,
                         )));

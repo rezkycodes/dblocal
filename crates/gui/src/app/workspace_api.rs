@@ -453,6 +453,18 @@ impl Workspace {
         }
     }
 
+    /// The database-name field's text, as the user sees it.
+    #[cfg(test)]
+    pub(crate) fn db_name_text_for_test(&self, cx: &App) -> String {
+        self.db_name_input.read(cx).value().to_string()
+    }
+
+    /// The new-user name field's text.
+    #[cfg(test)]
+    pub(crate) fn user_name_text_for_test(&self, cx: &App) -> String {
+        self.user_name_input.read(cx).value().to_string()
+    }
+
     /// Opens the drop dialog, reusing the database-name field as its input (the
     /// dialog only needs an entity to hold the typed text).
     pub(crate) fn open_drop_dialog_for_test(

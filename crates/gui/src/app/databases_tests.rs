@@ -362,6 +362,144 @@ fn the_drop_dialog_keeps_its_enter_subscription_after_the_focus_change(
     );
 }
 
+/// F6: a successful create empties the name field.
+#[gpui_kit::test]
+fn a_successful_create_clears_the_name_fields(cx: &mut TestAppContext) {
+    let (view, service, cx) = fixture(cx);
+    let id = open_databases(&view, &service, cx);
+    set_db_name(&view, "shop_db", cx);
+    view.update(cx, |this, cx| this.create_database(&id, cx));
+    settle(cx);
+    assert_eq!(
+        view.read_with(cx, |this, cx| this.db_name_text_for_test(cx)),
+        "",
+        "the database field must not keep the name it just created (F6)"
+    );
+
+    set_user_name(&view, "app_ro", cx);
+    view.update(cx, |this, cx| {
+        this.choose_user_database("app".to_owned(), cx);
+        this.create_user(&id, cx);
+    });
+    settle(cx);
+    assert_eq!(
+        view.read_with(cx, |this, cx| this.user_name_text_for_test(cx)),
+        "",
+        "the user field must not keep the name it just created (F6)"
+    );
+}
+
+/// A failed create keeps the text so the user can correct it.
+#[gpui_kit::test]
+fn a_failed_create_keeps_the_name(cx: &mut TestAppContext) {
+    let (view, service, cx) = fixture(cx);
+    service.set(|script| {
+        script.create_database = Err(UserFacingError::new("DBL-8104", "sudah ada"));
+    });
+    let id = open_databases(&view, &service, cx);
+    set_db_name(&view, "shop_db", cx);
+    view.update(cx, |this, cx| this.create_database(&id, cx));
+    settle(cx);
+    assert_eq!(
+        view.read_with(cx, |this, cx| this.db_name_text_for_test(cx)),
+        "shop_db",
+        "a failure must not throw away what the user typed"
+    );
+}
+
+/// F6: a successful drop confirms itself instead of leaving the create line.
+#[gpui_kit::test]
+fn a_drop_reports_itself_in_the_status_bar(cx: &mut TestAppContext) {
+    let (view, service, cx) = fixture(cx);
+    let id = open_databases(&view, &service, cx);
+    // Reproduce the report: a create leaves "Database shop_db dibuat (UTF-8)".
+    set_db_name(&view, "shop_db", cx);
+    view.update(cx, |this, cx| this.create_database(&id, cx));
+    settle(cx);
+    assert!(
+        view.read_with(cx, |this, _| this.toast_text())
+            .is_some_and(|t| t.contains("dibuat")),
+        "the create toast is up first"
+    );
+
+    view.update(cx, |this, cx| {
+        this.open_drop_dialog_for_test(&id, "app", cx);
+    });
+    set_drop_text(&view, "app", cx);
+    view.update(cx, |this, cx| this.confirm_drop(cx));
+    settle(cx);
+    let toast = view
+        .read_with(cx, |this, _| this.toast_text())
+        .map(|t| t.to_string())
+        .unwrap_or_default();
+    assert!(
+        toast.contains("app") && toast.contains("dihapus"),
+        "a drop must replace the create line with its own confirmation: {toast}"
+    );
+}
+
+/// F6: a failed drop states the failure and never claims the drop happened.
+#[gpui_kit::test]
+fn a_failed_drop_does_not_confirm(cx: &mut TestAppContext) {
+    let (view, service, cx) = fixture(cx);
+    service.set(|script| {
+        script.drop_database = Err(UserFacingError::new("DBL-8106", "masih dipakai"));
+    });
+    let id = open_databases(&view, &service, cx);
+    view.update(cx, |this, cx| {
+        this.open_drop_dialog_for_test(&id, "app", cx);
+    });
+    set_drop_text(&view, "app", cx);
+    view.update(cx, |this, cx| this.confirm_drop(cx));
+    settle(cx);
+    let (toast, error) = view.read_with(cx, |this, _| {
+        (
+            this.toast_text().map(|t| t.to_string()).unwrap_or_default(),
+            this.admin_state_for(&id)
+                .and_then(|a| a.error.as_ref().map(|e| e.code.clone())),
+        )
+    });
+    assert!(
+        !toast.contains("dihapus"),
+        "a failed drop must not claim it happened: {toast}"
+    );
+    assert_eq!(error.as_deref(), Some("DBL-8106"));
+}
+
+/// F5: no code from the core registry is invented on the dead no-database path.
+///
+/// `create_user` used to build `DBL-8106` ("database in use") with the label
+/// "Database" when nothing was chosen. The button is disabled in that state, so
+/// the branch is unreachable from the UI — but a stray code must not exist.
+#[gpui_kit::test]
+fn create_user_without_a_database_sends_nothing_and_claims_nothing(
+    cx: &mut TestAppContext,
+) {
+    let (view, service, cx) = fixture(cx);
+    let id = open_databases(&view, &service, cx);
+    set_user_name(&view, "app_ro", cx);
+    // No `choose_user_database`: the same state as the disabled button.
+    view.update(cx, |this, cx| this.create_user(&id, cx));
+    settle(cx);
+
+    assert_eq!(
+        service.counts().create_user,
+        0,
+        "no database means no round trip"
+    );
+    let (error, dialog) = view.read_with(cx, |this, _| {
+        (
+            this.admin_state_for(&id).and_then(|a| a.error.clone()),
+            this.secret_dialog().is_some(),
+        )
+    });
+    assert!(
+        error.is_none(),
+        "the dead path must not invent a code: {error:?}"
+    );
+    assert!(!dialog, "nothing was created, so no password dialog");
+}
+
 #[gpui_kit::test]
 fn create_database_rejects_a_bad_name_without_a_round_trip(cx: &mut TestAppContext) {
     let (view, service, cx) = fixture(cx);
