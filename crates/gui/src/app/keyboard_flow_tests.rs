@@ -109,6 +109,36 @@ fn engine_handle(
     })
 }
 
+/// F-PLH-01 AC2: the palette renders (including the disabled-row branch) and
+/// closes on Escape, returning focus — a lib-level draw that exercises
+/// `palette::render`'s disabled-row and cancel paths without a pointer.
+#[gpui_kit::test]
+fn the_palette_renders_with_a_disabled_row(cx: &mut TestAppContext) {
+    let (view, _service, cx) = harness(cx);
+    let root_focus = view.read_with(cx, |this, cx| {
+        use gpui_kit::Focusable as _;
+        this.focus_handle(cx)
+    });
+    focus(cx, &root_focus);
+    press(cx, "ctrl-k");
+    assert!(view.read_with(cx, |this, _| this.palette_is_open()));
+    // Draw with the palette open: this lays out every row, including the
+    // disabled start-on-running and stop-on-stopped rows (their muted reason
+    // text is a custom child).
+    draw(cx);
+    // Escape closes it and focus returns to the opener.
+    press(cx, "escape");
+    draw(cx);
+    assert!(
+        !view.read_with(cx, |this, _| this.palette_is_open()),
+        "Escape closes the palette"
+    );
+    assert!(
+        cx.update(|window, _cx| root_focus.is_focused(window)),
+        "closing the palette returns focus to the opener"
+    );
+}
+
 /// F-PLH-01 AC1: Escape closes the top overlay and returns focus to the control
 /// that opened it, so the keyboard user is never stranded.
 #[gpui_kit::test]
