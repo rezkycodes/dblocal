@@ -374,6 +374,27 @@ impl Workspace {
         workspace
     }
 
+    /// Preview of the create modal with the **MySQL** engine card focused (not
+    /// the default-selected PostgreSQL), so a render test can prove the ring is
+    /// drawn: the selected card's border is already the primary colour, so only a
+    /// focused *unselected* card shows the ring as new pixels (`F3`).
+    pub fn preview_create_engine_focused(
+        service: Arc<dyn DblService>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let workspace = Self::preview_create(service, window, cx);
+        if let Some(handle) = workspace.create_form().and_then(|form| {
+            form.engine_focus
+                .iter()
+                .find(|(key, _)| *key == dblocal_core::model::EngineKey::Mysql)
+                .map(|(_, h)| h.clone())
+        }) {
+            handle.focus(window, cx);
+        }
+        workspace
+    }
+
     /// Preview with the delete modal open on the first instance.
     pub fn preview_delete(
         service: Arc<dyn DblService>,

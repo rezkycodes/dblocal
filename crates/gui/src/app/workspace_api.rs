@@ -138,7 +138,12 @@ impl Workspace {
         self.begin_modal(window, cx);
         self.palette_open = true;
         let command_state = self.command_state.clone();
-        command_state.update(cx, |state, cx| state.focus(window, cx));
+        // Clear any query left from a previous open so the list starts fresh and
+        // typing does not append to stale text.
+        command_state.update(cx, |state, cx| {
+            state.set_query("", window, cx);
+            state.focus(window, cx);
+        });
     }
 
     /// Closes the palette and gives focus back to the element that opened it.

@@ -523,3 +523,210 @@ fn tab_is_contained_in_the_delete_dialog(cx: &mut TestAppContext) {
     assert_trapped(cx, true, 40, "delete Tab");
     assert_trapped(cx, false, 40, "delete Shift+Tab");
 }
+
+/// `F3`: real Tab reaches every engine card and every version row of the create
+/// dialog — so `tab_stop(false)` on a row makes this go red. Focus starts on the
+/// name field (open position); walking forward must visit each card/row handle
+/// before the cycle wraps.
+#[gpui_kit::test]
+fn tab_reaches_every_engine_card_and_version_row(cx: &mut TestAppContext) {
+    let (view, _service, cx) = harness(cx);
+    press(cx, "ctrl-n");
+    assert!(view.read_with(cx, |this, _| this.create_form().is_some()));
+    draw(cx);
+    // Identity set: the handles the form owns. A stop that is one of these
+    // proves the row is a real tab stop reached by Tab.
+    let (engine_ids, version_ids) = view.read_with(cx, |this, _| {
+        let form = this.create_form().expect("form");
+        (
+            form.engine_focus
+                .iter()
+                .map(|(_, h)| format!("{h:?}"))
+                .collect::<Vec<_>>(),
+            form.version_focus
+                .iter()
+                .map(|(_, h)| format!("{h:?}"))
+                .collect::<Vec<_>>(),
+        )
+    });
+    let mut visited: Vec<String> = Vec::new();
+    for _ in 0..40 {
+        press(cx, "tab");
+        let id = cx
+            .update(|window, cx| window.focused(cx).map(|f| format!("{f:?}")))
+            .unwrap_or_default();
+        if visited.contains(&id) {
+            break;
+        }
+        visited.push(id);
+    }
+    for (label, ids) in [("engine card", &engine_ids), ("version row", &version_ids)] {
+        for id in ids {
+            assert!(
+                visited.contains(id),
+                "Tab never reached a {label} ({id}); visited {} stops",
+                visited.len()
+            );
+        }
+    }
+}
+
+/// `F3`: the **full** first session by keyboard — choose engine + version,
+/// create (assert the exact spec the keys chose), then start and copy the URI of
+/// an instance, asserting the specific service calls and the **clipboard text**,
+/// with no pointer event.
+#[gpui_kit::test]
+fn full_first_session_creates_starts_and_copies(cx: &mut TestAppContext) {
+    let (view, service, cx) = harness(cx);
+    let stopped = service.id_with(InstanceStatus::Stopped);
+
+    // 1) Open the create dialog and choose PostgreSQL's version 16.6 by pressing
+    //    Enter/Space on the focused card/row (real keys, not method calls). The
+    //    test catalog has one engine (PostgreSQL) with versions 17.4 (default)
+    //    and 16.6, so choosing 16.6 proves the key selection took effect.
+    press(cx, "ctrl-n");
+    let pg = engine_handle(&view, cx, EngineKey::Postgresql);
+    focus(cx, &pg);
+    press(cx, "enter");
+    let version_handle = view
+        .read_with(cx, |this, _| {
+            this.create_form().and_then(|form| {
+                form.version_focus
+                    .iter()
+                    .find(|(tag, _)| tag == "16.6")
+                    .map(|(_, h)| h.clone())
+            })
+        })
+        .expect("16.6 version handle");
+    focus(cx, &version_handle);
+    press(cx, "space");
+
+    // 2) Create by focusing "Buat" and pressing Enter.
+    let submit = view
+        .read_with(cx, |this, _| {
+            this.create_form().map(|f| f.submit_focus.clone())
+        })
+        .expect("submit focus");
+    focus(cx, &submit);
+    press(cx, "enter");
+    cx.run_until_parked();
+    assert!(
+        view.read_with(cx, |this, _| this.create_form().is_none()),
+        "create closes the dialog"
+    );
+    let created = service.created();
+    assert_eq!(created.len(), 1, "exactly one create_instance call");
+    assert_eq!(created[0].engine(), EngineKey::Postgresql, "engine chosen");
+    assert_eq!(created[0].version(), "16.6", "keys chose version 16.6");
+
+    // 3) Copy the URI: open the stopped instance's tab via the palette ("Buka"),
+    //    then Ctrl+Shift+C. Assert the clipboard holds the plaintext URI.
+    press(cx, "ctrl-k");
+    type_text(cx, "pg-stop");
+    // Move the highlight to the "Buka pg-stop" row (first row is "Mulai"); Down
+    // selects the next enabled row, then Enter opens the tab.
+    press(cx, "down");
+    press(cx, "enter");
+    cx.run_until_parked();
+    press(cx, "ctrl-shift-c");
+    cx.run_until_parked();
+    let clip = cx
+        .read_from_clipboard()
+        .and_then(|item| item.text())
+        .unwrap_or_default();
+    assert!(
+        clip.starts_with("postgresql://"),
+        "Ctrl+Shift+C must put the URI on the clipboard, got {clip:?}"
+    );
+    assert!(
+        service.uris().iter().any(|(id, _)| id == &stopped),
+        "the copy must have fetched the stopped instance's URI"
+    );
+
+    // 4) Start it from the palette: type the name (the first enabled row for a
+    //    stopped instance is "Mulai pg-stop") and Enter.
+    press(cx, "ctrl-k");
+    assert!(
+        view.read_with(cx, |this, _| this.palette_is_open()),
+        "ctrl-k reopens the palette after copy"
+    );
+    type_text(cx, "pg-stop");
+    let (matched, sel) = view.read_with(cx, |this, cx| {
+        let s = this.command_state().read(cx);
+        (s.matched_count(), s.selected_index())
+    });
+    eprintln!("FULL start step: matched={matched} selected={sel:?}");
+    press(cx, "enter");
+    cx.run_until_parked();
+    assert!(
+        service.started().contains(&stopped),
+        "the palette start command must start the stopped instance, got {:?} (matched={matched})",
+        service.started()
+    );
+}
+
+/// `F3`: typing the ENGINE word ("postgres") finds an instance whose name does
+/// not contain it — the `keywords` are matched, per AC2 "by name and engine".
+#[gpui_kit::test]
+fn the_palette_finds_an_instance_by_the_engine_word(cx: &mut TestAppContext) {
+    let (view, _service, cx) = harness(cx);
+    press(cx, "ctrl-k");
+    assert!(view.read_with(cx, |this, _| this.palette_is_open()));
+    type_text(cx, "postgres");
+    let (labels, matched) = view.read_with(cx, |this, cx| {
+        (
+            this.palette_labels(),
+            this.command_state().read(cx).matched_count(),
+        )
+    });
+    assert!(
+        matched >= 1,
+        "typing the engine word 'postgres' must match rows (matched={matched}); labels={labels:?}"
+    );
+    // And the matched rows are the pg-run/pg-stop instance rows (their labels do
+    // not contain "postgres"; only the keyword does).
+    assert!(
+        labels.iter().any(|l| l.contains("pg-stop")),
+        "an instance row must be reachable by the engine keyword: {labels:?}"
+    );
+}
+
+/// `F3`: Enter on a DISABLED palette row does nothing — no service call, and the
+/// palette stays open. Drives the disabled `Hentikan pg-stop` (the instance is
+/// stopped) through the CommandState and a real Enter.
+#[gpui_kit::test]
+fn enter_on_a_disabled_palette_row_does_nothing(cx: &mut TestAppContext) {
+    let (view, service, cx) = harness(cx);
+    let calls_before = service.calls();
+    press(cx, "ctrl-k");
+    // "hentikan pg-stop": the stop command for a stopped instance is disabled.
+    type_text(cx, "hentikan pg-stop");
+    let (matched, reason_first) = view.read_with(cx, |this, cx| {
+        let items = this.palette_items();
+        let filtered = crate::format::filter_palette(&items, "hentikan pg-stop");
+        (
+            this.command_state().read(cx).matched_count(),
+            filtered.first().and_then(|i| i.reason.clone()),
+        )
+    });
+    // The only matching row is the disabled stop.
+    assert!(
+        matched >= 1,
+        "the disabled stop row must be visible, matched={matched}"
+    );
+    assert!(reason_first.is_some(), "that row must carry a reason");
+    let selected = view.read_with(cx, |this, cx| {
+        this.command_state().read(cx).selected_index()
+    });
+    press(cx, "enter");
+    cx.run_until_parked();
+    assert!(
+        view.read_with(cx, |this, _| this.palette_is_open()),
+        "Enter on a disabled row must not confirm/close the palette"
+    );
+    assert_eq!(
+        service.calls(),
+        calls_before,
+        "Enter on a disabled row must reach no service (selected={selected:?})"
+    );
+}
