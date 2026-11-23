@@ -4,9 +4,11 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
+pub mod admin_mysql;
 pub mod autostart_instances;
 pub mod cancel_and_checksum;
 pub mod concurrency;
+pub mod config_editor;
 pub mod engines_outlive_app;
 pub mod mariadb_download;
 pub mod mysql_download;

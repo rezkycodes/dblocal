@@ -7,6 +7,7 @@
 mod admin_ops;
 mod catalog_ops;
 mod clients_ops;
+mod config_ops;
 mod create;
 mod delete;
 mod helpers;

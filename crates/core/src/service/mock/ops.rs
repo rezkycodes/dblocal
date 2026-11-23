@@ -765,6 +765,41 @@ impl DblService for MockService {
         super::admin::reset_superuser_password(&self.inner, id)
     }
 
+    // --- Config editor (F-CFG) ----------------------------------------------
+
+    fn config_view(
+        &self,
+        id: &InstanceId,
+    ) -> crate::service::ServiceResult<crate::config::ConfigView> {
+        super::config::view(&self.inner, id)
+    }
+
+    fn config_apply(
+        &self,
+        id: &InstanceId,
+        changes: Vec<(String, String)>,
+    ) -> crate::service::ServiceResult<crate::config::ConfigApplied> {
+        super::config::apply(&self.inner, id, &changes)
+    }
+
+    fn config_restore(&self, id: &InstanceId) -> crate::service::ServiceResult<()> {
+        super::config::restore(&self.inner, id)
+    }
+
+    fn config_raw_path(
+        &self,
+        id: &InstanceId,
+    ) -> crate::service::ServiceResult<std::path::PathBuf> {
+        super::config::raw_path(&self.inner, id)
+    }
+
+    fn config_open_raw(
+        &self,
+        id: &InstanceId,
+    ) -> crate::service::ServiceResult<crate::config::OpenCommand> {
+        super::config::open_raw(&self.inner, id)
+    }
+
     // --- Updates (F-PKG-05) -------------------------------------------------
 
     fn check_update(&self) -> crate::service::ServiceResult<crate::service::UpdateStatus> {

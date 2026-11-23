@@ -494,6 +494,46 @@ fn the_pg_admin_factory_builds_a_loopback_executor() {
 }
 
 #[test]
+fn the_default_admin_factory_dispatches_by_engine() {
+    use super::super::super::admin_ops;
+    let dir = tempfile::tempdir().expect("tempdir");
+    let paths = crate::paths::DblPaths::with_root(dir.path());
+    let factory = admin_ops::default_admin_factory(paths);
+    let make = |engine: EngineKey, port: u16| {
+        Instance::new(
+            &crate::model::InstanceSpec::new(
+                crate::model::InstanceName::new("svc").expect("name"),
+                engine,
+                "18.7",
+                Some(crate::model::Port::new(port).expect("port")),
+                crate::model::AuthMode::Password,
+            )
+            .expect("spec"),
+            InstanceId::new(),
+            crate::model::InstanceStatus::Running,
+            std::time::SystemTime::now(),
+        )
+    };
+    // PostgreSQL, MySQL and MariaDB all build an executor; none touch a server.
+    for engine in [EngineKey::Postgresql, EngineKey::Mysql, EngineKey::Mariadb] {
+        match factory(&make(engine, 5432), SecretString::new("pw")) {
+            Ok(executor) => drop(executor),
+            Err(err) => panic!(
+                "{} must build: [{}] {}",
+                engine.display_name(),
+                err.code,
+                err.message
+            ),
+        }
+    }
+    // Valkey is refused (it has no database/user model).
+    match factory(&make(EngineKey::Valkey, 6379), SecretString::new("pw")) {
+        Ok(_) => panic!("valkey must be refused"),
+        Err(err) => assert_eq!(err.code, crate::admin::error::CODE_UNSUPPORTED),
+    }
+}
+
+#[test]
 fn os_kind_of_maps_every_platform() {
     use super::super::super::clients_ops::os_kind_of;
     assert_eq!(
@@ -543,8 +583,7 @@ fn a_no_password_instance_has_no_launch_credential() {
         move |options| {
             options.admin_factory = Some(Arc::new(move |_instance, _password| {
                 let admin = Arc::clone(&admin);
-                Ok(Box::new(SharedAdmin(admin))
-                    as Box<dyn super::super::super::admin_ops::AdminExecutor>)
+                Ok(Box::new(SharedAdmin(admin)) as Box<dyn crate::admin::AdminExecutor>)
             }));
         }
     });

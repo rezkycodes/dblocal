@@ -10,7 +10,10 @@
 use gpui_kit::assets::IconName;
 use gpui_kit::component::label::Label;
 use gpui_kit::component::{Theme, h_flex, v_flex};
-use gpui_kit::{Div, Hsla, IntoElement, ParentElement, SharedString, Styled, div, px, svg};
+use gpui_kit::{
+    Div, Hsla, InteractiveElement as _, IntoElement, ParentElement, SharedString, Styled, div, px,
+    svg,
+};
 
 use dblocal_core::model::{EngineKey, InstanceStatus};
 
@@ -82,6 +85,10 @@ pub fn status_glyph(status: InstanceStatus, size: f32, theme: &Theme) -> Div {
 }
 
 /// Monogram badge for an engine (`PG`, `MY`, `MA`, `VK`).
+///
+/// A11y: a page can show two badges of one engine (the dock row and the
+/// instance header), each as its own subtree, so the label id depends on the
+/// size — the only thing telling those badges apart — to stay unique.
 pub fn engine_badge(engine: EngineKey, size: f32, theme: &Theme) -> Div {
     let colour = engine_colour(engine, theme);
     div()
@@ -94,6 +101,10 @@ pub fn engine_badge(engine: EngineKey, size: f32, theme: &Theme) -> Div {
         .bg(tokens::tint(colour, 0.16))
         .child(
             Label::new(format::engine_monogram(engine))
+                .id(SharedString::from(format!(
+                    "engine-badge-{}-{size}",
+                    engine.as_str()
+                )))
                 .text_color(colour)
                 .text_size(px((size * 0.42).max(9.0)))
                 .font_weight(gpui_kit::FontWeight::SEMIBOLD),
@@ -101,6 +112,9 @@ pub fn engine_badge(engine: EngineKey, size: f32, theme: &Theme) -> Div {
 }
 
 /// A status chip: the glyph plus the Indonesian word.
+///
+/// A11y: the same status can be drawn more than once in a frame (an instance
+/// row, a header pill, a filter result), so the label id carries the status.
 pub fn status_pill(status: InstanceStatus, theme: &Theme) -> Div {
     let colour = status_colour(status, theme);
     h_flex()
@@ -114,19 +128,50 @@ pub fn status_pill(status: InstanceStatus, theme: &Theme) -> Div {
         .text_xs()
         .font_weight(gpui_kit::FontWeight::MEDIUM)
         .child(status_glyph(status, 8.0, theme))
-        .child(Label::new(format::status_label(status)))
+        .child(
+            Label::new(format::status_label(status)).id(SharedString::from(format!(
+                "status-pill-{}",
+                status_word(status)
+            ))),
+        )
+}
+
+/// Stable id fragment for a status, used where two nodes share a parent.
+fn status_word(status: InstanceStatus) -> &'static str {
+    match status {
+        InstanceStatus::Running => "running",
+        InstanceStatus::Stopped => "stopped",
+        InstanceStatus::Failed => "failed",
+        _ => "busy",
+    }
 }
 
 /// Small capitalised section label, e.g. `INSTANCES`.
+///
+/// A11y: a page draws several section headings, all from this one call site.
+/// `Label::new` would give them one element id and gpui's duplicate-node
+/// assertion would fire, so the id comes from the heading text.
 pub fn section_label(text: impl Into<SharedString>) -> Label {
-    Label::new(text.into().to_uppercase())
+    let text = text.into();
+    Label::new(text.clone().to_uppercase())
+        .id(SharedString::from(format!("section-{text}")))
         .text_size(px(11.))
         .font_weight(gpui_kit::FontWeight::SEMIBOLD)
 }
 
 /// A bordered card with an optional heading.
-pub fn card(title: Option<&str>, theme: &Theme) -> Div {
+///
+/// A11y: callers that draw several cards pass a `key` that tells them apart (a
+/// loop index); two cards with the same key, or two title-less cards, would
+/// otherwise share one element path, because `Label::new`'s id is the call site.
+/// `key` falls back to the heading, then to a fixed name.
+pub fn card(title: Option<&str>, key: Option<&str>, theme: &Theme) -> gpui_kit::Stateful<Div> {
+    let card_key = key
+        .map(str::to_owned)
+        .or_else(|| title.map(str::to_owned))
+        .unwrap_or_else(|| "card".to_owned());
     let mut base = v_flex()
+        .id(SharedString::from(format!("card-{card_key}")))
         .gap_3()
         .p(px(18.))
         .pb(px(18.))
@@ -137,6 +182,7 @@ pub fn card(title: Option<&str>, theme: &Theme) -> Div {
     if let Some(title) = title {
         base = base.child(
             Label::new(title.to_owned())
+                .id(SharedString::from(format!("card-title-{card_key}")))
                 .text_sm()
                 .font_weight(gpui_kit::FontWeight::SEMIBOLD),
         );
@@ -145,12 +191,17 @@ pub fn card(title: Option<&str>, theme: &Theme) -> Div {
 }
 
 /// A `label — value` row for the detail cards.
-pub fn kv(label: &str, value: impl IntoElement, theme: &Theme) -> Div {
+///
+/// A11y: the row root and its label carry the field name, so the same call
+/// site can serve every field of every card without colliding.
+pub fn kv(label: &str, value: impl IntoElement, theme: &Theme) -> gpui_kit::Stateful<Div> {
     h_flex()
+        .id(SharedString::from(format!("kv-{label}")))
         .gap_3()
         .items_start()
         .child(
             Label::new(label.to_owned())
+                .id(SharedString::from(format!("kv-label-{label}")))
                 .w(px(130.))
                 .flex_none()
                 .text_color(theme.muted_foreground),
@@ -159,10 +210,14 @@ pub fn kv(label: &str, value: impl IntoElement, theme: &Theme) -> Div {
 }
 
 /// Monospace text in the theme's mono family, used for URIs, ports and logs.
-pub fn mono_themed(text: impl Into<SharedString>, theme: &Theme) -> Div {
+///
+/// A11y: the wrapper takes an id from the text so repeated uses stay distinct.
+pub fn mono_themed(text: impl Into<SharedString>, theme: &Theme) -> gpui_kit::Stateful<Div> {
+    let text = text.into();
     div()
+        .id(SharedString::from(format!("mono-{text}")))
         .font_family(theme.mono_font_family.clone())
-        .child(Label::new(text.into()))
+        .child(Label::new(text))
 }
 
 /// A tinted banner: fill, border and whatever the caller adds inside.

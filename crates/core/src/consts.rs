@@ -60,6 +60,8 @@ pub const DIR_DOWNLOADS: &str = "downloads";
 pub const DIR_INSTANCES: &str = "instances";
 /// Sub-directory holding archived data directories.
 pub const DIR_ARCHIVE: &str = "archive";
+/// Sub-directory holding config backups (`F-CFG-01` AC3).
+pub const DIR_BACKUPS: &str = "dblocal-backups";
 /// Sub-directory holding the credential file fallback.
 pub const DIR_SECRETS: &str = "secrets";
 /// Per-instance data directory.

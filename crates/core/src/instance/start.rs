@@ -223,6 +223,11 @@ async fn run_start_inner(
             })
             .await?;
             emit_changed(inner, id);
+            // Record the config file hash at the first successful start, so a
+            // later failed start can offer "restore the previous config".
+            if let Ok(current) = load(inner, id) {
+                super::config_ops::record_last_good(inner, &current);
+            }
             Ok(())
         }
         Err(err) => {
@@ -373,7 +378,12 @@ async fn fail_with_tail(
     )
     .await;
 
-    let info = failure_info(err.code(), err.user_message(), diagnosis, tail);
+    let mut info = failure_info(err.code(), err.user_message(), diagnosis, tail);
+    // Offer "restore the previous configuration" when a backup exists and the
+    // config changed since the last successful start (`F-CFG-01` AC3).
+    if let Ok(current) = load(inner, id) {
+        info.restore_available = super::config_ops::restore_available(inner, &current);
+    }
     if let Ok(mut failures) = inner.failures.lock() {
         failures.insert(id.clone(), info.clone());
     }

@@ -22,7 +22,8 @@ New feature modules do NOT edit `error.rs` or `strings.rs` (several workers edit
 | 8300-8399 | `clients` (open in an external client) | W3-C |
 | 8400-8499 | `cli` (command line only: argument and terminal problems) | W3-D |
 | 8500-8599 | packaging and autostart helpers (`autostart`, W4-D) | W4-D |
-| 8600-8999 | reserved | |
+| 8600-8699 | `config` (config editor, F-CFG) | W4-C |
+| 8700-8999 | reserved | |
 
 Rules for a module error type:
 

@@ -201,6 +201,7 @@ inside the range, unique, and reached by a variant.
 | 8114 | `RollbackFailed` | rollback failed, state inconsistent |
 | 8115 | `PasswordGenerate` | OS RNG failed |
 | 8117 | `NoPassword` | the instance was created without a password; admin needs one created with a password (W4-A fix 1) |
+| 8118 | `SystemSchema` | the database is one MySQL/MariaDB own (`mysql`, `sys`, `information_schema`, `performance_schema`); admin must not manage it (W4-A2) |
 
 `NoPassword` is deliberately distinct from `Unsupported` (8111): the engine is
 PostgreSQL (supported), but an instance created with `--no-password` has no
@@ -340,3 +341,110 @@ public method that takes a name.
   with a recording sink, not the keychain.
 - **MySQL privilege semantics** (`GRANT … ON db.*`) are asserted as text, not
   against a running MySQL.
+
+## W4-A2 — MySQL and MariaDB admin (F-DBU-01..03 for the MySQL family)
+
+The same `DblService` calls now work for MySQL and MariaDB through
+`admin/mysql.rs` (`MysqlTarget` + `MysqlAdmin`), which implements the
+`admin/executor.rs::AdminExecutor` trait. The F-DBU-03 AC2 reset state machine
+was extracted into `admin/reset.rs` and is shared by `PgAdmin` and `MysqlAdmin`.
+
+### Client library
+
+`mysql_async` 0.37 (MIT OR Apache-2.0). It was already a workspace dependency
+(health checks and the e2e client), resolves to rustls + `flate2` with no
+`openssl` / `native-tls` in the lock (`cargo tree` shows none), and its default
+feature set needs no system C library. Kept out of scope: any TLS feature; the
+module only ever talks to a loopback unix socket.
+
+### Connection: always the unix socket, never TCP
+
+Every admin connection dials the instance's **unix socket** (`my.cnf`'s
+`socket=`; the adapters' `configured_socket_path` returns the same path the
+start command wrote, including the long-path fallback). There is **no TCP
+fallback**: `MysqlTarget` carries no port and `opts()` always sets the socket, so
+admin can never quietly connect over TCP. Reasons:
+
+- The socket is a secure (never-transmitted) channel, so no byte — the password
+  or a statement's text — crosses the loopback TCP stream. (`mysql_async` would
+  itself do the `caching_sha2_password` RSA public-key exchange over TCP, so the
+  socket is not *required* to complete the handshake — but it is the only path
+  that keeps the traffic off TCP.)
+- MariaDB's bootstrap (`--auth-root-authentication-method=normal`) configures
+  `root@localhost`, reachable only through the socket.
+
+Managed accounts are created at `user@'127.0.0.1'` (the TCP account the service
+URI uses), not `localhost`, so a client opened with the URI can log in.
+
+### Exact SQL per call
+
+| Call | Statement |
+|---|---|
+| list databases | `SELECT s.SCHEMA_NAME, COALESCE(SUM(t.DATA_LENGTH + t.INDEX_LENGTH),0) FROM information_schema.SCHEMATA s LEFT JOIN information_schema.TABLES t ON t.TABLE_SCHEMA = s.SCHEMA_NAME WHERE s.SCHEMA_NAME NOT IN ('mysql','sys','information_schema','performance_schema') GROUP BY s.SCHEMA_NAME ORDER BY s.SCHEMA_NAME` |
+| create database | ``CREATE DATABASE `name` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`` |
+| drop database (`force != true`, default) | `SELECT COUNT(*) FROM information_schema.PROCESSLIST WHERE DB = ?`; if > 0, `DBL-8106`, else ``DROP DATABASE `name``` |
+| drop database (`force`) | ``DROP DATABASE `name``` (no pre-check) |
+| create user | ``CREATE USER `u`@'127.0.0.1' IDENTIFIED BY '<escaped>'`` |
+| grant `ro` | ``GRANT SELECT ON `db`.* TO `u`@'127.0.0.1'`` |
+| grant `rw` | ``GRANT SELECT, INSERT, UPDATE, DELETE ON `db`.* TO `u`@'127.0.0.1'`` |
+| drop user | ``DROP USER `u`@'127.0.0.1'`` |
+| reset password | ``ALTER USER `root`@'<host>' IDENTIFIED BY '<escaped>'`` for `localhost`, `127.0.0.1`, `::1` |
+
+Constraints:
+
+- The privilege list is **explicit and `ON `db`.*` only** — never `*.*`, never
+  `ALL`, never `WITH GRANT OPTION`, so a managed user cannot touch another schema
+  or grant rights. Pinned by an exact-SQL test.
+- System schemas (`mysql`, `sys`, `information_schema`, `performance_schema`,
+  case-insensitive) are refused by the executor with `SystemSchema` (`DBL-8118`)
+  before a statement is sent.
+- Identifiers go through the existing `Identifier` allowlist and the backtick
+  quoter; the password is a [`quote_mysql_literal`] single literal, so a hostile
+  value cannot become a second statement (hostile-corpus tests).
+
+### Not leaking the password to the query log
+
+Enabling MySQL's general query log records `CREATE USER ... IDENTIFIED BY
+'<cleartext>'`. Every admin statement that carries a password literal runs with
+`SET sql_log_off = 1` on the session first, so its text never reaches the general
+log. That variable needs `SYSTEM_VARIABLES_ADMIN`/super, which the admin
+connection is; the set is best-effort (the socket already avoids a network
+observer) and its failure does not abort the statement.
+
+### Reset (F-DBU-03 AC2) for MySQL/MariaDB
+
+The shared `reset_with` runs `apply → verify → store`, rolling back to the old
+password on a verify or sink failure. `apply` sets the new password on every
+loopback host account of the superuser (`localhost`, `127.0.0.1`, `::1`);
+`verify` opens a fresh socket connection with the new password. A failed reset
+leaves the old password working and the keychain untouched (service-level test
+with a failing sink).
+
+### Error codes
+
+MySQL server errors map without carrying the driver text: `1045` →
+`AuthFailed` (8116), `1049` → `DatabaseNotFound` (8105), `1007` →
+`DatabaseExists` (8104), `1008` → `DatabaseNotFound`, `1044`/`1142` →
+`InsufficientPrivilege` (8109), `1396` → `UserExists` (8107) or `UserNotFound`
+(8108) by the "doesn't exist" text; anything else is `QueryFailed` (8110) with no
+payload. System schemas are `DBL-8118`.
+
+### Valkey and no-password
+
+`executor_for` accepts PostgreSQL, MySQL and MariaDB (a typed `NoPassword`
+(8117) for any of them created without a password) and rejects only Valkey with
+`Unsupported` (8111), which has no named databases or login roles.
+
+### Tests and what is not proven
+
+- Unit: exact-SQL and hostile-corpus builder tests, `MysqlAdmin` target/opts/
+  system-schema/error-mapping, the shared reset state machine.
+- Real-engine e2e (`tests/support/cases/admin_mysql.rs`, run under the e2e lock,
+  MariaDB via the `libcrypt.so.1` shim): create with the `utf8mb4_unicode_ci`
+  charset asserted via `information_schema`, list, refuse every system schema, ro
+  SELECT vs INSERT, rw INSERT vs CREATE DATABASE, reset (old fails, new works,
+  URI carries it), drop, clean PurgeData delete with no surviving engine.
+- Not proven here: macOS/Windows, aarch64, MariaDB 11.4 (needs `libcrypt.so.1`,
+  absent on this host), MySQL 8.0/9.x, a live OS keychain, and a reset with a
+  live keychain failure against a real server (the sink-failure rollback is
+  proven at the service level with the shared state machine).

@@ -45,7 +45,7 @@ impl FakeAdmin {
     }
 }
 
-impl super::super::admin_ops::AdminExecutor for FakeAdmin {
+impl crate::admin::AdminExecutor for FakeAdmin {
     fn list_databases(&self) -> AdminResult<Vec<DatabaseInfo>> {
         self.calls.lock().unwrap().push("list_databases".to_owned());
         Ok(vec![DatabaseInfo::new("postgres", "postgres", 1)])
@@ -125,7 +125,7 @@ fn harness_with_admin(engine: EngineKey, admin: Arc<FakeAdmin>) -> (Harness, Ins
     let h = Harness::with_options(engine, move |options| {
         options.admin_factory = Some(Arc::new(move |_instance, _password| {
             let admin = Arc::clone(&admin);
-            Ok(Box::new(SharedAdmin(admin)) as Box<dyn super::super::admin_ops::AdminExecutor>)
+            Ok(Box::new(SharedAdmin(admin)) as Box<dyn crate::admin::AdminExecutor>)
         }));
     });
     let name = format!("adm{}", test_port() % 1000);
@@ -136,7 +136,7 @@ fn harness_with_admin(engine: EngineKey, admin: Arc<FakeAdmin>) -> (Harness, Ins
 /// A boxed executor that borrows the shared fake.
 struct SharedAdmin(Arc<FakeAdmin>);
 
-impl super::super::admin_ops::AdminExecutor for SharedAdmin {
+impl crate::admin::AdminExecutor for SharedAdmin {
     fn list_databases(&self) -> AdminResult<Vec<DatabaseInfo>> {
         self.0.list_databases()
     }
@@ -535,38 +535,67 @@ fn seed_row(h: &Harness, engine: EngineKey, name: &str) -> InstanceId {
 }
 
 #[test]
-fn mysql_and_valkey_report_not_supported_per_engine() {
-    for engine in [EngineKey::Mysql, EngineKey::Mariadb, EngineKey::Valkey] {
+fn valkey_reports_not_supported() {
+    // Valkey has no named databases or login roles: a typed "not supported",
+    // never an empty list, and the executor is never built.
+    let admin = Arc::new(FakeAdmin::default());
+    let h = Harness::with_options(EngineKey::Postgresql, {
+        let admin = Arc::clone(&admin);
+        move |options| {
+            options.admin_factory = Some(Arc::new(move |_instance, _password| {
+                let admin = Arc::clone(&admin);
+                Ok(Box::new(SharedAdmin(admin)) as Box<dyn crate::admin::AdminExecutor>)
+            }));
+        }
+    });
+    let name = format!("vk{}", test_port() % 1000);
+    let id = seed_row(&h, EngineKey::Valkey, &name);
+    let err = h.service.list_databases(&id).expect_err("unsupported");
+    assert_eq!(err.code, crate::admin::error::CODE_UNSUPPORTED);
+    let err = h
+        .service
+        .create_database(&id, "x_db")
+        .expect_err("unsupported");
+    assert_eq!(err.code, crate::admin::error::CODE_UNSUPPORTED);
+    let err = h.service.list_users(&id).expect_err("unsupported");
+    assert_eq!(err.code, crate::admin::error::CODE_UNSUPPORTED);
+    assert!(
+        admin.calls().is_empty(),
+        "Valkey must not reach the executor"
+    );
+}
+
+#[test]
+fn mysql_and_mariadb_route_to_the_executor() {
+    // W4-A2: MySQL and MariaDB are supported engines now; the engine gate lets
+    // them through to the injected executor (the real one dials the socket).
+    for engine in [EngineKey::Mysql, EngineKey::Mariadb] {
         let admin = Arc::new(FakeAdmin::default());
         let h = Harness::with_options(EngineKey::Postgresql, {
             let admin = Arc::clone(&admin);
             move |options| {
                 options.admin_factory = Some(Arc::new(move |_instance, _password| {
                     let admin = Arc::clone(&admin);
-                    Ok(Box::new(SharedAdmin(admin))
-                        as Box<dyn super::super::admin_ops::AdminExecutor>)
+                    Ok(Box::new(SharedAdmin(admin)) as Box<dyn crate::admin::AdminExecutor>)
                 }));
             }
         });
-        let name = format!("eng{}", test_port() % 1000);
+        let name = format!("my{}", test_port() % 1000);
         let id = seed_row(&h, engine, &name);
-        let err = h.service.list_databases(&id).expect_err("unsupported");
-        assert_eq!(
-            err.code,
-            crate::admin::error::CODE_UNSUPPORTED,
-            "{} must be typed unsupported, not an empty list",
-            engine.display_name()
-        );
-        let err = h
-            .service
+        let dbs = h.service.list_databases(&id).expect("routed to executor");
+        assert_eq!(dbs.len(), 1, "{}", engine.display_name());
+        h.service
             .create_database(&id, "x_db")
-            .expect_err("unsupported");
-        assert_eq!(err.code, crate::admin::error::CODE_UNSUPPORTED);
-        let err = h.service.list_users(&id).expect_err("unsupported");
-        assert_eq!(err.code, crate::admin::error::CODE_UNSUPPORTED);
-        assert!(
-            admin.calls().is_empty(),
-            "{} must not reach the executor",
+            .expect("routed to executor");
+        h.service.list_users(&id).expect("routed to executor");
+        assert_eq!(
+            admin.calls(),
+            vec![
+                "list_databases".to_owned(),
+                "create_database:x_db".to_owned(),
+                "list_users".to_owned()
+            ],
+            "{} must reach the executor",
             engine.display_name()
         );
     }
@@ -583,7 +612,7 @@ fn a_no_password_postgres_instance_reports_its_own_error() {
         move |options| {
             options.admin_factory = Some(Arc::new(move |_instance, _password| {
                 let admin = Arc::clone(&admin);
-                Ok(Box::new(SharedAdmin(admin)) as Box<dyn super::super::admin_ops::AdminExecutor>)
+                Ok(Box::new(SharedAdmin(admin)) as Box<dyn crate::admin::AdminExecutor>)
             }));
         }
     });
@@ -664,7 +693,7 @@ fn an_instance_without_a_credential_is_typed_not_found() {
         move |options| {
             options.admin_factory = Some(Arc::new(move |_instance, _password| {
                 let admin = Arc::clone(&admin);
-                Ok(Box::new(SharedAdmin(admin)) as Box<dyn super::super::admin_ops::AdminExecutor>)
+                Ok(Box::new(SharedAdmin(admin)) as Box<dyn crate::admin::AdminExecutor>)
             }));
         }
     });
