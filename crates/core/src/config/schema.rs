@@ -535,23 +535,74 @@ fn is_comment_injection(value: &str) -> bool {
 }
 
 /// Accepts `UTC`, `GMT`, `Area/Location` and rejects anything else.
+///
+/// The database engines resolve a zone name against the system tzdata, so this
+/// checks the same source: `/usr/share/zoneinfo/<name>` must exist. Where that
+/// tree is absent (Windows, a minimal container) it falls back to a strict
+/// syntactic check, and the engine itself refuses an unknown name at start — that
+/// is the `F-CFG-01` AC3 path, covered by the restore flow.
 fn validate_timezone(value: &str) -> Result<(), ConfigError> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
         return Err(ConfigError::InvalidValue("zona waktu kosong"));
     }
-    // A MySQL time zone may be an UTC offset (`+07:00`, `-08:00`); accept that
-    // form, which is better than a named zone for a server that must not depend
-    // on an installed tzdata.
+    // A MySQL time zone may be an UTC offset (`+07:00`, `-08:00`).
     if let Some(offset) = trimmed.strip_prefix(['+', '-']) {
         return validate_offset(offset)
             .then_some(())
             .ok_or(ConfigError::InvalidValue("offset zona waktu tidak valid"));
     }
-    match trimmed.parse::<chrono_tz::Tz>() {
-        Ok(_) => Ok(()),
-        Err(_) => Err(ConfigError::InvalidValue("zona waktu tidak dikenal")),
+    if trimmed == "UTC" || trimmed == "GMT" || trimmed == "localtime" {
+        return Ok(());
     }
+    // Reject path traversal or an absolute path masquerading as a zone name.
+    if trimmed.starts_with('/') || trimmed.contains("..") || trimmed.contains('\0') {
+        return Err(ConfigError::InvalidValue("zona waktu tidak valid"));
+    }
+    if !well_formed_zone(trimmed) {
+        return Err(ConfigError::InvalidValue("zona waktu tidak dikenal"));
+    }
+    let root = std::path::Path::new("/usr/share/zoneinfo");
+    if root.is_dir() {
+        if root.join(trimmed).is_file() {
+            Ok(())
+        } else {
+            Err(ConfigError::InvalidValue("zona waktu tidak dikenal"))
+        }
+    } else {
+        // No system tzdata to consult; accept a syntactically valid name and let
+        // the engine decide at start.
+        Ok(())
+    }
+}
+
+/// `Area/Location` (one or two slashes) of ASCII alphanumerics, `_`, `+`, `-`.
+fn well_formed_zone(name: &str) -> bool {
+    let mut slashes = 0;
+    let mut has_area = false;
+    let mut has_location = false;
+    let mut after_slash = false;
+    for ch in name.chars() {
+        match ch {
+            '/' => {
+                if slashes == 2 || (!has_area && !after_slash) {
+                    return false;
+                }
+                slashes += 1;
+                after_slash = true;
+            }
+            c if c.is_ascii_alphanumeric() || c == '_' || c == '+' || c == '-' => {
+                if after_slash {
+                    has_location = true;
+                    after_slash = false;
+                } else if slashes == 0 {
+                    has_area = true;
+                }
+            }
+            _ => return false,
+        }
+    }
+    has_area && has_location && !after_slash
 }
 
 /// Validates `HH:MM` (or `HH`) for a UTC offset.

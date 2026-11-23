@@ -10,7 +10,6 @@ default = []
 mock = []
 
 [dependencies]
-chrono-tz = { workspace = true }
 directories = { workspace = true }
 flate2 = { workspace = true }
 keyring = { workspace = true }

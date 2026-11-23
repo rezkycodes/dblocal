@@ -178,7 +178,21 @@ fn timezone_accepts_named_zones_and_offsets() {
     validate_value(spec, "Europe/Berlin").expect("Area/Location");
     validate_value(spec, "+07:00").expect("offset");
     validate_value(spec, "-08:00").expect("offset");
-    assert!(validate_value(spec, "Mars/Olympus").is_err());
+    // A valid shape but a zone that does not exist: the engines' own rule is the
+    // system tzdata, so this is an error where tzdata is present.
+    if std::path::Path::new("/usr/share/zoneinfo").is_dir() {
+        assert!(validate_value(spec, "Mars/Olympus").is_err());
+    }
+    // Always refused regardless of tzdata:
+    assert!(validate_value(spec, "no-slash").is_err(), "shape");
+    assert!(
+        validate_value(spec, "/etc/passwd").is_err(),
+        "absolute path"
+    );
+    assert!(
+        validate_value(spec, "../../etc/passwd").is_err(),
+        "traversal"
+    );
     assert!(validate_value(spec, "+99:00").is_err());
     assert!(validate_value(spec, "").is_err());
 }

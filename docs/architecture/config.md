@@ -62,6 +62,12 @@ e2e.
 Every key in this subset needs a restart (`ApplyTime::Restart`), and the form
 says so per key.
 
+Time zones are validated against the system tzdata (`/usr/share/zoneinfo`), the
+same source the engines resolve a zone name with — no time-zone crate is added.
+Where that tree is absent (Windows, a minimal container) only the `Area/Location`
+shape and a UTC offset are checked, and the engine refuses an unknown name at
+start, which is exactly the `F-CFG-01` AC3 restore path.
+
 ## 4. Read-only: authentication method
 
 `F-CFG-01` AC1 lists "metode autentikasi" in the form. This task shows the
