@@ -112,13 +112,25 @@ the change is for the next start.
 
 ## 7. Opening the raw file
 
-`config_raw_path(id)` returns the path; opening it is the caller's job through
-the existing `open` machinery (`F-OPN`), which launches the OS default handler
-detached, argv only, no shell. This module never rewrites the file for that.
+`config_raw_path(id)` returns the path and `config_open_raw(id)` opens it in the
+OS default handler (`F-CFG-02` AC1). The argv is a pure function of the OS and
+the path (`config::launcher`): `xdg-open <path>` on Linux, `open <path>` on macOS,
+`rundll32.exe url.dll,FileProtocolHandler <path>` on Windows — never
+`cmd /c start`, whose parser would see `&`, `^`, `%` and quotes in the path. The
+path is exactly one argv element, so a space, `&`, `%` or a leading `-` is never a
+second argument (a leading `-` is prefixed with `./` so `xdg-open` cannot read it
+as an option). The launch is detached, argv only, no shell, through an
+`OpenLauncher` seam a test injects a fake into; the real service uses
+`SystemOpenLauncher`. A missing file is `DBL-8607`; a handler that cannot start is
+`DBL-8608`, and the failure prints the path so the user can open it by hand. The
+CLI command is `dblocal config open <name>`. Nothing here reads or rewrites the
+file, so no content can leak.
 
 ## 8. Not verified here
 
 - Windows/macOS file semantics: the CRLF fixtures cover the parser only.
-- The OS default editor launch (a human must click it).
+- The Windows (`rundll32`) and macOS (`open`) launchers were not run: only the
+  Linux `xdg-open` path was exercised with a stub that records its argv.
+- The OS default editor actually opening a window (a human must click it).
 - MySQL 8.0/9.x and MariaDB 11.4: this machine has MySQL 8.4.11 and MariaDB
   11.8.10; 11.4 needs the libcrypt shim and is a printed skip elsewhere.
