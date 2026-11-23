@@ -155,6 +155,19 @@ the title bar proves the modal, not the page.
 | `Tab` ×19 in the create dialog | change `512×370+298+198` — **entirely inside the dialog panel**; sidebar (`x<272`), title bar (`y<34`) and status bar unchanged → Tab did **not** leave the modal (F2) |
 | `Escape`, then `Tab` on the main screen, 12× | changes cycle through the header (`+240+1`), the sidebar top (`+5+39`), the sidebar list (`+5+69`, `+5+721`), then the centre pane — focus reaches the sidebar controls in order and wraps (F4) |
 
+### Fix-2 transcript (this host, Xvfb `:78`, release `dblocal`, light theme)
+
+The PostgreSQL 18.7 tarball was pre-placed in `downloads/`; the instance was
+created by key (`ctrl+n`, `Tab`×4 to "Buat", `Return`), giving `postgres-18`.
+
+| Key | Observed |
+|---|---|
+| palette `postgres-18`, `Down`, `Return` ("Buka") | palette closed (change 1271×758); the instance tab opened and became the selected instance |
+| `ctrl+shift+s` | `pgrep -x postgres`: **0 → 9** — the selected stopped instance started (G1; this key was dead before) |
+| `ctrl+shift+x` | `pgrep -x postgres`: **9 → 0** — the running instance stopped (G1); frame changed 1220×766 |
+| `ctrl+n`, `Tab` ×10..11 in the create dialog | change **676×83** over the version row — a band spanning the row's full width and height (a full inset outline), not a 2px top line (G2) |
+| `Escape`×3, `Tab`×4 on the main screen | change **261×60+5+39** over the PostgreSQL group header — full header width and height (full inset outline), not a one-edge line (G2) |
+
 Cleanup after the run: `pgrep -x dblocal`=0, `pgrep -x Xvfb`=0,
 `pgrep -x postgres`=0, the temp home removed, no
 `~/.config/systemd/user/dblocal.service`.
@@ -165,10 +178,11 @@ These cannot be believed from a headless test or from this Linux host. Run them
 on each release build for every OS in the matrix.
 
 1. **Keyboard-only first session (real window).** With only the keyboard —
-   `Ctrl/Cmd+N`, Tab/Shift+Tab, Enter/Space, `Ctrl/Cmd+K`, `Ctrl/Cmd+Shift+C` —
-   complete choose engine → create → start → copy URI and confirm the clipboard
-   holds the URI. The headless test proves the same code path; a real window
-   confirms native key delivery (blocked by Xwayland synthetic input here).
+   `Ctrl/Cmd+N`, Tab/Shift+Tab, Enter/Space, `Ctrl/Cmd+K`, `Ctrl/Cmd+Shift+C`,
+   `Ctrl/Cmd+Shift+S`/`X` — complete choose engine → create → start → copy URI
+   and confirm the clipboard holds the URI. This host's Xvfb run exercises the
+   same path (the desktop's Xwayland drops synthetic XTEST input, so use a
+   private Xvfb); Windows/macOS confirm native key delivery.
 2. **Focus ring per OS.** Tab through the shell on Windows and macOS and confirm
    the ring is drawn and visible (contrast ≥ 3:1 against both the control and the
    surface). The ring rendering path is `gpui-component`'s `focus_style`; the

@@ -74,11 +74,15 @@ completable from the keyboard, with the focus always visible. The rules:
   from `Enter`/`Space` on a *focused* element, so a row that already has
   `on_click` becomes keyboard-activatable once it holds focus. The create
   dialog's engine cards and version rows, the dock's engine-group headers and
-  instance rows, and the instance tabs all go through
-  `components::apply_focus_ring` (with `components::keyed_focus` for a stable
-  handle), which calls `track_focus`, sets `tab_stop(true)` and, when focused,
-  draws the theme's own focus appearance (`focus_ring_style`: a `theme.ring`
-  border plus the outside ring — a ring, never just a background tint).
+  instance rows, and the instance tabs are tab stops that draw the theme ring.
+  Two ring helpers exist because clipping differs: `components::apply_focus_ring`
+  (gpui-component's `focus_ring_style`, a `theme.ring` border plus the outside
+  ring — fine for cards, buttons, inputs, sidebar rows, tabs) and
+  `components::apply_inset_focus_ring` (a 2px `theme.ring` border on **all four
+  sides inside** the row) for the version rows and engine-group headers, whose
+  parents (`overflow_hidden` list / clipped dock) cut the outside ring down to a
+  single edge line (`G2`). `components::keyed_focus` and the Workspace's
+  `dock_focus` map give a stable handle so focus survives a re-render.
 - **One dismissal helper returns the keyboard, always (`F1`).** Every overlay
   close — Escape, a Cancel/close button, a *confirm*, or a background action that
   finished — funnels through `Workspace::restore_dialog_focus_after_close`. It
@@ -90,6 +94,9 @@ completable from the keyboard, with the focus always visible. The rules:
   confirming paths that used to skip it now call it: `run_palette_action`
   (palette confirm), `submit_create`'s success arm (`finish_create_overlay`),
   `confirm_delete`, `close_settings`, `confirm_drop`, the quit cancel/keep paths.
+  The quit dialog has no open path with a window, so it captures its opener on the
+  first frame it draws (`render`, before focusing its trap) — cancelling then
+  returns the exact child that had focus, not only the root (`G3b`).
   `render` additionally focuses the root whenever nothing holds focus, so a fresh
   window answers `ctrl-k`/`ctrl-n` with no click.
 - **Modals contain Tab (`F2`).** Each modal registers a `gpui-base` focus trap
