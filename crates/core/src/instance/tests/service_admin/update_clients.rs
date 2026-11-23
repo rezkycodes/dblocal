@@ -471,6 +471,49 @@ fn the_default_trait_methods_return_a_typed_not_implemented() {
 
 // --- Production glue reachable without a live engine ------------------------
 
+/// The admin socket is resolved only on a platform that has unix sockets. Off
+/// unix the loopback TCP arm never dials one, so a path that `resolve` would
+/// reject (a Windows path over the AF_UNIX limit, say) must not fail the whole
+/// admin factory — `resolve` is not even called.
+#[test]
+fn the_admin_socket_is_resolved_only_on_unix() {
+    use super::super::super::admin_ops::admin_socket;
+    use std::cell::Cell;
+    use std::path::PathBuf;
+
+    let calls = Cell::new(0);
+    let resolve = || {
+        calls.set(calls.get() + 1);
+        Ok(PathBuf::from("/run/dblocal/mysqld-40001.sock"))
+    };
+    let unix = admin_socket(true, resolve).expect("unix resolves");
+    assert_eq!(
+        unix.as_deref(),
+        Some(std::path::Path::new("/run/dblocal/mysqld-40001.sock"))
+    );
+    assert_eq!(calls.get(), 1, "the unix arm resolves the socket once");
+
+    let calls = Cell::new(0);
+    let resolve = || {
+        calls.set(calls.get() + 1);
+        Err::<PathBuf, _>(crate::DblError::InvalidInput {
+            field: "socket",
+            reason: "would be rejected".to_owned(),
+        })
+    };
+    assert_eq!(admin_socket(false, resolve).expect("off unix"), None);
+    assert_eq!(calls.get(), 0, "the loopback arm never resolves a socket");
+
+    // A unix resolution failure is still surfaced, not swallowed.
+    let resolve = || {
+        Err::<PathBuf, _>(crate::DblError::InvalidInput {
+            field: "socket",
+            reason: "too long".to_owned(),
+        })
+    };
+    assert!(admin_socket(true, resolve).is_err());
+}
+
 #[test]
 fn the_pg_admin_factory_builds_a_loopback_executor() {
     use super::super::super::admin_ops;

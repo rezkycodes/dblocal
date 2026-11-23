@@ -74,7 +74,8 @@ pub fn default_admin_factory(paths: crate::paths::DblPaths) -> AdminFactory {
     })
 }
 
-/// Builds a [`MysqlAdmin`] for a MySQL/MariaDB instance over its unix socket.
+/// Builds a [`MysqlAdmin`] for a MySQL/MariaDB instance over its unix socket, or
+/// over loopback TCP on Windows (see [`crate::admin::mysql::Transport`]).
 fn mysql_admin(
     paths: &crate::paths::DblPaths,
     instance: &Instance,
@@ -84,7 +85,7 @@ fn mysql_admin(
     let name = instance.name();
     let data_dir = paths.data_dir(name);
     let run_dir = paths.run_dir(name);
-    let socket = match instance.engine() {
+    let socket = admin_socket(cfg!(unix), || match instance.engine() {
         EngineKey::Mysql => crate::engine::mysql_configured_socket_path(
             &run_dir,
             instance.port().get(),
@@ -93,14 +94,17 @@ fn mysql_admin(
         EngineKey::Mariadb => {
             crate::engine::mariadb_configured_socket_path(&data_dir, instance.port().get())
         }
-        _ => return Err(UserFacingError::from(AdminError::Unsupported)),
-    }
+        _ => Err(crate::DblError::InvalidInput {
+            field: "engine",
+            reason: "engine has no admin socket".to_owned(),
+        }),
+    })
     .map_err(|err| {
         tracing::warn!(engine, instance = %name, error = %err, "cannot resolve the admin socket");
         UserFacingError::from(AdminError::Connect)
     })?;
     let target = crate::admin::MysqlTarget::new(
-        socket,
+        socket.unwrap_or_default(),
         instance.port().get(),
         instance.superuser(),
         password,
@@ -110,6 +114,20 @@ fn mysql_admin(
         Duration::from_secs(consts::ADMIN_STATEMENT_TIMEOUT_SECS),
     );
     Ok(Box::new(crate::admin::MysqlAdmin::new(target)))
+}
+
+/// The socket path an admin target carries, or `None` on a platform without unix
+/// sockets.
+///
+/// Resolving the socket is a unix-only concern: the loopback TCP arm never dials
+/// it, and resolution validates the AF_UNIX path limit, which a Windows path
+/// with no socket to dial must not be failed by. `resolve` is therefore not
+/// called off unix.
+pub(crate) fn admin_socket(
+    unix: bool,
+    resolve: impl FnOnce() -> crate::error::Result<std::path::PathBuf>,
+) -> crate::error::Result<Option<std::path::PathBuf>> {
+    if unix { resolve().map(Some) } else { Ok(None) }
 }
 
 /// Runs `f` against the executor for `instance`, after the engine gate and the

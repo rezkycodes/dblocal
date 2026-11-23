@@ -530,7 +530,11 @@ in code:
   transport. There is no runtime fallback.
 - `instance/admin_ops.rs::mysql_admin` passes `instance.port()` and still
   resolves `configured_socket_path` first — the socket is the unix arm and the
-  long-path fallback it already applies is unaffected.
+  long-path fallback it already applies is unaffected. Resolution itself is
+  gated by `admin_socket(cfg!(unix), …)`: off unix it is never called, because
+  the loopback arm dials no socket and a Windows path must not be failed by the
+  AF_UNIX length check the resolver performs. A unix resolution failure is still
+  `DBL-8100`.
 
 Proven on Linux (the unix host is where every commit and gate runs):
 
