@@ -327,3 +327,77 @@ fn every_action_is_busy_while_in_flight(cx: &mut TestAppContext) {
     });
     assert_eq!(busy, (true, false));
 }
+
+#[gpui_kit::test]
+fn escape_closes_the_top_dialog_and_leaves_the_one_under_it(cx: &mut TestAppContext) {
+    let (view, service, cx) = fixture(cx);
+    let id = open_databases(&view, &service, cx);
+    // A secret dialog over the Settings dialog: Escape closes the secret one and
+    // leaves Settings up (F-PLH-01, the task's "Escape closes the top dialog").
+    view.update(cx, |this, _| {
+        this.settings.open();
+        this.secret_dialog = Some(crate::app::admin_dialogs::SecretDialog {
+            instance: id.clone(),
+            kind: crate::app::admin_dialogs::SecretKind::ResetUri,
+            value: dblocal_core::secret::SecretString::new("postgresql://x"),
+        });
+    });
+    view.update(cx, |this, _| this.close_modals());
+    let (secret, settings) = view.read_with(cx, |this, _| {
+        (this.secret_dialog().is_some(), this.settings_state().open)
+    });
+    assert!(!secret, "Escape must close the top (secret) dialog");
+    assert!(settings, "the dialog under it must stay open");
+    view.update(cx, |this, _| this.close_modals());
+    assert!(
+        !view.read_with(cx, |this, _| this.settings_state().open),
+        "a second Escape closes Settings"
+    );
+}
+
+#[gpui_kit::test]
+fn enter_confirms_the_drop_only_when_the_name_matches(cx: &mut TestAppContext) {
+    let (view, service, cx) = fixture(cx);
+    let id = open_databases(&view, &service, cx);
+    // Use the real dialog opener so its Enter subscription is installed.
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            this.open_drop_dialog(&id, "app".to_owned(), window, cx);
+        });
+    });
+
+    // Enter with the wrong text must not drop.
+    set_drop_text(&view, "app_dev", cx);
+    press_enter_in_drop(&view, cx);
+    settle(cx);
+    assert_eq!(
+        service.counts().drop_database,
+        0,
+        "Enter on a mismatch is a no-op"
+    );
+
+    // Enter with the exact name drops.
+    set_drop_text(&view, "app", cx);
+    press_enter_in_drop(&view, cx);
+    settle(cx);
+    assert_eq!(service.counts().drop_database, 1, "Enter on a match drops");
+}
+
+/// Emits `InputEvent::PressEnter` through the drop dialog's field, exactly as
+/// the widget does when the user presses Enter; the workspace's subscription
+/// then runs the confirm path.
+fn press_enter_in_drop(view: &gpui_kit::Entity<Workspace>, cx: &mut gpui_kit::VisualTestContext) {
+    let input = cx.update(|_window, app| {
+        view.read_with(app, |this, _| this.drop_dialog().map(|d| d.input.clone()))
+    });
+    if let Some(input) = input {
+        cx.update(|_window, app| {
+            input.update(app, |_state, ctx| {
+                ctx.emit(gpui_kit::component::input::InputEvent::PressEnter {
+                    secondary: false,
+                    shift: false,
+                });
+            });
+        });
+    }
+}

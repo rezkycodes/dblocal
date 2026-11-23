@@ -145,6 +145,21 @@ impl Workspace {
             InputState::new(window, cx)
                 .placeholder(strings::UI_DATABASES_DROP_PLACEHOLDER.to_owned())
         });
+        // Enter confirms only when the typed text already matches the name; the
+        // confirm button is disabled otherwise, and so is this path.
+        cx.subscribe(
+            &input,
+            |this, _input, event: &gpui_kit::component::input::InputEvent, cx| {
+                if matches!(
+                    event,
+                    gpui_kit::component::input::InputEvent::PressEnter { .. }
+                ) && this.drop_confirmation_ok(cx)
+                {
+                    this.confirm_drop(cx);
+                }
+            },
+        )
+        .detach();
         self.drop_dialog = Some(DropDialog {
             instance: id.clone(),
             name,
