@@ -464,24 +464,6 @@ pub fn diagnosis_move_and_start(port: u16) -> String {
     UI_DIAGNOSIS_MOVE_AND_START.replace("{port}", &port.to_string())
 }
 
-// --- Placeholder tabs (D-25: honest, never sample rows in the product) ------
-
-/// Databases tab, product build: the backend lands in Phase 2 (F-DBU).
-pub const UI_PLACEHOLDER_DATABASES: &str = "Kelola database dan user belum tersedia di versi ini.";
-/// Config tab, product build: the backend lands in Phase 3 (F-CFG).
-pub const UI_PLACEHOLDER_CONFIG: &str = "Editor konfigurasi belum tersedia di versi ini.";
-/// "Open in…" menu, product build: the backend lands in Phase 2 (F-OPN).
-pub const UI_PLACEHOLDER_OPEN_IN: &str = "Membuka di klien eksternal belum tersedia di versi ini.";
-/// Phase label appended to a placeholder.
-pub const UI_PLACEHOLDER_PHASE: &str = "Fase {phase}";
-/// The line that explains what a placeholder tab will contain.
-pub const UI_PLACEHOLDER_PREVIEW: &str = "Pratinjau tata letak memakai data contoh (mode demo).";
-
-/// Formats a phase label.
-pub fn placeholder_phase(phase: &str) -> String {
-    UI_PLACEHOLDER_PHASE.replace("{phase}", phase)
-}
-
 // --- Databases tab (demo content, mock build only) --------------------------
 
 /// Databases table heading.
@@ -527,29 +509,20 @@ pub fn databases_created(name: &str) -> String {
     UI_DATABASES_CREATED.replace("{name}", name)
 }
 
-// --- Config tab (demo content, mock build only) -----------------------------
+// --- Config tab: shared strings the live screen (`W4-H`) reuses -------------
+//
+// The card title, apply label and the rest of the live chrome live in
+// `strings/config.rs`; these four are the prototype's words the live screen
+// keeps (`UI_CONFIG_COLUMNS`, the restart banner and the open-file action).
 
-/// Config table heading.
-pub const UI_CONFIG_HEADING: &str = "Setting penting";
 /// Config table column note.
 pub const UI_CONFIG_COLUMNS: &str = "Nilai saat ini · Default";
-/// Config table: changed badge.
-pub const UI_CONFIG_CHANGED: &str = "diubah";
-/// Config banner after saving (F-CFG-01 AC2).
-pub const UI_CONFIG_RESTART_REQUIRED: &str =
-    "Tersimpan. Restart diperlukan agar perubahan berlaku.";
 /// Config banner: restart later.
 pub const UI_CONFIG_LATER: &str = "Nanti";
 /// Config banner: restart now.
 pub const UI_CONFIG_RESTART_NOW: &str = "Restart sekarang";
 /// Config footer: open the config file (F-CFG-02).
 pub const UI_CONFIG_OPEN_FILE: &str = "Buka file konfigurasi";
-/// Config footer: revert to the previous file (F-CFG-01 AC3).
-pub const UI_CONFIG_REVERT: &str = "Kembalikan konfigurasi sebelumnya";
-/// Config footer: discard changes.
-pub const UI_CONFIG_DISCARD: &str = "Buang perubahan";
-/// Config footer: save changes.
-pub const UI_CONFIG_SAVE: &str = "Simpan";
 
 // --- New instance dialog (D-25 prototype layout) ----------------------------
 
@@ -660,12 +633,8 @@ pub const UI_STARTUP_FAILED_TITLE: &str = "DBLocal tidak bisa dimulai";
 pub const UI_STARTUP_FAILED_BODY: &str =
     "DBLocal tidak bisa membaca atau menyiapkan data lokalnya.";
 
-/// Placeholders the UI renders while no backend exists (D-25). Each entry names
-/// the phase that fills it, so `docs/architecture/gui.md` and the GUI agree.
-///
-/// `Databases` and `Open in…` are gone: `F-DBU` and `F-OPN` now have their
-/// service calls. Only the Config editor is still a placeholder (`F-CFG`).
-pub const PLACEHOLDERS: [(&str, &str); 1] = [("Config", "F-CFG · Phase 3")];
-
 mod admin;
 pub use admin::*;
+
+mod config;
+pub use config::*;

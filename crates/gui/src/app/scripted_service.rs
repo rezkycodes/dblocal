@@ -47,6 +47,20 @@ pub(crate) struct CallCounts {
     pub check_update: usize,
     /// `apply_update`.
     pub apply_update: usize,
+    /// `config_view`.
+    pub config_view: usize,
+    /// `config_apply`.
+    pub config_apply: usize,
+    /// `config_restore`.
+    pub config_restore: usize,
+    /// `config_open_raw`.
+    pub config_open_raw: usize,
+    /// `config_raw_path`.
+    pub config_raw_path: usize,
+    /// `start_instance`.
+    pub start_instance: usize,
+    /// `stop_instance`.
+    pub stop_instance: usize,
 }
 
 /// What each W4-B call answers. Every field is a `Result` so a test can script a
@@ -75,6 +89,22 @@ pub(crate) struct Script {
     pub update: ServiceResult<UpdateStatus>,
     /// `apply_update` answer.
     pub apply_update: ServiceResult<()>,
+    /// `config_view` answer (the read model the Config tab renders).
+    pub config_view: ServiceResult<dblocal_core::config::ConfigView>,
+    /// `config_apply` answer.
+    pub config_apply: ServiceResult<dblocal_core::config::ConfigApplied>,
+    /// `config_restore` answer.
+    pub config_restore: ServiceResult<()>,
+    /// `config_raw_path` answer.
+    pub config_raw_path: ServiceResult<std::path::PathBuf>,
+    /// `config_open_raw` answer.
+    pub config_open_raw: ServiceResult<dblocal_core::config::OpenCommand>,
+    /// `start_instance` answer: when `Err`, the code is returned as an engine
+    /// failure (the service's real `start_instance` error shape).
+    pub start_instance: ServiceResult<()>,
+    /// `stop_instance` answer: when `Err`, the request itself is refused (the
+    /// instance is still running and nothing was queued).
+    pub stop_instance: ServiceResult<()>,
 }
 
 /// The arguments one mutation was called with.
@@ -90,6 +120,12 @@ pub(crate) struct Mutations {
     pub users: Vec<(InstanceId, String, String, PrivilegeLevel)>,
     /// `(instance, name)` of every `create_database` call.
     pub creates: Vec<(InstanceId, String)>,
+    /// `(instance, changes)` of every `config_apply` call, in order.
+    pub config_applies: Vec<(InstanceId, Vec<(String, String)>)>,
+    /// Instance of every `config_restore` call, in order.
+    pub config_restores: Vec<InstanceId>,
+    /// Instance of every `config_open_raw` call, in order.
+    pub config_opens: Vec<InstanceId>,
 }
 
 impl Default for Script {
@@ -115,7 +151,69 @@ impl Default for Script {
             )),
             update: Ok(update_available()),
             apply_update: Ok(()),
+            config_view: Ok(sample_config_view()),
+            config_apply: Ok(sample_config_applied()),
+            config_restore: Ok(()),
+            config_raw_path: Ok(std::path::PathBuf::from("/mock/pg-run/postgresql.conf")),
+            config_open_raw: Ok(dblocal_core::config::OpenCommand::for_os(
+                dblocal_core::platform::Os::Linux,
+                &std::path::PathBuf::from("/mock/pg-run/postgresql.conf"),
+            )),
+            start_instance: Ok(()),
+            stop_instance: Ok(()),
         }
+    }
+}
+
+/// The Config tab's sample read model: a PostgreSQL instance with editable and
+/// read-only rows and no backup yet.
+fn sample_config_view() -> dblocal_core::config::ConfigView {
+    use dblocal_core::config::{ConfigSetting, ConfigView};
+    let mut view = ConfigView::new(
+        InstanceId::new(),
+        EngineKey::Postgresql,
+        std::path::PathBuf::from("/mock/pg-run/postgresql.conf"),
+    );
+    view.settings.push(ConfigSetting {
+        key: "max_connections".to_owned(),
+        current: Some("100".to_owned()),
+        default: "100".to_owned(),
+        unit: String::new(),
+        restart_required: true,
+        description: dblocal_core::config::messages::DESC_MAX_CONNECTIONS_PG.to_owned(),
+        readonly: false,
+    });
+    view.settings.push(ConfigSetting {
+        key: "shared_buffers".to_owned(),
+        current: None,
+        default: "128MB".to_owned(),
+        unit: "bytes".to_owned(),
+        restart_required: true,
+        description: dblocal_core::config::messages::DESC_SHARED_BUFFERS.to_owned(),
+        readonly: false,
+    });
+    view.settings.push(ConfigSetting {
+        key: "port".to_owned(),
+        current: Some("5432".to_owned()),
+        default: "5432".to_owned(),
+        unit: String::new(),
+        restart_required: false,
+        description: dblocal_core::config::messages::READONLY_LABEL.to_owned(),
+        readonly: true,
+    });
+    view
+}
+
+/// A successful apply result with a backup taken an hour ago.
+fn sample_config_applied() -> dblocal_core::config::ConfigApplied {
+    dblocal_core::config::ConfigApplied {
+        restart_required: true,
+        backup: dblocal_core::config::BackupInfo {
+            taken_at: 1_700_000_000,
+            taken_at_secs: 1_700_000_000,
+            path: std::path::PathBuf::from("/mock/backups/postgresql.conf.1700000000.bak"),
+        },
+        changed: 2,
     }
 }
 
@@ -264,10 +362,24 @@ impl DblService for ScriptedService {
         Ok(OperationId::new("op-create"))
     }
     fn start_instance(&self, _id: &InstanceId) -> Result<OperationId> {
-        Ok(OperationId::new("op-start"))
+        self.bump(|counts| counts.start_instance += 1);
+        let script = self.script.lock().expect("script lock");
+        match &script.start_instance {
+            Ok(()) => Ok(OperationId::new("op-start")),
+            Err(err) => Err(dblocal_core::DblError::Engine {
+                reason: format!("{} — {}", err.code, err.message),
+            }),
+        }
     }
     fn stop_instance(&self, _id: &InstanceId) -> Result<OperationId> {
-        Ok(OperationId::new("op-stop"))
+        self.bump(|counts| counts.stop_instance += 1);
+        let script = self.script.lock().expect("script lock");
+        match &script.stop_instance {
+            Ok(()) => Ok(OperationId::new("op-stop")),
+            Err(err) => Err(dblocal_core::DblError::Engine {
+                reason: format!("{} — {}", err.code, err.message),
+            }),
+        }
     }
     fn delete_instance(&self, _id: &InstanceId, _mode: DeleteMode) -> Result<OperationId> {
         Ok(OperationId::new("op-del"))
@@ -428,6 +540,68 @@ impl DblService for ScriptedService {
         let script = self.script.lock().expect("script lock");
         match &script.launch {
             Ok(plan) => Ok(plan.clone()),
+            Err(err) => Err(clone_error(err)),
+        }
+    }
+
+    // --- Config editor (F-CFG) ----------------------------------------------
+    fn config_view(&self, _id: &InstanceId) -> ServiceResult<dblocal_core::config::ConfigView> {
+        self.bump(|counts| counts.config_view += 1);
+        let script = self.script.lock().expect("script lock");
+        match &script.config_view {
+            Ok(view) => Ok(view.clone()),
+            Err(err) => Err(clone_error(err)),
+        }
+    }
+    fn config_apply(
+        &self,
+        id: &InstanceId,
+        changes: Vec<(String, String)>,
+    ) -> ServiceResult<dblocal_core::config::ConfigApplied> {
+        self.bump(|counts| counts.config_apply += 1);
+        self.mutations
+            .lock()
+            .expect("mutations lock")
+            .config_applies
+            .push((id.clone(), changes));
+        let script = self.script.lock().expect("script lock");
+        match &script.config_apply {
+            Ok(applied) => Ok(applied.clone()),
+            Err(err) => Err(clone_error(err)),
+        }
+    }
+    fn config_restore(&self, id: &InstanceId) -> ServiceResult<()> {
+        self.bump(|counts| counts.config_restore += 1);
+        self.mutations
+            .lock()
+            .expect("mutations lock")
+            .config_restores
+            .push(id.clone());
+        let script = self.script.lock().expect("script lock");
+        script
+            .config_restore
+            .as_ref()
+            .map(|_| ())
+            .map_err(clone_error)
+    }
+    fn config_raw_path(&self, _id: &InstanceId) -> ServiceResult<std::path::PathBuf> {
+        self.bump(|counts| counts.config_raw_path += 1);
+        let script = self.script.lock().expect("script lock");
+        match &script.config_raw_path {
+            Ok(path) => Ok(path.clone()),
+            Err(err) => Err(clone_error(err)),
+        }
+    }
+    fn config_open_raw(&self, id: &InstanceId) -> ServiceResult<dblocal_core::config::OpenCommand> {
+        self.bump(|counts| counts.config_open_raw += 1);
+        self.mutations
+            .lock()
+            .expect("mutations lock")
+            .config_opens
+            .push(id.clone());
+        let script = self.script.lock().expect("script lock");
+        match &script.config_open_raw {
+            Ok(command) => Ok(command.clone()),
             Err(err) => Err(clone_error(err)),
         }
     }

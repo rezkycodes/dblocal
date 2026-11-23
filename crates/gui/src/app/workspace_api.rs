@@ -49,6 +49,11 @@ impl Workspace {
         {
             self.enter_databases_tab(&id, cx);
         }
+        if inner == InnerTab::Config
+            && let Some(id) = self.tabs.selected_instance().cloned()
+        {
+            self.enter_config_tab(&id, cx);
+        }
     }
 
     /// Sets the inner tab from a click. Kept for the tab bar's listener, which
@@ -98,6 +103,10 @@ impl Workspace {
     }
 
     /// Whether the demo build may render sample rows in the placeholder tabs.
+    ///
+    /// Only the test suite reads it; no live screen branches on it any more (the
+    /// Config tab is live in `W4-H`).
+    #[cfg(test)]
     pub(crate) fn demo_content(&self) -> bool {
         self.demo_content
     }
@@ -463,6 +472,21 @@ impl Workspace {
     #[cfg(test)]
     pub(crate) fn user_name_text_for_test(&self, cx: &App) -> String {
         self.user_name_input.read(cx).value().to_string()
+    }
+
+    /// The instance a "Restart sekarang" is waiting to start, for assertions.
+    pub(crate) fn config_restart_pending_for_test(&self) -> Option<&InstanceId> {
+        self.config_restart_after_stop.as_ref()
+    }
+
+    /// Runs the Enter path ("apply only when Terapkan is enabled") for one
+    /// instance, exactly as a keypress in a Config field does.
+    pub(crate) fn apply_config_if_ready_for_test(
+        &mut self,
+        id: &InstanceId,
+        cx: &mut Context<Self>,
+    ) {
+        self.apply_config_if_ready(id, cx);
     }
 
     /// Opens the drop dialog, reusing the database-name field as its input (the

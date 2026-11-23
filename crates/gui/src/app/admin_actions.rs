@@ -170,24 +170,12 @@ impl Workspace {
     /// The dialog's Copy and "Sudah saya simpan" buttons are its Tab stops, so
     /// focusing the dialog itself puts the keyboard inside it while leaving the
     /// covered field behind (F3).
-    fn focus_dialog_buttons(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn focus_dialog_buttons(&mut self, cx: &mut Context<Self>) {
         let entity_id = cx.entity().entity_id();
         cx.with_window(entity_id, |window, cx| {
             self.dialog_focus.opened(window.focused(cx));
             window.focus_next(cx);
         });
-    }
-
-    /// Returns focus to the field the dialog covered (F3).
-    ///
-    /// Nothing is focused when no dialog had captured a handle, so this is safe
-    /// on every close path (Escape, the overlay, a button, a confirm).
-    fn restore_dialog_focus(&mut self, cx: &mut Context<Self>) {
-        let Some(target) = self.dialog_focus.closed() else {
-            return;
-        };
-        let entity_id = cx.entity().entity_id();
-        cx.with_window(entity_id, |window, cx| target.focus(window, cx));
     }
 
     /// Opens the type-the-name confirmation for dropping `name`.
@@ -250,7 +238,7 @@ impl Workspace {
         let iid = dialog.instance.clone();
         let name = dialog.name.clone();
         self.drop_dialog = None;
-        self.restore_dialog_focus(cx);
+        self.restore_dialog_focus_after_close();
         self.admin.entry(&iid).begin(AdminAction::DropDatabase);
         self.bg(cx, move || {
             // `force == false`: a database with a live session is refused and
@@ -410,7 +398,7 @@ impl Workspace {
     /// Closes the one-time secret dialog, dropping the value with it.
     pub(crate) fn close_secret_dialog(&mut self, cx: &mut Context<Self>) {
         self.secret_dialog = None;
-        self.restore_dialog_focus(cx);
+        self.restore_dialog_focus_after_close();
         cx.notify();
     }
 

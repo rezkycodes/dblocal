@@ -7,7 +7,7 @@ Owner: W1-G. This document describes the `crates/gui` shell built against `dbloc
 - `crates/gui` is a **library** (`dblocal_gui::run()`); `crates/cli` is the only binary, and no-args launches the GUI.
 - The UI talks only to `Arc<dyn DblService>`. No direct state/engine/process access from GUI code.
 - `tokio` work (mock timers, simulated downloads, future service I/O) runs on its own runtime. It never runs on the GPUI executor. UI updates cross into GPUI through a `flume` channel that a GPUI task `await`s, so the loop wakes only on real activity — there is **no idle timer**.
-- Every user-facing string lives in the `crates/core/src/strings` module (`strings/mod.rs`, plus `strings/admin.rs` for the W4-B Databases/Open-in/Settings strings; both re-exported as `strings::UI_...`), including the Vulkan pre-flight text and the port-taken validation sentence. `crates/gui` contains no literal UI sentence.
+- Every user-facing string lives in the `crates/core/src/strings` module (`strings/mod.rs`, plus `strings/admin.rs` for the W4-B Databases/Open-in/Settings strings and `strings/config.rs` for the W4-H Config-tab chrome; all re-exported as `strings::UI_...`), including the Vulkan pre-flight text and the port-taken validation sentence. `crates/gui` contains no literal UI sentence.
 
 ## Modules
 
@@ -36,7 +36,11 @@ Owner: W1-G. This document describes the `crates/gui` shell built against `dbloc
 | `app/settings_state.rs` | Pure Settings state (`F-PKG-05`, `F-AUT-01`) | unit, thorough | — |
 | `app/settings_dialog.rs` / `app/settings_actions.rs` | Settings dialog view and its background handlers | render | — |
 | `app/login_item.rs` | The `F-AUT-01` login-item seam over the W4-D autostart core API | unit | — |
-| `app/screens/config.rs` | Config placeholder (`F-CFG`, Phase 3) and the demo-only config table | render | — |
+| `app/screens/config.rs` | The live Config tab (`F-CFG-01`, `F-CFG-02`): one "Pengaturan" card from `config_view`, read-only rows, apply/reset/restore/open-file and the restart banner | render + handler tests | — |
+| `app/config_state.rs` | Pure Config-tab state: the last view, local edits until "Terapkan", per-field errors, in-flight actions, re-base on `ConfigChanged`, id derivation | unit, thorough | — |
+| `app/config_actions.rs` | Config-tab handlers on `Workspace::bg` (read, apply, restore, restart, open raw, copy) | unit (render) | — |
+| `app/config_dialogs.rs` | The restore confirmation (`F-CFG-01` AC3) | unit + render | — |
+| `app/events.rs` | Event reduction into the workspace: `apply_event`/`apply_event_with_cx`, the Databases/Config invalidation and a pending "Restart sekarang" | unit | — |
 | `format.rs` | Pure view-models (grouping, labels, bytes/speed/ETA, masking, palette, validation) | unit, thorough | 98.5% |
 | `logs.rs` | Per-instance `LogStore` of `LogBuffer`s, follow, copy | unit, thorough | 99.5% |
 | `service_bridge.rs` | Event bridge, no polling, Resync on lag | unit | 92.1% |

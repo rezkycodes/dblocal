@@ -161,7 +161,7 @@ impl Workspace {
         workspace
     }
 
-    /// Preview of the Config tab placeholder in the product build (`Fase 3`).
+    /// Preview of the Config tab on the demo service (`F-CFG-01`, `F-CFG-02`).
     pub fn preview_product_config(
         service: Arc<dyn DblService>,
         window: &mut Window,
@@ -169,7 +169,12 @@ impl Workspace {
     ) -> Self {
         let mut workspace = Self::preview(service, window, cx);
         workspace.demo_content = false;
-        workspace.set_inner_tab(InnerTab::Config, cx);
+        // Set the tab without the background entry read; the preview reads it
+        // synchronously below and must start no background work.
+        workspace
+            .tabs
+            .set_inner(workspace.tabs.selected_index(), InnerTab::Config);
+        workspace.load_config_sync(cx);
         workspace
     }
 
@@ -186,15 +191,39 @@ impl Workspace {
 
     /// Preview with the demo build's Config table open (one row per parameter).
     ///
-    /// The render tests draw the product placeholder; this reaches the demo
-    /// table, which is also where the per-row a11y ids live (`W2-B2`).
+    /// The render tests draw the live Config tab; this reaches it with the
+    /// selected demo instance's settings read synchronously.
     pub fn preview_config_demo(
         service: Arc<dyn DblService>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
         let mut workspace = Self::preview(service, window, cx);
-        workspace.set_inner_tab(InnerTab::Config, cx);
+        workspace
+            .tabs
+            .set_inner(workspace.tabs.selected_index(), InnerTab::Config);
+        workspace.load_config_sync(cx);
+        workspace
+    }
+
+    /// Two instances each with their Config tab opened; the second is selected.
+    ///
+    /// Every Config row id is derived from the instance and the key, so two
+    /// instances that share `max_connections` cannot collide in the a11y tree
+    /// (the W2-B2 trap) even in one frame that draws the tab strip plus a card.
+    pub fn preview_two_configs(
+        service: Arc<dyn DblService>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let mut workspace = Self::preview(service, window, cx);
+        for view in workspace.state.instances.clone() {
+            workspace.open_tab_sync(view.id.clone());
+            workspace
+                .tabs
+                .set_inner(workspace.tabs.selected_index(), InnerTab::Config);
+            workspace.load_config_sync(cx);
+        }
         workspace
     }
 

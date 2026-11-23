@@ -23,6 +23,18 @@ mod bootstrap_r3_tests;
 #[path = "app/bootstrap_tests.rs"]
 mod bootstrap_tests;
 mod components;
+mod config_actions;
+mod config_dialogs;
+#[cfg(test)]
+#[path = "app/config_fix_tests.rs"]
+mod config_fix_tests;
+#[cfg(test)]
+#[path = "app/config_layout_tests.rs"]
+mod config_layout_tests;
+mod config_state;
+#[cfg(test)]
+#[path = "app/config_tests.rs"]
+mod config_tests;
 mod create_dialog;
 mod create_submit;
 #[cfg(test)]
@@ -34,6 +46,7 @@ mod databases_tests;
 mod delete_dialog;
 mod dialog_focus;
 mod dock;
+mod events;
 mod instance_actions;
 #[cfg(test)]
 #[path = "app/instance_actions_tests.rs"]
@@ -90,7 +103,6 @@ use gpui_kit::{
 
 use crate::logs::LogStore;
 use crate::quit::QuitMachine;
-use crate::service_bridge::UiEvent;
 
 pub use actions::{ROOT_CONTEXT, modifier_label, palette_hint};
 pub use bootstrap::{appearance_is_dark, run_autostart_with_service, run_with_service};
@@ -182,6 +194,19 @@ pub struct Workspace {
     delete_size: u64,
     /// Per-instance Databases tab state (`F-DBU-01..03`).
     admin: admin_state::AdminState,
+    /// Per-instance Config tab state (`F-CFG-01`, `F-CFG-02`).
+    config: config_state::ConfigState,
+    /// An instance whose restore-confirmation dialog is open (`F-CFG-01` AC3).
+    config_restore_confirm: Option<InstanceId>,
+    /// Text fields the Config tab edits, one per (`instance`, `key`), so a field
+    /// survives switching tabs and two instances never share one.
+    config_fields: HashMap<(InstanceId, String), Entity<InputState>>,
+    /// An instance the Config tab asked to restart after an apply; the restart
+    /// runs when its stop completes, never a new service call (`F-CFG-01` AC2).
+    config_restart_after_stop: Option<InstanceId>,
+    /// The operation id of the stop that pending restart queued, so only that
+    /// stop can consume it and a failed stop drops it (`F2`).
+    config_restart_stop_op: Option<dblocal_core::service::OperationId>,
     /// The database-create field of the Databases tab.
     ///
     /// Created once with the workspace, not on first tab click: the tab can be
@@ -246,6 +271,9 @@ pub struct Workspace {
     pending_preview: bool,
     tray_needs_refresh: bool,
     _appearance: Option<Subscription>,
+    /// Fires when the window is activated, so the visible Config tab re-reads a
+    /// file something else may have changed (`F7a`).
+    _activation: Option<Subscription>,
     _event_task: Option<Task<()>>,
 }
 
@@ -294,6 +322,15 @@ impl Workspace {
             focus_handle,
         });
         workspace.startup_load(cx);
+        // `F7a`: the external editor DBLocal launches, the CLI and a second
+        // window all write the file without an in-process `ConfigChanged`. On
+        // the way back to this window the visible Config tab re-reads, so the
+        // form is never stale.
+        workspace._activation = Some(cx.observe_window_activation(window, |this, window, cx| {
+            if window.is_window_active() {
+                this.refresh_config_on_activation(cx);
+            }
+        }));
         // No per-window event pump: the app-level loop is the single consumer of
         // the one bridge and forwards each event here (R3). Two pumps on one
         // flume channel would split the stream between them.
@@ -323,6 +360,13 @@ impl Workspace {
         });
         workspace.tray_note_shown = true;
         workspace.tray_note = Some(SharedString::from(strings::UI_TRAY_UNAVAILABLE_NOTE));
+        // The same activation re-read the live window installs (`F7a`), so a
+        // test can prove the return-to-window path.
+        workspace._activation = Some(cx.observe_window_activation(window, |this, window, cx| {
+            if window.is_window_active() {
+                this.refresh_config_on_activation(cx);
+            }
+        }));
         workspace
     }
 
@@ -368,6 +412,11 @@ impl Workspace {
             delete_mode: DeleteMode::ArchiveData,
             delete_size: 0,
             admin: admin_state::AdminState::default(),
+            config: config_state::ConfigState::default(),
+            config_restore_confirm: None,
+            config_fields: HashMap::new(),
+            config_restart_after_stop: None,
+            config_restart_stop_op: None,
             db_name_input: parts.db_name_input,
             user_name_input: parts.user_name_input,
             user_db_choice: None,
@@ -398,6 +447,7 @@ impl Workspace {
             pending_preview: false,
             tray_needs_refresh: false,
             _appearance: None,
+            _activation: None,
             _event_task: None,
         }
     }
@@ -448,142 +498,6 @@ impl Workspace {
         }
     }
 
-    fn apply_event(&mut self, event: UiEvent) {
-        match event {
-            UiEvent::InstanceChanged(view) => {
-                self.state.upsert_instance(view);
-                self.tray_needs_refresh = true;
-            }
-            UiEvent::OperationProgress { id, stage } => self.state.on_progress(&id, stage),
-            UiEvent::DownloadProgress { id, progress } => {
-                self.state
-                    .on_download(id, progress, strings::UI_DOWNLOADS.to_owned());
-            }
-            UiEvent::OperationFinished { id, result } => {
-                self.state.on_finished(&id, result.clone());
-                if let Err(err) = &result {
-                    self.toast = Some(SharedString::from(format!(
-                        "{} — {}",
-                        err.code, err.message
-                    )));
-                    self.last_failure_mirror = Some(err.clone());
-                }
-                // Quit-stop completion is driven by the finished operation, never
-                // by request acceptance. The actual state transition is applied in
-                // `apply_event_with_cx` where we have `cx`.
-            }
-            UiEvent::CatalogUpdated => {}
-            UiEvent::LogLines { instance, lines } => {
-                if let Ok(id) = instance.parse::<InstanceId>() {
-                    self.state.on_log_lines(&mut self.logs, &id, lines);
-                    if self.visible_logs_following(&id) {
-                        self.log_scroll.scroll_to_bottom();
-                    }
-                }
-            }
-            UiEvent::InstanceRemoved(id) => {
-                self.state
-                    .apply_removed(&id, &mut self.tabs, &mut self.logs);
-                self.admin.forget(&id);
-                self.forget_instance(&id);
-                self.tray_needs_refresh = true;
-            }
-            UiEvent::AdminChanged(id) => {
-                // The rows are stale. The visible instance is re-read below
-                // (`apply_event_with_cx`); any other instance goes back to
-                // `Idle`, so opening its tab issues a fresh read instead of
-                // showing rows that changed while it was in the background.
-                if let Some(admin) = self.admin.get(&id).cloned() {
-                    let mut admin = admin;
-                    if admin.data.ready().is_some() {
-                        admin.data = admin_state::Loadable::Idle;
-                        *self.admin.entry(&id) = admin;
-                    }
-                }
-            }
-            UiEvent::StopForced(_id) => {
-                self.toast = Some(SharedString::from(strings::UI_TOAST_STOP_FORCED));
-            }
-            UiEvent::UpdateChecked { .. } => {
-                // `check_update` returns the full status to the caller, so the
-                // dialog already has it; the event only exists for consumers
-                // that poll nothing, and a stray one must not overwrite a check
-                // the dialog is showing with a partial answer.
-            }
-            UiEvent::Resync => {}
-            UiEvent::Closed => {}
-        }
-    }
-
-    fn apply_event_with_cx(&mut self, event: UiEvent, cx: &mut Context<Self>) {
-        let needs_resync = matches!(event, UiEvent::Resync);
-        let needs_catalog = matches!(event, UiEvent::CatalogUpdated);
-        let removed_id = match &event {
-            UiEvent::InstanceRemoved(id) => Some(id.clone()),
-            _ => None,
-        };
-        let admin_changed = match &event {
-            UiEvent::AdminChanged(id) => Some(id.clone()),
-            _ => None,
-        };
-        // F1: a start or stop changes whether the Databases tab can be read at
-        // all, so the rows read before the transition are stale even though no
-        // `AdminChanged` was emitted. Record the transition here, where the
-        // status is still visible before `apply_event` overwrites it.
-        let status_changed = match &event {
-            UiEvent::InstanceChanged(view) => self
-                .instance(&view.id)
-                .map(|current| current.status != view.status)
-                .unwrap_or(false)
-                .then(|| view.id.clone()),
-            _ => None,
-        };
-        let quit_stop_finished = match &event {
-            UiEvent::OperationFinished { id, result } => Some((id.clone(), result.is_ok())),
-            _ => None,
-        };
-        let finished = quit_stop_finished.is_some();
-        let removed = removed_id.is_some();
-        self.apply_event(event);
-        if self.tray_needs_refresh {
-            self.tray_needs_refresh = false;
-            self.refresh_tray(cx);
-        }
-        if let Some((op, ok)) = quit_stop_finished {
-            self.on_quit_stop_finished(&op, ok, cx);
-        }
-        if let Some(id) = removed_id {
-            let service = self.service.clone();
-            self.bg(cx, move || {
-                let _ = service.watch_logs(&id, false);
-                move |_: &mut Workspace, _: &mut Context<Workspace>| {}
-            });
-        }
-        if needs_catalog {
-            self.reload_catalog_bg(cx);
-        }
-        if let Some(id) = status_changed {
-            self.admin.invalidate(&id);
-            if self.database_tab_visible(&id) {
-                self.reload_admin_bg(&id, cx);
-            }
-        }
-        if let Some(id) = admin_changed {
-            // Re-read only the instance whose Databases tab is on screen; an
-            // event for a background instance just clears its "ready" state in
-            // `apply_event`, and it is read again when the user opens it.
-            if self.database_tab_visible(&id) {
-                self.reload_admin_bg(&id, cx);
-            }
-        }
-        if needs_resync || finished {
-            self.refresh_instances_bg(cx);
-        }
-        if finished || removed {
-            self.refresh_home_size_bg(cx);
-        }
-    }
-
     pub(crate) fn instance(&self, id: &InstanceId) -> Option<&InstanceView> {
         self.state.instances.iter().find(|view| &view.id == id)
     }
@@ -597,6 +511,13 @@ impl Workspace {
         self.tabs
             .selected_tab()
             .is_some_and(|tab| &tab.instance == id && tab.inner == InnerTab::Databases)
+    }
+
+    /// Whether this instance's Config tab is the one on screen.
+    pub(crate) fn config_tab_visible(&self, id: &InstanceId) -> bool {
+        self.tabs
+            .selected_tab()
+            .is_some_and(|tab| &tab.instance == id && tab.inner == InnerTab::Config)
     }
 
     fn close_tab_by_instance(&mut self, id: &InstanceId, cx: &mut Context<Self>) {
@@ -659,6 +580,10 @@ impl Workspace {
             self.restore_dialog_focus_after_close();
             return;
         }
+        if self.config_restore_confirm.take().is_some() {
+            self.restore_dialog_focus_after_close();
+            return;
+        }
         if self.settings.open {
             self.settings.close();
         }
@@ -698,6 +623,14 @@ impl Render for Workspace {
         // here; the frame is the first place it can be focused.
         if let Some(target) = self.pending_focus_restore.take() {
             target.focus(window, cx);
+        }
+        // The Config tab's text fields are GPUI entities created once; build any
+        // the visible tab needs before the frame reads them (`F-CFG-01`).
+        if let Some(tab) = self.tabs.selected_tab()
+            && tab.inner == InnerTab::Config
+        {
+            let id = tab.instance.clone();
+            self.ensure_config_fields(&id, window, cx);
         }
         let colours = cx.theme().clone();
         div()
@@ -761,6 +694,9 @@ impl Render for Workspace {
             })
             .when(self.secret_dialog.is_some(), |this| {
                 this.child(admin_dialogs::render_secret(self, cx))
+            })
+            .when(self.config_restore_confirm.is_some(), |this| {
+                this.child(config_dialogs::render_restore(self, cx))
             })
             .when(self.quit.is_confirming(), |this| {
                 this.child(self.render_quit_dialog(cx))

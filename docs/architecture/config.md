@@ -1,8 +1,8 @@
 # Config editor (F-CFG)
 
 Core of the Config tab (`F-CFG-01`) and "open the raw file" (`F-CFG-02`). The GUI
-tab is a later task; it consumes the read model in `crate::config::view` and needs
-nothing else from this module.
+tab (`W4-H`) renders this module's read model in `crate::config::view` and needs
+nothing else from it.
 
 ## 1. Which file is the user's and which is DBLocal's?
 

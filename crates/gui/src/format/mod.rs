@@ -489,6 +489,20 @@ pub fn offers_port_fix(view: &InstanceView) -> bool {
         })
 }
 
+/// Whether the failure banner offers "restore the previous configuration and
+/// start again" (`F-CFG-01` AC3).
+///
+/// True whenever the service flagged a restore on the failure (the config file
+/// changed since the last successful start and a backup exists), independent of
+/// the diagnosis, so the action is reachable from where the failure is shown.
+pub fn offers_restore(view: &InstanceView) -> bool {
+    view.status == InstanceStatus::Failed
+        && view
+            .failure
+            .as_ref()
+            .is_some_and(|failure| failure.restore_available)
+}
+
 /// The port the log banner offers to move to: the suggested free port, or the
 /// instance's own port plus one when the service could not propose another.
 pub fn suggested_fix_port(view: &InstanceView, service_suggestion: Option<u16>) -> u16 {
@@ -768,6 +782,9 @@ mod placeholders;
 pub use masking::*;
 pub use placeholders::*;
 
+#[cfg(test)]
+#[path = "fix_tests.rs"]
+mod fix_tests;
 #[cfg(test)]
 #[path = "masking_tests.rs"]
 mod masking_tests;

@@ -33,6 +33,11 @@ impl Workspace {
         if crate::format::offers_port_fix(view) {
             content = content.child(self.render_overview_diagnosis(view, &theme, cx));
         }
+        // F-CFG-01 AC3: a failure whose config file changed offers the restore
+        // from where the failure is shown, not only from the Config tab.
+        if crate::format::offers_restore(view) {
+            content = content.child(self.render_restore_banner(view, &theme, cx));
+        }
         content
             .child(self.render_connection(view, &theme, cx))
             .child(
@@ -109,6 +114,66 @@ impl Workspace {
                         .label(strings::diagnosis_move_and_start(suggested))
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.move_to_port_and_start(&id_fix, suggested, cx);
+                        })),
+                ),
+            )
+    }
+
+    /// The failure banner that offers "Pulihkan konfigurasi dan mulai ulang"
+    /// (`F-CFG-01` AC3): shown where the failure is, not only in the Config tab.
+    fn render_restore_banner(
+        &self,
+        view: &dblocal_core::service::InstanceView,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let id_restore = view.id.clone();
+        let code = view
+            .failure
+            .as_ref()
+            .map(|f| f.code.clone())
+            .unwrap_or_default();
+        super::super::components::banner(theme.danger)
+            .child(super::super::components::icon(
+                gpui_kit::assets::IconName::TriangleAlert,
+                20.0,
+                theme.danger,
+            ))
+            .child(
+                v_flex()
+                    .flex_1()
+                    .min_w(px(280.))
+                    .gap_1()
+                    .child(
+                        h_flex()
+                            .gap_2()
+                            .items_center()
+                            .child(
+                                Label::new(strings::UI_CONFIG_RESTORE_TITLE)
+                                    .text_sm()
+                                    .font_weight(gpui_kit::FontWeight::SEMIBOLD),
+                            )
+                            .child(
+                                Label::new(code)
+                                    .text_xs()
+                                    .font_family(theme.mono_font_family.clone())
+                                    .text_color(theme.muted_foreground),
+                            ),
+                    )
+                    .child(
+                        Label::new(strings::UI_CONFIG_RESTORE_BANNER_BODY)
+                            .text_xs()
+                            .text_color(theme.muted_foreground),
+                    ),
+            )
+            .child(
+                h_flex().flex_none().gap_2().child(
+                    Button::new("overview-restore-config")
+                        .debug_selector(|| "overview-restore-config".to_owned())
+                        .primary()
+                        .label(strings::UI_CONFIG_RESTORE_AND_RESTART)
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.restore_and_restart(&id_restore, cx);
                         })),
                 ),
             )

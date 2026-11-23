@@ -726,30 +726,27 @@ fn create_footer_note_depends_on_whether_a_download_is_needed() {
 }
 
 #[test]
-fn placeholder_layouts_match_the_prototype_structure() {
-    // Only Config is still a placeholder; `F-DBU` and `F-OPN` now have their
-    // view (`W4-B`). The Config layout keeps the prototype's card/control
-    // structure with every control disabled and no sample rows.
-    let cfg = placeholder_layout(PlaceholderTab::Config);
-    let cfg_labels = placeholder_labels(PlaceholderTab::Config);
+fn the_config_tab_has_its_own_live_strings() {
+    // The Config tab is live (`W4-H`): its chrome comes from `strings::UI_CONFIG_*`
+    // and its rows from `config_view`, never from the removed placeholder.
+    assert!(!strings::UI_CONFIG_CARD_TITLE.is_empty());
+    assert!(!strings::UI_CONFIG_APPLY.is_empty());
+    assert!(!strings::UI_CONFIG_RESTORE.is_empty());
     assert_eq!(
-        cfg_labels,
-        vec![
-            strings::UI_CONFIG_LATER,
-            strings::UI_CONFIG_RESTART_NOW,
-            strings::UI_CONFIG_OPEN_FILE,
-            strings::UI_CONFIG_REVERT,
-            strings::UI_CONFIG_DISCARD,
-            strings::UI_CONFIG_SAVE,
-        ]
+        strings::config_default("100"),
+        format!("{}{}", strings::UI_CONFIG_DEFAULT_PREFIX, "100")
     );
-    assert!(
-        cfg.iter()
-            .all(|card| { card.controls.iter().all(|c| c.disabled) })
+    assert_eq!(strings::config_unit(""), None);
+    assert!(strings::config_unit("bytes").is_some());
+    // The backup age reads as Indonesian time, not a raw epoch.
+    assert_eq!(
+        strings::config_backup_age(1_000, 1_030),
+        strings::UI_CONFIG_AGE_SECONDS.replace("{n}", "30")
     );
-    assert!(!cfg_labels.contains(&strings::UI_CREATE_SUBMIT));
-    assert!(!cfg_labels.contains(&strings::UI_CANCEL));
-    assert_eq!(placeholder_phase_label(PlaceholderTab::Config), "3");
+    assert_eq!(
+        strings::config_backup_age(1_000, 1_000),
+        strings::UI_CONFIG_AGE_NOW
+    );
 }
 
 #[test]
