@@ -26,6 +26,7 @@ mod create_submit;
 #[path = "app/databases_tests.rs"]
 mod databases_tests;
 mod delete_dialog;
+mod dialog_focus;
 mod dock;
 mod instance_actions;
 #[cfg(test)]
@@ -193,6 +194,12 @@ pub struct Workspace {
     reset_confirm: Option<InstanceId>,
     /// The one-time secret dialog (new user password or reset URI).
     secret_dialog: Option<admin_dialogs::SecretDialog>,
+    /// Keyboard focus for the Databases dialogs: take it on open, give it back
+    /// on close (F3).
+    dialog_focus: dialog_focus::DialogFocus,
+    /// A focus return the next frame must apply; set by a close path that had no
+    /// window (Escape) and consumed by `render`.
+    pending_focus_restore: Option<FocusHandle>,
     /// Clients detected for the "Open in…" menu; `None` until the first read.
     clients: Option<Result<Vec<DetectedClient>, UserFacingError>>,
     /// An instance whose "Open in…" launch is in flight.
@@ -362,6 +369,8 @@ impl Workspace {
             drop_dialog: None,
             reset_confirm: None,
             secret_dialog: None,
+            dialog_focus: dialog_focus::DialogFocus::default(),
+            pending_focus_restore: None,
             clients: None,
             opening: None,
             settings: settings_state::SettingsState::default(),
@@ -633,17 +642,32 @@ impl Workspace {
         // The top overlay only: Escape closes the topmost dialog, so a secret
         // dialog closes first, then the confirmation under it stays open.
         if self.secret_dialog.take().is_some() {
+            self.restore_dialog_focus_after_close();
             return;
         }
         if self.drop_dialog.take().is_some() {
+            self.restore_dialog_focus_after_close();
             return;
         }
         if self.reset_confirm.take().is_some() {
+            self.restore_dialog_focus_after_close();
             return;
         }
         if self.settings.open {
             self.settings.close();
         }
+    }
+
+    /// Gives focus back to the field a Databases dialog covered (F3).
+    ///
+    /// `close_modals` runs from the Escape listener with no window of its own,
+    /// so the focus goes through the entity's current window, which GPUI
+    /// resolves from the frame the workspace last rendered in.
+    fn restore_dialog_focus_after_close(&mut self) {
+        let Some(target) = self.dialog_focus.closed() else {
+            return;
+        };
+        self.pending_focus_restore = Some(target);
     }
 }
 
@@ -654,7 +678,7 @@ impl Focusable for Workspace {
 }
 
 impl Render for Workspace {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if !self.first_paint_logged {
             self.first_paint_logged = true;
             tracing::info!(
@@ -664,6 +688,11 @@ impl Render for Workspace {
         }
         let deleting = self.delete_target.is_some();
         let creating = self.create.is_some();
+        // F3: a close from a listener with no window (Escape) parks the handle
+        // here; the frame is the first place it can be focused.
+        if let Some(target) = self.pending_focus_restore.take() {
+            target.focus(window, cx);
+        }
         let colours = cx.theme().clone();
         div()
             .id("root")

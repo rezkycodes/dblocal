@@ -135,6 +135,47 @@ impl Workspace {
         cx.notify();
     }
 
+    /// Gives a dialog the keyboard and remembers where to return it (F3).
+    ///
+    /// Without this the covered field keeps focus: typing `x` appended to the
+    /// "Buat database" field behind the overlay while the dialog's own field
+    /// stayed empty, and Enter confirmed nothing.
+    fn focus_dialog(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+        target: Entity<InputState>,
+    ) {
+        // Capture what has focus *before* moving it: that field gets it back.
+        self.dialog_focus.opened(window.focused(cx));
+        target.update(cx, |state, cx| state.focus(window, cx));
+    }
+
+    /// Takes focus for a SecretDialog, which has no text field of its own.
+    ///
+    /// The dialog's Copy and "Sudah saya simpan" buttons are its Tab stops, so
+    /// focusing the dialog itself puts the keyboard inside it while leaving the
+    /// covered field behind (F3).
+    fn focus_dialog_buttons(&mut self, cx: &mut Context<Self>) {
+        let entity_id = cx.entity().entity_id();
+        cx.with_window(entity_id, |window, cx| {
+            self.dialog_focus.opened(window.focused(cx));
+            window.focus_next(cx);
+        });
+    }
+
+    /// Returns focus to the field the dialog covered (F3).
+    ///
+    /// Nothing is focused when no dialog had captured a handle, so this is safe
+    /// on every close path (Escape, the overlay, a button, a confirm).
+    fn restore_dialog_focus(&mut self, cx: &mut Context<Self>) {
+        let Some(target) = self.dialog_focus.closed() else {
+            return;
+        };
+        let entity_id = cx.entity().entity_id();
+        cx.with_window(entity_id, |window, cx| target.focus(window, cx));
+    }
+
     /// Opens the type-the-name confirmation for dropping `name`.
     pub(crate) fn open_drop_dialog(
         &mut self,
@@ -165,8 +206,10 @@ impl Workspace {
         self.drop_dialog = Some(DropDialog {
             instance: id.clone(),
             name,
-            input,
+            input: input.clone(),
         });
+        // F3: the dialog owns the keyboard from here, not the field it covers.
+        self.focus_dialog(window, cx, input);
         cx.notify();
     }
 
@@ -193,6 +236,7 @@ impl Workspace {
         let iid = dialog.instance.clone();
         let name = dialog.name.clone();
         self.drop_dialog = None;
+        self.restore_dialog_focus(cx);
         self.admin.entry(&iid).begin(AdminAction::DropDatabase);
         self.bg(cx, move || {
             // `force == false`: a database with a live session is refused and
@@ -262,6 +306,10 @@ impl Workspace {
                             },
                             value: password,
                         });
+                        // F3: the Copy / "Sudah saya simpan" buttons are what a
+                        // keyboard user acts on next, so the dialog takes focus
+                        // away from the field behind it.
+                        this.focus_dialog_buttons(cx);
                         this.toast = Some(SharedString::from(strings::databases_user_created(
                             &user_name,
                         )));
@@ -280,6 +328,8 @@ impl Workspace {
     /// Opens the reset-password confirmation (`F-DBU-03`).
     pub(crate) fn open_reset_confirm(&mut self, id: &InstanceId, cx: &mut Context<Self>) {
         self.reset_confirm = Some(id.clone());
+        // F3: a confirmation with no field focuses its own first button.
+        self.focus_dialog_buttons(cx);
         cx.notify();
     }
 
@@ -314,6 +364,8 @@ impl Workspace {
                             kind: SecretKind::ResetUri,
                             value: uri.clone(),
                         });
+                        // F3: focus the dialog, not the covered field.
+                        this.focus_dialog_buttons(cx);
                         // The Overview card holds the old URI; replace it so the
                         // two views agree (F-DBU-03 AC1).
                         this.state.set_uri(&iid, &uri);
@@ -334,6 +386,7 @@ impl Workspace {
     /// Closes the one-time secret dialog, dropping the value with it.
     pub(crate) fn close_secret_dialog(&mut self, cx: &mut Context<Self>) {
         self.secret_dialog = None;
+        self.restore_dialog_focus(cx);
         cx.notify();
     }
 

@@ -14,6 +14,7 @@ use dblocal_core::admin::PrivilegeLevel;
 use dblocal_core::model::InstanceStatus;
 use dblocal_core::service::{DblService, UserFacingError};
 use gpui_kit::TestAppContext;
+use gpui_kit::Focusable as _;
 
 use crate::app::admin_state::{AdminAction, Loadable};
 use crate::app::scripted_service::ScriptedService;
@@ -244,6 +245,121 @@ fn a_stopped_instance_drops_its_rows_again(cx: &mut TestAppContext) {
     });
     assert_eq!(rows, 0, "a stopped instance must not keep its rows");
     assert!(idle, "the stopped state must be 'not read', not a fake empty read");
+}
+
+/// F3: the drop dialog takes the keyboard, and gives it back on close.
+///
+/// Before the fix the covered "Buat database" field kept focus, so typing `x`
+/// appended there and the dialog's field stayed empty.
+#[gpui_kit::test]
+fn the_drop_dialog_takes_focus_and_returns_it_on_close(cx: &mut TestAppContext) {
+    let (view, service, cx) = fixture(cx);
+    let id = open_databases(&view, &service, cx);
+    let field = view.read_with(cx, |this, cx| {
+        this.db_name_input_entity().read(cx).focus_handle(cx)
+    });
+    cx.update(|window, cx| field.focus(window, cx));
+    assert!(
+        cx.update(|window, _| field.is_focused(window)),
+        "the fixture focuses the covered field first"
+    );
+
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            this.open_drop_dialog(&id, "app".to_owned(), window, cx);
+        });
+    });
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    let dialog_focused = cx.update(|window, app| {
+        let input = view
+            .read_with(app, |this, _| this.drop_dialog().map(|d| d.input.clone()))
+            .expect("the dialog is open");
+        input.read(app).focus_handle(app).is_focused(window)
+    });
+    assert!(
+        dialog_focused,
+        "the dialog's field must take focus from the covered field (F3)"
+    );
+    assert!(
+        !cx.update(|window, _| field.is_focused(window)),
+        "the covered field must lose focus"
+    );
+
+    // Escape closes the top dialog and the covered field gets the keyboard back.
+    cx.dispatch_action(crate::app::actions::CloseOverlay);
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(
+        view.read_with(cx, |this, _| this.drop_dialog().is_none()),
+        "Escape must close the drop dialog"
+    );
+    assert!(
+        cx.update(|window, _| field.is_focused(window)),
+        "closing the dialog must return focus to the field it covered (F3)"
+    );
+}
+
+/// F3: the secret dialog is reachable by keyboard, and Escape closes it.
+#[gpui_kit::test]
+fn the_secret_dialog_takes_focus_and_escape_closes_it(cx: &mut TestAppContext) {
+    let (view, service, cx) = fixture(cx);
+    let id = open_databases(&view, &service, cx);
+    let field = view.read_with(cx, |this, cx| {
+        this.db_name_input_entity().read(cx).focus_handle(cx)
+    });
+    cx.update(|window, cx| field.focus(window, cx));
+    set_user_name(&view, "app_ro", cx);
+    view.update(cx, |this, cx| {
+        this.choose_user_database("app".to_owned(), cx);
+        this.create_user(&id, cx);
+    });
+    settle(cx);
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    let (open, still_on_field) = cx.update(|window, app| {
+        (
+            view.read_with(app, |this, _| this.secret_dialog().is_some()),
+            field.is_focused(window),
+        )
+    });
+    assert!(open, "the one-time dialog is up");
+    assert!(
+        !still_on_field,
+        "the covered field must not keep the keyboard while a dialog is up"
+    );
+
+    cx.dispatch_action(crate::app::actions::CloseOverlay);
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(
+        view.read_with(cx, |this, _| this.secret_dialog().is_none()),
+        "Escape must close the secret dialog"
+    );
+    assert!(
+        cx.update(|window, _| field.is_focused(window)),
+        "focus returns to the covered field after the dialog closes"
+    );
+}
+
+/// F3: dialog keys stay registerable, and the drop path still confirms on Enter.
+#[gpui_kit::test]
+fn the_drop_dialog_keeps_its_enter_subscription_after_the_focus_change(
+    cx: &mut TestAppContext,
+) {
+    let (view, service, cx) = fixture(cx);
+    let id = open_databases(&view, &service, cx);
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            this.open_drop_dialog(&id, "app".to_owned(), window, cx);
+        });
+    });
+    set_drop_text(&view, "app", cx);
+    press_enter_in_drop(&view, cx);
+    settle(cx);
+    assert_eq!(
+        service.counts().drop_database,
+        1,
+        "Enter in the focused dialog field must still confirm"
+    );
 }
 
 #[gpui_kit::test]
