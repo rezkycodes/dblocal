@@ -500,6 +500,125 @@ fn assert_no_canary_outside_the_dialog(
     });
 }
 
+/// F3b: every close path restores focus through the one mechanism.
+///
+/// The W4-B fix round shipped two focus-restore paths — an explicit
+/// `restore_dialog_focus` inside the button/confirm handlers and the render-time
+/// `restore_dialog_focus_after_close` the Escape path used — and emptying the
+/// first body left every test green because the render-time one covered it. The
+/// redundant one is deleted; this test pins that **each** close path parks the
+/// handle and the next frame gives the covered field the keyboard: Enter-confirm,
+/// Cancel, and "Sudah saya simpan".
+#[gpui_kit::test]
+fn every_dialog_close_path_returns_focus_through_the_frame(cx: &mut TestAppContext) {
+    let (view, service, cx) = fixture(cx);
+    let id = open_databases(&view, &service, cx);
+    let field = view.read_with(cx, |this, cx| {
+        this.db_name_input_entity().read(cx).focus_handle(cx)
+    });
+
+    // 1. Enter-confirm on the drop dialog.
+    cx.update(|window, cx| field.focus(window, cx));
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            this.open_drop_dialog(&id, "app".to_owned(), window, cx);
+        });
+    });
+    set_drop_text(&view, "app", cx);
+    press_enter_in_drop(&view, cx);
+    settle(cx);
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(
+        cx.update(|window, _| field.is_focused(window)),
+        "F3b: Enter-confirm must return focus to the covered field"
+    );
+
+    // 2. Cancel on the reset confirmation.
+    cx.update(|window, cx| field.focus(window, cx));
+    view.update(cx, |this, cx| this.open_reset_confirm(&id, cx));
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    view.update(cx, |this, _| this.close_modals());
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(
+        cx.update(|window, _| field.is_focused(window)),
+        "F3b: Cancel must return focus to the covered field"
+    );
+
+    // 3. "Sudah saya simpan" on the one-time secret dialog.
+    cx.update(|window, cx| field.focus(window, cx));
+    set_user_name(&view, "app_ro", cx);
+    view.update(cx, |this, cx| {
+        this.choose_user_database("app".to_owned(), cx);
+        this.create_user(&id, cx);
+    });
+    settle(cx);
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    view.update(cx, |this, cx| this.close_secret_dialog(cx));
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(
+        cx.update(|window, _| field.is_focused(window)),
+        "F3b: \"Sudah saya simpan\" must return focus to the covered field"
+    );
+}
+
+/// F1a: a status change invalidates a NON-visible instance's rows.
+///
+/// The W4-B fix round pinned the visible-tab re-read (`a_started_instance_re_reads_the_visible_tab`)
+/// but the `invalidate` in the `status_changed` block stayed untested: deleting
+/// it kept every GUI lib test green, because the visible tab re-reads anyway. The
+/// instance that is *not* on screen kept its `Ready` rows, so entering its
+/// Databases tab showed a stale list. Here the other instance's rows are `Ready`,
+/// a `InstanceChanged` with a different status arrives, and selecting its tab
+/// afterwards must issue a fresh read (proved by the scripted call count), not
+/// show the old rows.
+#[gpui_kit::test]
+fn a_status_change_invalidates_a_non_visible_instance(cx: &mut TestAppContext) {
+    let (view, service, cx) = fixture(cx);
+    // The visible tab is `pg-run`; `other` is the background instance.
+    let visible = open_databases(&view, &service, cx);
+    let other = service.id_with(InstanceStatus::Stopped);
+    // Its rows are a fresh, ready answer taken while it was the visible tab.
+    let planted = vec![dblocal_core::service::DatabaseInfo::new("stale", "postgres", 4096)];
+    view.update(cx, |this, _| {
+        this.admin.entry(&other).data = Loadable::Ready(crate::app::admin_state::AdminData {
+            databases: planted,
+            users: Vec::new(),
+        });
+    });
+
+    // A status change for the background instance arrives as an event.
+    view.update(cx, |this, cx| {
+        let mut changed = this.instance(&other).cloned().expect("instance view");
+        changed.status = InstanceStatus::Running;
+        this.apply_event_with_cx(UiEvent::InstanceChanged(changed), cx);
+    });
+    settle(cx);
+    assert_eq!(
+        service.counts().list_databases,
+        1,
+        "only the visible instance is re-read on the event itself"
+    );
+
+    // Selecting the other instance's Databases tab must issue a fresh read.
+    let before = service.counts().list_databases;
+    view.update(cx, |this, cx| {
+        this.open_tab(other.clone(), cx);
+        this.set_inner_tab(InnerTab::Databases, cx);
+    });
+    settle(cx);
+    assert!(
+        service.counts().list_databases > before,
+        "a status-changed background instance must be re-read when its tab opens, \
+         not show the stale rows (F1a)"
+    );
+    let stale = view.read_with(cx, |this, _| {
+        this.admin_state_for(&other)
+            .is_some_and(|a| a.rows().iter().any(|row| row.name() == "stale"))
+    });
+    assert!(!stale, "the tab must not show the planted stale row");
+    let _ = visible;
+}
+
 /// The `Debug` of every field that could carry a secret.
 ///
 /// `Workspace` holds `Arc<dyn DblService>`, which is not `Debug`, so the whole
