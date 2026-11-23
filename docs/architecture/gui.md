@@ -253,9 +253,10 @@ Events drive everything (`app.rs::apply_event` / `apply_event_with_cx`):
   (`UI_TRAY_QUIT`). Unit-tested for grouping, labels, disabled states and id→action lookup.
 - `TrayBackend` is the platform glue trait. Linux implements it with **ksni 0.3** (StatusNotifierItem
   over D-Bus, `blocking` + `async-io`, no GTK).
-- macOS and Windows tray backends are **not implemented in this round**: `start_tray()` returns
-  `TrayStartup::none()` there, the status bar says the tray is unavailable, and close-to-quit applies
-  (F-TRY-01 AC3 fallback). This is tracked as a separate task; no fake tray is created.
+- Windows and macOS implement it with **`tray-icon` 0.26 + `muda` 0.21** (`tray/desktop.rs`, W2-G).
+  Both are `Rc`-based and must be created and used on the thread that runs the platform event loop;
+  see "Windows and macOS tray backends (W2-G)" below. `start_tray()` returns `TrayStartup::none()` —
+  the F-TRY-01 AC3 fallback — only when creation fails or on any other target.
 - No idle timer (OPEN-08): tray actions travel over flume and are pumped by the app-level async loop.
   The tray menu is refreshed on instance/catalog events. There is no `sleep`, `poll`, or timer in the
   bridge (`service_bridge::spawn_bridge` does `recv_async()` only).
@@ -339,10 +340,114 @@ goes through the quit flow. The quit dialog's default (primary) button is "Biark
 (AC2, AC3); "Hentikan semua lalu keluar" disables actions while stopping and only exits after
 operation completion, failure, timeout, or explicit force-exit confirmation.
 
+### Windows and macOS tray backends (W2-G, F-TRY-01 AC1/AC2)
+
+`crates/gui/src/tray/` is split by responsibility: `mod.rs` (the pure menu model, the
+`TrayBackend` trait, `TrayHandle`, `TrayStartup`), `spec.rs` (platform-neutral menu/icon
+spec), `linux.rs` (ksni, unchanged by W2-G) and `desktop.rs` (`tray-icon` + `muda` for
+Windows and macOS, gated `cfg(any(windows, macos))`).
+
+#### Why `tray-icon` + `muda`
+
+Evaluated against `windows-sys` and `objc2` hand-written FFI and against `ksni` (already the
+Linux backend):
+
+| Candidate | Verdict |
+|---|---|
+| **`tray-icon` 0.26.1 + `muda` 0.21.2** | **Chosen.** Maintained by the Tauri programme, MIT OR Apache-2.0. One API for both targets, icons from RGBA, icon menu items (`muda::IconMenuItem`), `Menu`/`PredefinedMenuItem`. `default-features = false` removes the Linux GTK/AppIndicator backend entirely, so no `libappindicator`/GTK system library is pulled in. |
+| `windows-sys` + `objc2` directly (already in the lock) | Rejected: `Shell_NotifyIconW` + a hidden window `WndProc` + `RegisterWindowMessage` on one side and `NSStatusBar`/`NSMenu` + a delegate on the other is several hundred lines of `unsafe` per OS, all unverifiable from Linux. `unsafe_code = "deny"` is workspace policy; only the process module may opt in. |
+| `ksni` on all three | Rejected: `ksni` is StatusNotifierItem over D-Bus and has no Windows or macOS backend. |
+
+`tray-icon` with `ksni` enabled *does* have a Linux backend, but the GUI keeps `ksni` directly
+so the Linux menu (which already ships, R8) is untouched and no new code path runs on this host.
+
+**Cost.** Five crates added to `Cargo.lock` (960 → 965): `tray-icon`, `muda`, `crossbeam-channel`,
+`dpi`, `keyboard-types`. `cargo deny check licenses bans` → `licenses ok, bans ok`; every new
+crate is MIT/Apache-2.0 (see the report for the per-crate list). The dependency is
+target-gated, so the **Linux release binary is unchanged**: `dblocal` 79,063,688 → 79,061,968
+bytes (−1,720 B, build noise). A Windows release size delta could **not** be measured here
+(linking needs `x86_64-w64-mingw32-dlltool`, which this host does not have).
+
+#### Which thread creates the tray, and why
+
+Both crates are `Rc`-based and are only valid on the thread that pumps the platform event loop.
+GPUI calls its `on_finish_launching` callback on exactly that thread, and `start_tray()` runs
+from `AppRuntime::new` inside it (`app/bootstrap.rs`):
+
+- **Windows** (`gpui-pre-windows-0.3.12/src/platform.rs:575`): `fn run` invokes
+  `on_finish_launching()`, then loops `while GetMessageW(&mut msg, None, 0, 0).as_bool()`. The
+  tray is a hidden `CreateWindowExW` window whose `WndProc` receives the shell callbacks
+  (`WM_…` mouse messages, `WM_USER_UPDATE_TRAYMENU`), so it must own the message pump the tray
+  was created on.
+- **macOS** (`gpui-pre-macos-0.3.12/src/platform.rs:527` and `:1312`): `fn run` stores the
+  callback; the AppKit delegate's `did_finish_launching` takes it and calls it on the main
+  thread, then `run` blocks in `msg_send![app, run]` (the AppKit run loop). `tray-icon` calls
+  `MainThreadMarker::new()` and returns `Error::NotMainThread` otherwise; `muda` `expect`s on the
+  main thread. So the tray is created on the main thread, after launch.
+
+Because `TrayBackend: Send` (the handle lives in a GPUI `Global` and may move through a
+background closure), the `Rc` object is **not** stored in the backend. It lives in a
+thread-local slot (`UI_TRAY`) on the owning thread, and `desktop::DesktopBackend` reaches it
+only when `thread::current().id()` equals the id recorded at creation. A refresh or shutdown
+from another thread logs a warning and is ignored rather than touching the `Rc`.
+
+#### Activation path (delivers on a channel, no timer)
+
+`muda` pushes activations to a process-global crossbeam channel. `desktop.rs` spawns one
+forwarding thread (`dblocal-tray-menu`) whose only wait is a blocking `MenuEvent::receiver().recv()`.
+For each event it looks the id up in a mutex-guarded `BTreeMap` that the UI thread republishes
+on every refresh, and sends the resolved `TrayAction` on the app's existing flume channel. The
+existing `start_tray_action_pump` in `bootstrap.rs` consumes it. No polling, no timer, no `sleep`.
+
+#### What degrades when creation fails
+
+`desktop::start()` returns `TrayStartup::none()` on any `tray-icon` error — no shell tray area,
+a restricted session, `NSStatusBar` failure. Then `TrayHandle::is_available()` is `false`, the
+status bar shows `UI_TRAY_UNAVAILABLE` (`Tray tidak tersedia`) and the one-time
+`UI_TRAY_UNAVAILABLE_NOTE`, `set_quit_mode` becomes `LastWindowClosed`, and closing the window
+goes through the quit flow — the F-TRY-01 AC3 fallback. No panic.
+
+#### Shutdown and the ghost icon
+
+`request_app_quit` (the single quit path) calls `TrayHandle::shutdown()` before `cx.quit()`.
+Dropping the `TrayIcon` runs `Shell_NotifyIconW(NIM_DELETE)` on Windows and `removeStatusItem` on
+macOS, so the icon leaves the tray instead of lingering until mouse-over — the "no ghost icon"
+row. Shutdown from a non-UI thread is refused with a warning rather than corrupting the `Rc`.
+
+#### Unverified here
+
+Neither backend can be run on this Linux host. The Windows/macOS code is **compile-verified**
+only, and the pure spec it depends on (`spec.rs`) is unit-tested on Linux:
+
+- `cargo check -p dblocal-gui --target x86_64-pc-windows-gnu` **cannot** run: the pre-existing
+  `aws-lc-sys` build script needs `x86_64-w64-mingw32-gcc`, which this host lacks (same limitation
+  as `docs/architecture/autostart.md` and `docs/architecture/process.md`). Recorded, not skipped.
+- Instead, a probe crate (`~/.cache/dblocal-dev/tray-probe`, not committed) compiles the **real**
+  `tray/{mod,spec,desktop}.rs` (copied byte-for-byte) against stub `dblocal-core`/`format` types
+  and the real `tray-icon`/`muda` tree. `cargo check --target x86_64-pc-windows-gnu` → **Finished**
+  after the API fixes below. The same sources also `cargo check` on Linux with `tray-icon`'s
+  `ksni` feature, exercising the identical Rust API surface.
+- **macOS:** `aarch64-apple-darwin`/`x86_64-apple-darwin` std is not installed and rule 10 forbids
+  installing it, so `cargo check --target aarch64-apple-darwin` fails with
+  `error[E0463]: can't find crate for 'core'` (the tray/muda/objc2 crates themselves compiled).
+  The macOS-specific arms (`MainThreadMarker`, `set_icon_templated`) are not type-checked here.
+
+Real behaviour — icon appears, dots, Start/Stop, open-window, quit dialog, no ghost icon — is a
+checklist in `docs/dev/windows-verification.md` (Windows, after the reboot) and under its macOS
+heading (no macOS machine here).
+
+#### Defects the cross-check caught before merge
+
+The Windows type-check found three real API mistakes that a "looks right" review would have
+shipped: `Menu` owns its child items (so the `Vec<MenuItemKind>` handles were unnecessary and
+`MenuItemKind` is not `IsMenuItem` — rows must be appended as concrete `IconMenuItem` /
+`PredefinedMenuItem`); `tray_icon::menu::Icon` (muda) is a *distinct* type from `tray_icon::Icon`,
+so menu-row icons and the tray icon need separate constructors; and `tray_icon::Error` has no
+`From<BadIcon>`, so the `BadIcon` is mapped to an `io::Error` explicitly.
+
 ### Modules added in W2-B
 
 | Module | Responsibility |
-|---|---|
 | `app/background.rs` | `bg`, `is_pending`, startup load, pumps, tray refresh, catalog reload |
 | `app/instance_actions.rs` | tab open + derived reads, start/stop, reveal/copy, autostart, create and delete dialogs |
 | `app/quit_flow.rs` | tray actions, quit transitions → service calls/window ops, the quit dialog |

@@ -103,11 +103,18 @@ Rows depending on the tray and quit flow assume the GUI-wiring task (W2-B) has b
 | Clean shutdown/no leftovers | Quit app after starting/stopping engines. | No orphan dblocal/engine processes; ports released. | | |
 | Autostart: enable writes the Run value (W4-D) | Run `dblocal.exe autostart enable`, then `reg query "HKCU\Software\Microsoft\Windows\CurrentVersion\Run" /v DBLocal`. | The value is present and quotes the installed exe path (`"C:\Program Files\DBLocal\dblocal.exe" --autostart`), including under `Program Files` (a space in the path). `dblocal.exe autostart status` prints `autostart: aktif`. | | |
 | Autostart: disable removes the Run value (W4-D) | Run `dblocal.exe autostart disable`, then `reg query` the same key. | The `DBLocal` value is gone; `autostart status` prints `autostart: nonaktif`; running `disable` twice does not error. | | |
-| Autostart: login opens to the tray (W4-D) | With the Run value enabled, sign out and back in (or run `dblocal.exe --autostart`). | No window appears; the app runs in the tray. With no tray host (pre-W2-G) the process stays headless only while a flagged instance starts, otherwise it exits with the `tidak ada instance yang berjalan` message. Record which behaviour you saw. | | |
+| Autostart: login opens to the tray (W4-D) | With the Run value enabled, sign out and back in (or run `dblocal.exe --autostart`). | No window appears; the app runs in the tray (W2-G now provides a real Windows tray). If the tray could not be created (restricted session), the process opens the window instead, or with a flagged instance keeps running headless; record which behaviour you saw and whether the status bar showed "Tray tidak tersedia". | | |
 | Autostart: flagged instance starts at login (W4-D) | Flag one instance (`autostart`), sign out and in. | The instance reaches `running`; the tray dot turns green. If its port is taken by another process, it ends `failed` with `[DBL-1005]` and the other flagged instances still start. | | |
+| Tray: icon appears in the notification area (W2-G) | Start the app normally, look at the notification area / overflow. | A DBLocal tray icon appears (a status dot: grey with nothing running, green with a running instance, red with a failed one). Hovering shows the "DBLocal" tooltip. | | |
+| Tray: menu lists instances with the right dots (W2-G) | Right-click (or left-click) the tray icon. | The menu lists every instance grouped by engine, each with a coloured status dot (green running, grey stopped, red failed, amber busy); `Starting`/`Stopping` rows are greyed out. "Buka DBLocal" and "Keluar" are present. | | |
+| Tray: Start/Stop from the menu starts/stops the engine (W2-G) | Create a stopped instance; choose it / its "Mulai" row from the tray menu; then stop it the same way. | The engine starts (status turns green within ~1 s, log shows startup) and stops again; the main window, if open, reflects the change in ≤ 1 s (F-TRY-01 AC2). | | |
+| Tray: "Buka DBLocal" opens a window after the window was closed (W2-G) | Close the main window (tray stays), then choose "Buka DBLocal" from the tray. | A window opens attached to the same service (no second app instance); with the window already open it is focused instead. | | |
+| Tray: "Keluar" with a running instance shows the quit dialog (W2-G) | Start one instance, then choose "Keluar" from the tray. | The quit dialog appears ("Biarkan tetap berjalan" is the default); cancelling leaves both the app and the engine running. Choosing "Hentikan semua lalu keluar" stops the engine and exits. | | |
+| Tray: closing the window keeps the process (W2-G) | Click the window close button while the tray is present. | The window closes; the process, tray and any running engines stay alive (F-TRY-02 AC1). | | |
+| Tray: quit removes the icon, no ghost icon (W2-G) | Quit the app from the tray, then inspect the notification area (including the overflow pane, and after hovering). | The tray icon disappears immediately and does not linger as a ghost that only clears on hover. No `dblocal.exe` process remains (`tasklist | findstr dblocal`). | | |
+| Tray: no tray host degrades to AC3 (W2-G) | If you can reproduce a session with no shell tray area, start the app. | The status bar shows "Tray tidak tersedia" once with its note; closing the window goes through the quit dialog; nothing panics. (Otherwise record Blocked with the reason.) | | |
 | Self-update: install kind | Run the update check from the installed MSI build and from a portable zip (when the GUI/CLI exposes it; until then the library `dblocal_core::update` is covered only by Linux tests). | The MSI install is detected as managed by the installer (update offered through a new MSI, not an in-place swap) or as portable, exactly as `docs/architecture/update.md` states; a build tree is detected as `build tree` and updates are disabled. | | |
 | Self-update: swap helper | Only after the update engine is wired into the app: apply an update on a portable install. | The running `dblocal.exe` is replaced through the helper plan (rename away, new file in place, relaunch); a failed smoke run rolls back to the old exe; no leftover `.old` after the next start. | | |
-| Known gap: tray | Start the app on Windows and look at the status bar. | Until task W2-G lands the tray rows above are EXPECTED to fail: the status bar shows the "Tray tidak tersedia" note once and closing the window goes through the quit dialog. Record what you see; do not count it as a regression. | | |
 
 ## SmartScreen / unsigned artifact checks
 
@@ -153,5 +160,21 @@ This task cannot verify macOS. The owner/coordinator should verify separately on
 - Keychain entries are created/removed on credential lifecycle.
 - `.dmg` install/launch works; signed+notarized artifact passes Gatekeeper/spctl when secrets configured.
 - Real PostgreSQL and Valkey start/stop on localhost ports; uninstall keeps `~/.dblocal`.
+
+### macOS tray (W2-G: `tray-icon` + `muda`; **no macOS machine here**)
+
+Every row is unverified. The macOS backend is the same `tray/desktop.rs` as Windows, on the
+AppKit main thread; the compile-only verification and its limits are in `docs/architecture/gui.md`.
+
+| Area | Steps | Expected result | Outcome | Notes |
+|---|---|---|---|---|
+| Menu bar icon appears | Launch the app; look at the menu bar (status area). | A DBLocal status-dot icon appears in the menu bar (template image, recoloured for light/dark). **no macOS machine here.** | | |
+| Menu lists instances with the right dots | Click the menu bar icon. | The menu lists instances grouped by engine with status dots; busy rows disabled; "Buka DBLocal" and "Keluar" present. **no macOS machine here.** | | |
+| Start/Stop from the menu | Choose a stopped instance's start row, then stop it. | The engine starts/stops; the window reflects it in ≤ 1 s. **no macOS machine here.** | | |
+| "Buka DBLocal" opens a window after close | Close the window, then choose "Buka DBLocal". | A window opens (or the existing one is focused); no second app instance. **no macOS machine here.** | | |
+| "Keluar" with a running instance shows the quit dialog | Start an instance, choose "Keluar". | The quit dialog appears with "Biarkan tetap berjalan" as default. **no macOS machine here.** | | |
+| Closing the window keeps the process | Click the window close button. | The window closes; the process, menu bar icon and engines stay (AppKit accessory/regular policy per the app). **no macOS machine here.** | | |
+| Quit removes the icon, no ghost icon | Quit, then inspect the menu bar. | The status item is removed immediately (`removeStatusItem`); no ghost. **no macOS machine here.** | | |
+| Fullscreen-app quirk | Open a fullscreen app, then create the tray (launch DBLocal). | The tray is created after launch (`did_finish_launching`), which `tray-icon` documents as required to avoid fullscreen issues. **no macOS machine here.** | | |
 
 Until run on macOS hardware, macOS behavior remains **unverified**.

@@ -37,7 +37,12 @@ pub struct QuitLedger {
 
 impl Global for QuitLedger {}
 
-/// The single quit path: record the request, then ask the platform to quit.
+/// The single quit path: record the request, release the tray, then ask the
+/// platform to quit.
+///
+/// Releasing the tray first removes the icon from the shell (Windows
+/// `NIM_DELETE`, macOS `removeStatusItem`) instead of leaving a ghost icon that
+/// only disappears on hover.
 pub(crate) fn request_app_quit(cx: &mut App) {
     if cx.has_global::<QuitLedger>() {
         cx.update_global::<QuitLedger, _>(|ledger, _| {
@@ -45,6 +50,9 @@ pub(crate) fn request_app_quit(cx: &mut App) {
                 .requests
                 .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         });
+    }
+    if cx.has_global::<AppRuntime>() {
+        cx.update_global::<AppRuntime, _>(|runtime, _| runtime.tray.shutdown());
     }
     cx.quit();
 }
