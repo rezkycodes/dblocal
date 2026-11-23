@@ -304,3 +304,306 @@ fn restore_available_is_false_without_a_file_or_a_backup() {
         &instance
     ));
 }
+
+// --- F1: config_apply validates the value through the LocalService call site ---
+//
+// Each case applies an out-of-range integer, a non-integer, an enum outside its
+// set and a malformed size, and asserts (a) the typed CODE_INVALID_VALUE, (b) the
+// file bytes are unchanged, (c) no backup was taken. Plus a batch whose second
+// entry is invalid leaves the first unwritten. These go through LocalService, so
+// removing `validate_value(spec, value)?` in config_ops::apply turns them red.
+
+/// Creates an instance of any engine by seeding a fake runtime first, so `create`
+/// skips the download path. Returns the harness, id and config path.
+fn created_with_runtime(engine: EngineKey) -> (Harness, InstanceId, PathBuf) {
+    let harness = Harness::new(engine);
+    // Seed the runtime `create` looks for (`<home>/runtimes/<engine>/18.7/<arch>/bin`).
+    let dir = harness
+        .paths
+        .runtime_dir(engine, "18.7", crate::platform::Arch::X86_64)
+        .expect("runtime dir");
+    fs::create_dir_all(dir.join("bin")).expect("runtime bin");
+    let port = test_port();
+    let spec = harness.spec("cfg", engine, port);
+    harness.create(spec);
+    let instance = harness.instances().into_iter().next().expect("instance");
+    let id = instance.id().clone();
+    let path =
+        match engine {
+            EngineKey::Postgresql | EngineKey::Mariadb => harness
+                .paths
+                .data_dir(instance.name())
+                .join(if engine == EngineKey::Postgresql {
+                    "postgresql.conf"
+                } else {
+                    "my.cnf"
+                }),
+            EngineKey::Mysql | EngineKey::Valkey => {
+                harness
+                    .paths
+                    .run_dir(instance.name())
+                    .join(if engine == EngineKey::Mysql {
+                        "my.cnf"
+                    } else {
+                        "valkey.conf"
+                    })
+            }
+        };
+    (harness, id, path)
+}
+
+fn seed_any(path: &std::path::Path, engine: EngineKey) {
+    let body = match engine {
+        EngineKey::Postgresql => "# base\nmax_connections = 100\n",
+        EngineKey::Mysql | EngineKey::Mariadb => "[mysqld]\nport=3307\nmax_connections=151\n",
+        EngineKey::Valkey => "port 6379\nmaxmemory 0\n",
+    };
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).expect("parent");
+    }
+    fs::write(path, body).expect("seed");
+}
+
+/// The backup directory for the test instance has no files yet.
+fn backup_count(harness: &Harness) -> usize {
+    let dir = harness.paths.root().join("dblocal-backups").join("cfg");
+    fs::read_dir(&dir)
+        .map(|entries| entries.filter_map(Result::ok).count())
+        .unwrap_or(0)
+}
+
+/// Family-specific bad values: out-of-range integer, non-integer, bad enum,
+/// malformed size. Returns (key, value) pairs.
+fn bad_values(engine: EngineKey) -> Vec<(&'static str, &'static str)> {
+    match engine {
+        EngineKey::Postgresql => vec![
+            ("max_connections", "99999999"), // above the max
+            ("max_connections", "abc"),      // not an integer
+            ("shared_buffers", "12XB"),      // unknown unit
+            ("work_mem", "1.5MB"),           // fractional
+        ],
+        EngineKey::Mysql | EngineKey::Mariadb => vec![
+            ("max_connections", "999999999"), // above the max
+            ("max_connections", "abc"),
+            ("character-set-server", "klingon"), // outside the enum
+            ("innodb_buffer_pool_size", "12XB"),
+        ],
+        EngineKey::Valkey => vec![
+            ("timeout", "999999999999"), // above the max
+            ("timeout", "abc"),
+            ("maxmemory-policy", "bogus"), // outside the enum
+            ("maxmemory", "12XB"),
+        ],
+    }
+}
+
+/// Runs the four validation classes for one engine through LocalService.
+fn assert_engine_validates(engine: EngineKey) {
+    let (harness, id, path) = created_with_runtime(engine);
+    seed_any(&path, engine);
+    let instance_name = harness.instances()[0].name().clone();
+    let _ = instance_name;
+    for (key, value) in bad_values(engine) {
+        let before = fs::read(&path).expect("read before");
+        let backups_before = backup_count(&harness);
+        let result = harness
+            .service
+            .config_apply(&id, vec![(key.to_owned(), value.to_owned())]);
+        let err = match result {
+            Err(err) => err,
+            Ok(_) => panic!("{engine:?} {key}={value:?} must be refused, was accepted"),
+        };
+        assert_eq!(
+            err.code,
+            codes::CODE_INVALID_VALUE,
+            "{engine:?} {key}={value:?}: {err:?}"
+        );
+        assert_eq!(
+            fs::read(&path).expect("read after"),
+            before,
+            "{engine:?} {key}={value:?}: the file must be unchanged"
+        );
+        assert_eq!(
+            backup_count(&harness),
+            backups_before,
+            "{engine:?} {key}={value:?}: no backup may be taken on a refused value"
+        );
+    }
+}
+
+#[test]
+fn apply_validates_every_value_through_the_service_postgresql() {
+    assert_engine_validates(EngineKey::Postgresql);
+}
+
+#[test]
+fn apply_validates_every_value_through_the_service_mysql() {
+    assert_engine_validates(EngineKey::Mysql);
+}
+
+#[test]
+fn apply_validates_every_value_through_the_service_mariadb() {
+    assert_engine_validates(EngineKey::Mariadb);
+}
+
+#[test]
+fn apply_validates_every_value_through_the_service_valkey() {
+    assert_engine_validates(EngineKey::Valkey);
+}
+
+#[test]
+fn a_batch_with_one_invalid_entry_writes_nothing() {
+    let (harness, id, path) = created_with_runtime(EngineKey::Valkey);
+    seed_any(&path, EngineKey::Valkey);
+    let before = fs::read(&path).expect("read before");
+    let backups_before = backup_count(&harness);
+    // First entry is valid, second is invalid: the whole batch must be refused.
+    let err = harness
+        .service
+        .config_apply(
+            &id,
+            vec![
+                ("maxmemory".to_owned(), "1gb".to_owned()),
+                ("timeout".to_owned(), "abc".to_owned()),
+            ],
+        )
+        .expect_err("a batch with one invalid entry refuses the whole call");
+    assert_eq!(err.code, codes::CODE_INVALID_VALUE);
+    assert_eq!(
+        fs::read(&path).expect("read after"),
+        before,
+        "the valid first entry must not be written"
+    );
+    assert_eq!(backup_count(&harness), backups_before, "no backup");
+}
+
+// --- F1 (cont.): restore_available with the marker present ---
+
+#[test]
+fn restore_available_is_false_when_the_file_matches_the_recorded_hash() {
+    let (harness, id, path) = created_with_runtime(EngineKey::Valkey);
+    seed_any(&path, EngineKey::Valkey);
+    // A backup must exist for the flag to be considered at all.
+    harness
+        .service
+        .config_apply(&id, vec![("maxmemory".to_owned(), "1gb".to_owned())])
+        .expect("apply takes a backup");
+    // Record the CURRENT file hash as "last good", then do not touch the file.
+    let instance = harness.instance(&id).expect("row");
+    super::super::config_ops::record_last_good(harness.service.inner(), &instance);
+    assert!(
+        !super::super::config_ops::restore_available(harness.service.inner(), &instance),
+        "an unchanged file that matches the recorded hash must not offer a restore"
+    );
+}
+
+#[test]
+fn restore_available_is_true_when_the_file_changed_after_the_recorded_hash() {
+    let (harness, id, path) = created_with_runtime(EngineKey::Valkey);
+    seed_any(&path, EngineKey::Valkey);
+    harness
+        .service
+        .config_apply(&id, vec![("maxmemory".to_owned(), "1gb".to_owned())])
+        .expect("apply takes a backup");
+    let instance = harness.instance(&id).expect("row");
+    // Record the hash, then change the file (an out-of-band edit a start would see).
+    super::super::config_ops::record_last_good(harness.service.inner(), &instance);
+    harness
+        .service
+        .config_apply(&id, vec![("maxmemory".to_owned(), "2gb".to_owned())])
+        .expect("apply changes the file and adds a backup");
+    assert!(
+        super::super::config_ops::restore_available(harness.service.inner(), &instance),
+        "a file changed since the recorded hash must offer a restore"
+    );
+}
+
+// --- F2: opening the raw config file through the LocalService seam ---
+
+use std::sync::{Arc, Mutex};
+
+/// Records the open command instead of launching a real editor.
+struct RecordingOpen {
+    seen: Mutex<Vec<crate::config::OpenCommand>>,
+    fail: bool,
+}
+
+impl RecordingOpen {
+    fn new(fail: bool) -> Arc<Self> {
+        Arc::new(Self {
+            seen: Mutex::new(Vec::new()),
+            fail,
+        })
+    }
+}
+
+impl crate::config::OpenLauncher for RecordingOpen {
+    fn launch(&self, command: &crate::config::OpenCommand) -> std::io::Result<()> {
+        if self.fail {
+            return Err(std::io::Error::other("no handler"));
+        }
+        self.seen.lock().expect("lock").push(command.clone());
+        Ok(())
+    }
+}
+
+fn created_with_launcher(launcher: Arc<RecordingOpen>) -> (Harness, InstanceId, PathBuf) {
+    let harness = Harness::with_options(EngineKey::Valkey, move |options| {
+        options.open_launcher = Some(launcher as Arc<dyn crate::config::OpenLauncher>);
+    });
+    let port = test_port();
+    let spec = harness.spec("cfg", EngineKey::Valkey, port);
+    harness.create(spec);
+    let instance = harness.instances().into_iter().next().expect("instance");
+    let id = instance.id().clone();
+    let path = harness.paths.run_dir(instance.name()).join("valkey.conf");
+    (harness, id, path)
+}
+
+#[test]
+fn open_raw_launches_the_handler_with_the_file_as_one_argument() {
+    let launcher = RecordingOpen::new(false);
+    let (harness, id, path) = created_with_launcher(Arc::clone(&launcher));
+    seed(&path, EngineKey::Valkey);
+    let command = harness.service.config_open_raw(&id).expect("open");
+    let seen = launcher.seen.lock().expect("lock");
+    assert_eq!(seen.len(), 1, "exactly one launch");
+    assert_eq!(command, seen[0], "the returned command is the one launched");
+    // The path is exactly one argument and never split.
+    assert!(
+        command
+            .args
+            .iter()
+            .any(|arg| arg == &path.display().to_string()),
+        "{:?}",
+        command.args
+    );
+}
+
+#[test]
+fn open_raw_refuses_a_missing_file_without_launching() {
+    let launcher = RecordingOpen::new(false);
+    let (harness, id, path) = created_with_launcher(Arc::clone(&launcher));
+    let _ = fs::remove_file(&path);
+    let err = harness
+        .service
+        .config_open_raw(&id)
+        .expect_err("missing file is refused");
+    assert_eq!(err.code, codes::CODE_MISSING_FILE);
+    assert!(
+        launcher.seen.lock().expect("lock").is_empty(),
+        "nothing opened"
+    );
+}
+
+#[test]
+fn open_raw_reports_a_launcher_failure() {
+    let launcher = RecordingOpen::new(true);
+    let (harness, id, path) = created_with_launcher(launcher);
+    seed(&path, EngineKey::Valkey);
+    let err = harness
+        .service
+        .config_open_raw(&id)
+        .expect_err("launcher failed");
+    assert_eq!(err.code, codes::CODE_LAUNCHER);
+}

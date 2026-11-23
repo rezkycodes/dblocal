@@ -217,3 +217,87 @@ fn the_cli_never_prints_a_requirepass_value() {
     assert!(!out.contains("requirepass"));
     assert!(!err.contains("requirepass"));
 }
+
+/// F3: the unit column says what the user types, not the storage primitive.
+#[test]
+fn show_prints_human_units_not_bytes_or_english_seconds() {
+    let svc = MockService::deterministic();
+    // Valkey `timeout` has unit "seconds"; `maxmemory` has unit "bytes".
+    svc.seed_instance(
+        spec("cache", EngineKey::Valkey, "9.2.0", 6379),
+        InstanceStatus::Stopped,
+    );
+    let (code, out, err) = run_cmd(
+        &svc,
+        &Command::Config {
+            command: crate::cli::ConfigCommand::Show {
+                name: "cache".into(),
+                json: false,
+            },
+        },
+        false,
+    );
+    assert_eq!(code, EXIT_OK, "stderr: {err}");
+    // A size setting shows the size words, never the primitive `bytes`, and the
+    // English `seconds` becomes the Indonesian `detik`.
+    assert!(out.contains(messages::UNIT_SIZE), "{out}");
+    assert!(
+        !out.contains("bytes"),
+        "the table must not say `bytes`: {out}"
+    );
+    assert!(out.contains(messages::UNIT_SECONDS), "{out}");
+    assert!(
+        !out.contains("seconds"),
+        "the table must not say `seconds`: {out}"
+    );
+    // --json keeps the machine-readable unit.
+    let (code, json_out, _e) = run_cmd(
+        &svc,
+        &Command::Config {
+            command: crate::cli::ConfigCommand::Show {
+                name: "cache".into(),
+                json: true,
+            },
+        },
+        false,
+    );
+    assert_eq!(code, EXIT_OK);
+    let parsed: serde_json::Value = serde_json::from_str(json_out.trim()).expect("json");
+    let maxmemory = parsed["settings"]
+        .as_array()
+        .expect("array")
+        .iter()
+        .find(|s| s["key"] == "maxmemory")
+        .expect("maxmemory");
+    assert_eq!(maxmemory["unit"], "bytes", "--json keeps the raw unit");
+}
+
+/// `config open` on the mock returns the command it would run and prints the path.
+#[test]
+fn open_prints_the_path_it_opened() {
+    let (svc, _id) = seeded();
+    let (code, out, err) = run_cmd(
+        &svc,
+        &Command::Config {
+            command: crate::cli::ConfigCommand::Open { name: "app".into() },
+        },
+        false,
+    );
+    assert_eq!(code, EXIT_OK, "stderr: {err}");
+    assert!(out.trim().ends_with("valkey.conf"), "{out}");
+}
+
+#[test]
+fn open_on_an_unknown_instance_is_not_found() {
+    let svc = MockService::deterministic();
+    let (code, _out, _err) = run_cmd(
+        &svc,
+        &Command::Config {
+            command: crate::cli::ConfigCommand::Open {
+                name: "nope".into(),
+            },
+        },
+        false,
+    );
+    assert_eq!(code, EXIT_NOT_FOUND);
+}
