@@ -161,9 +161,8 @@ fn enabling_the_login_item_records_only_the_confirmed_state(cx: &mut TestAppCont
 fn a_failed_disable_keeps_the_switch_on_and_shows_the_error(cx: &mut TestAppContext) {
     let (view, _service, cx) = fixture(cx);
     view.update(cx, |this, _| {
-        this.login = Some(Ok(
-            Arc::new(SwitchLoginItem::enabled_failing_disable()) as Arc<dyn login_item::LoginItemControl>
-        ));
+        this.login = Some(Ok(Arc::new(SwitchLoginItem::enabled_failing_disable())
+            as Arc<dyn login_item::LoginItemControl>));
     });
     view.update(cx, |this, cx| this.read_login_status(cx));
     settle(cx);
@@ -195,7 +194,9 @@ fn a_failed_disable_keeps_the_switch_on_and_shows_the_error(cx: &mut TestAppCont
 fn a_failed_enable_keeps_the_switch_off(cx: &mut TestAppContext) {
     let (view, _service, cx) = fixture(cx);
     view.update(cx, |this, _| {
-        this.login = Some(Ok(Arc::new(RefusingLoginItem) as Arc<dyn login_item::LoginItemControl>));
+        this.login = Some(Ok(
+            Arc::new(RefusingLoginItem) as Arc<dyn login_item::LoginItemControl>
+        ));
     });
     view.update(cx, |this, cx| this.read_login_status(cx));
     settle(cx);
@@ -217,9 +218,8 @@ fn a_failed_enable_keeps_the_switch_off(cx: &mut TestAppContext) {
 fn a_login_write_in_flight_keeps_the_previous_value(cx: &mut TestAppContext) {
     let (view, _service, cx) = fixture(cx);
     view.update(cx, |this, _| {
-        this.login = Some(Ok(
-            Arc::new(SwitchLoginItem::enabled_failing_disable()) as Arc<dyn login_item::LoginItemControl>
-        ));
+        this.login = Some(Ok(Arc::new(SwitchLoginItem::enabled_failing_disable())
+            as Arc<dyn login_item::LoginItemControl>));
     });
     view.update(cx, |this, cx| this.read_login_status(cx));
     settle(cx);

@@ -127,9 +127,7 @@ impl Workspace {
                         // F6: the field is cleared on success, so the next click
                         // does not hit "already exists" with the old name.
                         this.clear_input(&input, cx);
-                        this.toast = Some(SharedString::from(strings::databases_created(
-                            &created,
-                        )));
+                        this.toast = Some(SharedString::from(strings::databases_created(&created)));
                     }
                     Err(err) => {
                         admin.error = Some(err.clone());

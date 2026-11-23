@@ -345,7 +345,10 @@ mod tests {
             Some(on.clone()),
         );
         assert!(state.login_enabled(), "a failed disable reported disabled");
-        assert_eq!(state.login_error().map(|e| e.code.as_str()), Some("DBL-8503"));
+        assert_eq!(
+            state.login_error().map(|e| e.code.as_str()),
+            Some("DBL-8503")
+        );
 
         // A successful enable then shows the confirmed state.
         state.login = LoginState::Known(LoginStatus {
