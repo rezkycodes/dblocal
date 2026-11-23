@@ -74,6 +74,21 @@ pub(super) fn render(workspace: &Workspace, cx: &mut Context<Workspace>) -> impl
                     .text_color(theme.muted_foreground),
             )
             .child(
+                // The Settings dialog's title-bar entry point (`F-PKG-05`,
+                // `F-AUT-01`); `Ctrl/Cmd+,` fires the same action.
+                Button::new("title-settings")
+                    .ghost()
+                    .small()
+                    .compact()
+                    .icon(IconName::Settings)
+                    .tooltip(strings::UI_SETTINGS)
+                    .accessibility_label(strings::UI_SETTINGS)
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.open_settings(cx);
+                        cx.notify();
+                    })),
+            )
+            .child(
                 Button::new("title-new")
                     .ghost()
                     .small()

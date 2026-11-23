@@ -65,24 +65,11 @@ impl Workspace {
         });
     }
 
-    /// Ensures the tab has field entities and has read its rows once.
-    pub(crate) fn enter_databases_tab(
-        &mut self,
-        id: &InstanceId,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        if self.db_name_input.is_none() {
-            self.db_name_input = Some(cx.new(|cx| {
-                InputState::new(window, cx)
-                    .placeholder(strings::UI_DATABASES_NAME_PLACEHOLDER.to_owned())
-            }));
-        }
-        if self.user_name_input.is_none() {
-            self.user_name_input = Some(cx.new(|cx| {
-                InputState::new(window, cx).placeholder(strings::UI_DATABASES_USER_NAME.to_owned())
-            }));
-        }
+    /// Reads the tab's rows once, on first entry, and again after a failure.
+    ///
+    /// The text fields already exist (they are built with the workspace), so
+    /// entry needs no window and works from any path that selects the tab.
+    pub(crate) fn enter_databases_tab(&mut self, id: &InstanceId, cx: &mut Context<Self>) {
         let needs_read = match self.admin.get(id) {
             None => true,
             Some(admin) => {
@@ -99,10 +86,7 @@ impl Workspace {
 
     /// The database-name field's value.
     fn db_name_text(&self, cx: &App) -> String {
-        self.db_name_input
-            .as_ref()
-            .map(|input| input.read(cx).value().to_string())
-            .unwrap_or_default()
+        self.db_name_input.read(cx).value().to_string()
     }
 
     /// Creates a database from the visible tab's field (`F-DBU-01` AC2/AC4).
@@ -219,11 +203,7 @@ impl Workspace {
 
     /// Creates a login role and shows its password exactly once (`F-DBU-02`).
     pub(crate) fn create_user(&mut self, id: &InstanceId, cx: &mut Context<Self>) {
-        let raw = self
-            .user_name_input
-            .as_ref()
-            .map(|input| input.read(cx).value().to_string())
-            .unwrap_or_default();
+        let raw = self.user_name_input.read(cx).value().to_string();
         let name = match validate_user_name(&raw) {
             Ok(name) => name,
             Err(err) => {
@@ -355,12 +335,12 @@ impl Workspace {
     }
 
     /// The database-name input entity, for the view.
-    pub(crate) fn db_name_input_entity(&self) -> Option<Entity<InputState>> {
+    pub(crate) fn db_name_input_entity(&self) -> Entity<InputState> {
         self.db_name_input.clone()
     }
 
     /// The new-user name input entity, for the view.
-    pub(crate) fn user_name_input_entity(&self) -> Option<Entity<InputState>> {
+    pub(crate) fn user_name_input_entity(&self) -> Entity<InputState> {
         self.user_name_input.clone()
     }
 

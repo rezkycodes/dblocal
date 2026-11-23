@@ -163,13 +163,11 @@ impl Workspace {
                             .text_sm()
                             .font_weight(FontWeight::SEMIBOLD),
                     )
-                    .child(match self.db_name_input_entity() {
-                        Some(input) => div()
+                    .child(
+                        div()
                             .w(px(200.))
-                            .child(Input::new(&input).small())
-                            .into_any_element(),
-                        None => div().w(px(200.)).into_any_element(),
-                    })
+                            .child(Input::new(&self.db_name_input_entity()).small()),
+                    )
                     .child(
                         Button::new(SharedString::from(row_part_id(
                             "databases-create",
@@ -494,13 +492,11 @@ impl Workspace {
                 h_flex()
                     .gap_2()
                     .items_center()
-                    .child(match self.user_name_input_entity() {
-                        Some(input) => div()
+                    .child(
+                        div()
                             .w(px(200.))
-                            .child(Input::new(&input).small())
-                            .into_any_element(),
-                        None => div().w(px(200.)).into_any_element(),
-                    })
+                            .child(Input::new(&self.user_name_input_entity()).small()),
+                    )
                     .child(
                         Button::new(SharedString::from(row_part_id(
                             "users-create",

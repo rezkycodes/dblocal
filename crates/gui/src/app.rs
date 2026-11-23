@@ -89,6 +89,21 @@ pub fn run_with_mock() -> dblocal_core::Result<()> {
     bootstrap::run_with_mock()
 }
 
+/// The two Databases-tab text fields, built with the workspace so every entry
+/// path (click, preview, keyboard, restored tab) finds them.
+fn databases_tab_inputs(
+    window: &mut Window,
+    cx: &mut Context<Workspace>,
+) -> (Entity<InputState>, Entity<InputState>) {
+    let db = cx.new(|cx| {
+        InputState::new(window, cx).placeholder(strings::UI_DATABASES_NAME_PLACEHOLDER.to_owned())
+    });
+    let user = cx.new(|cx| {
+        InputState::new(window, cx).placeholder(strings::UI_DATABASES_USER_NAME.to_owned())
+    });
+    (db, user)
+}
+
 /// What the create dialog currently has selected.
 #[derive(Clone)]
 pub struct CreateForm {
@@ -151,10 +166,14 @@ pub struct Workspace {
     delete_size: u64,
     /// Per-instance Databases tab state (`F-DBU-01..03`).
     admin: admin_state::AdminState,
-    /// The database-create field of the visible Databases tab.
-    db_name_input: Option<Entity<InputState>>,
-    /// The new-user name field.
-    user_name_input: Option<Entity<InputState>>,
+    /// The database-create field of the Databases tab.
+    ///
+    /// Created once with the workspace, not on first tab click: the tab can be
+    /// reached by the tab bar, a preview, a keyboard action or a restored inner
+    /// tab, and every one of those paths needs a field that exists.
+    db_name_input: Entity<InputState>,
+    /// The new-user name field; created once, as `db_name_input` is.
+    user_name_input: Entity<InputState>,
     /// The database a new user is granted on.
     user_db_choice: Option<String>,
     /// The privilege level a new user gets.
@@ -215,6 +234,8 @@ struct Parts {
     tray_available: bool,
     command_state: Entity<CommandState>,
     filter_input: Entity<InputState>,
+    db_name_input: Entity<InputState>,
+    user_name_input: Entity<InputState>,
     focus_handle: FocusHandle,
 }
 
@@ -240,11 +261,14 @@ impl Workspace {
         let filter_input = cx
             .new(|cx| InputState::new(window, cx).placeholder(strings::UI_DOCK_FILTER.to_owned()));
         cx.observe(&filter_input, |_, _, cx| cx.notify()).detach();
+        let (db_name_input, user_name_input) = databases_tab_inputs(window, cx);
         let mut workspace = Self::assemble(Parts {
             service,
             tray_available,
             command_state,
             filter_input,
+            db_name_input,
+            user_name_input,
             focus_handle,
         });
         workspace.startup_load(cx);
@@ -265,11 +289,14 @@ impl Workspace {
         let filter_input = cx
             .new(|cx| InputState::new(window, cx).placeholder(strings::UI_DOCK_FILTER.to_owned()));
         cx.observe(&filter_input, |_, _, cx| cx.notify()).detach();
+        let (db_name_input, user_name_input) = databases_tab_inputs(window, cx);
         let mut workspace = Self::assemble(Parts {
             service,
             tray_available: false,
             command_state,
             filter_input,
+            db_name_input,
+            user_name_input,
             focus_handle,
         });
         workspace.tray_note_shown = true;
@@ -319,8 +346,8 @@ impl Workspace {
             delete_mode: DeleteMode::ArchiveData,
             delete_size: 0,
             admin: admin_state::AdminState::default(),
-            db_name_input: None,
-            user_name_input: None,
+            db_name_input: parts.db_name_input,
+            user_name_input: parts.user_name_input,
             user_db_choice: None,
             user_level: PrivilegeLevel::ReadOnly,
             drop_dialog: None,

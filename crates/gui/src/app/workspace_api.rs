@@ -32,7 +32,10 @@ impl Workspace {
         }
     }
 
-    /// Sets the visible tab's inner tab, loading the log tail on first use.
+    /// Sets the inner tab, loading what that tab needs on entry.
+    ///
+    /// The Databases tab reads its rows here, not on a render path, so opening
+    /// it by any route (tab bar, keyboard, restored tab) issues the same reads.
     pub(crate) fn set_inner_tab(&mut self, inner: InnerTab, cx: &mut Context<Self>) {
         let index = self.tabs.selected_index();
         self.tabs.set_inner(index, inner);
@@ -41,21 +44,22 @@ impl Workspace {
         {
             self.load_logs_for(&id, cx);
         }
-    }
-
-    /// Sets the inner tab from a click, which has a window to build inputs in.
-    pub(crate) fn set_inner_tab_with_window(
-        &mut self,
-        inner: InnerTab,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.set_inner_tab(inner, cx);
         if inner == InnerTab::Databases
             && let Some(id) = self.tabs.selected_instance().cloned()
         {
-            self.enter_databases_tab(&id, window, cx);
+            self.enter_databases_tab(&id, cx);
         }
+    }
+
+    /// Sets the inner tab from a click. Kept for the tab bar's listener, which
+    /// has a window; the work itself no longer needs one.
+    pub(crate) fn set_inner_tab_with_window(
+        &mut self,
+        inner: InnerTab,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.set_inner_tab(inner, cx);
     }
 
     /// Toggles follow mode for the visible Logs tab and, when turning it on,

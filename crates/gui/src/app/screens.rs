@@ -291,7 +291,7 @@ impl Workspace {
                                 cx.notify();
                             })),
                     )
-                    .child(self.render_open_in(view, &theme, cx)),
+                    .child(self.render_open_in(view, "header", &theme, cx)),
             )
     }
 
@@ -302,9 +302,14 @@ impl Workspace {
     /// refresh item. A client that cannot open this engine is listed disabled.
     /// When nothing was detected the menu offers "Salin URI" instead of an empty
     /// list (`F-OPN-01` AC2). A launch failure is reported as a typed toast.
+    ///
+    /// `slot` keeps the element ids unique when two of these menus are on screen
+    /// at once — the instance header and the Overview Connection card both draw
+    /// one (the W2-B2 duplicate-node trap).
     fn render_open_in(
         &self,
         view: &dblocal_core::service::InstanceView,
+        slot: &'static str,
         theme: &Theme,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
@@ -321,9 +326,9 @@ impl Workspace {
         let id_copy = view.id.clone();
         let detection_failed = self.clients.as_ref().is_some_and(|result| result.is_err());
 
-        DropdownButton::new("header-open-in")
+        DropdownButton::new(SharedString::from(format!("{slot}-open-in")))
             .button(
-                Button::new("header-open-in-main")
+                Button::new(SharedString::from(format!("{slot}-open-in-main")))
                     .icon(IconName::ExternalLink)
                     .label(strings::UI_ACTION_OPEN_IN)
                     .loading(opening)
