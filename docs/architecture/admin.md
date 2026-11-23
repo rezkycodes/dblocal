@@ -357,16 +357,19 @@ was extracted into `admin/reset.rs` and is shared by `PgAdmin` and `MysqlAdmin`.
 feature set needs no system C library. Kept out of scope: any TLS feature; the
 module only ever talks to a loopback unix socket.
 
-### Connection: the unix socket, not TCP
+### Connection: always the unix socket, never TCP
 
 Every admin connection dials the instance's **unix socket** (`my.cnf`'s
 `socket=`; the adapters' `configured_socket_path` returns the same path the
-start command wrote, including the long-path fallback). Two reasons:
+start command wrote, including the long-path fallback). There is **no TCP
+fallback**: `MysqlTarget` carries no port and `opts()` always sets the socket, so
+admin can never quietly connect over TCP. Reasons:
 
-- MySQL 8.4's default `caching_sha2_password` over plaintext TCP refuses the
-  first full authentication unless the client requests the server's RSA public
-  key, and the encrypted-password reply is still over an unencrypted channel. The
-  socket counts as a secure channel, so the password never crosses the network.
+- The socket is a secure (never-transmitted) channel, so no byte — the password
+  or a statement's text — crosses the loopback TCP stream. (`mysql_async` would
+  itself do the `caching_sha2_password` RSA public-key exchange over TCP, so the
+  socket is not *required* to complete the handshake — but it is the only path
+  that keeps the traffic off TCP.)
 - MariaDB's bootstrap (`--auth-root-authentication-method=normal`) configures
   `root@localhost`, reachable only through the socket.
 

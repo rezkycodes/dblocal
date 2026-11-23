@@ -414,6 +414,7 @@ mod tests {
             message: "port dipakai".to_owned(),
             diagnosis: crate::model::StartFailure::PortInUse,
             log_tail: Vec::new(),
+            restore_available: false,
         });
         match classify(Ok(vec![view]), &id) {
             Some(Err(message)) => assert!(message.starts_with("[DBL-1005]"), "{message}"),

@@ -665,6 +665,7 @@ mod tests {
                     message: "Port itu sedang dipakai proses lain.".to_owned(),
                     diagnosis: dblocal_core::model::StartFailure::PortInUse,
                     log_tail: Vec::new(),
+                    restore_available: false,
                 });
                 Ok(vec![
                     self.view(&self.ok_id, "auto-ok", InstanceStatus::Running),

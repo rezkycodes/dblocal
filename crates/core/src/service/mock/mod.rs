@@ -10,6 +10,7 @@ mod admin;
 mod catalog;
 mod clients_mock;
 mod clock;
+mod config;
 pub mod demo;
 mod ops;
 mod update;
@@ -159,6 +160,8 @@ struct Inner {
     /// Admin view, per instance (`F-DBU`).
     databases: HashMap<InstanceId, Vec<DatabaseInfo>>,
     users: HashMap<InstanceId, Vec<UserInfo>>,
+    /// Config editor state per instance (`F-CFG`).
+    configs: HashMap<InstanceId, config::ConfigState>,
     /// Update state: running version and an optional install-kind override.
     current_version: semver::Version,
     install_kind: Option<InstallKind>,
@@ -192,6 +195,7 @@ impl Inner {
             failures: VecDeque::new(),
             databases: HashMap::new(),
             users: HashMap::new(),
+            configs: HashMap::new(),
             current_version: semver::Version::parse(env!("CARGO_PKG_VERSION"))
                 .unwrap_or_else(|_| semver::Version::new(0, 0, 0)),
             install_kind: None,
@@ -299,6 +303,7 @@ impl Inner {
                 message,
                 diagnosis,
                 log_tail: tail,
+                restore_available: false,
             });
             self.views.insert(id.clone(), view.clone());
             self.emit(ServiceEvent::InstanceChanged { view });

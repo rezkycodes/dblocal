@@ -4,6 +4,7 @@
 
 mod archive_recovery;
 mod catalog;
+mod config;
 mod coverage;
 mod download;
 mod gates;

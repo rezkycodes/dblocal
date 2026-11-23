@@ -2,6 +2,7 @@
 //! with injected writers, so tests can drive them without a real terminal.
 
 pub mod autostart;
+pub mod config;
 pub mod create;
 pub mod db;
 pub mod delete;
@@ -86,6 +87,7 @@ pub fn dispatch(ctx: &mut Ctx<'_>, command: &Command) -> u8 {
             client,
             dry_run,
         } => open::run(ctx, instance, client, *dry_run),
+        Command::Config { command } => config::dispatch(ctx, command),
     }
 }
 
