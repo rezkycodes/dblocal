@@ -578,7 +578,9 @@ fn a_status_change_invalidates_a_non_visible_instance(cx: &mut TestAppContext) {
     let visible = open_databases(&view, &service, cx);
     let other = service.id_with(InstanceStatus::Stopped);
     // Its rows are a fresh, ready answer taken while it was the visible tab.
-    let planted = vec![dblocal_core::service::DatabaseInfo::new("stale", "postgres", 4096)];
+    let planted = vec![dblocal_core::service::DatabaseInfo::new(
+        "stale", "postgres", 4096,
+    )];
     view.update(cx, |this, _| {
         this.admin.entry(&other).data = Loadable::Ready(crate::app::admin_state::AdminData {
             databases: planted,

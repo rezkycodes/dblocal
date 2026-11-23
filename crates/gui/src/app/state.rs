@@ -58,9 +58,12 @@ impl InnerTab {
 
     /// Whether this tab is still an honest placeholder (`D-25`).
     ///
-    /// Only Config is: `F-DBU` and `F-OPN` became real screens in `W4-B`.
+    /// Always `false` now: `F-DBU`/`F-OPN` became real screens in `W4-B` and the
+    /// Config tab in `W4-H`. Kept for the placeholder test that pins every tab
+    /// live; remove it with the last caller.
+    #[cfg(test)]
     pub fn is_placeholder(self) -> bool {
-        matches!(self, Self::Config)
+        false
     }
 }
 
@@ -489,13 +492,9 @@ mod tests {
             assert!(!tab.label().is_empty());
         }
         assert_eq!(InnerTab::from_index(99), InnerTab::Overview);
-        assert!(!InnerTab::Overview.is_placeholder());
-        assert!(!InnerTab::Logs.is_placeholder());
-        assert!(
-            !InnerTab::Databases.is_placeholder(),
-            "the Databases tab is live since W4-B"
-        );
-        assert!(InnerTab::Config.is_placeholder());
+        for tab in InnerTab::ALL {
+            assert!(!tab.is_placeholder(), "{tab:?} is live, not a placeholder");
+        }
     }
 
     #[test]

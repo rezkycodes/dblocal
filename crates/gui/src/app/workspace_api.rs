@@ -49,6 +49,11 @@ impl Workspace {
         {
             self.enter_databases_tab(&id, cx);
         }
+        if inner == InnerTab::Config
+            && let Some(id) = self.tabs.selected_instance().cloned()
+        {
+            self.enter_config_tab(&id, cx);
+        }
     }
 
     /// Sets the inner tab from a click. Kept for the tab bar's listener, which
@@ -98,6 +103,10 @@ impl Workspace {
     }
 
     /// Whether the demo build may render sample rows in the placeholder tabs.
+    ///
+    /// Only the test suite reads it; no live screen branches on it any more (the
+    /// Config tab is live in `W4-H`).
+    #[cfg(test)]
     pub(crate) fn demo_content(&self) -> bool {
         self.demo_content
     }

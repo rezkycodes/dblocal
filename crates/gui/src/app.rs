@@ -23,6 +23,12 @@ mod bootstrap_r3_tests;
 #[path = "app/bootstrap_tests.rs"]
 mod bootstrap_tests;
 mod components;
+mod config_actions;
+mod config_dialogs;
+mod config_state;
+#[cfg(test)]
+#[path = "app/config_tests.rs"]
+mod config_tests;
 mod create_dialog;
 mod create_submit;
 #[cfg(test)]
@@ -182,6 +188,16 @@ pub struct Workspace {
     delete_size: u64,
     /// Per-instance Databases tab state (`F-DBU-01..03`).
     admin: admin_state::AdminState,
+    /// Per-instance Config tab state (`F-CFG-01`, `F-CFG-02`).
+    config: config_state::ConfigState,
+    /// An instance whose restore-confirmation dialog is open (`F-CFG-01` AC3).
+    config_restore_confirm: Option<InstanceId>,
+    /// Text fields the Config tab edits, one per (`instance`, `key`), so a field
+    /// survives switching tabs and two instances never share one.
+    config_fields: HashMap<(InstanceId, String), Entity<InputState>>,
+    /// An instance the Config tab asked to restart after an apply; the restart
+    /// runs when its stop completes, never a new service call (`F-CFG-01` AC2).
+    config_restart_after_stop: Option<InstanceId>,
     /// The database-create field of the Databases tab.
     ///
     /// Created once with the workspace, not on first tab click: the tab can be
@@ -368,6 +384,10 @@ impl Workspace {
             delete_mode: DeleteMode::ArchiveData,
             delete_size: 0,
             admin: admin_state::AdminState::default(),
+            config: config_state::ConfigState::default(),
+            config_restore_confirm: None,
+            config_fields: HashMap::new(),
+            config_restart_after_stop: None,
             db_name_input: parts.db_name_input,
             user_name_input: parts.user_name_input,
             user_db_choice: None,
@@ -485,6 +505,8 @@ impl Workspace {
                 self.state
                     .apply_removed(&id, &mut self.tabs, &mut self.logs);
                 self.admin.forget(&id);
+                self.config.forget(&id);
+                self.forget_config_fields(&id);
                 self.forget_instance(&id);
                 self.tray_needs_refresh = true;
             }
@@ -499,6 +521,19 @@ impl Workspace {
                         admin.data = admin_state::Loadable::Idle;
                         *self.admin.entry(&id) = admin;
                     }
+                }
+            }
+            UiEvent::ConfigChanged(id) => {
+                // Same rule as the Databases rows: an event for a background
+                // instance sends its view back to `Idle`, so opening the tab
+                // re-reads instead of showing a stale file. The visible tab is
+                // re-read (and its edits re-based) in `apply_event_with_cx`.
+                if self
+                    .config
+                    .get(&id)
+                    .is_some_and(|config| config.view().is_some())
+                {
+                    self.config.entry(&id).data = admin_state::Loadable::Idle;
                 }
             }
             UiEvent::StopForced(_id) => {
@@ -524,6 +559,10 @@ impl Workspace {
         };
         let admin_changed = match &event {
             UiEvent::AdminChanged(id) => Some(id.clone()),
+            _ => None,
+        };
+        let config_changed = match &event {
+            UiEvent::ConfigChanged(id) => Some(id.clone()),
             _ => None,
         };
         // F1: a start or stop changes whether the Databases tab can be read at
@@ -567,6 +606,28 @@ impl Workspace {
             if self.database_tab_visible(&id) {
                 self.reload_admin_bg(&id, cx);
             }
+            // A Config apply's "Restart sekarang" waits for the stop to settle:
+            // starting a `Stopping` instance would be refused, so the start runs
+            // here, on the transition to `Stopped` (`F-CFG-01` AC2).
+            if self
+                .config_restart_after_stop
+                .as_ref()
+                .is_some_and(|target| target == &id)
+                && self
+                    .instance(&id)
+                    .is_some_and(|v| v.status == dblocal_core::model::InstanceStatus::Stopped)
+            {
+                self.config_restart_after_stop = None;
+                self.start_instance(id.clone(), cx);
+            }
+        }
+        if let Some(id) = config_changed {
+            // The file changed (another window, the CLI, a restore). Re-read only
+            // the visible instance; a background one went back to `Idle` in
+            // `apply_event` and is read on entry.
+            if self.config_tab_visible(&id) {
+                self.reload_config_bg(&id, cx);
+            }
         }
         if let Some(id) = admin_changed {
             // Re-read only the instance whose Databases tab is on screen; an
@@ -597,6 +658,13 @@ impl Workspace {
         self.tabs
             .selected_tab()
             .is_some_and(|tab| &tab.instance == id && tab.inner == InnerTab::Databases)
+    }
+
+    /// Whether this instance's Config tab is the one on screen.
+    pub(crate) fn config_tab_visible(&self, id: &InstanceId) -> bool {
+        self.tabs
+            .selected_tab()
+            .is_some_and(|tab| &tab.instance == id && tab.inner == InnerTab::Config)
     }
 
     fn close_tab_by_instance(&mut self, id: &InstanceId, cx: &mut Context<Self>) {
@@ -659,6 +727,10 @@ impl Workspace {
             self.restore_dialog_focus_after_close();
             return;
         }
+        if self.config_restore_confirm.take().is_some() {
+            self.restore_dialog_focus_after_close();
+            return;
+        }
         if self.settings.open {
             self.settings.close();
         }
@@ -698,6 +770,14 @@ impl Render for Workspace {
         // here; the frame is the first place it can be focused.
         if let Some(target) = self.pending_focus_restore.take() {
             target.focus(window, cx);
+        }
+        // The Config tab's text fields are GPUI entities created once; build any
+        // the visible tab needs before the frame reads them (`F-CFG-01`).
+        if let Some(tab) = self.tabs.selected_tab()
+            && tab.inner == InnerTab::Config
+        {
+            let id = tab.instance.clone();
+            self.ensure_config_fields(&id, window, cx);
         }
         let colours = cx.theme().clone();
         div()
@@ -761,6 +841,9 @@ impl Render for Workspace {
             })
             .when(self.secret_dialog.is_some(), |this| {
                 this.child(admin_dialogs::render_secret(self, cx))
+            })
+            .when(self.config_restore_confirm.is_some(), |this| {
+                this.child(config_dialogs::render_restore(self, cx))
             })
             .when(self.quit.is_confirming(), |this| {
                 this.child(self.render_quit_dialog(cx))

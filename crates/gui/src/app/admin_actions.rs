@@ -170,7 +170,7 @@ impl Workspace {
     /// The dialog's Copy and "Sudah saya simpan" buttons are its Tab stops, so
     /// focusing the dialog itself puts the keyboard inside it while leaving the
     /// covered field behind (F3).
-    fn focus_dialog_buttons(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn focus_dialog_buttons(&mut self, cx: &mut Context<Self>) {
         let entity_id = cx.entity().entity_id();
         cx.with_window(entity_id, |window, cx| {
             self.dialog_focus.opened(window.focused(cx));

@@ -637,7 +637,7 @@ fn renders_databases_placeholder_in_the_product_build() {
 }
 
 #[test]
-fn renders_config_placeholder_in_the_product_build() {
+fn renders_the_live_config_tab_in_the_product_build() {
     let frame = render(
         false,
         "config-product-light.png",
@@ -648,7 +648,7 @@ fn renders_config_placeholder_in_the_product_build() {
     eprintln!("CONFIG product={text}");
     assert!(
         text > 8_000,
-        "config placeholder should render the prototype structure ({text})"
+        "the live Config tab should render its rows and actions ({text})"
     );
 }
 

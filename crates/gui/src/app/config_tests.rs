@@ -1,0 +1,387 @@
+//! Config tab handler tests over the scriptable service (`F-CFG-01`, `F-CFG-02`).
+//!
+//! Each test drives the `Workspace` through the same handlers a click runs and
+//! asserts on the pure state the card renders, so a state the task names (all
+//! engines, an invalid value, a failed apply, a backup, no backup, a launcher
+//! failure, a `ConfigChanged` mid-edit) is proven end to end without a real
+//! engine. The pure state itself has its own unit tests in `config_state.rs`.
+
+#![allow(clippy::expect_used, clippy::unwrap_used)]
+
+use dblocal_core::config::{BackupInfo, ConfigView};
+use dblocal_core::model::{EngineKey, InstanceStatus};
+use dblocal_core::service::UserFacingError;
+use gpui_kit::TestAppContext;
+
+use super::databases_support::{fixture, settle};
+use super::scripted_service::ScriptedService;
+use crate::app::admin_state::Loadable;
+use crate::app::config_state::ConfigAction;
+use crate::app::{InnerTab, Workspace};
+use crate::service_bridge::UiEvent;
+
+/// Opens the running instance's Config tab and settles its first read.
+fn open_config(
+    view: &gpui_kit::Entity<Workspace>,
+    service: &ScriptedService,
+    cx: &mut gpui_kit::VisualTestContext,
+) -> dblocal_core::model::InstanceId {
+    let id = service.id_with(InstanceStatus::Running);
+    view.update(cx, |this, cx| this.open_tab(id.clone(), cx));
+    cx.run_until_parked();
+    view.update(cx, |this, cx| this.set_inner_tab(InnerTab::Config, cx));
+    settle(cx);
+    id
+}
+
+/// A view with a backup available, so the restore action is enabled.
+fn view_with_backup() -> ConfigView {
+    use dblocal_core::config::{ConfigSetting, ConfigView};
+    let mut view = ConfigView::new(
+        dblocal_core::model::InstanceId::new(),
+        EngineKey::Postgresql,
+        std::path::PathBuf::from("/mock/pg-run/postgresql.conf"),
+    );
+    view.settings.push(ConfigSetting {
+        key: "max_connections".to_owned(),
+        current: Some("100".to_owned()),
+        default: "100".to_owned(),
+        unit: String::new(),
+        restart_required: true,
+        description: "desc".to_owned(),
+        readonly: false,
+    });
+    view.backup_available = Some(BackupInfo {
+        taken_at: 1_700_000_000,
+        taken_at_secs: 1_700_000_000,
+        path: std::path::PathBuf::from("/mock/backups/postgresql.conf.1700000000.bak"),
+    });
+    view
+}
+
+#[gpui_kit::test]
+fn entering_the_tab_reads_the_config_view(cx: &mut TestAppContext) {
+    let (view, service, cx) = fixture(cx);
+    let id = open_config(&view, &service, cx);
+    let (editable, readonly, backup) = view.read_with(cx, |this, _| {
+        let config = this.config_state_for(&id).expect("config state");
+        (
+            config.editable().len(),
+            config.readonly().len(),
+            config.view().map(|v| v.backup_available.is_some()),
+        )
+    });
+    assert_eq!(editable, 2, "two editable rows from the service");
+    assert_eq!(readonly, 1, "the port row is read-only");
+    assert_eq!(backup, Some(false), "no backup in the seed");
+    assert_eq!(service.counts().config_view, 1);
+}
+
+#[gpui_kit::test]
+fn a_failed_read_is_a_typed_error_not_a_panic(cx: &mut TestAppContext) {
+    let (view, service, cx) = fixture(cx);
+    let failure = UserFacingError::new("DBL-8603", "Berkas konfigurasi tidak dapat dibaca.");
+    service.set(|script| script.config_view = Err(failure));
+    let id = open_config(&view, &service, cx);
+    let error = view.read_with(cx, |this, _| {
+        let config = this.config_state_for(&id).expect("config state");
+        config
+            .error
+            .as_ref()
+            .or_else(|| config.data.error())
+            .map(|e| e.code.clone())
+    });
+    assert_eq!(error.as_deref(), Some("DBL-8603"));
+}
+
+#[gpui_kit::test]
+fn an_invalid_value_is_refused_locally_with_the_service_message(cx: &mut TestAppContext) {
+    let (view, service, cx) = fixture(cx);
+    let id = open_config(&view, &service, cx);
+    let before = service.counts().config_apply;
+    // The core validator refuses this before any round trip.
+    view.update(cx, |this, cx| {
+        this.config.entry(&id).set_field("max_connections", "0");
+        this.config.entry(&id).validate(EngineKey::Postgresql);
+        this.apply_config(&id, cx);
+    });
+    settle(cx);
+    assert_eq!(
+        service.counts().config_apply,
+        before,
+        "an invalid value must not reach the service"
+    );
+    let code = view.read_with(cx, |this, _| {
+        this.config_state_for(&id)
+            .and_then(|config| config.errors.get("max_connections").map(|e| e.code.clone()))
+    });
+    assert_eq!(code.as_deref(), Some("DBL-8601"));
+}
+
+#[gpui_kit::test]
+fn apply_sends_only_the_changed_fields_and_shows_the_restart_offer(cx: &mut TestAppContext) {
+    let (view, service, cx) = fixture(cx);
+    let id = open_config(&view, &service, cx);
+    view.update(cx, |this, cx| {
+        this.config.entry(&id).set_field("max_connections", "300");
+        this.apply_config(&id, cx);
+    });
+    settle(cx);
+
+    let applies = service.mutations().config_applies;
+    assert_eq!(applies.len(), 1, "one apply crosses the seam");
+    assert_eq!(
+        applies[0].1,
+        vec![("max_connections".to_owned(), "300".to_owned())],
+        "only the changed key is sent"
+    );
+    let (applied, edits_empty) = view.read_with(cx, |this, _| {
+        let config = this.config_state_for(&id).expect("config state");
+        (config.applied.is_some(), config.edits.is_empty())
+    });
+    assert!(
+        applied,
+        "the restart banner is offered after a successful apply"
+    );
+    assert!(
+        edits_empty,
+        "the edits are cleared after a successful apply"
+    );
+}
+
+#[gpui_kit::test]
+fn a_busy_apply_error_is_reported_typed(cx: &mut TestAppContext) {
+    let (view, service, cx) = fixture(cx);
+    service.set(|script| {
+        script.config_apply = Err(UserFacingError::new(
+            "DBL-8604",
+            "Instance sedang dipakai operasi lain. Coba lagi setelah selesai.",
+        ));
+    });
+    let id = open_config(&view, &service, cx);
+    view.update(cx, |this, cx| {
+        this.config.entry(&id).set_field("max_connections", "300");
+        this.apply_config(&id, cx);
+    });
+    settle(cx);
+    let (code, applied) = view.read_with(cx, |this, _| {
+        let config = this.config_state_for(&id).expect("config state");
+        (
+            config.error.as_ref().map(|e| e.code.clone()),
+            config.applied.is_some(),
+        )
+    });
+    assert_eq!(
+        code.as_deref(),
+        Some("DBL-8604"),
+        "a busy apply says try again"
+    );
+    assert!(!applied, "a failed apply must not claim success");
+}
+
+#[gpui_kit::test]
+fn a_restore_confirmation_needs_a_backup_and_calls_restore(cx: &mut TestAppContext) {
+    let (view, service, cx) = fixture(cx);
+    service.set(|script| script.config_view = Ok(view_with_backup()));
+    let id = open_config(&view, &service, cx);
+    let can_restore = view.read_with(cx, |this, _| {
+        this.config_state_for(&id)
+            .is_some_and(|config| config.can_restore())
+    });
+    assert!(can_restore, "a backup enables the restore action");
+
+    view.update(cx, |this, cx| {
+        this.open_config_restore(&id, cx);
+    });
+    assert!(view.read_with(cx, |this, _| this.config_restore_confirm().is_some()));
+    view.update(cx, |this, cx| this.confirm_config_restore(cx));
+    settle(cx);
+    assert_eq!(service.mutations().config_restores, vec![id.clone()]);
+}
+
+#[gpui_kit::test]
+fn without_a_backup_the_restore_action_is_disabled(cx: &mut TestAppContext) {
+    let (view, service, cx) = fixture(cx);
+    let id = open_config(&view, &service, cx);
+    let can_restore = view.read_with(cx, |this, _| {
+        this.config_state_for(&id)
+            .is_some_and(|config| config.can_restore())
+    });
+    assert!(!can_restore, "no backup means no restore");
+}
+
+#[gpui_kit::test]
+fn restore_and_restart_is_two_service_calls(cx: &mut TestAppContext) {
+    let (view, service, cx) = fixture(cx);
+    service.set(|script| script.config_view = Ok(view_with_backup()));
+    let id = open_config(&view, &service, cx);
+    let starts_before = service.counts().start_instance;
+    view.update(cx, |this, cx| this.restore_and_restart(&id, cx));
+    settle(cx);
+    assert_eq!(service.mutations().config_restores, vec![id.clone()]);
+    assert_eq!(
+        service.counts().start_instance,
+        starts_before + 1,
+        "restore then start are two separate service calls"
+    );
+}
+
+#[gpui_kit::test]
+fn opening_the_raw_file_calls_the_service(cx: &mut TestAppContext) {
+    let (view, service, cx) = fixture(cx);
+    let id = open_config(&view, &service, cx);
+    view.update(cx, |this, cx| this.open_config_raw(&id, cx));
+    settle(cx);
+    assert_eq!(service.mutations().config_opens, vec![id]);
+}
+
+#[gpui_kit::test]
+fn a_launcher_failure_is_typed_and_keeps_the_path(cx: &mut TestAppContext) {
+    let (view, service, cx) = fixture(cx);
+    service.set(|script| {
+        script.config_open_raw = Err(UserFacingError::new(
+            "DBL-8608",
+            "Editor bawaan sistem tidak dapat dibuka. Buka berkasnya secara manual.",
+        ));
+    });
+    let id = open_config(&view, &service, cx);
+    view.update(cx, |this, cx| this.open_config_raw(&id, cx));
+    settle(cx);
+    let (code, path) = view.read_with(cx, |this, _| {
+        let config = this.config_state_for(&id).expect("config state");
+        (
+            config.error.as_ref().map(|e| e.code.clone()),
+            config.view().map(|v| v.raw_path.display().to_string()),
+        )
+    });
+    assert_eq!(code.as_deref(), Some("DBL-8608"));
+    assert!(
+        path.as_deref()
+            .is_some_and(|p| p.contains("postgresql.conf")),
+        "the path is still shown so the user can open it by hand: {path:?}"
+    );
+}
+
+#[gpui_kit::test]
+fn a_config_change_re_reads_the_visible_tab_and_rebases_edits(cx: &mut TestAppContext) {
+    let (view, service, cx) = fixture(cx);
+    let id = open_config(&view, &service, cx);
+    // An unsaved edit on a key that the new file value will not match.
+    view.update(cx, |this, _| {
+        this.config.entry(&id).set_field("max_connections", "300");
+    });
+    let before = service.counts().config_view;
+    // The file changed elsewhere; the re-read now reports max_connections 100.
+    view.update(cx, |this, cx| {
+        this.apply_event_with_cx(UiEvent::ConfigChanged(id.clone()), cx);
+    });
+    settle(cx);
+    assert!(
+        service.counts().config_view > before,
+        "the visible Config tab must re-read on ConfigChanged"
+    );
+    let (survives, outside) = view.read_with(cx, |this, _| {
+        let config = this.config_state_for(&id).expect("config state");
+        (
+            config.edits.get("max_connections").cloned(),
+            config.touched_outside,
+        )
+    });
+    assert_eq!(
+        survives.as_deref(),
+        Some("300"),
+        "an edit to another key survives the re-read"
+    );
+    assert!(outside, "the banner says the file changed outside the app");
+}
+
+#[gpui_kit::test]
+fn a_config_change_for_a_background_instance_sends_it_to_idle(cx: &mut TestAppContext) {
+    let (view, service, cx) = fixture(cx);
+    let visible = open_config(&view, &service, cx);
+    // The other instance's view is ready but it is not on screen.
+    let other = service.id_with(InstanceStatus::Stopped);
+    view.update(cx, |this, _| {
+        this.config.entry(&other).data = Loadable::Ready(view_with_backup());
+    });
+    view.update(cx, |this, cx| {
+        this.apply_event_with_cx(UiEvent::ConfigChanged(other.clone()), cx);
+    });
+    let idle = view.read_with(cx, |this, _| {
+        this.config_state_for(&other)
+            .is_some_and(|config| matches!(config.data, Loadable::Idle))
+    });
+    assert!(
+        idle,
+        "a background instance's Config view is invalidated on ConfigChanged"
+    );
+    let _ = visible;
+}
+
+#[gpui_kit::test]
+fn switching_instances_never_shows_another_instances_values(cx: &mut TestAppContext) {
+    let (view, service, cx) = fixture(cx);
+    let first = open_config(&view, &service, cx);
+    view.update(cx, |this, _| {
+        this.config
+            .entry(&first)
+            .set_field("max_connections", "999");
+    });
+    // Open the other instance's Config tab: its own state has no edit.
+    let other = service.id_with(InstanceStatus::Stopped);
+    view.update(cx, |this, cx| {
+        this.open_tab(other.clone(), cx);
+        this.set_inner_tab(InnerTab::Config, cx);
+    });
+    settle(cx);
+    let other_edits = view.read_with(cx, |this, _| {
+        this.config_state_for(&other)
+            .map(|config| config.edits.len())
+            .unwrap_or(0)
+    });
+    assert_eq!(
+        other_edits, 0,
+        "the second instance must not inherit the first's edit"
+    );
+}
+
+#[gpui_kit::test]
+fn two_instances_with_the_same_keys_get_distinct_row_ids(cx: &mut TestAppContext) {
+    // The a11y duplicate-node trap: two instances share `max_connections`.
+    let (view, service, cx) = fixture(cx);
+    let first = open_config(&view, &service, cx);
+    let other = service.id_with(InstanceStatus::Stopped);
+    let a = crate::app::config_state::config_row_id("config-key", &first, "max_connections");
+    let b = crate::app::config_state::config_row_id("config-key", &other, "max_connections");
+    assert_ne!(a, b);
+    let _ = view;
+}
+
+#[gpui_kit::test]
+fn escape_closes_the_restore_dialog(cx: &mut TestAppContext) {
+    let (view, service, cx) = fixture(cx);
+    service.set(|script| script.config_view = Ok(view_with_backup()));
+    let id = open_config(&view, &service, cx);
+    view.update(cx, |this, cx| this.open_config_restore(&id, cx));
+    assert!(view.read_with(cx, |this, _| this.config_restore_confirm().is_some()));
+    view.update(cx, |this, _| this.close_modals());
+    assert!(
+        view.read_with(cx, |this, _| this.config_restore_confirm().is_none()),
+        "Escape must close the restore dialog"
+    );
+}
+
+#[gpui_kit::test]
+fn every_call_is_busy_while_in_flight(cx: &mut TestAppContext) {
+    let (view, service, cx) = fixture(cx);
+    let id = open_config(&view, &service, cx);
+    view.update(cx, |this, _| {
+        this.config.entry(&id).begin(ConfigAction::Apply);
+    });
+    let (busy, can_apply) = view.read_with(cx, |this, _| {
+        let config = this.config_state_for(&id).expect("config state");
+        (config.is_busy(ConfigAction::Apply), config.can_apply())
+    });
+    assert!(busy);
+    assert!(!can_apply, "Terapkan is disabled while a call is in flight");
+}

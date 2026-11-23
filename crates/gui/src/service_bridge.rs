@@ -54,6 +54,9 @@ pub enum UiEvent {
     InstanceRemoved(InstanceId),
     /// The databases or users of one instance changed; re-read them (`F-DBU`).
     AdminChanged(InstanceId),
+    /// The config file of one instance changed; the Config tab re-reads it
+    /// (`F-CFG-01`). Carries no content.
+    ConfigChanged(InstanceId),
     /// An update check finished; the Settings dialog renders the result.
     UpdateChecked {
         /// Newer version, or `None` when the running version is current.
@@ -150,6 +153,7 @@ pub fn translate(event: ServiceEvent) -> Option<UiEvent> {
             lines,
         }),
         ServiceEvent::AdminChanged { id } => Some(UiEvent::AdminChanged(id)),
+        ServiceEvent::ConfigChanged { id } => Some(UiEvent::ConfigChanged(id)),
         ServiceEvent::UpdateChecked {
             version,
             can_self_update,
