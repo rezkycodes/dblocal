@@ -634,6 +634,7 @@ fn a_no_password_instance_has_no_launch_credential() {
     // path reports a typed NotFound, never a panic.
     let name = format!("nocred2{}", test_port() % 1000);
     let instance = created(&h, &name);
+    mark_running(&h, instance.id());
     h.store()
         .connection()
         .execute(

@@ -414,7 +414,7 @@ non-unix target. Before W4-A3 that made every `list_databases`, `create_database
   plugin for that account; `mysql_async` also accepts a `mysql_native_password`
   switch. Either way the cleartext never crosses the wire.
 
-#### Residual risk of loopback TCP (Windows only)
+#### Residual risk of loopback TCP (Windows, and PostgreSQL on every OS)
 
 Any loopback TCP admin path has one hazard the unix socket does not: between the
 port check and the engine's bind, a **rogue process** could be listening on
@@ -424,9 +424,22 @@ and limits:
 - The adapters' recovery path opens no listening window of their own; the engine
   binds loopback and the port is checked free before a start, but the check and
   the bind are not atomic.
-- Admin only behaves this way after the caller has loaded a `Running` instance
-  row; a stopped or failed instance's port is not dialled by an admin call in
-  normal use, and a failed start ends `failed` with the port released.
+- **The running gate (W4-A3 fix 1).** `instance/admin_ops.rs::executor_for`
+  refuses any instance whose status is not `Running` with `AdminError::Connect`
+  (`DBL-8100`, "Pastikan server sedang berjalan") — the same answer a stopped
+  server already produced by failing to connect. The gate runs **before** the
+  credential read and **before** the factory builds an executor, so an admin call
+  to a Stopped, Starting, Stopping or Failed row never reads the superuser
+  password and never dials. (Before the fix the docs claimed this but the code
+  never checked: `dblocal db list <stopped>` on an immediately reused port — the
+  user's own MySQL on 3306 is the obvious case — would have handed the password
+  to whatever now listens there. This affected PostgreSQL on every OS and MySQL
+  and MariaDB on Windows; on unix the MySQL socket is DBLocal's own path.)
+- **The remaining window.** The gate narrows the race, it does not close it: if
+  the status says `Running` and the engine dies and some other process binds the
+  port before the admin dial, the password still goes to that process. Closing
+  that requires a post-connect server identity check, which does not exist today
+  (see the next point).
 - The existing identity gate (`process::identity::verify_pid_identity`, used by
   stop/delete) validates a PID's executable and start time **before signalling**
   a process; there is **no** equivalent pre-dial identity check for the admin
@@ -534,7 +547,35 @@ in code:
   gated by `admin_socket(cfg!(unix), …)`: off unix it is never called, because
   the loopback arm dials no socket and a Windows path must not be failed by the
   AF_UNIX length check the resolver performs. A unix resolution failure is still
-  `DBL-8100`.
+  `DBL-8100`. The builder is split into the pure `mysql_target(paths, instance,
+  password) -> AdminResult<MysqlTarget>`, so the port and socket that reach the
+  target are unit-tested without an engine (a `0` port mutation is red).
+
+### W4-A3 fix 1 — the running gate, the port test, the wrong-engine code
+
+The reviewer found three things this section now records honestly:
+
+- **F1 (test gap, fixed).** The instance port reaching the target was untested:
+  replacing `instance.port().get()` with `0` in the factory left every lib test
+  green, because on unix the socket is what is dialled. The pure
+  `mysql_target` builder is tested through `the_mysql_target_carries_the_instance_port_not_zero`
+  (MySQL and MariaDB on different ports) and
+  `the_mysql_target_carries_the_configured_socket_on_unix`; the `0` mutation is
+  now red.
+- **F2 (security, fixed).** The docs claimed admin dials only a `Running`
+  instance; the code never checked. `executor_for` now refuses any other status
+  with `DBL-8100` before the credential read and before the factory, so a
+  stopped instance's port — possibly now the user's own MySQL — never receives
+  the password. Every admin call is tested for Stopped/Starting/Stopping/Failed
+  with a factory-call counter of 0 and no credential read; removing the gate is
+  red. This protects PostgreSQL on every OS and MySQL/MariaDB on Windows. The
+  remaining window (status says Running, the port is taken afterwards) and the
+  absence of a post-connect identity check are stated above.
+- **F3 (code, fixed).** A wrong engine in the target builder returned a
+  `DblError::InvalidInput` that the factory turned into `DBL-8100`; it is
+  `AdminError::Unsupported` (`DBL-8111`) again, pinned by
+  `a_non_mysql_engine_is_unsupported_not_a_connect_failure` (mutating it back to
+  `Connect` is red).
 
 Proven on Linux (the unix host is where every commit and gate runs):
 

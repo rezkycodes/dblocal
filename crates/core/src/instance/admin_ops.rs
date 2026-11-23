@@ -1,19 +1,24 @@
 //! Database and user administration through `DblService` (`F-DBU-01..03`).
 //!
-//! Every call runs against a **running** instance over loopback. Credentials are
-//! read from the secret store and handed to [`PgAdmin`] as an `AdminTarget`; they
-//! are never placed in an event, a log line, an error or a returned view — the
-//! only value that leaves this module is the one-time password a create-user or
-//! password-reset call is defined to return (`F-DBU-02` AC2, `F-DBU-03` AC1).
+//! Every call runs against a **running** instance over loopback, and the running
+//! gate is enforced here: a row that is not `Running` is refused with
+//! `AdminError::Connect` before any credential is read and before any dial
+//! (W4-A3 fix 1 — a stopped instance's port may belong to another process).
+//! Credentials are read from the secret store and handed to [`PgAdmin`] as an
+//! `AdminTarget`; they are never placed in an event, a log line, an error or a
+//! returned view — the only value that leaves this module is the one-time
+//! password a create-user or password-reset call is defined to return
+//! (`F-DBU-02` AC2, `F-DBU-03` AC1).
 //!
-//! MySQL/MariaDB and Valkey have no executor yet (the MySQL one is `W4-A2`), so
-//! they return the module's typed, stable-coded "not supported for this engine
-//! yet" error instead of an empty list or a panic.
+//! Valkey has no named databases or login roles, so it returns the module's
+//! typed, stable-coded "not supported" error instead of an empty list or a panic.
+//! PostgreSQL, MySQL and MariaDB all have an executor.
 //!
 //! The engine calls sit behind [`AdminExecutor`] so every branch above them —
-//! the engine gate, the credential lookup, the rollback-on-grant-failure, the
-//! pointer update after a reset — is unit-testable without a server; the real
-//! [`PgAdmin`] is what the ignored admin service e2e exercises.
+//! the running gate, the engine gate, the credential lookup, the
+//! rollback-on-grant-failure, the pointer update after a reset — is
+//! unit-testable without a server; the real [`PgAdmin`] is what the ignored
+//! admin service e2e exercises.
 
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -24,7 +29,7 @@ use crate::admin::{
     PgAdmin, PrivilegeLevel, UserInfo,
 };
 use crate::consts;
-use crate::model::{AuthMode, EngineKey, Instance, InstanceId};
+use crate::model::{AuthMode, EngineKey, Instance, InstanceId, InstanceStatus};
 use crate::secret::SecretString;
 use crate::secrets::{BackendKind, credential_ref_for};
 use crate::service::{ServiceResult, UserFacingError};
@@ -82,28 +87,52 @@ fn mysql_admin(
     password: SecretString,
     engine: &'static str,
 ) -> ServiceResult<Box<dyn AdminExecutor>> {
+    let target = mysql_target(paths, instance, password).map_err(|err| {
+        if err != AdminError::Unsupported {
+            tracing::warn!(engine, instance = %instance.name(), error = %err, "cannot build the admin target");
+        }
+        UserFacingError::from(err)
+    })?;
+    Ok(Box::new(crate::admin::MysqlAdmin::new(target)))
+}
+
+/// The pure connection description for a MySQL/MariaDB admin session.
+///
+/// Split out of [`mysql_admin`] so the port and socket that reach
+/// [`MysqlTarget`] are provable without an engine: on unix the target carries the
+/// configured socket and the instance's own port; off unix it carries the port
+/// the loopback arm dials (see [`crate::admin::mysql::Transport`]).
+///
+/// A non-MySQL engine is [`AdminError::Unsupported`] (`DBL-8111`), never a
+/// connect failure: the `executor_for` engine gate normally stops such an engine
+/// first, but this arm must keep the honest answer if it is ever reached.
+pub(crate) fn mysql_target(
+    paths: &crate::paths::DblPaths,
+    instance: &Instance,
+    password: SecretString,
+) -> AdminResult<crate::admin::MysqlTarget> {
     let name = instance.name();
     let data_dir = paths.data_dir(name);
     let run_dir = paths.run_dir(name);
-    let socket = admin_socket(cfg!(unix), || match instance.engine() {
-        EngineKey::Mysql => crate::engine::mysql_configured_socket_path(
-            &run_dir,
-            instance.port().get(),
-            &paths.instance_dir(name),
-        ),
-        EngineKey::Mariadb => {
-            crate::engine::mariadb_configured_socket_path(&data_dir, instance.port().get())
-        }
-        _ => Err(crate::DblError::InvalidInput {
-            field: "engine",
-            reason: "engine has no admin socket".to_owned(),
+    let socket = match instance.engine() {
+        EngineKey::Mysql => admin_socket(cfg!(unix), || {
+            crate::engine::mysql_configured_socket_path(
+                &run_dir,
+                instance.port().get(),
+                &paths.instance_dir(name),
+            )
         }),
-    })
+        EngineKey::Mariadb => admin_socket(cfg!(unix), || {
+            crate::engine::mariadb_configured_socket_path(&data_dir, instance.port().get())
+        }),
+        // F3: a wrong engine is "not supported", not "cannot connect".
+        _ => return Err(AdminError::Unsupported),
+    }
     .map_err(|err| {
-        tracing::warn!(engine, instance = %name, error = %err, "cannot resolve the admin socket");
-        UserFacingError::from(AdminError::Connect)
+        tracing::warn!(instance = %name, error = %err, "cannot resolve the admin socket");
+        AdminError::Connect
     })?;
-    let target = crate::admin::MysqlTarget::new(
+    Ok(crate::admin::MysqlTarget::new(
         socket.unwrap_or_default(),
         instance.port().get(),
         instance.superuser(),
@@ -112,8 +141,7 @@ fn mysql_admin(
     .with_timeouts(
         Duration::from_secs(consts::ADMIN_CONNECT_TIMEOUT_SECS),
         Duration::from_secs(consts::ADMIN_STATEMENT_TIMEOUT_SECS),
-    );
-    Ok(Box::new(crate::admin::MysqlAdmin::new(target)))
+    ))
 }
 
 /// The socket path an admin target carries, or `None` on a platform without unix
@@ -130,8 +158,8 @@ pub(crate) fn admin_socket(
     if unix { resolve().map(Some) } else { Ok(None) }
 }
 
-/// Runs `f` against the executor for `instance`, after the engine gate and the
-/// credential read.
+/// Runs `f` against the executor for `instance`, after the running gate, the
+/// engine gate and the credential read.
 fn with_admin<T>(
     inner: &Inner,
     id: &InstanceId,
@@ -142,8 +170,19 @@ fn with_admin<T>(
     Ok(f(executor.as_ref())?)
 }
 
-/// Builds the executor for `instance`, enforcing the engine gate first.
+/// Builds the executor for `instance`, enforcing the running, engine and
+/// password gates first, in that order.
+///
+/// The running gate comes first and before any credential read: an admin dial
+/// carries the superuser password, and a stopped instance's port may now belong
+/// to something else (a stopped MySQL's freed 3306, say). Refusing here means an
+/// admin call to a non-`Running` row never reads the password and never dials.
 fn executor_for(inner: &Inner, instance: &Instance) -> ServiceResult<Box<dyn AdminExecutor>> {
+    if instance.status() != InstanceStatus::Running {
+        // The same DBL-8100 "Pastikan server sedang berjalan" a stopped server
+        // already produced by failing to connect, so no caller changes.
+        return Err(AdminError::Connect.into());
+    }
     if instance.engine() == EngineKey::Valkey {
         // Valkey has no named databases or login roles: a typed "not supported",
         // not an empty list. PostgreSQL, MySQL and MariaDB are all supported.
