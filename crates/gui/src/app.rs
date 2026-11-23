@@ -59,6 +59,9 @@ mod open_in_actions;
 mod open_in_tests;
 mod palette;
 mod preview;
+#[cfg(test)]
+#[path = "app/preview_tests.rs"]
+mod preview_tests;
 mod quit_flow;
 #[cfg(test)]
 #[path = "app/quit_flow_tests.rs"]
