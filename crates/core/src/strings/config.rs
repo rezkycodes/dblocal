@@ -26,6 +26,10 @@ pub const UI_CONFIG_UNSET_NOTE: &str = "bawaan";
 pub const UI_CONFIG_RESTART_MARKER: &str = "perlu restart";
 /// Unit hint shown after the field when the view carries one.
 pub const UI_CONFIG_UNIT_PREFIX: &str = "satuan: ";
+/// What a byte-size field accepts: the value is written in MB/GB, not bytes.
+pub const UI_CONFIG_UNIT_BYTES: &str = "byte (boleh KB, MB, GB)";
+/// What a duration field accepts: seconds.
+pub const UI_CONFIG_UNIT_SECONDS: &str = "detik";
 /// Why `port` is read-only here (it goes through the Ubah port action).
 pub const UI_CONFIG_READONLY_PORT: &str = "Ubah port lewat tindakan Ubah port";
 /// Why the PostgreSQL authentication method is read-only here.
@@ -83,12 +87,21 @@ pub fn config_default(default: &str) -> String {
 }
 
 /// Formats the unit note when the view carries a unit.
+///
+/// The core `unit` is the base unit the service stores (`bytes`, `seconds`), but
+/// the field accepts `16MB` or `60`, so the note says what may be typed instead
+/// of echoing a base unit the value visibly is not (`F9`). An unknown unit is
+/// shown verbatim rather than dropped.
 pub fn config_unit(unit: &str) -> Option<String> {
     if unit.is_empty() {
-        None
-    } else {
-        Some(format!("{UI_CONFIG_UNIT_PREFIX}{unit}"))
+        return None;
     }
+    let text = match unit {
+        "bytes" => UI_CONFIG_UNIT_BYTES,
+        "seconds" => UI_CONFIG_UNIT_SECONDS,
+        other => other,
+    };
+    Some(format!("{UI_CONFIG_UNIT_PREFIX}{text}"))
 }
 
 /// Formats the restore prompt with the backup time.
@@ -118,4 +131,45 @@ pub fn config_backup_age(taken_at_secs: u64, now_secs: u64) -> String {
     }
     let days = hours / 24;
     UI_CONFIG_AGE_DAYS.replace("{n}", &days.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::expect_used, clippy::unwrap_used)]
+
+    use super::*;
+
+    #[test]
+    fn a_byte_size_unit_says_what_may_be_typed_not_the_base_unit() {
+        // `F9`: the field takes `16MB`, so "satuan: bytes" next to `128MB` is a
+        // contradiction; the note names the suffixes the field accepts.
+        let note = config_unit("bytes").expect("a byte unit has a note");
+        assert_eq!(
+            note,
+            format!("{UI_CONFIG_UNIT_PREFIX}{UI_CONFIG_UNIT_BYTES}")
+        );
+        assert!(
+            note.contains("KB") && note.contains("MB") && note.contains("GB"),
+            "the byte note names the accepted suffixes: {note}"
+        );
+    }
+
+    #[test]
+    fn a_duration_unit_says_seconds_in_indonesian() {
+        let note = config_unit("seconds").expect("a duration unit has a note");
+        assert_eq!(
+            note,
+            format!("{UI_CONFIG_UNIT_PREFIX}{UI_CONFIG_UNIT_SECONDS}")
+        );
+    }
+
+    #[test]
+    fn an_empty_unit_has_no_note_and_an_unknown_one_is_verbatim() {
+        assert_eq!(config_unit(""), None, "a unitless value shows no note");
+        assert_eq!(
+            config_unit("rows"),
+            Some(format!("{UI_CONFIG_UNIT_PREFIX}rows")),
+            "an unknown unit is shown verbatim, never dropped"
+        );
+    }
 }

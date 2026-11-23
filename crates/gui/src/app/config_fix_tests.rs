@@ -541,3 +541,120 @@ fn a_second_restore_or_open_while_busy_does_nothing(cx: &mut TestAppContext) {
         "M17: an open during an open is a no-op"
     );
 }
+
+/// `F8`: an invalid edit keeps its error across a re-read, so "Terapkan" never
+/// turns blue while the field is invalid. Repro: type `abc`, leave the tab and
+/// come back (the tab re-reads every entry now).
+#[gpui_kit::test]
+fn an_invalid_edit_keeps_its_error_across_a_re_read(cx: &mut TestAppContext) {
+    let (view, service, cx) = fixture(cx);
+    let id = open_config(&view, &service, cx);
+    view.update(cx, |this, cx| {
+        this.record_config_field(&id, "max_connections", "abc", cx);
+    });
+    let before = view.read_with(cx, |this, _| {
+        let config = this.config_state_for(&id).expect("config state");
+        (
+            config.errors.contains_key("max_connections"),
+            config.can_apply(),
+        )
+    });
+    assert!(before.0, "F8: the invalid field shows DBL-8601");
+    assert!(!before.1, "F8: Terapkan is disabled before the re-read");
+
+    // Leave and come back: every entry re-reads, which re-bases the edits.
+    view.update(cx, |this, cx| this.set_inner_tab(InnerTab::Overview, cx));
+    view.update(cx, |this, cx| this.set_inner_tab(InnerTab::Config, cx));
+    settle(cx);
+    let after = view.read_with(cx, |this, _| {
+        let config = this.config_state_for(&id).expect("config state");
+        (
+            config.edits.get("max_connections").cloned(),
+            config.errors.get("max_connections").map(|e| e.code.clone()),
+            config.can_apply(),
+        )
+    });
+    assert_eq!(
+        after.0.as_deref(),
+        Some("abc"),
+        "F8: the typed text survives the re-read"
+    );
+    assert_eq!(
+        after.1.as_deref(),
+        Some("DBL-8601"),
+        "F8: the surviving invalid edit keeps its error"
+    );
+    assert!(
+        !after.2,
+        "F8: Terapkan never turns blue while a field is invalid"
+    );
+}
+
+/// `N13`: "Buka file konfigurasi" re-reads after the launcher returns, so a
+/// change the editor made (no window activation) is in the form.
+#[gpui_kit::test]
+fn opening_the_raw_file_re_reads_the_new_values(cx: &mut TestAppContext) {
+    let (view, service, cx) = fixture(cx);
+    let id = open_config(&view, &service, cx);
+    // The editor saved a new value while it was open.
+    service.set(|script| {
+        let mut changed = view_with_backup();
+        changed.settings[0].current = Some("424".to_owned());
+        script.config_view = Ok(changed);
+    });
+    let before = service.counts().config_view;
+    view.update(cx, |this, cx| this.open_config_raw(&id, cx));
+    settle(cx);
+    assert!(
+        service.counts().config_view > before,
+        "N13: the open re-reads after the launcher returns"
+    );
+    let shown = view.read_with(cx, |this, _| {
+        this.config_state_for(&id)
+            .and_then(|c| c.view())
+            .and_then(|v| v.settings.first())
+            .and_then(|s| s.current.clone())
+    });
+    assert_eq!(
+        shown.as_deref(),
+        Some("424"),
+        "N13: the form shows what the service now reads"
+    );
+}
+
+/// `N14`: a stop that cannot even be requested leaves no pending restart, shows
+/// the typed error, and a later manual stop does not start the instance.
+#[gpui_kit::test]
+fn a_refused_stop_leaves_no_pending_restart(cx: &mut TestAppContext) {
+    let (view, service, cx) = fixture(cx);
+    let id = service.id_with(InstanceStatus::Running);
+    service.set(|script| {
+        script.stop_instance = Err(UserFacingError::new("DBL-4002", "stop ditolak"));
+    });
+    let starts_before = service.counts().start_instance;
+    view.update(cx, |this, cx| this.restart_after_apply(&id, cx));
+    settle(cx);
+    let (toast, pending) = view.read_with(cx, |this, _| {
+        (
+            this.toast_text().map(|t| t.to_string()),
+            this.config_restart_pending_for_test().is_some(),
+        )
+    });
+    assert!(
+        toast.as_deref().is_some_and(|t| t.contains("DBL-")),
+        "N14: the refused stop is reported typed: {toast:?}"
+    );
+    assert!(!pending, "N14: no restart is left pending");
+    // A later manual stop must not start the instance.
+    view.update(cx, |this, cx| {
+        let mut stopped = this.instance(&id).cloned().expect("instance view");
+        stopped.status = InstanceStatus::Stopped;
+        this.apply_event_with_cx(UiEvent::InstanceChanged(stopped), cx);
+    });
+    settle(cx);
+    assert_eq!(
+        service.counts().start_instance,
+        starts_before,
+        "N14: a manual stop after a refused Restart sekarang must not auto-start"
+    );
+}

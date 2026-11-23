@@ -102,6 +102,9 @@ pub(crate) struct Script {
     /// `start_instance` answer: when `Err`, the code is returned as an engine
     /// failure (the service's real `start_instance` error shape).
     pub start_instance: ServiceResult<()>,
+    /// `stop_instance` answer: when `Err`, the request itself is refused (the
+    /// instance is still running and nothing was queued).
+    pub stop_instance: ServiceResult<()>,
 }
 
 /// The arguments one mutation was called with.
@@ -157,6 +160,7 @@ impl Default for Script {
                 &std::path::PathBuf::from("/mock/pg-run/postgresql.conf"),
             )),
             start_instance: Ok(()),
+            stop_instance: Ok(()),
         }
     }
 }
@@ -369,7 +373,13 @@ impl DblService for ScriptedService {
     }
     fn stop_instance(&self, _id: &InstanceId) -> Result<OperationId> {
         self.bump(|counts| counts.stop_instance += 1);
-        Ok(OperationId::new("op-stop"))
+        let script = self.script.lock().expect("script lock");
+        match &script.stop_instance {
+            Ok(()) => Ok(OperationId::new("op-stop")),
+            Err(err) => Err(dblocal_core::DblError::Engine {
+                reason: format!("{} — {}", err.code, err.message),
+            }),
+        }
     }
     fn delete_instance(&self, _id: &InstanceId, _mode: DeleteMode) -> Result<OperationId> {
         Ok(OperationId::new("op-del"))

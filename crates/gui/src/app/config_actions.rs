@@ -102,7 +102,11 @@ impl Workspace {
     }
 
     /// "Muat ulang": re-reads after a failure.
+    ///
+    /// It is itself the user's dismissal of whatever card banner was showing, so
+    /// a failed apply/restore/open error goes away here too (`F10`).
     pub(crate) fn retry_config(&mut self, id: &InstanceId, cx: &mut Context<Self>) {
+        self.config.entry(id).dismiss_card_error();
         self.reload_config_bg(id, cx);
         cx.notify();
     }

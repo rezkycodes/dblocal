@@ -49,6 +49,10 @@ pub struct InstanceConfig {
     /// The last card-level failure (apply/restore/launcher), cleared by the next
     /// successful action.
     pub error: Option<UserFacingError>,
+    /// Whether `error` came from a failed READ rather than an action. A re-read
+    /// that succeeds replaces a read failure, but a failed apply/restore/open
+    /// keeps its banner until the next action or "Muat ulang" (`F10`).
+    pub error_from_read: bool,
     /// Actions currently in flight for this instance.
     pub busy: BTreeSet<ConfigAction>,
     /// Result of the last successful apply; drives the restart banner.
@@ -81,6 +85,7 @@ impl InstanceConfig {
         self.busy.insert(action);
         if action != ConfigAction::Load {
             self.error = None;
+            self.error_from_read = false;
         }
     }
 
@@ -219,6 +224,7 @@ impl InstanceConfig {
         let file_changed = self
             .view()
             .is_none_or(|old| view_values(old) != view_values(&view));
+        let engine = view.engine;
         self.data = Loadable::Ready(view.clone());
         let current: BTreeMap<&str, &str> = view
             .settings
@@ -227,12 +233,24 @@ impl InstanceConfig {
             .collect();
         self.edits
             .retain(|key, text| current.get(key.as_str()) != Some(&text.as_str()));
-        self.errors.clear();
+        // `errors` must always match the remaining edits: a surviving `abc` keeps
+        // its `DBL-8601` across the re-read, so "Terapkan" never turns blue while
+        // a field is invalid (`F8`). Re-validating is what an apply would do.
+        self.validate(engine);
         // The banner shows only when the file really changed outside and the user
         // still has an unsaved edit to protect; when the read returned the same
         // file, or every edit already matches the new one, there is nothing to
         // warn about.
         self.touched_outside = file_changed && !self.edits.is_empty();
+    }
+
+    /// Clears the card error explicitly ("Muat ulang" / the next user action).
+    ///
+    /// The one way a failed apply/restore/open banner goes away besides a new
+    /// action; a successful re-read alone no longer does (`F10`).
+    pub fn dismiss_card_error(&mut self) {
+        self.error = None;
+        self.error_from_read = false;
     }
 
     /// Marks a re-read as started without blanking the view on screen.
@@ -245,7 +263,12 @@ impl InstanceConfig {
         if self.data.ready().is_none() {
             self.data = Loadable::Loading;
         }
-        self.error = None;
+        // A read failure is what the next read replaces; a failed apply or open
+        // keeps its banner until the next action or "Muat ulang" (`F10`).
+        if self.error_from_read {
+            self.error = None;
+            self.error_from_read = false;
+        }
     }
 
     /// Marks the re-read as finished and records its outcome.
@@ -264,6 +287,7 @@ impl InstanceConfig {
             self.data = Loadable::Failed(err.clone());
         }
         self.error = Some(err);
+        self.error_from_read = true;
     }
 }
 
@@ -618,5 +642,144 @@ mod tests {
             config_row_id("config-row", &one, "port"),
             config_action_id("config-port", &one)
         );
+    }
+}
+
+#[cfg(test)]
+mod f8_tests {
+    #![allow(clippy::expect_used, clippy::unwrap_used)]
+
+    use std::path::PathBuf;
+
+    use dblocal_core::config::ConfigView;
+    use dblocal_core::model::EngineKey;
+    use dblocal_core::service::UserFacingError;
+
+    use super::*;
+
+    fn view(engine: EngineKey, max: Option<&str>) -> ConfigView {
+        let mut view = ConfigView::new(
+            InstanceId::new(),
+            engine,
+            PathBuf::from("/mock/postgresql.conf"),
+        );
+        view.settings.push(ConfigSetting {
+            key: "max_connections".to_owned(),
+            current: max.map(str::to_owned),
+            default: "100".to_owned(),
+            unit: String::new(),
+            restart_required: true,
+            description: "desc".to_owned(),
+            readonly: false,
+        });
+        view.settings.push(ConfigSetting {
+            key: "shared_buffers".to_owned(),
+            current: None,
+            default: "128MB".to_owned(),
+            unit: "bytes".to_owned(),
+            restart_required: true,
+            description: "desc".to_owned(),
+            readonly: false,
+        });
+        view
+    }
+
+    fn ready(engine: EngineKey) -> InstanceConfig {
+        InstanceConfig {
+            data: Loadable::Ready(view(engine, Some("100"))),
+            ..InstanceConfig::default()
+        }
+    }
+
+    #[test]
+    fn an_invalid_edit_keeps_its_error_and_terapkan_stays_disabled_after_a_re_read() {
+        let mut config = ready(EngineKey::Postgresql);
+        config.set_field("max_connections", "abc");
+        assert!(!config.validate(EngineKey::Postgresql));
+        assert!(!config.can_apply(), "invalid before the re-read");
+
+        // The window is re-activated: a re-read of the SAME file re-bases.
+        config.rebase(view(EngineKey::Postgresql, Some("100")));
+        assert_eq!(
+            config.edits.get("max_connections").map(String::as_str),
+            Some("abc"),
+            "F8: the typed text survives the re-read"
+        );
+        assert_eq!(
+            config
+                .errors
+                .get("max_connections")
+                .map(|e| e.code.as_str()),
+            Some("DBL-8601"),
+            "F8: the surviving invalid edit keeps its DBL-8601"
+        );
+        assert!(
+            !config.can_apply(),
+            "F8: Terapkan never turns blue while a field is invalid"
+        );
+    }
+
+    #[test]
+    fn a_valid_edit_has_no_error_after_a_re_read() {
+        let mut config = ready(EngineKey::Postgresql);
+        config.set_field("max_connections", "300");
+        assert!(config.validate(EngineKey::Postgresql));
+        config.rebase(view(EngineKey::Postgresql, Some("100")));
+        assert!(config.errors.is_empty(), "F8: a valid edit is not flagged");
+        assert!(config.can_apply(), "F8: and Terapkan is enabled");
+    }
+
+    #[test]
+    fn an_edit_the_new_file_value_makes_equal_disappears_with_its_error() {
+        let mut config = ready(EngineKey::Postgresql);
+        config.set_field("max_connections", "abc");
+        assert!(!config.validate(EngineKey::Postgresql));
+        // The file now assigns exactly the typed text: it is no longer an edit.
+        config.rebase(view(EngineKey::Postgresql, Some("abc")));
+        assert!(
+            config.edits.is_empty(),
+            "F8: an edit equal to the file is dropped"
+        );
+        assert!(config.errors.is_empty(), "F8: and its error goes with it");
+    }
+
+    #[test]
+    fn a_failed_apply_error_survives_a_successful_re_read_until_dismissed() {
+        let mut config = ready(EngineKey::Postgresql);
+        config.set_field("max_connections", "300");
+        config.begin(ConfigAction::Apply);
+        config.error = Some(UserFacingError::new("DBL-8604", "sedang dipakai"));
+        config.end(ConfigAction::Apply);
+        // A re-read lands and succeeds: the failed-apply banner stays (`F10`).
+        config.begin_refresh();
+        config.end_refresh_ok(view(EngineKey::Postgresql, Some("100")));
+        assert_eq!(
+            config.error.as_ref().map(|e| e.code.as_str()),
+            Some("DBL-8604"),
+            "F10: a failed apply keeps its banner through a re-read"
+        );
+
+        // "Muat ulang" is the explicit dismissal.
+        config.dismiss_card_error();
+        assert!(config.error.is_none(), "F10: Muat ulang clears it");
+    }
+
+    #[test]
+    fn a_failed_read_error_is_replaced_by_the_next_read() {
+        let mut config = ready(EngineKey::Postgresql);
+        config.begin_refresh();
+        config.end_refresh_failed(UserFacingError::new("DBL-8603", "gagal baca"));
+        assert_eq!(
+            config.error.as_ref().map(|e| e.code.as_str()),
+            Some("DBL-8603")
+        );
+        // The next read is a successful one: a read error is what it replaces.
+        config.begin_refresh();
+        assert!(
+            config.error.is_none(),
+            "F10: a read error is cleared as the next read starts"
+        );
+        config.end_refresh_ok(view(EngineKey::Postgresql, Some("100")));
+        assert!(config.error.is_none());
     }
 }
