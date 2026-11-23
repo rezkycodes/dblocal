@@ -126,11 +126,9 @@ impl Workspace {
         } else {
             IconName::ChevronDown
         };
-        let header_focus = super::components::keyed_focus(
-            SharedString::from(format!("group-focus-{}", engine.as_str())),
-            window,
-            cx,
-        );
+        // The header's focus handle lives on the Workspace (one per engine), so a
+        // render test can focus it to check the ring (`G2`).
+        let header_focus = self.dock_group_focus(engine);
         let header = h_flex()
             .id(SharedString::from(format!("group-{}", engine.as_str())))
             .h(px(30.))
@@ -155,7 +153,10 @@ impl Workspace {
             );
         // `G2`: an inset full outline (all four edges), not the outside ring the
         // dock's clipping can reduce to a single line.
-        let header = super::components::apply_inset_focus_ring(header, &header_focus, window, cx);
+        let header = match &header_focus {
+            Some(focus) => super::components::apply_inset_focus_ring(header, focus, window, cx),
+            None => header,
+        };
 
         let mut group_box = v_flex().gap_0p5().child(header);
         if !collapsed {

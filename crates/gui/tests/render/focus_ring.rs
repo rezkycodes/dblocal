@@ -32,6 +32,32 @@ fn new_ring_pixels(unfocused: &Frame, focused: &Frame, ring: [u8; 3]) -> usize {
     hits
 }
 
+/// The bounding box `(x0, y0, x1, y1)` of the newly-added ring pixels, or `None`.
+///
+/// A ring drawn on all four sides spans the full row (width **and** height); a
+/// ring on only the top edge is a thin horizontal band (height ≈ 2 device px).
+fn new_ring_bbox(
+    unfocused: &Frame,
+    focused: &Frame,
+    ring: [u8; 3],
+) -> Option<(u32, u32, u32, u32)> {
+    let (w, h) = focused.dims();
+    let (mut x0, mut y0, mut x1, mut y1) = (u32::MAX, u32::MAX, 0u32, 0u32);
+    let mut seen = false;
+    for y in 0..h {
+        for x in 0..w {
+            if near(focused.px(x, y), ring, 6) && !near(unfocused.px(x, y), ring, 6) {
+                seen = true;
+                x0 = x0.min(x);
+                y0 = y0.min(y);
+                x1 = x1.max(x);
+                y1 = y1.max(y);
+            }
+        }
+    }
+    seen.then_some((x0, y0, x1, y1))
+}
+
 #[test]
 fn a_focused_engine_card_draws_the_theme_ring() {
     for (dark, ring) in [(true, DARK_PRIMARY), (false, LIGHT_PRIMARY)] {
@@ -59,6 +85,79 @@ fn a_focused_engine_card_draws_the_theme_ring() {
         assert!(
             added > 200,
             "dark={dark}: focusing an engine card must draw new theme-ring pixels (got {added})"
+        );
+    }
+}
+
+/// `G2`: a focused **version row** draws the ring on all four edges, not a thin
+/// line on one edge. The scale factor doubles the row's logical height, so a
+/// full outline's bbox is tall; a top-edge-only line's bbox is ~2 device px.
+#[test]
+fn a_focused_version_row_draws_a_full_outline() {
+    for (dark, ring) in [(true, DARK_PRIMARY), (false, LIGHT_PRIMARY)] {
+        let before = render(dark, "vring-before.png", Workspace::preview_create);
+        let after = render(
+            dark,
+            "vring-after.png",
+            Workspace::preview_version_row_focused,
+        );
+        let scale = after.scale;
+        let added = new_ring_pixels(&before, &after, ring);
+        let bbox = new_ring_bbox(&before, &after, ring).expect("new ring pixels");
+        let height = bbox.3 - bbox.1;
+        let width = bbox.2 - bbox.0;
+        eprintln!(
+            "VRING dark={dark}: added={added} bbox={bbox:?} w={width} h={height} scale={scale}"
+        );
+        // A version row is 42 logical px tall; a full outline spans at least most
+        // of that. A top-edge-only line would be <= 4 device px tall.
+        assert!(
+            height >= 30 * scale,
+            "dark={dark}: version-row ring must span the row height (all four edges); bbox height {height} < {} (top-edge-only mutation)",
+            30 * scale
+        );
+        assert!(
+            width >= 200 * scale,
+            "dark={dark}: version-row ring must span the row width; bbox width {width}"
+        );
+        assert!(
+            added > 200,
+            "dark={dark}: expected a substantial ring ({added})"
+        );
+    }
+}
+
+/// `G2`: a focused **engine-group header** draws the ring on all four edges.
+#[test]
+fn a_focused_group_header_draws_a_full_outline() {
+    for (dark, ring) in [(true, DARK_PRIMARY), (false, LIGHT_PRIMARY)] {
+        let before = render(dark, "hring-before.png", Workspace::preview);
+        let after = render(
+            dark,
+            "hring-after.png",
+            Workspace::preview_dock_group_focused,
+        );
+        let scale = after.scale;
+        let added = new_ring_pixels(&before, &after, ring);
+        let bbox = new_ring_bbox(&before, &after, ring).expect("new ring pixels");
+        let height = bbox.3 - bbox.1;
+        let width = bbox.2 - bbox.0;
+        eprintln!(
+            "HRING dark={dark}: added={added} bbox={bbox:?} w={width} h={height} scale={scale}"
+        );
+        // A group header is 30 logical px tall; a full outline spans most of it.
+        assert!(
+            height >= 20 * scale,
+            "dark={dark}: group-header ring must span the header height (all four edges); bbox height {height} < {} (one-edge mutation)",
+            20 * scale
+        );
+        assert!(
+            width >= 100 * scale,
+            "dark={dark}: group-header ring must span the header width; bbox width {width}"
+        );
+        assert!(
+            added > 100,
+            "dark={dark}: expected a substantial ring ({added})"
         );
     }
 }

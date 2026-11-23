@@ -410,6 +410,11 @@ impl Workspace {
         self.collapsed.contains(&engine)
     }
 
+    /// The stable focus handle of an engine-group header (`F4`, `G2`).
+    pub(crate) fn dock_group_focus(&self, engine: EngineKey) -> Option<gpui_kit::FocusHandle> {
+        self.dock_focus.get(&engine).cloned()
+    }
+
     pub(crate) fn toggle_collapsed(&mut self, engine: EngineKey) {
         if !self.collapsed.remove(&engine) {
             self.collapsed.insert(engine);

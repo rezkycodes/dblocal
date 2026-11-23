@@ -133,6 +133,17 @@ fn databases_tab_inputs(
     (db, user)
 }
 
+/// One stable focus handle per engine-group header, for every `EngineKey::ALL`.
+///
+/// Built with the workspace so a header keeps its tab-stop identity across
+/// re-renders (`F4`) and a render test can focus one to check its ring (`G2`).
+fn dock_focus_handles(cx: &mut Context<Workspace>) -> HashMap<EngineKey, FocusHandle> {
+    EngineKey::ALL
+        .into_iter()
+        .map(|engine| (engine, cx.focus_handle()))
+        .collect()
+}
+
 /// What the create dialog currently has selected.
 #[derive(Clone)]
 pub struct CreateForm {
@@ -181,6 +192,10 @@ pub struct Workspace {
     filter_input: Option<Entity<InputState>>,
     /// Collapsed engine groups in the dock.
     collapsed: HashSet<EngineKey>,
+    /// Stable focus handle per engine-group header, one for each
+    /// [`EngineKey::ALL`] entry. Created once so a header is a persistent tab stop
+    /// (`F4`) and a render test can focus one to check its ring (`G2`).
+    dock_focus: HashMap<EngineKey, FocusHandle>,
     /// Data size per instance, read on demand for the Overview card.
     data_sizes: HashMap<InstanceId, u64>,
     /// Cached dotenv blocks fetched in background (never on render path).
@@ -305,6 +320,7 @@ struct Parts {
     db_name_input: Entity<InputState>,
     user_name_input: Entity<InputState>,
     focus_handle: FocusHandle,
+    dock_focus: HashMap<EngineKey, FocusHandle>,
 }
 
 impl Workspace {
@@ -330,6 +346,7 @@ impl Workspace {
             .new(|cx| InputState::new(window, cx).placeholder(strings::UI_DOCK_FILTER.to_owned()));
         cx.observe(&filter_input, |_, _, cx| cx.notify()).detach();
         let (db_name_input, user_name_input) = databases_tab_inputs(window, cx);
+        let dock_focus = dock_focus_handles(cx);
         let mut workspace = Self::assemble(Parts {
             service,
             tray_available,
@@ -338,6 +355,7 @@ impl Workspace {
             db_name_input,
             user_name_input,
             focus_handle,
+            dock_focus,
         });
         workspace.startup_load(cx);
         // `F7a`: the external editor DBLocal launches, the CLI and a second
@@ -377,6 +395,7 @@ impl Workspace {
             .new(|cx| InputState::new(window, cx).placeholder(strings::UI_DOCK_FILTER.to_owned()));
         cx.observe(&filter_input, |_, _, cx| cx.notify()).detach();
         let (db_name_input, user_name_input) = databases_tab_inputs(window, cx);
+        let dock_focus = dock_focus_handles(cx);
         let mut workspace = Self::assemble(Parts {
             service,
             tray_available: false,
@@ -385,6 +404,7 @@ impl Workspace {
             db_name_input,
             user_name_input,
             focus_handle,
+            dock_focus,
         });
         workspace.tray_note_shown = true;
         workspace.tray_note = Some(SharedString::from(strings::UI_TRAY_UNAVAILABLE_NOTE));
@@ -420,6 +440,7 @@ impl Workspace {
             logs: LogStore::new(),
             log_scroll: gpui_kit::UniformListScrollHandle::new(),
             collapsed: HashSet::new(),
+            dock_focus: parts.dock_focus,
             data_sizes: HashMap::new(),
             dotenv_cache: HashMap::new(),
             port_suggestions: HashMap::new(),
@@ -607,6 +628,13 @@ impl Render for Workspace {
         }
         let deleting = self.delete_target.is_some();
         let creating = self.create.is_some();
+        // `G3b`/`F1`: the quit dialog has no open path that captures focus, so
+        // capture the opener on the first frame it draws (this runs before the
+        // root-focus fallback below and before `render_quit_dialog` focuses its
+        // trap), so a cancel returns the exact element that had focus.
+        if self.quit.is_confirming() && self.dialog_focus.is_empty() {
+            self.dialog_focus.opened(window.focused(cx));
+        }
         // F3: a close from a listener with no window (Escape) parks the handle
         // here; the frame is the first place it can be focused.
         if let Some(target) = self.pending_focus_restore.take() {
