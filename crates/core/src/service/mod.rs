@@ -447,6 +447,20 @@ pub trait DblService: Send + Sync + 'static {
         not_implemented()
     }
 
+    /// Opens the raw config file in the OS default handler (`F-CFG-02` AC1).
+    ///
+    /// Launches `xdg-open`/`open`/`rundll32` detached, argv only, no shell, and
+    /// returns the command it ran (so the CLI can print the path when the
+    /// handler is unavailable). Refuses with `DBL-8607` when the file does not
+    /// exist yet and `DBL-8608` when the handler could not be started.
+    fn config_open_raw(
+        &self,
+        id: &InstanceId,
+    ) -> ServiceResult<crate::config::OpenCommand> {
+        let _ = id;
+        not_implemented()
+    }
+
     /// Lists every installed runtime.
     fn list_runtimes(&self) -> Result<Vec<Runtime>>;
 

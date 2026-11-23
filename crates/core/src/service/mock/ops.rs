@@ -793,6 +793,13 @@ impl DblService for MockService {
         super::config::raw_path(&self.inner, id)
     }
 
+    fn config_open_raw(
+        &self,
+        id: &InstanceId,
+    ) -> crate::service::ServiceResult<crate::config::OpenCommand> {
+        super::config::open_raw(&self.inner, id)
+    }
+
     // --- Updates (F-PKG-05) -------------------------------------------------
 
     fn check_update(&self) -> crate::service::ServiceResult<crate::service::UpdateStatus> {

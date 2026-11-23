@@ -202,6 +202,9 @@ pub struct ServiceOptions {
     pub update_repo: Option<String>,
     /// Builds the admin executor (production: `PgAdmin`; tests: a fake).
     pub admin_factory: Option<admin_ops::AdminFactory>,
+    /// OS default-handler launcher for "open the raw config" (`F-CFG-02`).
+    /// Production uses [`crate::config::SystemOpenLauncher`].
+    pub open_launcher: Option<Arc<dyn crate::config::OpenLauncher>>,
 }
 
 impl std::fmt::Debug for ServiceOptions {
@@ -342,6 +345,8 @@ pub(crate) struct Inner {
     pub install_kind: Option<InstallKind>,
     /// Builds the admin executor (production: `PgAdmin`; tests: a fake).
     pub admin_factory: admin_ops::AdminFactory,
+    /// OS default-handler launcher for the raw config file (`F-CFG-02`).
+    pub open_launcher: Arc<dyn crate::config::OpenLauncher>,
 }
 
 impl Inner {
@@ -579,6 +584,9 @@ impl LocalService {
                 .admin_factory
                 .clone()
                 .unwrap_or_else(|| admin_ops::default_admin_factory(inner_paths.clone())),
+            open_launcher: options.open_launcher.clone().unwrap_or_else(|| {
+                Arc::new(crate::config::SystemOpenLauncher)
+            }),
         });
 
         let service = Self { inner, runtime };
@@ -897,6 +905,13 @@ impl DblService for LocalService {
         id: &InstanceId,
     ) -> crate::service::ServiceResult<std::path::PathBuf> {
         config_ops::raw_path(&self.inner, id)
+    }
+
+    fn config_open_raw(
+        &self,
+        id: &InstanceId,
+    ) -> crate::service::ServiceResult<crate::config::OpenCommand> {
+        config_ops::open_raw(&self.inner, id)
     }
 
     fn check_update(&self) -> crate::service::ServiceResult<crate::service::UpdateStatus> {

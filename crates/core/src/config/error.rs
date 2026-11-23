@@ -28,6 +28,10 @@ pub const CODE_BUSY: &str = "DBL-8604";
 pub const CODE_NO_BACKUP: &str = "DBL-8605";
 /// `DBL-8606`: the apply was refused because it touched more than the subset.
 pub const CODE_REFUSED: &str = "DBL-8606";
+/// `DBL-8607`: the config file the user asked to open does not exist.
+pub const CODE_MISSING_FILE: &str = "DBL-8607";
+/// `DBL-8608`: the OS default handler could not be started.
+pub const CODE_LAUNCHER: &str = "DBL-8608";
 
 /// Why a config operation failed.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -46,6 +50,10 @@ pub enum ConfigError {
     NoBackup,
     /// The call was refused as a whole because one entry was not permitted.
     Refused,
+    /// The config file to open does not exist.
+    MissingFile,
+    /// The OS default handler could not be started.
+    LauncherFailed,
 }
 
 impl ConfigError {
@@ -59,6 +67,8 @@ impl ConfigError {
             Self::Busy => CODE_BUSY,
             Self::NoBackup => CODE_NO_BACKUP,
             Self::Refused => CODE_REFUSED,
+            Self::MissingFile => CODE_MISSING_FILE,
+            Self::LauncherFailed => CODE_LAUNCHER,
         }
     }
 
@@ -72,6 +82,8 @@ impl ConfigError {
             Self::Busy => messages::ERR_BUSY,
             Self::NoBackup => messages::ERR_NO_BACKUP,
             Self::Refused => messages::ERR_REFUSED,
+            Self::MissingFile => messages::ERR_MISSING_FILE,
+            Self::LauncherFailed => messages::ERR_LAUNCHER,
         }
     }
 }
@@ -109,6 +121,8 @@ mod tests {
             ConfigError::Busy,
             ConfigError::NoBackup,
             ConfigError::Refused,
+            ConfigError::MissingFile,
+            ConfigError::LauncherFailed,
         ]
     }
 

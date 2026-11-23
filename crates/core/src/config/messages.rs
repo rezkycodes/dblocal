@@ -19,6 +19,12 @@ pub const ERR_NO_BACKUP: &str = "Belum ada salinan konfigurasi yang bisa dikemba
 /// `DBL-8606`: the whole call was refused.
 pub const ERR_REFUSED: &str =
     "Perubahan ditolak seluruhnya karena ada setelan yang tidak diizinkan.";
+/// `DBL-8607`: the config file to open does not exist.
+pub const ERR_MISSING_FILE: &str =
+    "Berkas konfigurasi belum ada. Jalankan instance sekali agar berkas dibuat.";
+/// `DBL-8608`: the OS handler could not be started.
+pub const ERR_LAUNCHER: &str =
+    "Editor bawaan sistem tidak dapat dibuka. Buka berkasnya secara manual.";
 
 // --- One-line descriptions for the editable settings -------------------------
 
@@ -96,3 +102,9 @@ pub const DEFAULT_LABEL: &str = "bawaan";
 pub const READONLY_LABEL: &str = "hanya-baca";
 /// Prompt for a `key=value` pair the CLI cannot parse.
 pub const ERR_SET_FORMAT: &str = "Format harus key=nilai.";
+/// Unit for a byte-size setting: what the user actually types.
+pub const UNIT_SIZE: &str = "ukuran (MB/GB)";
+/// Unit for a duration in seconds.
+pub const UNIT_SECONDS: &str = "detik";
+/// Shown after a successful `config open`.
+pub const MSG_OPENED: &str = "Berkas konfigurasi dibuka di editor bawaan sistem.";

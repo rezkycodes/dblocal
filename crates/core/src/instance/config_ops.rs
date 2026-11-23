@@ -221,6 +221,29 @@ pub(crate) fn raw_path(inner: &Inner, id: &InstanceId) -> ServiceResult<PathBuf>
     Ok(config_path(inner, &instance))
 }
 
+/// Opens the raw config file in the OS default handler (`F-CFG-02` AC1).
+///
+/// Resolves the path, refuses when the file does not exist yet (the instance was
+/// never initialised), then launches the OS handler detached, argv only, no
+/// shell. The launch goes through [`Inner::open_launcher`], a seam a test injects
+/// a fake into. Nothing here reads or rewrites the file, so no content can leak.
+pub(crate) fn open_raw(
+    inner: &Inner,
+    id: &InstanceId,
+) -> ServiceResult<crate::config::OpenCommand> {
+    let instance = load(inner, id)?;
+    let path = config_path(inner, &instance);
+    if !path.is_file() {
+        return Err(ConfigError::MissingFile.into());
+    }
+    let command = crate::config::OpenCommand::for_os(inner.os, &path);
+    inner
+        .open_launcher
+        .launch(&command)
+        .map_err(|_| UserFacingError::from(ConfigError::LauncherFailed))?;
+    Ok(command)
+}
+
 /// Takes the per-instance guard so a start/stop/delete in flight refuses this.
 fn lock_for(inner: &Inner, id: &InstanceId) -> ServiceResult<InstanceLock> {
     inner.ops.lock_instance(id).map_err(|_| {

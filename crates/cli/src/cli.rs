@@ -203,6 +203,11 @@ pub enum ConfigCommand {
         /// Nama instance.
         name: String,
     },
+    /// Membuka berkas konfigurasi mentah di editor bawaan OS (F-CFG-02).
+    Open {
+        /// Nama instance.
+        name: String,
+    },
 }
 
 /// `dblocal db ...` subcommands.

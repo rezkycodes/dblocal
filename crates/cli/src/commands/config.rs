@@ -18,6 +18,7 @@ pub fn dispatch(ctx: &mut Ctx<'_>, command: &ConfigCommand) -> u8 {
         ConfigCommand::Set { name, changes } => set(ctx, name, changes),
         ConfigCommand::Restore { name } => restore(ctx, name),
         ConfigCommand::Path { name } => path(ctx, name),
+        ConfigCommand::Open { name } => open(ctx, name),
     }
 }
 
@@ -100,6 +101,35 @@ fn path(ctx: &mut Ctx<'_>, name: &str) -> u8 {
     }
 }
 
+/// Opens the raw config file in the OS default handler (`F-CFG-02` AC1).
+///
+/// On success it prints the path it opened. When the handler could not be
+/// started, it prints the path to stdout anyway (so the user can open it by
+/// hand) and the typed error to stderr, exiting non-zero.
+fn open(ctx: &mut Ctx<'_>, name: &str) -> u8 {
+    let view = match find_instance(ctx, name) {
+        Ok(view) => view,
+        Err(code) => return code,
+    };
+    match ctx.service.config_open_raw(&view.id) {
+        Ok(command) => {
+            // The handler ran; print the file path (last argv is the path on
+            // every OS) so the user and a script both see what was opened.
+            if let Some(path) = command.args.iter().find(|arg| !arg.contains("FileProtocolHandler")) {
+                output::stdout_line(ctx.out, path);
+            }
+            EXIT_OK
+        }
+        Err(err) => {
+            // Best effort: still show the path so the user can open it manually.
+            if let Ok(raw) = ctx.service.config_raw_path(&view.id) {
+                output::stdout_line(ctx.out, &raw.display().to_string());
+            }
+            output::report_facing(ctx.err, &err)
+        }
+    }
+}
+
 /// Prints a validation refusal with the module's invalid-input code.
 fn refuse(ctx: &mut Ctx<'_>, message: &str) -> u8 {
     output::stderr_line(
@@ -110,6 +140,19 @@ fn refuse(ctx: &mut Ctx<'_>, message: &str) -> u8 {
     EXIT_BAD_ARGS
 }
 
+/// Maps a machine-readable unit to what the user reads and types.
+///
+/// A size setting's value column shows `128MB`, so its unit says the size words,
+/// not the storage primitive `bytes`; `seconds` becomes the Indonesian `detik`.
+/// `--json` keeps the raw unit.
+fn human_unit(unit: &str) -> String {
+    match unit {
+        "bytes" => messages::UNIT_SIZE.to_owned(),
+        "seconds" => messages::UNIT_SECONDS.to_owned(),
+        other => other.to_owned(),
+    }
+}
+
 /// Aligned settings table: key, current value, default, unit, restart.
 pub fn format_config_table(view: &ConfigView) -> String {
     let mut rows: Vec<[String; 4]> = Vec::new();
@@ -118,11 +161,7 @@ pub fn format_config_table(view: &ConfigView) -> String {
             .current
             .clone()
             .unwrap_or_else(|| messages::DEFAULT_LABEL.to_owned());
-        let unit = if setting.unit == "bytes" {
-            "bytes"
-        } else {
-            setting.unit.as_str()
-        };
+        let unit = human_unit(&setting.unit);
         let restart = if setting.readonly {
             messages::READONLY_LABEL.to_owned()
         } else {

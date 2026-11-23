@@ -148,3 +148,15 @@ pub(crate) fn raw_path(inner: &Arc<Mutex<Inner>>, id: &InstanceId) -> ServiceRes
     let (_state, _engine, path) = loaded(&guard, id)?;
     Ok(path)
 }
+
+/// The mock has no real file and never opens a window: it returns the command
+/// the real service would run, so the CLI/GUI can render "would open <path>".
+pub(crate) fn open_raw(
+    inner: &Arc<Mutex<Inner>>,
+    id: &InstanceId,
+) -> ServiceResult<crate::config::OpenCommand> {
+    let guard = inner.lock().map_err(|_| io())?;
+    let (_state, _engine, path) = loaded(&guard, id)?;
+    let os = crate::platform::Os::current();
+    Ok(crate::config::OpenCommand::for_os(os, &path))
+}
