@@ -658,3 +658,56 @@ fn a_refused_stop_leaves_no_pending_restart(cx: &mut TestAppContext) {
         "N14: a manual stop after a refused Restart sekarang must not auto-start"
     );
 }
+
+/// `F10c`: the "Muat ulang" button is the only dismissal of a failed-action
+/// banner since a successful re-read no longer clears it. A failed apply leaves
+/// the card error, `retry_config` drops it, issues a fresh read, and the view
+/// stays `Ready`.
+#[gpui_kit::test]
+fn retry_dismisses_a_failed_apply_error_and_re_reads(cx: &mut TestAppContext) {
+    let (view, service, cx) = fixture(cx);
+    service.set(|script| {
+        script.config_apply = Err(UserFacingError::new(
+            "DBL-8604",
+            "Instance sedang dipakai operasi lain. Coba lagi setelah selesai.",
+        ));
+    });
+    let id = open_config(&view, &service, cx);
+    // A failed apply sets the card error.
+    view.update(cx, |this, cx| {
+        this.config.entry(&id).set_field("max_connections", "300");
+        this.apply_config(&id, cx);
+    });
+    settle(cx);
+    let code = view.read_with(cx, |this, _| {
+        this.config_state_for(&id)
+            .and_then(|c| c.error.as_ref().map(|e| e.code.clone()))
+    });
+    assert_eq!(
+        code.as_deref(),
+        Some("DBL-8604"),
+        "F10c: the failed apply set the card error first"
+    );
+
+    // "Muat ulang" is the user's dismissal: it clears that error and re-reads.
+    let reads_before = service.counts().config_view;
+    view.update(cx, |this, cx| this.retry_config(&id, cx));
+    settle(cx);
+    let (error_now, ready, reads_now) = view.read_with(cx, |this, _| {
+        let config = this.config_state_for(&id).expect("config state");
+        (
+            config.error.clone(),
+            config.view().is_some(),
+            service.counts().config_view,
+        )
+    });
+    assert!(
+        error_now.is_none(),
+        "F10c: Muat ulang clears the failed-apply error"
+    );
+    assert!(
+        reads_now > reads_before,
+        "F10c: Muat ulang issues a fresh config_view read"
+    );
+    assert!(ready, "F10c: the re-read lands a Ready view");
+}
