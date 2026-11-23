@@ -9,10 +9,10 @@
 
 use gpui_kit::assets::IconName;
 use gpui_kit::component::label::Label;
-use gpui_kit::component::{Theme, h_flex, v_flex};
+use gpui_kit::component::{Theme, ThemeStyled as _, h_flex, v_flex};
 use gpui_kit::{
-    Div, Hsla, InteractiveElement as _, IntoElement, ParentElement, SharedString, Styled, div, px,
-    svg,
+    Div, FocusHandle, Hsla, InteractiveElement, IntoElement, ParentElement, SharedString, Styled,
+    Window, div, px, svg,
 };
 
 use dblocal_core::model::{EngineKey, InstanceStatus};
@@ -231,4 +231,32 @@ pub fn banner(colour: Hsla) -> Div {
         .border_1()
         .border_color(tokens::banner_border(colour))
         .bg(tokens::banner_fill(colour))
+}
+
+/// Makes a clickable element a keyboard tab stop with a visible focus ring.
+///
+/// gpui synthesises an `on_click` from Enter/Space on a *focused* element, so a
+/// row that already has `on_click` becomes fully keyboard-operable once it holds
+/// focus — the missing pieces were a focus handle, `track_focus`, a tab stop,
+/// and a ring that is more than a background tint. Applied to a card or row, this
+/// turns it into a focusable list option (`F-PLH-01` AC1: reach every choice by
+/// Tab, confirm with Enter/Space, and always see where focus is).
+///
+/// The caller passes a stable `focus` handle (taken once per row from
+/// `window.use_keyed_state`) so focus survives a re-render — choosing an engine
+/// must not drop the ring back to the first row.
+pub fn apply_focus_ring<E: InteractiveElement + Styled + ParentElement + 'static>(
+    row: E,
+    focus: &FocusHandle,
+    window: &Window,
+    cx: &gpui_kit::App,
+) -> E {
+    let focused = focus.contains_focused(window, cx);
+    let stop = focus.clone().tab_stop(true);
+    let row = row.track_focus(&stop);
+    if focused {
+        row.focus_ring_style(window, cx)
+    } else {
+        row
+    }
 }

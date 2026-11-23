@@ -332,9 +332,14 @@ impl Workspace {
             version,
             auth: AuthMode::Password,
             suggested_port: None,
-            name_input: Some(name_input),
+            name_input: Some(name_input.clone()),
             port_input: Some(port_input.clone()),
         });
+        // `F-PLH-01` AC1: the dialog takes the keyboard when it opens, so a
+        // keyboard user lands on the name field instead of nowhere; Escape and
+        // cancel give focus back to the opener (`dialog_focus` owns the rule).
+        self.dialog_focus.opened(window.focused(cx));
+        name_input.update(cx, |state, cx| state.focus(window, cx));
         // Port suggestion is a service call; do it in background.
         let service = self.service.clone();
         self.bg(cx, move || {
@@ -437,6 +442,10 @@ impl Workspace {
 
     pub(crate) fn cancel_create(&mut self) {
         self.create = None;
+        // Give focus back to whatever opened the dialog (`F-PLH-01` AC1);
+        // `render` parks and applies the handle because this runs from a
+        // listener that may have no window.
+        self.restore_dialog_focus_after_close();
     }
 
     pub(crate) fn submit_create(&mut self, window: &mut Window, cx: &mut Context<Self>) {

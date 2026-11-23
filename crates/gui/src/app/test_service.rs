@@ -19,12 +19,38 @@ use dblocal_core::model::{
 };
 use dblocal_core::secret::SecretString;
 use dblocal_core::service::{
-    CatalogView, DblService, InstanceView, OperationId, ServiceEvent, UriFormat,
+    CatalogView, DblService, EngineEntry, InstanceView, OperationId, ServiceEvent, UriFormat,
+    VersionEntry,
 };
 use tokio::sync::broadcast;
 
 /// The password every URI this service returns carries.
 pub(crate) const SECRET: &str = "p@ss:w/rd%";
+
+/// A deterministic platform-filtered catalog with one engine (PostgreSQL) and
+/// two versions, the newer installed. Enough for the create dialog to draw
+/// engine cards and version rows without a network.
+pub(crate) fn test_catalog() -> Vec<EngineEntry> {
+    vec![EngineEntry {
+        engine: EngineKey::Postgresql,
+        available: true,
+        unavailable_reason: None,
+        versions: vec![
+            VersionEntry {
+                version: "17.4".to_owned(),
+                eol: false,
+                installed: true,
+                size_bytes: 0,
+            },
+            VersionEntry {
+                version: "16.6".to_owned(),
+                eol: false,
+                installed: false,
+                size_bytes: 1024,
+            },
+        ],
+    }]
+}
 
 /// An emit-free service with a fixed set of instances.
 #[derive(Clone)]
@@ -99,7 +125,7 @@ impl DblService for QuietService {
         Ok(CatalogView {
             status: dblocal_core::model::CatalogStatus::Fresh,
             banner: None,
-            engines: Vec::new(),
+            engines: test_catalog(),
         })
     }
     fn refresh_catalog(&self, _force: bool) -> Result<OperationId> {

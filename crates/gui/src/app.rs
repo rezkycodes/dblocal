@@ -579,8 +579,16 @@ impl Workspace {
             self.restore_dialog_focus_after_close();
             return;
         }
-        self.create = None;
-        self.delete_target = None;
+        // Escape on the create or delete dialog returns focus to the opener.
+        if self.create.take().is_some() {
+            self.restore_dialog_focus_after_close();
+            return;
+        }
+        if self.delete_target.take().is_some() {
+            self.delete_name_input = None;
+            self.restore_dialog_focus_after_close();
+            return;
+        }
         self.delete_name_input = None;
         // The top overlay only: Escape closes the topmost dialog, so a secret
         // dialog closes first, then the confirmation under it stays open.
@@ -694,7 +702,9 @@ impl Render for Workspace {
                     .child(self.render_center(cx)),
             )
             .child(self.render_status_bar(cx))
-            .when(creating, |this| this.child(create_dialog::render(self, cx)))
+            .when(creating, |this| {
+                this.child(create_dialog::render(self, window, cx))
+            })
             .when(deleting, |this| this.child(delete_dialog::render(self, cx)))
             .when(self.palette_open, |this| {
                 this.child(palette::render(self, cx))

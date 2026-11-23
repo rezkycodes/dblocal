@@ -19,7 +19,7 @@ use gpui_kit::component::label::Label;
 use gpui_kit::component::{ActiveTheme, Theme, h_flex, input::Input, v_flex};
 use gpui_kit::{
     AnyElement, Context, InteractiveElement, IntoElement, MouseButton, ParentElement, SharedString,
-    Styled, div, prelude::*, px,
+    Styled, Window, div, prelude::*, px,
 };
 
 use crate::format;
@@ -28,7 +28,15 @@ use super::Workspace;
 use super::components::{engine_badge, icon, section_label};
 
 /// Renders the create-instance modal when a form is open.
-pub(super) fn render(workspace: &Workspace, cx: &mut Context<Workspace>) -> AnyElement {
+///
+/// `window` is threaded in so each engine card and version row can take a
+/// keyboard focus handle and draw the theme's focus ring when focused
+/// (`F-PLH-01` AC1: reach any choice by Tab, confirm with Enter/Space).
+pub(super) fn render(
+    workspace: &Workspace,
+    window: &mut Window,
+    cx: &mut Context<Workspace>,
+) -> AnyElement {
     let theme = cx.theme().clone();
     let Some(form) = workspace.create_form().cloned() else {
         return div().into_any_element();
@@ -59,7 +67,7 @@ pub(super) fn render(workspace: &Workspace, cx: &mut Context<Workspace>) -> AnyE
             v_flex()
                 .gap_2()
                 .child(section_label(strings::UI_FIELD_ENGINE).text_color(theme.muted_foreground))
-                .child(render_engine_cards(&entries, &form, &theme, cx)),
+                .child(render_engine_cards(&entries, &form, &theme, window, cx)),
         )
         .child(
             v_flex()
@@ -68,7 +76,13 @@ pub(super) fn render(workspace: &Workspace, cx: &mut Context<Workspace>) -> AnyE
                     section_label(format::create_versions(form.engine.display_name()))
                         .text_color(theme.muted_foreground),
                 )
-                .child(render_versions(selected_entry.as_ref(), &form, &theme, cx)),
+                .child(render_versions(
+                    selected_entry.as_ref(),
+                    &form,
+                    &theme,
+                    window,
+                    cx,
+                )),
         )
         .child(render_fields(workspace, &form, &theme, cx))
         .child(render_no_password(&form, &theme, cx));
@@ -115,16 +129,26 @@ fn render_engine_cards(
     entries: &[EngineEntry],
     form: &super::CreateForm,
     theme: &Theme,
+    window: &mut Window,
     cx: &mut Context<Workspace>,
 ) -> impl IntoElement {
-    let cards = crate::format::create_engine_cards(entries)
+    let cards = crate::format::create_engine_cards(entries);
+    // One stable focus handle per engine card, taken before the elements are
+    // built so a re-render keeps the same handle (choosing an engine must not
+    // drop the ring back to the first card).
+    let handles = cards
+        .iter()
+        .map(|entry| focus_handle_for(window, cx, format!("engine-focus-{}", entry.engine.as_str())))
+        .collect::<Vec<_>>();
+    let cards = cards
         .into_iter()
-        .map(|entry| {
+        .zip(handles)
+        .map(|(entry, focus)| {
             let engine = entry.engine;
             let selected = engine == form.engine;
             let disabled = !entry.available;
             let reason = format::engine_unavailable_reason(entry).map(str::to_owned);
-            v_flex()
+            let card = v_flex()
                 .id(SharedString::from(format!("engine-{}", engine.as_str())))
                 .flex_1()
                 .min_w(px(140.))
@@ -172,9 +196,26 @@ fn render_engine_cards(
                             .text_xs()
                             .text_color(theme.muted_foreground),
                     )
-                })
+                });
+            if disabled {
+                card
+            } else {
+                super::components::apply_focus_ring(card, &focus, window, cx)
+            }
         });
     h_flex().gap_2p5().flex_wrap().children(cards)
+}
+
+/// A keyed focus handle for a row that must survive re-renders.
+fn focus_handle_for(
+    window: &mut Window,
+    cx: &mut Context<Workspace>,
+    key: String,
+) -> gpui_kit::FocusHandle {
+    window
+        .use_keyed_state(SharedString::from(key), cx, |_, cx| cx.focus_handle())
+        .read(cx)
+        .clone()
 }
 
 /// The version list with the installed / download badges.
@@ -182,6 +223,7 @@ fn render_versions(
     entry: Option<&EngineEntry>,
     form: &super::CreateForm,
     theme: &Theme,
+    window: &mut Window,
     cx: &mut Context<Workspace>,
 ) -> impl IntoElement {
     let theme = theme.clone();
@@ -199,7 +241,14 @@ fn render_versions(
         );
     };
     let unavailable = format::version_unavailable_reason(entry).map(str::to_owned);
-    for (index, version) in entry.versions.iter().enumerate() {
+    // One stable focus handle per version row, taken before the elements are
+    // built (the same rule as the engine cards).
+    let handles = entry
+        .versions
+        .iter()
+        .map(|version| focus_handle_for(window, cx, format!("version-focus-{}", version.version)))
+        .collect::<Vec<_>>();
+    for ((index, version), focus) in entry.versions.iter().enumerate().zip(handles) {
         let selected = version.version == form.version;
         let tag = version.version.clone();
         let version_unavailable = unavailable.is_some();
@@ -213,52 +262,55 @@ fn render_versions(
                 theme.muted_foreground,
             ))
         };
-        list = list.child(
-            h_flex()
-                .id(SharedString::from(format!("version-{tag}")))
-                .h(px(42.))
-                .px(px(14.))
-                .gap_3()
-                .cursor_pointer()
-                .border_t_1()
-                .border_color(theme.table_row_border)
-                .bg(if selected {
-                    crate::theme::tokens::tint(theme.primary, 0.10)
-                } else {
-                    theme.background
-                })
-                .hover(|s| s.bg(theme.muted))
-                .on_click(cx.listener(move |this, _, window, cx| {
-                    if !version_unavailable {
-                        this.choose_version_action(tag.clone(), window, cx);
-                    }
-                    let _ = index;
-                }))
-                .child(radio_marker(selected, version_unavailable, &theme))
-                .child(
-                    Label::new(version.version.clone())
-                        .w(px(90.))
-                        .font_weight(gpui_kit::FontWeight::MEDIUM),
+        let row = h_flex()
+            .id(SharedString::from(format!("version-{tag}")))
+            .h(px(42.))
+            .px(px(14.))
+            .gap_3()
+            .cursor_pointer()
+            .border_t_1()
+            .border_color(theme.table_row_border)
+            .bg(if selected {
+                crate::theme::tokens::tint(theme.primary, 0.10)
+            } else {
+                theme.background
+            })
+            .hover(|s| s.bg(theme.muted))
+            .on_click(cx.listener(move |this, _, window, cx| {
+                if !version_unavailable {
+                    this.choose_version_action(tag.clone(), window, cx);
+                }
+                let _ = index;
+            }))
+            .child(radio_marker(selected, version_unavailable, &theme))
+            .child(
+                Label::new(version.version.clone())
+                    .w(px(90.))
+                    .font_weight(gpui_kit::FontWeight::MEDIUM),
+            )
+            .child(div().flex_1())
+            .when_some(badge, |this, (text, colour)| {
+                this.child(
+                    Label::new(text)
+                        .px_2()
+                        .rounded_full()
+                        .bg(theme.muted)
+                        .text_xs()
+                        .text_color(colour),
                 )
-                .child(div().flex_1())
-                .when_some(badge, |this, (text, colour)| {
-                    this.child(
-                        Label::new(text)
-                            .px_2()
-                            .rounded_full()
-                            .bg(theme.muted)
-                            .text_xs()
-                            .text_color(colour),
-                    )
-                })
-                .when_some(unavailable.clone(), |this, reason| {
-                    this.child(
-                        Label::new(reason)
-                            .text_xs()
-                            .text_color(theme.muted_foreground),
-                    )
-                }),
-        );
+            })
+            .when_some(unavailable.clone(), |this, reason| {
+                this.child(
+                    Label::new(reason)
+                        .text_xs()
+                        .text_color(theme.muted_foreground),
+                )
+            });
+        list = list.child(if version_unavailable {
+            row
+        } else {
+            super::components::apply_focus_ring(row, &focus, window, cx)
+        });
     }
     list
 }
