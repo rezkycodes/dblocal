@@ -139,6 +139,7 @@ case_tests! {
     databases_is_unique => "databases", Workspace::preview_databases;
     databases_product_is_unique => "databases product", Workspace::preview_product_databases;
     config_product_is_unique => "config product", Workspace::preview_product_config;
+    config_demo_is_unique => "config demo", Workspace::preview_config_demo;
     filtered_dock_is_unique => "filtered dock", Workspace::preview_filtered;
     stale_banner_is_unique => "stale banner", Workspace::preview_stale_banner;
     revealed_uris_is_unique => "revealed uris", Workspace::preview_revealed;
