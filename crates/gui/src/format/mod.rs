@@ -789,5 +789,8 @@ mod masking_tests;
 #[path = "path_tests.rs"]
 mod path_tests;
 #[cfg(test)]
+#[path = "fix_tests.rs"]
+mod fix_tests;
+#[cfg(test)]
 #[path = "tests.rs"]
 mod tests;

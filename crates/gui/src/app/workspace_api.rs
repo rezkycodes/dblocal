@@ -474,6 +474,11 @@ impl Workspace {
         self.user_name_input.read(cx).value().to_string()
     }
 
+    /// The instance a "Restart sekarang" is waiting to start, for assertions.
+    pub(crate) fn config_restart_pending_for_test(&self) -> Option<&InstanceId> {
+        self.config_restart_after_stop.as_ref()
+    }
+
     /// Runs the Enter path ("apply only when Terapkan is enabled") for one
     /// instance, exactly as a keypress in a Config field does.
     pub(crate) fn apply_config_if_ready_for_test(

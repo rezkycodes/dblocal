@@ -27,6 +27,12 @@ mod config_actions;
 mod config_dialogs;
 mod config_state;
 #[cfg(test)]
+#[path = "app/config_fix_tests.rs"]
+mod config_fix_tests;
+#[cfg(test)]
+#[path = "app/config_layout_tests.rs"]
+mod config_layout_tests;
+#[cfg(test)]
 #[path = "app/config_tests.rs"]
 mod config_tests;
 mod create_dialog;

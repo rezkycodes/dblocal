@@ -169,6 +169,7 @@ impl Workspace {
             .child(
                 h_flex().flex_none().gap_2().child(
                     Button::new("overview-restore-config")
+                        .debug_selector(|| "overview-restore-config".to_owned())
                         .primary()
                         .label(strings::UI_CONFIG_RESTORE_AND_RESTART)
                         .on_click(cx.listener(move |this, _, _, cx| {

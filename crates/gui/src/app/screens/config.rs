@@ -187,6 +187,7 @@ impl Workspace {
                     "config-later",
                     &view.id,
                 )))
+                .debug_selector(|| config_action_id("config-later", &view.id))
                 .label(strings::UI_CONFIG_LATER)
                 .small()
                 .compact()
@@ -196,11 +197,13 @@ impl Workspace {
             );
         // "Restart sekarang" only when the instance runs (`F-CFG-01` AC2).
         if running {
+            let restart_selector = config_action_id("config-restart", &view.id);
             row = row.child(
                 Button::new(SharedString::from(config_action_id(
                     "config-restart",
                     &view.id,
                 )))
+                .debug_selector(|| restart_selector)
                 .label(strings::UI_CONFIG_RESTART_NOW)
                 .small()
                 .compact()
