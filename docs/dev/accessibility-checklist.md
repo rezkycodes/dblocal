@@ -96,25 +96,55 @@ when the test **fails without the code it tests** (see the mutation checks above
 | Focus ring visibility | `theme.ring` ≥ 3:1 on every surface | parse theme JSON | pass | `contrast::tests` |
 | Status never colour alone | every status → non-empty label + a distinct glyph family | unit | pass | `format/tests.rs` |
 
+## Real-window run on this host (W4-G, Xwayland `:0`)
+
+The real `dblocal` binary (debug, real `LocalService`) was launched with an
+isolated `DBLOCAL_HOME=/tmp/.../home` (PostgreSQL 17.12 tarball pre-placed in
+`downloads/`) under `env -u WAYLAND_DISPLAY DISPLAY=:0`, once with
+`DBLOCAL_THEME=dark` and once with `DBLOCAL_THEME=light`.
+
+- **Rendering confirmed, both themes**: a python-xlib window capture shows the
+  dark base `#15161d` (21,22,29) in the dark run and the light base `#f8f8fb`
+  (248,248,251) in the light run, each with the full shell layout (title bar,
+  dock, welcome heading at y≈368–385, subtitle, primary CTA at y≈429–460,
+  status bar at y≈795–812). `DBLOCAL_THEME` really selects the theme in the
+  running window.
+- **Keyboard/pointer input was NOT deliverable here**: synthetic XTEST key and
+  pointer events (`xdotool key`/`click`, with the window activated and focused)
+  produced no frame change — a known Xwayland quirk where a Wayland session's
+  Xwayland does not forward synthetic input to this gpui window, not a product
+  defect. So the step-by-step "which key held focus" transcript from a real
+  window is **not** available on this host; the keyboard flow is proven by the
+  headless `keyboard_flow_tests.rs` instead, which drive the same `Root` + Tab +
+  `Keystroke` code. A human or a machine with working XTEST delivery (or a
+  Wayland-native input path) should run the transcript below.
+- Cleanup: `pgrep -x dblocal`=0, `pgrep -x postgres`=0, the temp home removed,
+  no `~/.config/systemd/user/dblocal.service`.
+
 ## Manual, per release (Windows, macOS; also a human pass on Linux)
 
 These cannot be believed from a headless test or from this Linux host. Run them
 on each release build for every OS in the matrix.
 
-1. **Focus ring per OS.** Tab through the shell on Windows and macOS and confirm
+1. **Keyboard-only first session (real window).** With only the keyboard —
+   `Ctrl/Cmd+N`, Tab/Shift+Tab, Enter/Space, `Ctrl/Cmd+K`, `Ctrl/Cmd+Shift+C` —
+   complete choose engine → create → start → copy URI and confirm the clipboard
+   holds the URI. The headless test proves the same code path; a real window
+   confirms native key delivery (blocked by Xwayland synthetic input here).
+2. **Focus ring per OS.** Tab through the shell on Windows and macOS and confirm
    the ring is drawn and visible (contrast ≥ 3:1 against both the control and the
    surface). The ring rendering path is `gpui-component`'s `focus_style`; the
    *appearance* on each native platform is unverified here.
-2. **System theme following.** Flip the OS appearance (Windows Settings → Colour,
+3. **System theme following.** Flip the OS appearance (Windows Settings → Colour,
    macOS Appearance) while the app runs and confirm every screen repaints in the
    new theme **without a restart**. (The change-while-running subscription is
    exercised headless; the native signal is not.)
-3. **Screen reader.** With Orca (Linux), NVDA (Windows) or VoiceOver (macOS),
+4. **Screen reader.** With Orca (Linux), NVDA (Windows) or VoiceOver (macOS),
    confirm the first session is announceable: sidebar rows read "name — status",
    dialog titles and buttons are named, the palette announces its rows.
-4. **High-contrast / forced-colours modes.** Confirm the app is legible under the
+5. **High-contrast / forced-colours modes.** Confirm the app is legible under the
    OS forced-colour mode (Windows High Contrast, macOS Increase Contrast).
-5. **Non-Latin input.** Type an instance name with an IME (Japanese, Chinese,
+6. **Non-Latin input.** Type an instance name with an IME (Japanese, Chinese,
    Arabic) into the create field and confirm composition and validation behave.
-6. **Reduce motion.** With motion reduce on, confirm no essential feedback relies
+7. **Reduce motion.** With motion reduce on, confirm no essential feedback relies
    on animation.
