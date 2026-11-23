@@ -458,3 +458,64 @@ fn a_corrupt_row_cannot_delete_outside_the_home() {
     assert_eq!(err.code(), crate::error::CODE_UNSAFE_ARCHIVE);
     assert!(outside.exists(), "outside data must survive");
 }
+
+/// Finding 4(b): the delete nonce must be distinct per call, proven through the
+/// production path (not the `delete_nonce` helper). Two `LocalService`s in one
+/// process each have their own `Ops`, so both allocate `op-1` for their first
+/// delete; the nonce must still differ or the loser's marker `Drop` can remove the
+/// winner's marker.
+///
+/// Deterministic, no concurrency: insert the row directly (consuming no operation
+/// id), delete it from service A (its `op-1`, marker written), re-insert the same
+/// row, delete it from the fresh service B (its `op-1`, marker written). The
+/// `InFlightMarker::create` seam records the nonce the production code actually
+/// wrote for each, so the assertion catches a call-site regression to
+/// `{pid}-{op_id}` or `{pid}-{id}` (both collapse to one distinct value).
+#[test]
+fn two_services_deleting_one_instance_write_distinct_marker_nonces() {
+    let h = Harness::new(EngineKey::Postgresql);
+    let port = test_port();
+    let spec = h.spec("nonce-services", EngineKey::Postgresql, port);
+    let id = crate::model::InstanceId::new();
+    let name = spec.name().clone();
+    let instance_dir = h.paths.instance_dir(&name);
+    let second =
+        super::harness::second_service(&h.paths, Arc::clone(&h.procs), Arc::clone(&h.secrets));
+
+    let row = || {
+        crate::model::Instance::new(
+            &spec,
+            id.clone(),
+            InstanceStatus::Stopped,
+            std::time::SystemTime::now(),
+        )
+    };
+
+    // Service A: inserted directly, so A's `ops` are at op-1 for this delete.
+    h.store().insert_instance(&row()).expect("insert row");
+    let (_op_a, run_a) = h.run_call(|| h.service.delete_instance(&id, DeleteMode::PurgeData));
+    assert!(
+        matches!(run_a.result(), Some(Ok(()))),
+        "service A delete: {:?}",
+        run_a.result()
+    );
+
+    // Service B: a different service (its own `Ops`), also at op-1.
+    h.store().insert_instance(&row()).expect("re-insert row");
+    let (_op_b, run_b) =
+        second.run_call(|| second.service.delete_instance(&id, DeleteMode::PurgeData));
+    assert!(
+        matches!(run_b.result(), Some(Ok(()))),
+        "service B delete: {:?}",
+        run_b.result()
+    );
+
+    let mut nonces = super::super::delete::take_created_nonces(&instance_dir);
+    nonces.sort();
+    nonces.dedup();
+    assert_eq!(
+        nonces.len(),
+        2,
+        "two services' deletes must write two distinct marker nonces, got {nonces:?}"
+    );
+}

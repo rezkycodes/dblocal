@@ -62,6 +62,24 @@ struct OpsInner {
     /// one id per operation. The outcome is stored alongside the id so a consumer
     /// that missed the broadcast can still observe success or failure.
     finished: Mutex<VecDeque<(OperationId, OperationOutcome)>>,
+    /// Test-only hook fired by [`Ops::finish`] the instant the durable result is
+    /// recorded, before `finish_operation` returns to its caller. It lives here,
+    /// not in `finish_operation`, so a test that swaps the two statements there
+    /// (registry write vs. broadcast) is caught: with the registry write first, the
+    /// hook runs with nothing yet in the channel.
+    #[cfg(test)]
+    finish_hook: Mutex<Option<FinishHookBox>>,
+}
+
+/// Test-only seam closure, wrapped so [`OpsInner`] can keep deriving `Debug`.
+#[cfg(test)]
+struct FinishHookBox(Box<dyn FnOnce(&OperationId) + Send>);
+
+#[cfg(test)]
+impl std::fmt::Debug for FinishHookBox {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("FinishHook")
+    }
 }
 
 impl Ops {
@@ -204,6 +222,29 @@ impl Ops {
             while finished.len() > FINISHED_HISTORY {
                 finished.pop_front();
             }
+        }
+        // Fire the seam here, at the exact instant the durable result is recorded.
+        // A consumer that stops as soon as the registry says "finished" relies on
+        // `OperationFinished` already being in its channel, so this hook observing an
+        // empty channel means the broadcast had not happened yet.
+        #[cfg(test)]
+        if let Some(FinishHookBox(hook)) = self
+            .inner
+            .finish_hook
+            .lock()
+            .ok()
+            .and_then(|mut slot| slot.take())
+        {
+            hook(id);
+        }
+    }
+
+    /// Registers the one-shot test hook fired by [`Ops::finish`] the instant the
+    /// durable result is recorded.
+    #[cfg(test)]
+    pub(crate) fn on_finish_recorded(&self, hook: impl FnOnce(&OperationId) + Send + 'static) {
+        if let Ok(mut slot) = self.inner.finish_hook.lock() {
+            *slot = Some(FinishHookBox(Box::new(hook)));
         }
     }
 

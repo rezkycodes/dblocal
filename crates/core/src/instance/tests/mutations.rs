@@ -688,27 +688,27 @@ fn change_port_check_then_act_window_is_documented() {
 /// **before** it records the durable registry result.
 ///
 /// A consumer may stop polling the registry the moment it reports "finished" and
-/// then drain its channel; it must find the terminal event. The reviewer's
-/// mutation — record in the registry, then broadcast — stayed green because no
-/// test observed the order.
+/// then drain its channel; it must find the terminal event.
 ///
-/// `on_finish_recorded` runs immediately after the registry write and owns the
-/// receiver, so it drains at exactly that instant. In the fixed order the broadcast
-/// has already happened, so it finds the event; with the pre-fix order it runs
-/// before the broadcast and finds nothing. Deterministic, no polling.
+/// The seam lives inside `Ops::finish`, at the exact instant the durable result is
+/// recorded, and owns the receiver. In the fixed order (broadcast, then record) the
+/// event is already in the channel when the seam runs; with the swapped order
+/// (record, then broadcast) the seam drains an empty channel. It sits in `Ops::finish`
+/// rather than at the end of `finish_operation` so the plain two-statement swap, not
+/// only a swap that also moves the seam, is caught.
 #[test]
 fn a_finished_operation_is_already_in_the_channel_when_the_registry_says_so() {
     let h = Harness::new(EngineKey::Postgresql);
     let port = test_port();
     let spec = h.spec("finish-order", EngineKey::Postgresql, port);
-    let root = h.paths.root().to_path_buf();
 
     // Subscribe before the create, so the hook's receiver is the one that would see
-    // the terminal event.
+    // the terminal event. The hook fires inside `Ops::finish`, at the instant the
+    // durable result is recorded, and owns the receiver.
     let mut receiver = h.receiver();
     let result: Arc<std::sync::Mutex<Option<bool>>> = Arc::new(std::sync::Mutex::new(None));
     let result_hook = Arc::clone(&result);
-    super::super::helpers::on_finish_recorded(&root, move |_inner, op| {
+    h.service.inner().ops.on_finish_recorded(move |op| {
         let op = op.clone();
         let mut found = false;
         loop {
@@ -733,11 +733,87 @@ fn a_finished_operation_is_already_in_the_channel_when_the_registry_says_so() {
         run.result()
     );
 
-    let found =
-        (*result.lock().expect("result")).expect("the finish hook must have run for this create");
+    // `h.run_call` returns as soon as it drains `OperationFinished`, which the
+    // service emits *before* it calls `Ops::finish`; the hook therefore may not have
+    // run yet. Wait for it, bounded, so a slow hook is not a spurious failure but a
+    // hook that never runs is.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let found = loop {
+        if let Some(found) = *result.lock().expect("result") {
+            break found;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the finish hook must have run for this create"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    };
     assert!(
         found,
         "the registry reported the operation finished before the channel held \
          OperationFinished: finish_operation must broadcast before recording"
+    );
+}
+
+/// Finding 2: an operation must not still hold its instance lock when it announces
+/// `OperationFinished`. `create_instance` used to release it only after
+/// `finish_operation`, so a consumer that reacts to the create finishing by starting
+/// the new instance (the GUI's auto-start, or a CLI chaining create then start) was
+/// refused as busy (`DBL-1004`). Start/stop/delete already drop first.
+///
+/// The `Ops::finish` seam fires as the terminal result is recorded, i.e. right at the
+/// announcement; taking the instance lock there must succeed. Red on the old order
+/// (the lock is still held as an operation guard, which refuses at once), green now.
+#[test]
+fn create_announces_completion_with_its_instance_lock_released() {
+    let h = Harness::new(EngineKey::Postgresql);
+    let port = test_port();
+    let spec = h.spec("release-at-finish", EngineKey::Postgresql, port);
+    let inner = Arc::clone(h.service.inner());
+
+    let outcome: Arc<std::sync::Mutex<Option<bool>>> = Arc::new(std::sync::Mutex::new(None));
+    let outcome_hook = Arc::clone(&outcome);
+    let ops = inner.ops.clone();
+    let ops_for_hook = ops.clone();
+    ops.on_finish_recorded(move |_op| {
+        // Try to take the instance lock at the instant completion is announced. The
+        // test home has exactly one instance (this create's row).
+        let row = inner
+            .db(|store| store.list_instances())
+            .ok()
+            .and_then(|rows| rows.into_iter().next());
+        let free = match row {
+            Some(instance) => ops_for_hook.lock_instance(instance.id()).is_ok(),
+            None => true,
+        };
+        *outcome_hook.lock().expect("outcome") = Some(free);
+    });
+
+    let mut receiver = h.receiver();
+    let op = h.service.create_instance(spec).expect("create");
+    let run = h.run_on(&mut receiver, op);
+    assert!(
+        matches!(run.result(), Some(Ok(()))),
+        "create: {:?}",
+        run.result()
+    );
+
+    // The seam fires inside `Ops::finish`, which runs after `h.run_on` may return;
+    // wait for it bounded.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let free = loop {
+        if let Some(free) = *outcome.lock().expect("outcome") {
+            break free;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the finish seam must have run for this create"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    };
+    assert!(
+        free,
+        "create still held its instance lock when it announced OperationFinished; a \
+         consumer chaining start on the event is refused as busy"
     );
 }
