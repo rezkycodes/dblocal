@@ -24,7 +24,13 @@ pub(crate) fn detect(
     inner: &Arc<std::sync::Mutex<Inner>>,
     refresh: bool,
 ) -> ServiceResult<Vec<DetectedClient>> {
-    let _ = (inner, refresh);
+    let _ = refresh;
+    // `set_no_clients(true)` makes the menu show "Salin URI" instead of a list
+    // (`F-OPN-01` AC2), so the demo build and the GUI tests can render that
+    // state without a machine where nothing is installed.
+    if lock(inner).no_clients {
+        return Ok(Vec::new());
+    }
     Ok(DetectedClients::default_detected())
 }
 
@@ -66,6 +72,15 @@ pub(crate) fn open(
             None => return Err(UserFacingError::from(not_found("instance", id))),
         }
     };
+    if lock(inner).no_clients {
+        return Err(UserFacingError::new(
+            crate::clients::ClientError::ClientNotFound {
+                name: client.as_str().to_owned(),
+            }
+            .code(),
+            "Client tidak ditemukan.",
+        ));
+    }
     let found = DetectedClients::default_detected()
         .into_iter()
         .find(|candidate| candidate.kind() == client)

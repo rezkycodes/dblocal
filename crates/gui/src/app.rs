@@ -6,6 +6,9 @@
 //! render the title bar, dock, tabs, screens, status bar, palette and dialogs.
 
 mod actions;
+mod admin_actions;
+mod admin_dialogs;
+mod admin_state;
 mod background;
 #[cfg(test)]
 mod bg_service_tests;
@@ -25,6 +28,9 @@ mod instance_actions;
 #[cfg(test)]
 #[path = "app/instance_actions_tests.rs"]
 mod instance_actions_tests;
+mod login_item;
+mod open_in;
+mod open_in_actions;
 mod palette;
 mod preview;
 mod quit_flow;
@@ -32,6 +38,9 @@ mod quit_flow;
 #[path = "app/quit_flow_tests.rs"]
 mod quit_flow_tests;
 mod screens;
+mod settings_actions;
+mod settings_dialog;
+mod settings_state;
 mod state;
 mod status_bar;
 #[cfg(test)]
@@ -52,6 +61,8 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
 use std::time::{Duration, Instant};
 
+use dblocal_core::admin::PrivilegeLevel;
+use dblocal_core::clients::DetectedClient;
 use dblocal_core::model::{AuthMode, DeleteMode, EngineKey, InstanceId, Port, Runtime};
 use dblocal_core::service::{CatalogView, DblService, InstanceView, UriFormat, UserFacingError};
 use dblocal_core::strings;
@@ -138,6 +149,30 @@ pub struct Workspace {
     delete_typed_name: Option<String>,
     delete_mode: DeleteMode,
     delete_size: u64,
+    /// Per-instance Databases tab state (`F-DBU-01..03`).
+    admin: admin_state::AdminState,
+    /// The database-create field of the visible Databases tab.
+    db_name_input: Option<Entity<InputState>>,
+    /// The new-user name field.
+    user_name_input: Option<Entity<InputState>>,
+    /// The database a new user is granted on.
+    user_db_choice: Option<String>,
+    /// The privilege level a new user gets.
+    user_level: PrivilegeLevel,
+    /// A drop-database dialog: the instance, the database, and the typed text.
+    drop_dialog: Option<admin_dialogs::DropDialog>,
+    /// A reset-password confirmation is open for this instance.
+    reset_confirm: Option<InstanceId>,
+    /// The one-time secret dialog (new user password or reset URI).
+    secret_dialog: Option<admin_dialogs::SecretDialog>,
+    /// Clients detected for the "Open in…" menu; `None` until the first read.
+    clients: Option<Result<Vec<DetectedClient>, UserFacingError>>,
+    /// An instance whose "Open in…" launch is in flight.
+    opening: Option<InstanceId>,
+    /// The Settings dialog's data (`F-PKG-05`, `F-AUT-01`).
+    settings: settings_state::SettingsState,
+    /// The login-item seam; `Err` when this host has no usable backend.
+    login: Option<Result<Arc<dyn login_item::LoginItemControl>, UserFacingError>>,
     palette_open: bool,
     palette_query: String,
     command_state: Entity<CommandState>,
@@ -283,6 +318,18 @@ impl Workspace {
             delete_typed_name: None,
             delete_mode: DeleteMode::ArchiveData,
             delete_size: 0,
+            admin: admin_state::AdminState::default(),
+            db_name_input: None,
+            user_name_input: None,
+            user_db_choice: None,
+            user_level: PrivilegeLevel::ReadOnly,
+            drop_dialog: None,
+            reset_confirm: None,
+            secret_dialog: None,
+            clients: None,
+            opening: None,
+            settings: settings_state::SettingsState::default(),
+            login: None,
             palette_open: false,
             palette_query: String::new(),
             last_failure_mirror: None,
@@ -386,11 +433,29 @@ impl Workspace {
             UiEvent::InstanceRemoved(id) => {
                 self.state
                     .apply_removed(&id, &mut self.tabs, &mut self.logs);
+                self.admin.forget(&id);
                 self.forget_instance(&id);
                 self.tray_needs_refresh = true;
             }
+            UiEvent::AdminChanged(id) => {
+                // The rows are stale; `apply_event_with_cx` re-reads them, so
+                // here only the "loading" flag needs to flip.
+                if let Some(admin) = self.admin.get(&id).cloned() {
+                    let mut admin = admin;
+                    if admin.data.ready().is_some() {
+                        admin.data = admin_state::Loadable::Loading;
+                        *self.admin.entry(&id) = admin;
+                    }
+                }
+            }
             UiEvent::StopForced(_id) => {
                 self.toast = Some(SharedString::from(strings::UI_TOAST_STOP_FORCED));
+            }
+            UiEvent::UpdateChecked { .. } => {
+                // `check_update` returns the full status to the caller, so the
+                // dialog already has it; the event only exists for consumers
+                // that poll nothing, and a stray one must not overwrite a check
+                // the dialog is showing with a partial answer.
             }
             UiEvent::Resync => {}
             UiEvent::Closed => {}
@@ -402,6 +467,10 @@ impl Workspace {
         let needs_catalog = matches!(event, UiEvent::CatalogUpdated);
         let removed_id = match &event {
             UiEvent::InstanceRemoved(id) => Some(id.clone()),
+            _ => None,
+        };
+        let admin_changed = match &event {
+            UiEvent::AdminChanged(id) => Some(id.clone()),
             _ => None,
         };
         let quit_stop_finished = match &event {
@@ -427,6 +496,9 @@ impl Workspace {
         }
         if needs_catalog {
             self.reload_catalog_bg(cx);
+        }
+        if let Some(id) = admin_changed {
+            self.reload_admin_bg(&id, cx);
         }
         if needs_resync || finished {
             self.refresh_instances_bg(cx);
@@ -486,6 +558,20 @@ impl Workspace {
         self.create = None;
         self.delete_target = None;
         self.delete_name_input = None;
+        // The top overlay only: Escape closes the topmost dialog, so a secret
+        // dialog closes first, then the confirmation under it stays open.
+        if self.secret_dialog.take().is_some() {
+            return;
+        }
+        if self.drop_dialog.take().is_some() {
+            return;
+        }
+        if self.reset_confirm.take().is_some() {
+            return;
+        }
+        if self.settings.open {
+            self.settings.close();
+        }
     }
 }
 
@@ -521,6 +607,9 @@ impl Render for Workspace {
                 this.toggle_palette();
                 cx.notify();
             }))
+            .on_action(cx.listener(|this, _: &actions::OpenSettings, _window, cx| {
+                this.open_settings(cx);
+            }))
             .on_action(cx.listener(|this, _: &actions::NewInstance, window, cx| {
                 this.open_new_instance(window, cx);
             }))
@@ -553,6 +642,18 @@ impl Render for Workspace {
             .when(deleting, |this| this.child(delete_dialog::render(self, cx)))
             .when(self.palette_open, |this| {
                 this.child(palette::render(self, cx))
+            })
+            .when(self.settings.open, |this| {
+                this.child(settings_dialog::render(self, cx))
+            })
+            .when(self.drop_dialog.is_some(), |this| {
+                this.child(admin_dialogs::render_drop(self, cx))
+            })
+            .when(self.reset_confirm.is_some(), |this| {
+                this.child(admin_dialogs::render_reset(self, cx))
+            })
+            .when(self.secret_dialog.is_some(), |this| {
+                this.child(admin_dialogs::render_secret(self, cx))
             })
             .when(self.quit.is_confirming(), |this| {
                 this.child(self.render_quit_dialog(cx))

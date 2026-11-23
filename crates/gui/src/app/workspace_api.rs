@@ -43,6 +43,21 @@ impl Workspace {
         }
     }
 
+    /// Sets the inner tab from a click, which has a window to build inputs in.
+    pub(crate) fn set_inner_tab_with_window(
+        &mut self,
+        inner: InnerTab,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.set_inner_tab(inner, cx);
+        if inner == InnerTab::Databases
+            && let Some(id) = self.tabs.selected_instance().cloned()
+        {
+            self.enter_databases_tab(&id, window, cx);
+        }
+    }
+
     /// Toggles follow mode for the visible Logs tab and, when turning it on,
     /// scrolls to the newest line.
     pub(crate) fn toggle_follow(&mut self) {
