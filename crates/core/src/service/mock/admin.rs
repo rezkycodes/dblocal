@@ -67,10 +67,7 @@ fn sticky(g: &Inner) -> Option<&AdminScenario> {
 
 /// Removes and returns the first one-shot scenario matching `wanted`.
 fn take_once(g: &mut Inner, wanted: impl Fn(&AdminScenario) -> bool) -> Option<AdminScenario> {
-    let index = g
-        .admin_scenarios
-        .iter()
-        .position(wanted)?;
+    let index = g.admin_scenarios.iter().position(wanted)?;
     g.admin_scenarios.remove(index)
 }
 

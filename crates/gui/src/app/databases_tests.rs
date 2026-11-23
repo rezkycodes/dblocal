@@ -329,6 +329,40 @@ fn every_action_is_busy_while_in_flight(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn admin_changed_re_reads_the_visible_instance_only(cx: &mut TestAppContext) {
+    let (view, service, cx) = fixture(cx);
+    let visible = open_databases(&view, &service, cx);
+    let before = service.counts().list_databases;
+
+    view.update(cx, |this, cx| {
+        this.apply_event_with_cx(
+            crate::service_bridge::UiEvent::AdminChanged(visible.clone()),
+            cx,
+        );
+    });
+    settle(cx);
+    assert!(
+        service.counts().list_databases > before,
+        "the visible instance is re-read on AdminChanged"
+    );
+
+    let other = service.id_with(InstanceStatus::Stopped);
+    let before = service.counts().list_databases;
+    view.update(cx, |this, cx| {
+        this.apply_event_with_cx(
+            crate::service_bridge::UiEvent::AdminChanged(other.clone()),
+            cx,
+        );
+    });
+    settle(cx);
+    assert_eq!(
+        service.counts().list_databases,
+        before,
+        "a background instance must not be read eagerly"
+    );
+}
+
+#[gpui_kit::test]
 fn escape_closes_the_top_dialog_and_leaves_the_one_under_it(cx: &mut TestAppContext) {
     let (view, service, cx) = fixture(cx);
     let id = open_databases(&view, &service, cx);

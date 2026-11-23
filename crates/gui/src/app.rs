@@ -474,12 +474,14 @@ impl Workspace {
                 self.tray_needs_refresh = true;
             }
             UiEvent::AdminChanged(id) => {
-                // The rows are stale; `apply_event_with_cx` re-reads them, so
-                // here only the "loading" flag needs to flip.
+                // The rows are stale. The visible instance is re-read below
+                // (`apply_event_with_cx`); any other instance goes back to
+                // `Idle`, so opening its tab issues a fresh read instead of
+                // showing rows that changed while it was in the background.
                 if let Some(admin) = self.admin.get(&id).cloned() {
                     let mut admin = admin;
                     if admin.data.ready().is_some() {
-                        admin.data = admin_state::Loadable::Loading;
+                        admin.data = admin_state::Loadable::Idle;
                         *self.admin.entry(&id) = admin;
                     }
                 }
@@ -534,7 +536,12 @@ impl Workspace {
             self.reload_catalog_bg(cx);
         }
         if let Some(id) = admin_changed {
-            self.reload_admin_bg(&id, cx);
+            // Re-read only the visible instance's Databases tab; an event for a
+            // background instance just clears its "ready" state in
+            // `apply_event`, and it is read again when the user opens it.
+            if self.tabs.selected_instance() == Some(&id) {
+                self.reload_admin_bg(&id, cx);
+            }
         }
         if needs_resync || finished {
             self.refresh_instances_bg(cx);
