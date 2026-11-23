@@ -85,6 +85,32 @@ impl ChildGuard {
     }
 }
 
+/// Waits until `predicate` holds, polling to a deadline.
+///
+/// A test that spawns a helper and then asserts on what it can observe about it
+/// was sleeping a fixed 100 ms first. Under a loaded box the child may not have
+/// exec'd yet, so the assertion ran against the parent's image or a stale
+/// observation and failed for no real reason. Polling the exact condition the
+/// assertion needs removes that guess; the deadline only has to be long enough to
+/// catch a genuine hang.
+pub(super) fn wait_until(
+    what: &str,
+    timeout: std::time::Duration,
+    mut predicate: impl FnMut() -> bool,
+) {
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        if predicate() {
+            return;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "timed out after {timeout:?} waiting for {what}"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+}
+
 impl Drop for ChildGuard {
     fn drop(&mut self) {
         let _ = self.child.kill();

@@ -765,13 +765,18 @@ fn verify_pid_identity_linux_matches_real_process() {
         .expect("spawn fake mariadbd"),
     );
     let pid = child.id();
-    std::thread::sleep(Duration::from_millis(100));
-
     let expected = ExpectedIdentity {
         exe: fake.clone(),
         data_dir: data.clone(),
         config_path: conf.clone(),
     };
+    // Wait for the helper to have exec'd (it becomes `/usr/bin/sleep`'s image
+    // only after exec); a fixed 100 ms was not guaranteed under load.
+    super::testutil::wait_until(
+        "the fake mariadbd to be identifiable",
+        Duration::from_secs(10),
+        || verify_pid_identity(pid, &expected) == PidIdentity::Match,
+    );
     let id = verify_pid_identity(pid, &expected);
     assert_eq!(
         id,
@@ -802,7 +807,13 @@ fn verify_pid_identity_linux_matches_real_process() {
     );
 
     child.reap();
-    std::thread::sleep(Duration::from_millis(50));
+    // The reaped child is gone from the process table shortly after the wait
+    // returns; poll instead of hoping 50 ms was enough.
+    super::testutil::wait_until(
+        "the reaped pid to disappear",
+        Duration::from_secs(10),
+        || !matches!(verify_pid_identity(pid, &expected), PidIdentity::Match),
+    );
     let dead = verify_pid_identity(pid, &expected);
     assert!(
         !matches!(dead, PidIdentity::Match),

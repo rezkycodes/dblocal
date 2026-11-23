@@ -435,7 +435,11 @@ pub(crate) fn on_data_gone(hook: impl FnOnce() + Send + 'static) {
 
 #[cfg(test)]
 fn run_data_gone() {
-    if let Some(hook) = data_gone_hook().lock().ok().and_then(|mut slot| slot.take()) {
+    if let Some(hook) = data_gone_hook()
+        .lock()
+        .ok()
+        .and_then(|mut slot| slot.take())
+    {
         hook();
     }
 }
