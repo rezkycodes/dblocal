@@ -13,7 +13,7 @@ use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::label::Label;
 use gpui_kit::component::{ActiveTheme, Sizable, Theme, h_flex, v_flex};
 use gpui_kit::prelude::*;
-use gpui_kit::{Context, IntoElement, ParentElement, Styled, div, px};
+use gpui_kit::{Context, IntoElement, ParentElement, SharedString, Styled, div, px};
 
 use crate::format;
 
@@ -148,17 +148,30 @@ impl Workspace {
             .font_family(mono_font)
             .text_xs()
             .child(Label::new(strings::UI_OVERVIEW_DOTENV).text_color(theme.muted_foreground));
-        for row in self.dotenv_rows(&view.id) {
+        for (index, row) in self.dotenv_rows(&view.id).into_iter().enumerate() {
             env_block = env_block.child(match row.key {
                 Some(key) => h_flex()
-                    .child(Label::new(key).text_color(theme.primary))
-                    .child(Label::new(format!("={}", row.value))),
-                None => h_flex().child(Label::new(row.value)),
+                    .id(SharedString::from(format!("env-row-{index}")))
+                    .child(
+                        Label::new(key)
+                            .id(SharedString::from(format!("env-key-{index}")))
+                            .text_color(theme.primary),
+                    )
+                    .child(
+                        Label::new(format!("={}", row.value))
+                            .id(SharedString::from(format!("env-value-{index}"))),
+                    ),
+                None => h_flex()
+                    .id(SharedString::from(format!("env-line-{index}")))
+                    .child(
+                        Label::new(row.value)
+                            .id(SharedString::from(format!("env-line-text-{index}"))),
+                    ),
             });
         }
 
         let header = format::connection_header(&credential_note);
-        card(header.card_title, theme)
+        card(header.card_title, Some("connection"), theme)
             .child(
                 h_flex()
                     .justify_between()
@@ -272,7 +285,7 @@ impl Workspace {
             .map(format::format_bytes_id)
             .unwrap_or_else(|| strings::UI_VALUE_UNKNOWN.to_owned());
         let canonical = format::is_canonical_port(view);
-        card(Some(strings::UI_OVERVIEW_DETAIL), theme)
+        card(Some(strings::UI_OVERVIEW_DETAIL), None, theme)
             .child(kv(
                 strings::UI_OVERVIEW_ENGINE,
                 Label::new(format::engine_detail(view, arch)),
@@ -328,7 +341,7 @@ impl Workspace {
             _ => (strings::UI_OVERVIEW_HEALTH_OFFLINE, theme.muted_foreground),
         };
         let id = view.id.clone();
-        card(Some(strings::UI_OVERVIEW_PROCESS), theme)
+        card(Some(strings::UI_OVERVIEW_PROCESS), None, theme)
             .child(kv(
                 strings::UI_OVERVIEW_PID,
                 Label::new(pid).font_family(theme.mono_font_family.clone()),
@@ -383,6 +396,7 @@ impl Workspace {
             if let Some(line) = buffer.line(index) {
                 lines = lines.child(
                     Label::new(line.clone())
+                        .id(SharedString::from(format!("recent-log-{index}")))
                         .py_0p5()
                         .text_color(theme.foreground),
                 );
@@ -392,7 +406,7 @@ impl Workspace {
             lines =
                 lines.child(Label::new(strings::UI_LOGS_EMPTY).text_color(theme.muted_foreground));
         }
-        card(Some(strings::UI_OVERVIEW_RECENT_LOGS), theme)
+        card(Some(strings::UI_OVERVIEW_RECENT_LOGS), None, theme)
             .child(
                 h_flex()
                     .justify_between()

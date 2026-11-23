@@ -394,10 +394,14 @@ pub(crate) fn page_fill() -> gpui_kit::Div {
 
 /// An icon plus a muted label, the pattern most hints use.
 pub(crate) fn hint_row(name: IconName, text: String, theme: &Theme) -> impl IntoElement {
+    // A11y: one page can draw two hints from this call site (the stopped-URI
+    // note and the loopback note), so the row and its label take the text as id.
+    let id = SharedString::from(format!("hint-{text}"));
     h_flex()
+        .id(id.clone())
         .gap_1p5()
         .text_xs()
         .text_color(theme.muted_foreground)
         .child(icon(name, 14.0, theme.muted_foreground))
-        .child(Label::new(text))
+        .child(Label::new(text).id(id))
 }

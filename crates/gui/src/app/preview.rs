@@ -184,6 +184,20 @@ impl Workspace {
         workspace
     }
 
+    /// Preview with the demo build's Config table open (one row per parameter).
+    ///
+    /// The render tests draw the product placeholder; this reaches the demo
+    /// table, which is also where the per-row a11y ids live (`W2-B2`).
+    pub fn preview_config_demo(
+        service: Arc<dyn DblService>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let mut workspace = Self::preview(service, window, cx);
+        workspace.set_inner_tab(InnerTab::Config, cx);
+        workspace
+    }
+
     /// Preview of the product build: no demo content in the placeholder tabs.
     pub fn preview_product_databases(
         service: Arc<dyn DblService>,
