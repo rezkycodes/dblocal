@@ -135,11 +135,10 @@ fn wait_for_identity(probe: &SysinfoProbe, pid: u32, limit: Duration) -> Option<
             exe: Some(exe),
             started_at: Some(started_at),
         } = probe.observe(pid)
+            && let Ok(candidate) = ProcessIdentity::new(pid, exe, started_at)
+            && probe.validate(&candidate) == ProcessState::Match
         {
-            let candidate = ProcessIdentity::new(pid, exe, started_at).ok()?;
-            if probe.validate(&candidate) == ProcessState::Match {
-                return Some(candidate);
-            }
+            return Some(candidate);
         }
         if std::time::Instant::now() >= deadline {
             return None;
