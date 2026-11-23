@@ -480,3 +480,66 @@ fn every_call_is_busy_while_in_flight(cx: &mut TestAppContext) {
     assert!(busy);
     assert!(!can_apply, "Terapkan is disabled while a call is in flight");
 }
+
+/// "Restart sekarang" stops a running instance, then starts it once the stop has
+/// settled (`F-CFG-01` AC2). Starting a `Stopping` instance would be refused, so
+/// the start must run on the transition to `Stopped`, not immediately.
+///
+/// Without the scheduling in `after_status_change` this test is red: the stop is
+/// issued but the start never is, so the engine stays stopped after a promised
+/// restart.
+#[gpui_kit::test]
+fn restart_now_stops_then_starts_on_the_stopped_transition(cx: &mut TestAppContext) {
+    let (view, service, cx) = fixture(cx);
+    let id = service.id_with(InstanceStatus::Running);
+    let starts_before = service.counts().start_instance;
+    let stops_before = service.counts().stop_instance;
+
+    // The user accepts "Restart sekarang": a running instance is stopped first.
+    view.update(cx, |this, cx| this.restart_after_apply(&id, cx));
+    settle(cx);
+    assert_eq!(
+        service.counts().stop_instance,
+        stops_before + 1,
+        "Restart sekarang stops a running instance first"
+    );
+    assert_eq!(
+        service.counts().start_instance,
+        starts_before,
+        "the start must wait for the stop to settle, not run before it"
+    );
+
+    // The stop completes: the service reports the instance as Stopped.
+    view.update(cx, |this, cx| {
+        let mut stopped = this.instance(&id).cloned().expect("instance view");
+        stopped.status = InstanceStatus::Stopped;
+        this.apply_event_with_cx(UiEvent::InstanceChanged(stopped), cx);
+    });
+    settle(cx);
+    assert_eq!(
+        service.counts().start_instance,
+        starts_before + 1,
+        "once the stop has settled the queued restart must start the instance"
+    );
+}
+
+/// A restart queued for an instance that is already stopped is just a start.
+#[gpui_kit::test]
+fn restart_now_on_a_stopped_instance_starts_it_directly(cx: &mut TestAppContext) {
+    let (view, service, cx) = fixture(cx);
+    let id = service.id_with(InstanceStatus::Stopped);
+    let starts_before = service.counts().start_instance;
+    let stops_before = service.counts().stop_instance;
+    view.update(cx, |this, cx| this.restart_after_apply(&id, cx));
+    settle(cx);
+    assert_eq!(
+        service.counts().start_instance,
+        starts_before + 1,
+        "a stopped instance is started, not stopped again"
+    );
+    assert_eq!(
+        service.counts().stop_instance,
+        stops_before,
+        "there is nothing to stop on a stopped instance"
+    );
+}
