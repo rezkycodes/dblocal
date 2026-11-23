@@ -248,7 +248,7 @@ mod tests {
         .expect("spec");
 
         assert_eq!(service.list_instances().expect("instances").len(), 3);
-        assert!(service.catalog().expect("catalog").engines.is_empty());
+        assert!(!service.catalog().expect("catalog").engines.is_empty());
         assert_eq!(
             service.refresh_catalog(false).expect("refresh").as_str(),
             "op-refresh"

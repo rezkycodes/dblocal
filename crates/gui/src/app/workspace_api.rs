@@ -111,6 +111,9 @@ impl Workspace {
         self.demo_content
     }
 
+    /// Flips the palette flag; a test shortcut. The real toggle is
+    /// [`Self::toggle_palette_in`], which also moves focus.
+    #[cfg(test)]
     pub(crate) fn toggle_palette(&mut self) {
         self.palette_open = !self.palette_open;
     }
@@ -153,6 +156,7 @@ impl Workspace {
         self.palette_open
     }
 
+    #[cfg(test)]
     pub(crate) fn set_palette_open(&mut self, open: bool) {
         self.palette_open = open;
     }
@@ -179,6 +183,7 @@ impl Workspace {
             .collect()
     }
 
+    #[cfg(test)]
     pub(crate) fn palette_labels(&self) -> Vec<String> {
         self.palette_items()
             .into_iter()
@@ -187,6 +192,7 @@ impl Workspace {
     }
 
     /// The reason a disabled palette row shows, or `None` when it is runnable.
+    #[cfg(test)]
     pub(crate) fn palette_reasons(&self) -> Vec<Option<String>> {
         self.palette_items()
             .into_iter()

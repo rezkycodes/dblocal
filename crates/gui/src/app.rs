@@ -148,6 +148,17 @@ pub struct CreateForm {
     pub name_input: Option<Entity<InputState>>,
     /// Port field state; see [`CreateForm::name_input`].
     pub port_input: Option<Entity<InputState>>,
+    /// Per-engine-card keyboard focus handles, in catalog order. Owned by the
+    /// form so the view and the keyboard tests share one handle per card rather
+    /// than each reaching into window element state (`F-PLH-01` AC1).
+    pub engine_focus: Vec<(EngineKey, FocusHandle)>,
+    /// Per-version-row keyboard focus handles, for the currently selected
+    /// engine's versions, in list order.
+    pub version_focus: Vec<(String, FocusHandle)>,
+    /// The footer "Buat" (create) button's focus handle.
+    pub submit_focus: FocusHandle,
+    /// The footer "Batal" (cancel) button's focus handle.
+    pub cancel_focus: FocusHandle,
 }
 
 pub use create_submit::{CreateDraft, SubmitError, Submitted};
@@ -764,3 +775,7 @@ pub(crate) fn masked_env_rows(
 #[cfg(test)]
 #[path = "app/event_tests.rs"]
 mod event_tests;
+
+#[cfg(test)]
+#[path = "app/keyboard_flow_tests.rs"]
+mod keyboard_flow_tests;

@@ -133,18 +133,17 @@ fn render_engine_cards(
     cx: &mut Context<Workspace>,
 ) -> impl IntoElement {
     let cards = crate::format::create_engine_cards(entries);
-    // One stable focus handle per engine card, taken before the elements are
-    // built so a re-render keeps the same handle (choosing an engine must not
-    // drop the ring back to the first card).
-    let handles = cards
-        .iter()
-        .map(|entry| focus_handle_for(window, cx, format!("engine-focus-{}", entry.engine.as_str())))
-        .collect::<Vec<_>>();
+    // One focus handle per engine card, taken from the form so the keyboard
+    // tests focus the exact same control the view draws (`F-PLH-01` AC1).
     let cards = cards
         .into_iter()
-        .zip(handles)
-        .map(|(entry, focus)| {
+        .map(|entry| {
             let engine = entry.engine;
+            let focus = form
+                .engine_focus
+                .iter()
+                .find(|(key, _)| *key == engine)
+                .map(|(_, handle)| handle.clone());
             let selected = engine == form.engine;
             let disabled = !entry.available;
             let reason = format::engine_unavailable_reason(entry).map(str::to_owned);
@@ -197,25 +196,14 @@ fn render_engine_cards(
                             .text_color(theme.muted_foreground),
                     )
                 });
-            if disabled {
-                card
-            } else {
-                super::components::apply_focus_ring(card, &focus, window, cx)
+            match (disabled, focus) {
+                (false, Some(focus)) => {
+                    super::components::apply_focus_ring(card, &focus, window, cx)
+                }
+                _ => card,
             }
         });
     h_flex().gap_2p5().flex_wrap().children(cards)
-}
-
-/// A keyed focus handle for a row that must survive re-renders.
-fn focus_handle_for(
-    window: &mut Window,
-    cx: &mut Context<Workspace>,
-    key: String,
-) -> gpui_kit::FocusHandle {
-    window
-        .use_keyed_state(SharedString::from(key), cx, |_, cx| cx.focus_handle())
-        .read(cx)
-        .clone()
 }
 
 /// The version list with the installed / download badges.
@@ -241,14 +229,12 @@ fn render_versions(
         );
     };
     let unavailable = format::version_unavailable_reason(entry).map(str::to_owned);
-    // One stable focus handle per version row, taken before the elements are
-    // built (the same rule as the engine cards).
-    let handles = entry
-        .versions
-        .iter()
-        .map(|version| focus_handle_for(window, cx, format!("version-focus-{}", version.version)))
-        .collect::<Vec<_>>();
-    for ((index, version), focus) in entry.versions.iter().enumerate().zip(handles) {
+    for (index, version) in entry.versions.iter().enumerate() {
+        let focus = form
+            .version_focus
+            .iter()
+            .find(|(tag, _)| tag == &version.version)
+            .map(|(_, handle)| handle.clone());
         let selected = version.version == form.version;
         let tag = version.version.clone();
         let version_unavailable = unavailable.is_some();
@@ -306,10 +292,11 @@ fn render_versions(
                         .text_color(theme.muted_foreground),
                 )
             });
-        list = list.child(if version_unavailable {
-            row
-        } else {
-            super::components::apply_focus_ring(row, &focus, window, cx)
+        list = list.child(match (version_unavailable, focus) {
+            (false, Some(focus)) => {
+                super::components::apply_focus_ring(row, &focus, window, cx)
+            }
+            _ => row,
         });
     }
     list
@@ -460,7 +447,6 @@ fn render_footer(
     } else {
         theme.muted_foreground
     };
-    let _ = form;
     h_flex()
         .gap_3()
         .px(px(20.))
@@ -471,6 +457,7 @@ fn render_footer(
         .child(
             Button::new("ni-cancel")
                 .label(strings::UI_CANCEL)
+                .track_focus(&form.cancel_focus)
                 .on_click(cx.listener(|this, _, _, cx| {
                     this.cancel_create_action();
                     cx.notify();
@@ -480,6 +467,7 @@ fn render_footer(
             Button::new("ni-create")
                 .primary()
                 .label(strings::UI_CREATE_SUBMIT_PROTOTYPE)
+                .track_focus(&form.submit_focus)
                 .on_click(cx.listener(|this, _, window, cx| {
                     this.submit_create_action(window, cx);
                 })),

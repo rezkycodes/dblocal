@@ -327,6 +327,15 @@ impl Workspace {
             cx.new(|cx| InputState::new(window, cx).placeholder(strings::UI_FIELD_PORT.to_owned()));
         let name = crate::format::suggested_name(engine, &version);
         name_input.update(cx, |state, cx| state.set_value(name, window, cx));
+        // One focus handle per engine card and per version row, plus the footer
+        // buttons, built here so the view and the keyboard tests share them.
+        let engine_focus = self
+            .catalog
+            .engines
+            .iter()
+            .map(|entry| (entry.engine, cx.focus_handle()))
+            .collect();
+        let version_focus = self.version_focus_for(engine, cx);
         self.create = Some(CreateForm {
             engine,
             version,
@@ -334,6 +343,10 @@ impl Workspace {
             suggested_port: None,
             name_input: Some(name_input.clone()),
             port_input: Some(port_input.clone()),
+            engine_focus,
+            version_focus,
+            submit_focus: cx.focus_handle(),
+            cancel_focus: cx.focus_handle(),
         });
         // `F-PLH-01` AC1: the dialog takes the keyboard when it opens, so a
         // keyboard user lands on the name field instead of nowhere; Escape and
@@ -355,6 +368,29 @@ impl Workspace {
         cx.notify();
     }
 
+    /// The version-row focus handles for `engine`, in catalog order.
+    ///
+    /// Rebuilt whenever the selected engine changes, because each engine has its
+    /// own version list (`F-PLH-01` AC1: Tab reaches every version row).
+    fn version_focus_for(
+        &self,
+        engine: EngineKey,
+        cx: &mut Context<Self>,
+    ) -> Vec<(String, gpui_kit::FocusHandle)> {
+        self.catalog
+            .engines
+            .iter()
+            .find(|entry| entry.engine == engine)
+            .map(|entry| {
+                entry
+                    .versions
+                    .iter()
+                    .map(|version| (version.version.clone(), cx.focus_handle()))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
     pub(crate) fn default_engine_version(&self, engine: EngineKey) -> (String, Option<Port>) {
         let version = self
             .catalog
@@ -374,10 +410,14 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         let (version, _) = self.default_engine_version(engine);
+        // The version rows belong to the newly chosen engine, so rebuild their
+        // focus handles too (`F-PLH-01` AC1).
+        let version_focus = self.version_focus_for(engine, cx);
         if let Some(form) = self.create.as_mut() {
             form.engine = engine;
             form.version = version.clone();
             form.suggested_port = None;
+            form.version_focus = version_focus;
         }
         let name = crate::format::suggested_name(engine, &version);
         self.set_create_field_texts(&name, "", window, cx);

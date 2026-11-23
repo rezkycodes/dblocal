@@ -273,7 +273,9 @@ pub(crate) fn check_all() -> (Vec<CheckedPair>, Vec<CheckedPair>) {
         let pairs = theme_pairs(&name, &colours)
             .into_iter()
             .chain(derived_pairs(&name, &colours))
-            .chain(derived_pairs_from_hsla(&name, &colours));
+            .chain(derived_pairs_from_hsla(&name, &colours))
+            .chain(tinted_pairs(&name, &colours))
+            .chain(extra_text_pairs(&name, &colours));
         for pair in pairs {
             if pair.ratio < MIN_RATIO {
                 failing.push(pair.clone());
@@ -282,6 +284,141 @@ pub(crate) fn check_all() -> (Vec<CheckedPair>, Vec<CheckedPair>) {
         }
     }
     (all, failing)
+}
+
+/// Alpha the views use for a status badge or banner fill (`theme.rs` tokens).
+const BADGE_ALPHA: f64 = 0.14;
+
+/// Composites `color` at `alpha` over an opaque `base`, as GPUI paints a tinted
+/// fill over the surface below it.
+fn composite(color: Rgb, alpha: f64, base: Rgb) -> Rgb {
+    let mix = |fg: u8, bg: u8| (f64::from(fg) * alpha + f64::from(bg) * (1.0 - alpha)).round() as u8;
+    Rgb {
+        r: mix(color.r, base.r),
+        g: mix(color.g, base.g),
+        b: mix(color.b, base.b),
+    }
+}
+
+/// The status colours a badge or banner paints its **text** with, which is the
+/// full-strength semantic colour over its own tinted fill (`F-PLH-02` AC2: the
+/// status pill draws `status_glyph` and the label in the status colour on a
+/// `tint(colour, 0.14)` fill).
+fn tinted_pairs(theme_name: &str, colors: &HashMap<String, String>) -> Vec<CheckedPair> {
+    // gpui reads `theme.success` from `success.background`, so that token is the
+    // one the pill paints text with; the rest follow the same rule.
+    const STEMS: [&str; 6] = ["success", "danger", "warning", "info", "primary", "muted"];
+    const SURFACES: [&str; 2] = ["background", "sidebar.background"];
+    let mut out = Vec::new();
+    for stem in STEMS {
+        // `muted` text sits on `muted.background`; the semantic stems use
+        // `<stem>.background` as both the text and the tint source.
+        let fg_key = if stem == "muted" {
+            "muted.foreground"
+        } else {
+            match stem {
+                "success" => "success.background",
+                "danger" => "danger.background",
+                "warning" => "warning.background",
+                "info" => "info.background",
+                "primary" => "primary.background",
+                _ => continue,
+            }
+        };
+        let Some(fg_hex) = colors.get(fg_key) else {
+            continue;
+        };
+        let Some(fg) = Rgb::parse(fg_hex) else {
+            continue;
+        };
+        for surface in SURFACES {
+            let Some(base_hex) = colors.get(surface) else {
+                continue;
+            };
+            let Some(base) = Rgb::parse(base_hex) else {
+                continue;
+            };
+            let fill = composite(fg, BADGE_ALPHA, base);
+            out.push(CheckedPair {
+                theme: theme_name.to_owned(),
+                label: format!("{fg_key} on tinted {stem} over {surface}"),
+                fg: fg_hex.clone(),
+                bg: format!("#{:02x}{:02x}{:02x}", fill.r, fill.g, fill.b),
+                ratio: contrast_ratio(fg, fill),
+            });
+        }
+    }
+    out
+}
+
+/// Text pairs the screens use that are not an `X.foreground`/`X.background`
+/// pair: link text on the page, the active tab and the danger/toast text.
+fn extra_text_pairs(theme_name: &str, colors: &HashMap<String, String>) -> Vec<CheckedPair> {
+    // (foreground key, background key, label)
+    const PAIRS: [(&str, &str, &str); 6] = [
+        ("link.foreground", "background", "link on page"),
+        ("link.foreground", "sidebar.background", "link on dock"),
+        ("tab.active.foreground", "tab.active.background", "active tab"),
+        ("danger.background", "background", "danger text on page"),
+        ("danger.background", "muted.background", "danger text on card"),
+        ("warning.background", "muted.background", "warning text on card"),
+    ];
+    let mut out = Vec::new();
+    for (fg_key, bg_key, label) in PAIRS {
+        let (Some(fg_hex), Some(bg_hex)) = (colors.get(fg_key), colors.get(bg_key)) else {
+            continue;
+        };
+        let (Some(fg), Some(bg)) = (Rgb::parse(fg_hex), Rgb::parse(bg_hex)) else {
+            continue;
+        };
+        out.push(CheckedPair {
+            theme: theme_name.to_owned(),
+            label: label.to_owned(),
+            fg: fg_hex.clone(),
+            bg: bg_hex.clone(),
+            ratio: contrast_ratio(fg, bg),
+        });
+    }
+    out
+}
+
+/// The WCAG 2.1 non-text minimum for a focus indicator or a control edge.
+#[cfg(test)]
+pub(crate) const MIN_NON_TEXT_RATIO: f64 = 3.0;
+
+/// The focus-ring colour against the surfaces it is drawn on.
+///
+/// The ring is a control edge, not text, so WCAG 2.1 asks for 3:1 (SC 1.4.11),
+/// not 4.5:1. It still must be checked: a ring that vanished into the surface
+/// would make "focus always visible" (`F-PLH-01` AC1) untrue.
+#[cfg(test)]
+pub(crate) fn focus_ring_pairs(
+    theme_name: &str,
+    colors: &HashMap<String, String>,
+) -> Vec<CheckedPair> {
+    let Some(ring_hex) = colors.get("ring") else {
+        return Vec::new();
+    };
+    let Some(ring) = Rgb::parse(ring_hex) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for surface in ["background", "sidebar.background", "popover.background"] {
+        let Some(bg_hex) = colors.get(surface) else {
+            continue;
+        };
+        let Some(bg) = Rgb::parse(bg_hex) else {
+            continue;
+        };
+        out.push(CheckedPair {
+            theme: theme_name.to_owned(),
+            label: format!("ring on {surface}"),
+            fg: ring_hex.clone(),
+            bg: bg_hex.clone(),
+            ratio: contrast_ratio(ring, bg),
+        });
+    }
+    out
 }
 
 /// The tokens the views derive their paints from, per theme.
@@ -460,6 +597,58 @@ mod tests {
         assert!(
             failing.is_empty(),
             "derived contrast failures:\n{}",
+            failing.join("\n")
+        );
+    }
+
+    #[test]
+    fn the_focus_ring_clears_the_non_text_minimum_on_every_surface() {
+        // `F-PLH-01` AC1 requires "focus always visible"; a ring that faded into
+        // any surface it is drawn on would make that false. WCAG 2.1 SC 1.4.11
+        // asks 3:1 for a control edge, which is the bar here.
+        let mut failing = Vec::new();
+        let mut checked = 0;
+        for (name, colours) in parse_themes() {
+            for pair in focus_ring_pairs(&name, &colours) {
+                checked += 1;
+                if pair.ratio < MIN_NON_TEXT_RATIO {
+                    failing.push(format!(
+                        "{} / {}: {} on {} = {:.2}",
+                        pair.theme, pair.label, pair.fg, pair.bg, pair.ratio
+                    ));
+                }
+            }
+        }
+        assert!(checked >= 6, "each theme must check the ring on its surfaces");
+        assert!(
+            failing.is_empty(),
+            "focus ring contrast failures (need 3:1):\n{}",
+            failing.join("\n")
+        );
+    }
+
+    #[test]
+    fn tinted_status_badges_keep_their_text_readable() {
+        // The status pill paints its glyph and word in the status colour on a
+        // `tint(colour, 0.14)` fill (`F-PLH-02` AC2). Check the composited pair
+        // rather than the flat colour, because that is what is on screen.
+        let mut failing = Vec::new();
+        let mut checked = 0;
+        for (name, colours) in parse_themes() {
+            for pair in tinted_pairs(&name, &colours) {
+                checked += 1;
+                if pair.ratio < MIN_RATIO {
+                    failing.push(format!(
+                        "{} / {}: {} on {} = {:.2}",
+                        pair.theme, pair.label, pair.fg, pair.bg, pair.ratio
+                    ));
+                }
+            }
+        }
+        assert!(checked >= 20, "expected a badge matrix, got {checked}");
+        assert!(
+            failing.is_empty(),
+            "tinted badge contrast failures:\n{}",
             failing.join("\n")
         );
     }
