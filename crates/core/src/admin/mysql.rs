@@ -569,9 +569,48 @@ mod tests {
     #[test]
     fn connection_to_a_missing_socket_is_a_typed_connect_error() {
         let admin = MysqlAdmin::new(target());
-        // No live server: the call must not panic and must map to Connect.
-        let err = MysqlAdmin::list_databases(&admin).expect_err("no socket");
-        assert_eq!(err, AdminError::Connect);
+        // No live server: every method must not panic and must map to Connect,
+        // covering each method's pre-connect glue.
+        let db = Identifier::new("appdb").expect("valid");
+        let user = Identifier::role("app_user").expect("valid");
+        assert_eq!(
+            MysqlAdmin::list_databases(&admin).expect_err("db"),
+            AdminError::Connect
+        );
+        assert_eq!(
+            MysqlAdmin::list_users(&admin).expect_err("users"),
+            AdminError::Connect
+        );
+        assert_eq!(
+            MysqlAdmin::create_database(&admin, &db).expect_err("create"),
+            AdminError::Connect
+        );
+        assert_eq!(
+            MysqlAdmin::drop_database(&admin, &db, true).expect_err("drop"),
+            AdminError::Connect
+        );
+        // force=false counts connections first, which also fails at Connect.
+        assert_eq!(
+            MysqlAdmin::drop_database(&admin, &db, false).expect_err("drop soft"),
+            AdminError::Connect
+        );
+        assert_eq!(
+            MysqlAdmin::database_exists(&admin, &db).expect_err("exists"),
+            AdminError::Connect
+        );
+        assert_eq!(
+            MysqlAdmin::create_user_at(&admin, &user, "127.0.0.1").expect_err("create user"),
+            AdminError::Connect
+        );
+        assert_eq!(
+            MysqlAdmin::grant(&admin, &user, &db, PrivilegeLevel::ReadOnly, "127.0.0.1")
+                .expect_err("grant"),
+            AdminError::Connect
+        );
+        assert_eq!(
+            MysqlAdmin::drop_user_at(&admin, &user, "127.0.0.1").expect_err("drop user"),
+            AdminError::Connect
+        );
     }
 
     #[test]
