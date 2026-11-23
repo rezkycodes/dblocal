@@ -236,7 +236,7 @@ fn row_gone_diagnostic(paths: &DblPaths, id: &InstanceId) -> String {
         return "row is gone".to_owned();
     };
     let instance_dir = paths.instance_dir(instance.name());
-    let marker_path = instance_dir.join(super::super::delete::IN_FLIGHT_MARKER);
+    let marker_path = super::super::delete::marker_path(paths, &instance.id().clone());
     let marker = std::fs::read_to_string(&marker_path)
         .map(|contents| contents.replace('\n', " | "))
         .unwrap_or_else(|err| format!("<unreadable: {err}>"));

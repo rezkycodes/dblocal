@@ -6,6 +6,7 @@ mod archive_recovery;
 mod catalog;
 mod config;
 mod coverage;
+mod delete_marker_cleanup;
 mod download;
 mod gates;
 mod harness;

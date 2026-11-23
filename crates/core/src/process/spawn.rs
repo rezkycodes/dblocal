@@ -171,6 +171,45 @@ mod tests {
     use std::time::Duration;
     use tempfile::tempdir;
 
+    /// Waits until `log` holds both marker lines, or panics at the deadline.
+    ///
+    /// A child needs time to be scheduled and for the kernel to drain its stdio
+    /// into the file, and under load that can be far longer than any fixed sleep
+    /// a test would pick: a 250 ms sleep lost to four burners made this test fail
+    /// with `log was ""` while nothing was wrong with the spawn. Polling to a
+    /// generous deadline keeps the assertions exactly as strong (both markers
+    /// must appear) while removing the timing guess, and the failure message
+    /// says which marker was missing and what the file held at the deadline.
+    #[cfg(unix)]
+    fn wait_for_log_content(log: &std::path::Path) -> String {
+        const DEADLINE: Duration = Duration::from_secs(10);
+        const STEP: Duration = Duration::from_millis(10);
+        let deadline = std::time::Instant::now() + DEADLINE;
+        loop {
+            let content = std::fs::read_to_string(log).unwrap_or_default();
+            if content.contains("from-child") && content.contains("to-stderr") {
+                return content;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the child's output never reached {}; missing {} after {DEADLINE:?}, the log held {content:?}",
+                log.display(),
+                missing_marker(&content),
+            );
+            std::thread::sleep(STEP);
+        }
+    }
+
+    /// Names the marker [`wait_for_log_content`] has not seen yet.
+    #[cfg(unix)]
+    fn missing_marker(content: &str) -> &'static str {
+        if !content.contains("from-child") {
+            "the stdout marker `from-child`"
+        } else {
+            "the stderr marker `to-stderr`"
+        }
+    }
+
     fn sleep_cmd(secs: u32) -> Command {
         #[cfg(unix)]
         {
@@ -230,9 +269,9 @@ mod tests {
             "echo from-child; echo to-stderr >&2; sleep 5; echo done",
         ]);
         let identity = spawn_detached(cmd, &log).expect("spawn");
-        std::thread::sleep(Duration::from_millis(250));
-
-        let content = std::fs::read_to_string(&log).expect("log readable");
+        // Poll rather than sleep: a fixed 250 ms was lost to load and failed with
+        // `log was ""` (see `wait_for_log_content`).
+        let content = wait_for_log_content(&log);
         assert!(content.contains("from-child"), "log was {content:?}");
         assert!(
             content.contains("to-stderr"),

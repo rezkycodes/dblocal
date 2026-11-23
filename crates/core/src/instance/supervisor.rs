@@ -34,6 +34,13 @@ pub(crate) async fn run(inner: Arc<Inner>) {
             return;
         }
         tick(&inner).await;
+        // Test seam: a completed tick is the boundary a test uses to know that
+        // no tick which started before it took the instance lock is still in
+        // flight (`the_supervisor_skips_a_running_row...`).
+        #[cfg(test)]
+        inner
+            .supervisor_ticks
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     }
 }
 

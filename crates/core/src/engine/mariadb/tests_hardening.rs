@@ -380,9 +380,18 @@ fn shutdown_timeout_names_pid() {
     // child, the fake ignores TERM only long enough for the 300 ms shutdown timeout
     // and its escalation, then exits on its own. A never-ending fake that inherited
     // the heavy-gate lock fd would keep the machine-wide lock held forever.
+    //
+    // The script touches `ready` only *after* its TERM trap is installed. The test
+    // waits for that file before it asks for a shutdown: a fixed 100 ms of sleep
+    // was not enough under load, and if the signal arrives before the trap, the
+    // shell dies and the expected "did not exit" timeout never happens.
+    let ready = root.join("trap-installed");
     write_fake_script(
         &fake,
-        "#!/bin/sh\ntrap '' TERM\ni=0\nwhile [ $i -lt 120 ]; do sleep 1; i=$((i+1)); done\n",
+        &format!(
+            "#!/bin/sh\ntrap '' TERM\ntouch '{}'\ni=0\nwhile [ $i -lt 120 ]; do sleep 1; i=$((i+1)); done\n",
+            ready.display()
+        ),
     );
     let data = root.join("inst/data");
     let conf = data.join("my.cnf");
@@ -401,7 +410,12 @@ fn shutdown_timeout_names_pid() {
         .expect("spawn"),
     );
     let pid = child.id();
-    std::thread::sleep(Duration::from_millis(100));
+    // Wait for the helper to install its TERM trap rather than hoping 100 ms did.
+    super::testutil::wait_until(
+        "the fake mariadbd to install its TERM trap",
+        Duration::from_secs(10),
+        || ready.exists(),
+    );
     let err = shutdown_verified_pid(pid, PidIdentity::Match, Duration::from_millis(300))
         .expect_err("timeout");
     let msg = format!("{err:?}");

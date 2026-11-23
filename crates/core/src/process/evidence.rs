@@ -96,31 +96,74 @@ fn a_grandchild_survives_its_parent_exiting() {
         "the helper itself must be gone before we claim reparenting"
     );
 
-    // The grandchild is alive and adoptable, with a complete identity.
-    let mut identity = None;
-    for _ in 0..50 {
-        if let crate::process::probe::ProcessObservation::Found {
-            exe: Some(exe),
-            started_at: Some(started_at),
-        } = probe.observe(pid)
-        {
-            let candidate = ProcessIdentity::new(pid, exe, started_at).expect("identity");
-            if probe.validate(&candidate) == ProcessState::Match {
-                identity = Some(candidate);
-                break;
-            }
-        }
-        std::thread::sleep(Duration::from_millis(20));
-    }
-    let identity = identity.expect("reparented engine must be observable");
+    // The grandchild is alive and adoptable, with a complete identity. Poll to a
+    // deadline rather than a fixed attempt count: under load the first observation
+    // after the helper exits can still be the pre-exec image or arrive late, and a
+    // 50 x 20 ms budget is only ~1 s.
+    let identity = wait_for_identity(&probe, pid, "/bin/sleep", Duration::from_secs(10))
+        .unwrap_or_else(|| panic!("reparented engine {pid} was never observable as sleep"));
     assert_eq!(probe.validate(&identity), ProcessState::Match);
 
     let outcome = terminate(&identity, Duration::from_secs(3)).expect("terminate");
+    // Report *why* nothing was signalled, not just that it was not: `NotRunning`
+    // means the grandchild had already exited, `Refused { state }` means the
+    // identity no longer matched (a reuse or an unreadable process), and a `None`
+    // outcome here would be impossible because `terminate` returned. The first
+    // version of this assertion said only "must still be stoppable", which is why
+    // the single whole-lib failure (flake 8 fix 1, F3) could not name its cause.
     assert!(
         outcome.signalled(),
-        "adopted engine must still be stoppable"
+        "adopted engine {pid} must still be stoppable, got {outcome:?} \
+         (state now {:?}); identity exe={:?} started_at={:?}",
+        probe.validate(&identity),
+        identity.exe(),
+        identity.started_at(),
     );
     assert_eq!(probe.validate(&identity), ProcessState::Absent);
+}
+
+/// Polls the process table until `pid` validates as the identity we would record,
+/// **and** is running `program`, or the deadline passes.
+///
+/// Requiring the executable is what makes the capture sound. The helper starts the
+/// grandchild with `&`, so between `fork` and `exec` `/proc/<pid>/exe` still names
+/// the shell: recording that identity and then terminating it would see the exe
+/// change to `sleep` and correctly refuse it as recycled, failing the test for a
+/// reason that has nothing to do with survival. Waiting for `program` (and then
+/// validating what we saw) records the post-exec identity, which is the one
+/// `terminate` will validate later.
+///
+/// Split out so the grandchild test can say what it actually observed at the
+/// deadline instead of failing on an `expect` with no facts.
+fn wait_for_identity(
+    probe: &dyn ProcessProbe,
+    pid: u32,
+    program: &str,
+    limit: Duration,
+) -> Option<ProcessIdentity> {
+    use crate::process::probe::ProcessObservation;
+    let expected = std::path::Path::new(program)
+        .canonicalize()
+        .unwrap_or_else(|_| PathBuf::from(program));
+    let deadline = std::time::Instant::now() + limit;
+    loop {
+        if let ProcessObservation::Found {
+            exe: Some(exe),
+            started_at: Some(started_at),
+        } = probe.observe(pid)
+            && exe
+                .canonicalize()
+                .is_ok_and(|observed| observed == expected)
+            && let Ok(candidate) = ProcessIdentity::new(pid, exe, started_at)
+            && probe.validate(&candidate) == ProcessState::Match
+        {
+            return Some(candidate);
+        }
+        if std::time::Instant::now() >= deadline {
+            return None;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
 }
 
 #[test]
@@ -268,4 +311,51 @@ fn reconcile_table_evidence() {
     ));
 
     let _ = terminate(&live, Duration::from_secs(3));
+}
+
+/// `wait_for_identity` must not record the pre-exec image of a `&` grandchild.
+///
+/// The helper starts the grandchild with `&`, so for a moment `/proc/<pid>/exe`
+/// still names `/bin/sh`. A capture at that instant yields an identity whose
+/// executable changes to `/bin/sleep` on exec, and `terminate` then correctly
+/// refuses it as recycled — which is exactly what `Refused { state: Reused }`
+/// means, and what failed once in 18 pinned whole-lib runs (`terminate` was
+/// right; the recorded identity was wrong). This drives the mechanism with a
+/// fake table instead of waiting for the race: the first observations report the
+/// pre-exec shell, then the post-exec programme, and only the latter may be
+/// returned.
+#[test]
+fn wait_for_identity_skips_the_pre_exec_shell_image() {
+    use crate::process::probe::ProcessObservation;
+    use crate::process::probe::fake::FakeProbe;
+
+    let probe = FakeProbe::new();
+    let pid = 42_424;
+    let started_at = SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+    // Pre-exec: the grandchild still carries the shell's image.
+    probe.set(
+        pid,
+        ProcessObservation::Found {
+            exe: Some(PathBuf::from("/bin/sh")),
+            started_at: Some(started_at),
+        },
+    );
+    assert!(
+        wait_for_identity(&probe, pid, "/bin/sleep", Duration::from_millis(150)).is_none(),
+        "a process that never execs the programme must not yield an identity"
+    );
+
+    // Post-exec: now it is the programme we launched, at the same start time.
+    probe.set(
+        pid,
+        ProcessObservation::Found {
+            exe: Some(PathBuf::from("/bin/sleep")),
+            started_at: Some(started_at),
+        },
+    );
+    let identity = wait_for_identity(&probe, pid, "/bin/sleep", Duration::from_secs(5))
+        .expect("the post-exec programme is adoptable");
+    assert_eq!(identity.pid(), pid);
+    assert_eq!(identity.started_at(), started_at);
+    assert_eq!(probe.validate(&identity), ProcessState::Match);
 }
