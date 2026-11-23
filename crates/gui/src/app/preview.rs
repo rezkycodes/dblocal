@@ -59,6 +59,24 @@ impl Workspace {
         workspace
     }
 
+    /// Preview with the palette open and its query filtered to a **single** row
+    /// ("Instance baru"), so a render test can prove the panel's height follows
+    /// its content instead of stretching to the window bottom (W4-I D2).
+    pub fn preview_palette_one_row(
+        service: Arc<dyn DblService>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let workspace = Self::preview_palette(service, window, cx);
+        let state = workspace.command_state().clone();
+        state.update(cx, |state, cx| {
+            // The model installs on the first `Command` render; the query is
+            // already in the field, so the first install filters to one row.
+            state.set_query(dblocal_core::strings::UI_PALETTE_NEW, window, cx);
+        });
+        workspace
+    }
+
     /// Preview of a failed instance's Logs tab, exercising the diagnosis banner.
     pub fn preview_failure(
         service: Arc<dyn DblService>,

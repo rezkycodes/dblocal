@@ -101,6 +101,12 @@ pub(super) fn render(
         .absolute()
         .inset_0()
         .flex()
+        // `items_start` is the fix for the panel stretching to the window
+        // bottom: a flex row's default cross-axis alignment is `stretch`, so
+        // without it the panel filled the whole height below `pt(90)` and the
+        // white column hid the page even with one row left. The panel's height
+        // now follows its content (`Command`'s `max_h(360)` bounds the list).
+        .items_start()
         .justify_center()
         .pt(gpui_kit::px(90.))
         .bg(tokens::scrim_from(&theme))

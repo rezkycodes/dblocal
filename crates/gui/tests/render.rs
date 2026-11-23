@@ -65,6 +65,8 @@ mod both_themes;
 mod focus_ring;
 #[path = "render/frame.rs"]
 mod frame;
+#[path = "render/palette_panel.rs"]
+mod palette_panel;
 #[path = "render/watchdog.rs"]
 mod watchdog;
 
