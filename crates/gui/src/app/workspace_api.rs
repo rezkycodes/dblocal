@@ -410,3 +410,63 @@ impl Workspace {
         self.open_create_dialog(window, cx);
     }
 }
+
+/// Test-only shortcuts so the Databases tests drive the handlers exactly as a
+/// typed click would, without spinning up a second window for every entity.
+#[cfg(test)]
+impl Workspace {
+    /// Types `value` into the database-name field.
+    pub(crate) fn set_db_name_for_test(
+        &self,
+        value: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.db_name_input.update(cx, |state, cx| {
+            state.set_value(value.to_owned(), window, cx)
+        });
+    }
+
+    /// Types `value` into the new-user name field.
+    pub(crate) fn set_user_name_for_test(
+        &self,
+        value: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.user_name_input.update(cx, |state, cx| {
+            state.set_value(value.to_owned(), window, cx)
+        });
+    }
+
+    /// Types `value` into the drop dialog's confirmation field.
+    pub(crate) fn set_drop_text_for_test(
+        &self,
+        value: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(dialog) = &self.drop_dialog {
+            dialog.input.update(cx, |state, cx| {
+                state.set_value(value.to_owned(), window, cx)
+            });
+        }
+    }
+
+    /// Opens the drop dialog, reusing the database-name field as its input (the
+    /// dialog only needs an entity to hold the typed text).
+    pub(crate) fn open_drop_dialog_for_test(
+        &mut self,
+        id: &InstanceId,
+        name: &str,
+        cx: &mut Context<Self>,
+    ) {
+        let input = self.db_name_input.clone();
+        self.drop_dialog = Some(super::admin_dialogs::DropDialog {
+            instance: id.clone(),
+            name: name.to_owned(),
+            input,
+        });
+        cx.notify();
+    }
+}

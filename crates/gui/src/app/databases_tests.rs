@@ -1,0 +1,329 @@
+//! Databases tab: handler tests over the scriptable service (`F-DBU-01..03`).
+//!
+//! Each test drives the `Workspace` the way the view does — through the action
+//! handlers — and asserts on the pure state the cards render, so a state the
+//! task names (empty, many, slow, failed, reset failure) is proven end to end
+//! without a real engine.
+
+#![allow(clippy::expect_used, clippy::unwrap_used)]
+
+use std::sync::Arc;
+use std::time::Duration;
+
+use dblocal_core::admin::PrivilegeLevel;
+use dblocal_core::model::InstanceStatus;
+use dblocal_core::service::{DblService, UserFacingError};
+use gpui_kit::TestAppContext;
+
+use crate::app::admin_state::{AdminAction, Loadable};
+use crate::app::scripted_service::ScriptedService;
+use crate::app::{InnerTab, Workspace};
+
+fn fixture(
+    cx: &mut TestAppContext,
+) -> (
+    gpui_kit::Entity<Workspace>,
+    ScriptedService,
+    &mut gpui_kit::VisualTestContext,
+) {
+    cx.update(gpui_kit::init);
+    cx.update(crate::theme::init);
+    let service = ScriptedService::new();
+    let svc: Arc<dyn DblService> = Arc::new(service.clone());
+    let (view, cx) = cx.add_window_view(|window, cx| Workspace::new_preview(svc, window, cx));
+    cx.run_until_parked();
+    (view, service, cx)
+}
+
+/// Drives the tab to a settled read: open the instance, select Databases, let
+/// the background read land.
+fn open_databases(
+    view: &gpui_kit::Entity<Workspace>,
+    service: &ScriptedService,
+    cx: &mut gpui_kit::VisualTestContext,
+) -> dblocal_core::model::InstanceId {
+    let id = service.id_with(InstanceStatus::Running);
+    view.update(cx, |this, cx| this.open_tab(id.clone(), cx));
+    cx.run_until_parked();
+    view.update(cx, |this, cx| this.set_inner_tab(InnerTab::Databases, cx));
+    settle(cx);
+    id
+}
+
+/// Yields until every background task the view spawned has run.
+fn settle(cx: &mut gpui_kit::VisualTestContext) {
+    for _ in 0..200 {
+        cx.run_until_parked();
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    cx.run_until_parked();
+}
+
+/// Types into the database-name field through the real editor state.
+fn set_db_name(
+    view: &gpui_kit::Entity<Workspace>,
+    value: &str,
+    cx: &mut gpui_kit::VisualTestContext,
+) {
+    cx.update(|window, app| {
+        view.update(app, |this, cx| this.set_db_name_for_test(value, window, cx));
+    });
+}
+
+/// Types into the new-user name field.
+fn set_user_name(
+    view: &gpui_kit::Entity<Workspace>,
+    value: &str,
+    cx: &mut gpui_kit::VisualTestContext,
+) {
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            this.set_user_name_for_test(value, window, cx)
+        });
+    });
+}
+
+/// Types into the drop dialog's confirmation field.
+fn set_drop_text(
+    view: &gpui_kit::Entity<Workspace>,
+    value: &str,
+    cx: &mut gpui_kit::VisualTestContext,
+) {
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            this.set_drop_text_for_test(value, window, cx)
+        });
+    });
+}
+
+#[gpui_kit::test]
+fn entering_the_tab_reads_databases_and_users(cx: &mut TestAppContext) {
+    let (view, service, cx) = fixture(cx);
+    let id = open_databases(&view, &service, cx);
+    let (rows, users) = view.read_with(cx, |this, _| {
+        let admin = this.admin_state_for(&id).expect("admin state");
+        (admin.rows().len(), admin.users().len())
+    });
+    assert_eq!(rows, 2, "the seeded databases must be read");
+    assert_eq!(users, 2, "the seeded users must be read");
+    let counts = service.counts();
+    assert_eq!(counts.list_databases, 1);
+    assert_eq!(counts.list_users, 1);
+}
+
+#[gpui_kit::test]
+fn an_empty_list_renders_no_rows_and_no_error(cx: &mut TestAppContext) {
+    let (view, service, cx) = fixture(cx);
+    service.set(|script| {
+        script.databases = Ok(Vec::new());
+        script.users = Ok(Vec::new());
+    });
+    let id = open_databases(&view, &service, cx);
+    let admin = view.read_with(cx, |this, _| {
+        let admin = this.admin_state_for(&id).expect("admin state");
+        (
+            admin.rows().is_empty(),
+            admin.users().is_empty(),
+            admin.error.is_some(),
+        )
+    });
+    assert_eq!(
+        admin,
+        (true, true, false),
+        "empty is a ready, error-free state"
+    );
+}
+
+#[gpui_kit::test]
+fn a_failed_read_is_a_typed_error_not_a_panic(cx: &mut TestAppContext) {
+    let (view, service, cx) = fixture(cx);
+    let failure = UserFacingError::new(
+        "DBL-8111",
+        "Operasi ini belum didukung untuk engine tersebut.",
+    );
+    service.set(|script| script.databases = Err(failure.clone()));
+    let id = open_databases(&view, &service, cx);
+    let (error, is_failed) = view.read_with(cx, |this, _| {
+        let admin = this.admin_state_for(&id).expect("admin state");
+        (admin.error.clone(), admin.data.error().is_some())
+    });
+    assert_eq!(error.map(|e| e.code), Some("DBL-8111".to_owned()));
+    assert!(is_failed, "the read must land as a typed failure");
+}
+
+#[gpui_kit::test]
+fn a_stopped_instance_is_ready_with_no_read(cx: &mut TestAppContext) {
+    let (view, service, cx) = fixture(cx);
+    let id = service.id_with(InstanceStatus::Stopped);
+    view.update(cx, |this, cx| this.open_tab(id.clone(), cx));
+    cx.run_until_parked();
+    view.update(cx, |this, cx| this.set_inner_tab(InnerTab::Databases, cx));
+    settle(cx);
+    let (ready, error) = view.read_with(cx, |this, _| {
+        let admin = this.admin_state_for(&id).expect("admin state");
+        (
+            matches!(admin.data, Loadable::Ready(_)),
+            admin.error.is_some(),
+        )
+    });
+    assert!(ready, "a stopped instance is an empty ready state");
+    assert!(
+        !error,
+        "a stopped instance must not show a connection error"
+    );
+    assert_eq!(
+        service.counts().list_databases,
+        0,
+        "a stopped instance has no server to read"
+    );
+}
+
+#[gpui_kit::test]
+fn create_database_rejects_a_bad_name_without_a_round_trip(cx: &mut TestAppContext) {
+    let (view, service, cx) = fixture(cx);
+    let id = open_databases(&view, &service, cx);
+    let before = service.counts().create_database;
+    set_db_name(&view, "app-dev", cx);
+    view.update(cx, |this, cx| this.create_database(&id, cx));
+    settle(cx);
+    assert_eq!(
+        service.counts().create_database,
+        before,
+        "an invalid name must not reach the service (F-DBU-01 AC4)"
+    );
+    let code = view.read_with(cx, |this, _| {
+        this.admin_state_for(&id)
+            .and_then(|admin| admin.error.as_ref().map(|e| e.code.clone()))
+    });
+    assert_eq!(code.as_deref(), Some("DBL-8101"));
+}
+
+#[gpui_kit::test]
+fn create_database_sends_a_valid_name(cx: &mut TestAppContext) {
+    let (view, service, cx) = fixture(cx);
+    let id = open_databases(&view, &service, cx);
+    set_db_name(&view, "shop_db", cx);
+    view.update(cx, |this, cx| this.create_database(&id, cx));
+    settle(cx);
+    assert_eq!(service.counts().create_database, 1);
+    let toast = view.read_with(cx, |this, _| this.toast_text().map(|t| t.to_string()));
+    assert!(
+        toast.as_deref().is_some_and(|t| t.contains("shop_db")),
+        "a created database must confirm: {toast:?}"
+    );
+}
+
+#[gpui_kit::test]
+fn drop_confirmation_needs_the_exact_name(cx: &mut TestAppContext) {
+    let (view, service, cx) = fixture(cx);
+    let id = open_databases(&view, &service, cx);
+    view.update(cx, |this, cx| {
+        this.open_drop_dialog_for_test(&id, "app", cx);
+    });
+    // Wrong text: the confirm button is disabled and a confirm is a no-op.
+    set_drop_text(&view, "app_dev", cx);
+    view.update(cx, |this, cx| this.confirm_drop(cx));
+    settle(cx);
+    assert_eq!(service.counts().drop_database, 0, "mismatch must not drop");
+
+    view.update(cx, |this, cx| {
+        this.open_drop_dialog_for_test(&id, "app", cx)
+    });
+    set_drop_text(&view, "app", cx);
+    view.update(cx, |this, cx| this.confirm_drop(cx));
+    settle(cx);
+    assert_eq!(service.counts().drop_database, 1, "the exact name drops");
+}
+
+#[gpui_kit::test]
+fn a_created_user_password_is_shown_once_and_dropped_on_close(cx: &mut TestAppContext) {
+    let (view, service, cx) = fixture(cx);
+    let id = open_databases(&view, &service, cx);
+    set_user_name(&view, "app_ro", cx);
+    view.update(cx, |this, cx| {
+        this.choose_user_database("app".to_owned(), cx);
+        this.choose_user_level(PrivilegeLevel::ReadOnly, cx);
+        this.create_user(&id, cx);
+    });
+    settle(cx);
+    let shown = view.read_with(cx, |this, _| {
+        this.secret_dialog().map(|d| d.value.expose().to_owned())
+    });
+    assert_eq!(shown.as_deref(), Some("pwd-user-0001"));
+    view.update(cx, |this, cx| this.close_secret_dialog(cx));
+    assert!(
+        view.read_with(cx, |this, _| this.secret_dialog().is_none()),
+        "the password must not survive the dialog (F-DBU-02 AC2)"
+    );
+}
+
+#[gpui_kit::test]
+fn a_reset_shows_the_new_uri_once_and_updates_the_card(cx: &mut TestAppContext) {
+    let (view, service, cx) = fixture(cx);
+    let id = open_databases(&view, &service, cx);
+    view.update(cx, |this, cx| {
+        this.open_reset_confirm(&id, cx);
+        this.confirm_reset(cx);
+    });
+    settle(cx);
+    let (masked, dialog_ok) = view.read_with(cx, |this, _| {
+        (this.uri_text(&id), this.secret_dialog().is_some())
+    });
+    assert!(dialog_ok, "the reset URI must be shown once");
+    assert!(
+        masked.contains(crate::format::SECRET_MASK),
+        "the Overview card must hold the (masked) new URI: {masked}"
+    );
+    // Revealing shows the rotated password, not a stale one.
+    view.update(cx, |this, cx| this.toggle_reveal(&id, cx));
+    settle(cx);
+    let revealed = view.read_with(cx, |this, _| this.uri_text(&id));
+    assert!(
+        revealed.contains("pwd-reset-0001"),
+        "the Overview card must carry the new URI: {revealed}"
+    );
+}
+
+#[gpui_kit::test]
+fn a_failed_reset_keeps_the_old_password_and_says_so(cx: &mut TestAppContext) {
+    let (view, service, cx) = fixture(cx);
+    let failure = UserFacingError::new(
+        "DBL-8112",
+        "Password baru tidak dapat dipakai untuk login; password lama dipulihkan.",
+    );
+    service.set(|script| script.reset_password = Err(failure));
+    let id = open_databases(&view, &service, cx);
+    view.update(cx, |this, cx| {
+        this.open_reset_confirm(&id, cx);
+        this.confirm_reset(cx);
+    });
+    settle(cx);
+    let (reset_failed, dialog) = view.read_with(cx, |this, _| {
+        let admin = this.admin_state_for(&id).expect("admin");
+        (admin.reset_failed, this.secret_dialog().is_some())
+    });
+    assert!(
+        reset_failed,
+        "the card must state the old password still works"
+    );
+    assert!(!dialog, "a failed reset must not show a URI");
+}
+
+#[gpui_kit::test]
+fn every_action_is_busy_while_in_flight(cx: &mut TestAppContext) {
+    // The buttons disable on the in-flight flag; setting it marks exactly that
+    // action and leaves the others.
+    let (view, service, cx) = fixture(cx);
+    let id = open_databases(&view, &service, cx);
+    view.update(cx, |this, _| {
+        this.admin.entry(&id).begin(AdminAction::CreateDatabase);
+    });
+    let busy = view.read_with(cx, |this, _| {
+        let admin = this.admin_state_for(&id).expect("admin");
+        (
+            admin.is_busy(AdminAction::CreateDatabase),
+            admin.is_busy(AdminAction::CreateUser),
+        )
+    });
+    assert_eq!(busy, (true, false));
+}

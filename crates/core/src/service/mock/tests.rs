@@ -949,7 +949,9 @@ fn mock_admin_fail_next_mutation_is_consumed_by_one_call() {
     assert_eq!(err.code, crate::admin::error::CODE_UNSUPPORTED);
     // Consumed: the next create succeeds, so one scripted failure does not wedge
     // the tab.
-    service.create_database(&id, "shop_db").expect("second works");
+    service
+        .create_database(&id, "shop_db")
+        .expect("second works");
 }
 
 #[test]

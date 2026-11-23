@@ -22,6 +22,9 @@ mod bootstrap_tests;
 mod components;
 mod create_dialog;
 mod create_submit;
+#[cfg(test)]
+#[path = "app/databases_tests.rs"]
+mod databases_tests;
 mod delete_dialog;
 mod dock;
 mod instance_actions;
@@ -31,6 +34,8 @@ mod instance_actions_tests;
 mod login_item;
 mod open_in;
 mod open_in_actions;
+#[cfg(test)]
+mod open_in_tests;
 mod palette;
 mod preview;
 mod quit_flow;
@@ -38,9 +43,13 @@ mod quit_flow;
 #[path = "app/quit_flow_tests.rs"]
 mod quit_flow_tests;
 mod screens;
+#[cfg(test)]
+mod scripted_service;
 mod settings_actions;
 mod settings_dialog;
 mod settings_state;
+#[cfg(test)]
+mod settings_tests;
 mod state;
 mod status_bar;
 #[cfg(test)]
