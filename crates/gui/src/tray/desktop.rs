@@ -42,42 +42,45 @@ use std::sync::{Arc, Mutex};
 use std::thread::{self, ThreadId};
 
 use dblocal_core::service::InstanceView;
-use tray_icon::menu::{IconMenuItem, Menu, MenuItemKind, PredefinedMenuItem};
-use tray_icon::{Icon, TrayIcon, TrayIconBuilder};
+use tray_icon::menu::{IconMenuItem, Menu, PredefinedMenuItem};
+use tray_icon::{TrayIcon, TrayIconBuilder};
 
 use super::spec::{self, MenuRow, MenuRowKind, TraySpec};
-use super::{MENU_ICON_SIZE, TRAY_ICON_SIZE, TrayAction, TrayBackend, TrayHandle, TrayMenuModel,
-    TrayStartup};
+use super::{
+    MENU_ICON_SIZE, TRAY_ICON_SIZE, TrayAction, TrayBackend, TrayHandle, TrayMenuModel, TrayStartup,
+};
 
 thread_local! {
     /// The live OS tray object, valid only on the thread that created it.
     static UI_TRAY: RefCell<Option<UiTray>> = const { RefCell::new(None) };
 }
 
-/// The `Rc`-based tray and its menu items, kept alive on the UI thread.
+/// The `Rc`-based tray and its native menu, kept alive on the UI thread.
+///
+/// `Menu` owns its children internally (`MenuState::children`), so the rows do
+/// not need to be held here; dropping the `Menu` drops them.
 struct UiTray {
     icon: TrayIcon,
     menu: Menu,
-    items: Vec<MenuItemKind>,
 }
 
 impl UiTray {
     fn build(spec: &TraySpec) -> Result<Self, tray_icon::Error> {
-        let (menu, items) = build_menu(spec);
+        let menu = menu_from_spec(spec);
         let icon = TrayIconBuilder::new()
             .with_id("dblocal")
             .with_tooltip(dblocal_core::strings::APP_NAME)
             .with_menu(Box::new(menu.clone()))
-            .with_icon(icon_from_rgba(&spec.icon_rgba, TRAY_ICON_SIZE)?)
+            .with_icon(tray_icon_from_rgba(&spec.icon_rgba, TRAY_ICON_SIZE)?)
             .build()?;
-        Ok(Self { icon, menu, items })
+        Ok(Self { icon, menu })
     }
 
     /// Replaces the menu and aggregate icon. Runs on the UI thread only.
     fn apply(&mut self, spec: &TraySpec) {
-        let (menu, items) = build_menu(spec);
+        let menu = menu_from_spec(spec);
         self.icon.set_menu(Some(Box::new(menu.clone())));
-        match icon_from_rgba(&spec.icon_rgba, TRAY_ICON_SIZE) {
+        match tray_icon_from_rgba(&spec.icon_rgba, TRAY_ICON_SIZE) {
             Ok(icon) => {
                 if let Err(err) = self.icon.set_icon(Some(icon)) {
                     tracing::warn!("tray icon update failed: {err}");
@@ -86,48 +89,55 @@ impl UiTray {
             Err(err) => tracing::warn!("tray icon bytes rejected: {err}"),
         }
         self.menu = menu;
-        self.items = items;
     }
 }
 
-/// Builds a `muda` menu from the spec, returning the menu and the item handles
-/// that keep its rows alive.
-fn build_menu(spec: &TraySpec) -> (Menu, Vec<MenuItemKind>) {
+/// Builds a `muda` menu from the spec. The returned `Menu` owns its rows.
+fn menu_from_spec(spec: &TraySpec) -> Menu {
     let menu = Menu::new();
-    let mut items = Vec::with_capacity(spec.rows.len());
     for row in &spec.rows {
-        let item = menu_item(row);
-        if let Err(err) = menu.append(&item) {
+        let appended = if row.kind == MenuRowKind::Separator {
+            menu.append(&PredefinedMenuItem::separator())
+        } else {
+            menu.append(&icon_item(row))
+        };
+        if let Err(err) = appended {
             tracing::warn!("tray menu append failed: {err}");
-            continue;
         }
-        items.push(item);
     }
-    (menu, items)
+    menu
 }
 
-fn menu_item(row: &MenuRow) -> MenuItemKind {
-    if row.kind == MenuRowKind::Separator {
-        return MenuItemKind::Predefined(PredefinedMenuItem::separator());
-    }
-    let icon = icon_from_rgba(&row.icon_rgba, MENU_ICON_SIZE).ok();
-    MenuItemKind::Icon(IconMenuItem::with_id(
-        row.id.clone(),
-        &row.label,
-        row.enabled,
-        icon,
-        None,
-    ))
+/// One clickable row. `MenuItemKind` is only a sum type, not an
+/// `IsMenuItem`, so rows are built as the concrete `IconMenuItem`.
+fn icon_item(row: &MenuRow) -> IconMenuItem {
+    let icon = menu_icon_from_rgba(&row.icon_rgba, MENU_ICON_SIZE);
+    IconMenuItem::with_id(row.id.clone(), &row.label, row.enabled, icon, None)
 }
 
-fn icon_from_rgba(rgba: &[u8], size: u32) -> Result<Icon, tray_icon::Error> {
-    Icon::from_rgba(rgba.to_vec(), size, size).map_err(tray_icon::Error::from)
+/// The tray-icon (notification area) icon, RGBA8.
+fn tray_icon_from_rgba(rgba: &[u8], size: u32) -> Result<tray_icon::Icon, tray_icon::Error> {
+    tray_icon::Icon::from_rgba(rgba.to_vec(), size, size).map_err(|err| {
+        tray_icon::Error::OsError(std::io::Error::new(std::io::ErrorKind::InvalidData, err))
+    })
+}
+
+/// A menu-row icon, RGBA8. `muda::Icon` is a distinct type from
+/// `tray_icon::Icon`; a rejected byte buffer degrades to a row without an icon.
+fn menu_icon_from_rgba(rgba: &[u8], size: u32) -> Option<tray_icon::menu::Icon> {
+    match tray_icon::menu::Icon::from_rgba(rgba.to_vec(), size, size) {
+        Ok(icon) => Some(icon),
+        Err(err) => {
+            tracing::warn!("tray menu icon bytes rejected: {err}");
+            None
+        }
+    }
 }
 
 /// Sends menu activations from muda's channel to the app's action channel.
 fn spawn_forwarder(tx: flume::Sender<TrayAction>, map: Arc<Mutex<BTreeMap<String, TrayAction>>>) {
     let events = tray_icon::menu::MenuEvent::receiver().clone();
-    let named = thread::Builder::new()
+    let spawned = thread::Builder::new()
         .name("dblocal-tray-menu".to_owned())
         .spawn(move || {
             while let Ok(event) = events.recv() {
@@ -137,13 +147,15 @@ fn spawn_forwarder(tx: flume::Sender<TrayAction>, map: Arc<Mutex<BTreeMap<String
                 }
             }
         });
-    if let Err(err) = named {
+    if let Err(err) = spawned {
         tracing::warn!("tray forwarding thread could not start: {err}");
     }
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    mutex
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 /// Backend handle stored by the app; it never holds the `Rc` tray itself.
@@ -206,7 +218,8 @@ impl TrayBackend for DesktopBackend {
 /// error — degrades to [`TrayStartup::none`], the F-TRY-01 AC3 fallback. It
 /// never panics.
 pub fn start() -> TrayStartup {
-    let initial = spec::build(&TrayMenuModel::from_views(&[]), &[]);
+    let empty = TrayMenuModel::from_views(&[]);
+    let initial = spec::build(&empty, &[]);
     let ui = match UiTray::build(&initial) {
         Ok(ui) => ui,
         Err(err) => {
@@ -215,9 +228,7 @@ pub fn start() -> TrayStartup {
         }
     };
     let (tx, rx) = flume::unbounded();
-    let activation = Arc::new(Mutex::new(spec::activation_map(&TrayMenuModel::from_views(
-        &[],
-    ))));
+    let activation = Arc::new(Mutex::new(spec::activation_map(&empty)));
     spawn_forwarder(tx.clone(), activation.clone());
     UI_TRAY.with(|cell| *cell.borrow_mut() = Some(ui));
     let backend = DesktopBackend {

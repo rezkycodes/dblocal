@@ -57,11 +57,7 @@ pub struct TraySpec {
 /// The row order matches the Linux menu: grouped instances, a separator (only
 /// when there is at least one instance), then "Buka DBLocal" and "Keluar".
 pub fn build(model: &TrayMenuModel, views: &[InstanceView]) -> TraySpec {
-    let mut rows: Vec<MenuRow> = model
-        .instances
-        .iter()
-        .map(item_row)
-        .collect();
+    let mut rows: Vec<MenuRow> = model.instances.iter().map(item_row).collect();
     if !rows.is_empty() {
         rows.push(separator_row());
     }

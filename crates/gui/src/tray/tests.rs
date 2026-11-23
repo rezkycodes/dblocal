@@ -219,7 +219,12 @@ fn rgba_dot_is_the_argb_dot_with_the_channels_rotated() {
         // ARGB [a, r, g, b] -> RGBA [r, g, b, a]
         assert_eq!(
             &rgba[center..center + 4],
-            &[argb[center + 1], argb[center + 2], argb[center + 3], argb[center]],
+            &[
+                argb[center + 1],
+                argb[center + 2],
+                argb[center + 3],
+                argb[center]
+            ],
             "{status:?} dot channels rotated wrong"
         );
         // The disc is opaque only at the centre and transparent at the corner.
@@ -276,12 +281,18 @@ fn spec_rows_carry_the_status_dot_and_disabled_state() {
     };
     let running = row("pg-run");
     assert!(running.enabled);
-    assert_eq!(running.icon_rgba.len(), (MENU_ICON_SIZE * MENU_ICON_SIZE * 4) as usize);
+    assert_eq!(
+        running.icon_rgba.len(),
+        (MENU_ICON_SIZE * MENU_ICON_SIZE * 4) as usize
+    );
     let busy = row("pg-busy");
     assert!(!busy.enabled, "a starting instance must be disabled");
     // The busy dot is amber [0xe5, 0xc0, 0x7b, 0xff] at the centre.
     let center = (MENU_ICON_SIZE / 2 * MENU_ICON_SIZE + MENU_ICON_SIZE / 2) as usize * 4;
-    assert_eq!(&busy.icon_rgba[center..center + 4], &[0xe5, 0xc0, 0x7b, 0xff]);
+    assert_eq!(
+        &busy.icon_rgba[center..center + 4],
+        &[0xe5, 0xc0, 0x7b, 0xff]
+    );
 }
 
 #[test]
@@ -292,7 +303,10 @@ fn spec_aggregate_icon_follows_the_aggregate_status() {
     ];
     let model = TrayMenuModel::from_views(&failed);
     let built = spec::build(&model, &failed);
-    assert_eq!(built.icon_rgba.len(), (TRAY_ICON_SIZE * TRAY_ICON_SIZE * 4) as usize);
+    assert_eq!(
+        built.icon_rgba.len(),
+        (TRAY_ICON_SIZE * TRAY_ICON_SIZE * 4) as usize
+    );
     let center = (TRAY_ICON_SIZE / 2 * TRAY_ICON_SIZE + TRAY_ICON_SIZE / 2) as usize * 4;
     assert_eq!(
         &built.icon_rgba[center..center + 4],
@@ -300,7 +314,11 @@ fn spec_aggregate_icon_follows_the_aggregate_status() {
         "any failed instance makes the aggregate icon red"
     );
 
-    let idle = vec![view("pg-off", EngineKey::Postgresql, InstanceStatus::Stopped)];
+    let idle = vec![view(
+        "pg-off",
+        EngineKey::Postgresql,
+        InstanceStatus::Stopped,
+    )];
     let idle_model = TrayMenuModel::from_views(&idle);
     let idle_built = spec::build(&idle_model, &idle);
     assert_eq!(
