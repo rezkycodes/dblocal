@@ -153,6 +153,93 @@ fn enabling_the_login_item_records_only_the_confirmed_state(cx: &mut TestAppCont
     assert_eq!(error.as_deref(), Some("DBL-8502"));
 }
 
+/// F2: a failed disable must not flip an enabled switch off.
+///
+/// The unit was still enabled after `systemctl --user disable` failed; showing
+/// the switch off claims a state the machine is not in.
+#[gpui_kit::test]
+fn a_failed_disable_keeps_the_switch_on_and_shows_the_error(cx: &mut TestAppContext) {
+    let (view, _service, cx) = fixture(cx);
+    view.update(cx, |this, _| {
+        this.login = Some(Ok(
+            Arc::new(SwitchLoginItem::enabled_failing_disable()) as Arc<dyn login_item::LoginItemControl>
+        ));
+    });
+    view.update(cx, |this, cx| this.read_login_status(cx));
+    settle(cx);
+    assert!(
+        view.read_with(cx, |this, _| this.settings_state().login_enabled()),
+        "the fixture starts enabled"
+    );
+
+    view.update(cx, |this, cx| this.set_login_item(false, cx));
+    settle(cx);
+    let (enabled, known, error) = view.read_with(cx, |this, _| {
+        let state = this.settings_state();
+        (
+            state.login_enabled(),
+            state.login_known().is_some(),
+            state.login_error().map(|e| e.code.clone()),
+        )
+    });
+    assert!(
+        enabled,
+        "a failed disable must keep showing the last confirmed on state"
+    );
+    assert!(known, "the confirmed state must survive the failure");
+    assert_eq!(error.as_deref(), Some("DBL-8503"));
+}
+
+/// F2: a failed enable on a disabled item keeps the switch off.
+#[gpui_kit::test]
+fn a_failed_enable_keeps_the_switch_off(cx: &mut TestAppContext) {
+    let (view, _service, cx) = fixture(cx);
+    view.update(cx, |this, _| {
+        this.login = Some(Ok(Arc::new(RefusingLoginItem) as Arc<dyn login_item::LoginItemControl>));
+    });
+    view.update(cx, |this, cx| this.read_login_status(cx));
+    settle(cx);
+    view.update(cx, |this, cx| this.set_login_item(true, cx));
+    settle(cx);
+    let (enabled, error) = view.read_with(cx, |this, _| {
+        let state = this.settings_state();
+        (
+            state.login_enabled(),
+            state.login_error().map(|e| e.code.clone()),
+        )
+    });
+    assert!(!enabled, "a failed enable must leave the switch off");
+    assert_eq!(error.as_deref(), Some("DBL-8502"));
+}
+
+/// F2: the switch keeps its value while a write is in flight.
+#[gpui_kit::test]
+fn a_login_write_in_flight_keeps_the_previous_value(cx: &mut TestAppContext) {
+    let (view, _service, cx) = fixture(cx);
+    view.update(cx, |this, _| {
+        this.login = Some(Ok(
+            Arc::new(SwitchLoginItem::enabled_failing_disable()) as Arc<dyn login_item::LoginItemControl>
+        ));
+    });
+    view.update(cx, |this, cx| this.read_login_status(cx));
+    settle(cx);
+
+    view.update(cx, |this, cx| {
+        // Start the write without letting the background task land.
+        this.set_login_item(false, cx);
+    });
+    let (busy, enabled) = view.read_with(cx, |this, _| {
+        let state = this.settings_state();
+        (
+            matches!(state.login, crate::app::settings_state::LoginState::Busy(_)),
+            state.login_enabled(),
+        )
+    });
+    assert!(busy, "the write is in flight");
+    assert!(enabled, "Busy must not flicker the switch off");
+    settle(cx);
+}
+
 fn package_manager_status() -> UpdateStatus {
     UpdateStatus {
         current: "0.8.0".to_owned(),
@@ -187,6 +274,50 @@ impl login_item::LoginItemControl for RefusingLoginItem {
         Err(UserFacingError::new("DBL-8502", "systemctl gagal"))
     }
     fn disable(&self) -> Result<login_item::LoginStatus, UserFacingError> {
+        Ok(login_item::LoginStatus {
+            enabled: false,
+            location: "/tmp/fake/login-item".into(),
+        })
+    }
+}
+
+/// A seam that reads as enabled and whose `disable` fails, the F2 case.
+struct SwitchLoginItem {
+    enabled: bool,
+    fail_disable: bool,
+}
+
+impl SwitchLoginItem {
+    fn enabled_failing_disable() -> Self {
+        Self {
+            enabled: true,
+            fail_disable: true,
+        }
+    }
+
+    fn status(&self) -> login_item::LoginStatus {
+        login_item::LoginStatus {
+            enabled: self.enabled,
+            location: "/tmp/fake/login-item".into(),
+        }
+    }
+}
+
+impl login_item::LoginItemControl for SwitchLoginItem {
+    fn status(&self) -> Result<login_item::LoginStatus, UserFacingError> {
+        Ok(self.status())
+    }
+    fn enable(&self) -> Result<login_item::LoginStatus, UserFacingError> {
+        Ok(login_item::LoginStatus {
+            enabled: true,
+            location: "/tmp/fake/login-item".into(),
+        })
+    }
+    fn disable(&self) -> Result<login_item::LoginStatus, UserFacingError> {
+        if self.fail_disable {
+            // The unit is still enabled, exactly as the failed call leaves it.
+            return Err(UserFacingError::new("DBL-8503", "disable gagal"));
+        }
         Ok(login_item::LoginStatus {
             enabled: false,
             location: "/tmp/fake/login-item".into(),

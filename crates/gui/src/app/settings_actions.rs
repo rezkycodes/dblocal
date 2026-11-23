@@ -50,17 +50,17 @@ impl Workspace {
         let seam = match self.login_item() {
             Ok(seam) => seam,
             Err(err) => {
-                self.settings.login = LoginState::Failed(err);
+                self.settings.login = LoginState::Failed(err, None);
                 return;
             }
         };
-        self.settings.login = LoginState::Busy;
+        self.settings.login = LoginState::Busy(self.settings.login_known().cloned());
         self.bg(cx, move || {
             let status = seam.status();
             move |this: &mut Workspace, cx: &mut Context<Workspace>| {
                 this.settings.login = match status {
                     Ok(status) => LoginState::Known(status),
-                    Err(err) => LoginState::Failed(err),
+                    Err(err) => LoginState::Failed(err, None),
                 };
                 cx.notify();
             }
@@ -68,16 +68,22 @@ impl Workspace {
     }
 
     /// Enables or disables the login item and records only the confirmed state.
+    ///
+    /// The switch keeps the last confirmed status through `Busy` and `Failed`:
+    /// a failed disable leaves the unit enabled, so flipping the switch off
+    /// would show a state the machine is not in (F2).
     pub(crate) fn set_login_item(&mut self, enabled: bool, cx: &mut Context<Self>) {
         let seam = match self.login_item() {
             Ok(seam) => seam,
             Err(err) => {
-                self.settings.login = LoginState::Failed(err);
+                let confirmed = self.settings.login_known().cloned();
+                self.settings.login = LoginState::Failed(err, confirmed);
                 cx.notify();
                 return;
             }
         };
-        self.settings.login = LoginState::Busy;
+        let confirmed = self.settings.login_known().cloned();
+        self.settings.login = LoginState::Busy(confirmed.clone());
         self.bg(cx, move || {
             let status = if enabled {
                 seam.enable()
@@ -95,9 +101,9 @@ impl Workspace {
                         }));
                     }
                     Err(err) => {
-                        // A failed write leaves the switch on the last confirmed
-                        // state, never the one the user asked for.
-                        this.settings.login = LoginState::Failed(err.clone());
+                        // A failed write keeps the last confirmed state; the
+                        // typed error explains what went wrong.
+                        this.settings.login = LoginState::Failed(err.clone(), confirmed);
                         this.report_user_facing_error(&err);
                     }
                 }

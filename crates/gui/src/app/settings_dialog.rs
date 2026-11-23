@@ -207,7 +207,7 @@ fn render_login_section(
     cx: &mut Context<Workspace>,
 ) -> AnyElement {
     let state = workspace.settings_state();
-    let busy = matches!(state.login, LoginState::Busy);
+    let busy = matches!(state.login, LoginState::Busy(_));
     let enabled = state.login_enabled();
     let mut column = v_flex().id("settings-login-body").gap_2();
 
@@ -221,8 +221,11 @@ fn render_login_section(
             })),
     );
 
-    match &state.login {
-        LoginState::Known(status) => {
+    // The confirmed state renders whenever one was read, whatever the section's
+    // status: a failed write keeps the switch on the machine's real state and
+    // shows the typed error under it (F2).
+    match state.login_known() {
+        Some(status) => {
             column = column.child(
                 Label::new(if status.enabled {
                     strings::UI_SETTINGS_AUTOSTART_ON
@@ -253,12 +256,7 @@ fn render_login_section(
                     ),
             );
         }
-        LoginState::Failed(_) => {
-            if let Some(err) = state.login_error() {
-                column = column.child(error_line(&err.code, &err.message, theme));
-            }
-        }
-        LoginState::Unknown => {
+        None => {
             column = column.child(
                 Label::new(strings::UI_SETTINGS_AUTOSTART_UNKNOWN)
                     .id(SharedString::from("settings-login-unknown"))
@@ -266,14 +264,18 @@ fn render_login_section(
                     .text_color(theme.muted_foreground),
             );
         }
-        LoginState::Busy => {
-            column = column.child(
-                Label::new(strings::UI_PENDING)
-                    .id(SharedString::from("settings-login-busy"))
-                    .text_xs()
-                    .text_color(theme.muted_foreground),
-            );
-        }
+    }
+
+    if let Some(err) = state.login_error() {
+        column = column.child(error_line(&err.code, &err.message, theme));
+    }
+    if busy {
+        column = column.child(
+            Label::new(strings::UI_PENDING)
+                .id(SharedString::from("settings-login-busy"))
+                .text_xs()
+                .text_color(theme.muted_foreground),
+        );
     }
 
     column.into_any_element()

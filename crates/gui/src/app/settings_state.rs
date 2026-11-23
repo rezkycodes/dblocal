@@ -45,17 +45,35 @@ pub enum InstallState {
 }
 
 /// The login-item section, as rendered.
+///
+/// `Busy` and `Failed` carry the last confirmed [`LoginStatus`], because the
+/// switch must keep showing the machine's real state while a write is in
+/// flight and after one fails. A failed disable leaves the unit enabled, so
+/// rendering the switch off would be a claim the machine contradicts (F2).
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum LoginState {
     /// The status was not read yet.
     #[default]
     Unknown,
-    /// The status is being read or a write is in flight.
-    Busy,
+    /// The status is being read or a write is in flight; the value is the last
+    /// confirmed state, or `None` before the first read.
+    Busy(Option<LoginStatus>),
     /// The item is registered or not, and where it lives.
     Known(LoginStatus),
-    /// The read or write failed; the switch never claims a state after this.
-    Failed(UserFacingError),
+    /// The read or write failed. The value is the last confirmed state, so the
+    /// switch does not move while the typed error is shown.
+    Failed(UserFacingError, Option<LoginStatus>),
+}
+
+impl LoginState {
+    /// The last confirmed status, from whichever variant carries one.
+    pub fn confirmed(&self) -> Option<&LoginStatus> {
+        match self {
+            Self::Known(status) => Some(status),
+            Self::Busy(status) | Self::Failed(_, status) => status.as_ref(),
+            Self::Unknown => None,
+        }
+    }
 }
 
 /// The whole Settings dialog's data.
@@ -98,16 +116,16 @@ impl SettingsState {
 
     /// The login state as a known value, when one was read.
     pub fn login_known(&self) -> Option<&LoginStatus> {
-        match &self.login {
-            LoginState::Known(status) => Some(status),
-            _ => None,
-        }
+        self.login.confirmed()
     }
 
     /// What the login switch shows: the *last confirmed* state.
     ///
     /// A failed enable reports `false`, never the state the user asked for
-    /// (`F-AUT-01` AC2 — "do not show enabled after a failed enable").
+    /// (`F-AUT-01` AC2 — "do not show enabled after a failed enable"), and a
+    /// failed disable keeps reporting `true` (F2 — the unit is still enabled).
+    /// Both come from the status kept alongside the error, so each failure
+    /// shows the state the machine is really in.
     pub fn login_enabled(&self) -> bool {
         self.login_known().is_some_and(|status| status.enabled)
     }
@@ -115,7 +133,7 @@ impl SettingsState {
     /// The typed error of the login section, when the last call failed.
     pub fn login_error(&self) -> Option<&UserFacingError> {
         match &self.login {
-            LoginState::Failed(err) => Some(err),
+            LoginState::Failed(err, _) => Some(err),
             _ => None,
         }
     }
@@ -241,7 +259,7 @@ mod tests {
             open: false,
             check: UpdateCheckState::Failed(UserFacingError::new("DBL-8003", "offline")),
             install: InstallState::Installed,
-            login: LoginState::Failed(UserFacingError::new("DBL-8504", "no")),
+            login: LoginState::Failed(UserFacingError::new("DBL-8504", "no"), None),
         };
         state.open();
         assert!(state.open);
@@ -296,20 +314,38 @@ mod tests {
     }
 
     #[test]
-    fn a_failed_enable_never_shows_enabled() {
+    fn a_failed_write_keeps_the_last_confirmed_state() {
+        let off = LoginStatus {
+            enabled: false,
+            location: std::path::PathBuf::from("/tmp/x"),
+        };
         let mut state = SettingsState {
-            login: LoginState::Known(LoginStatus {
-                enabled: false,
-                location: std::path::PathBuf::from("/tmp/x"),
-            }),
+            login: LoginState::Known(off.clone()),
             ..SettingsState::default()
         };
         assert!(!state.login_enabled());
 
-        // The user flips the switch; the write fails.
-        state.login = LoginState::Failed(UserFacingError::new("DBL-8502", "systemctl"));
+        // The user flips the switch on; the write fails. The confirmed value is
+        // what the machine is still in, so the switch stays off (F-AUT-01 AC2).
+        state.login = LoginState::Failed(
+            UserFacingError::new("DBL-8502", "systemctl"),
+            Some(off.clone()),
+        );
         assert!(!state.login_enabled(), "a failed enable reported enabled");
         assert!(state.login_error().is_some());
+
+        // The reverse: a failed disable leaves the unit enabled, so the switch
+        // must not move (F2).
+        let on = LoginStatus {
+            enabled: true,
+            location: off.location.clone(),
+        };
+        state.login = LoginState::Failed(
+            UserFacingError::new("DBL-8503", "systemctl"),
+            Some(on.clone()),
+        );
+        assert!(state.login_enabled(), "a failed disable reported disabled");
+        assert_eq!(state.login_error().map(|e| e.code.as_str()), Some("DBL-8503"));
 
         // A successful enable then shows the confirmed state.
         state.login = LoginState::Known(LoginStatus {
@@ -317,6 +353,31 @@ mod tests {
             location: std::path::PathBuf::from("/tmp/x"),
         });
         assert!(state.login_enabled());
+    }
+
+    #[test]
+    fn busy_keeps_the_last_confirmed_value() {
+        let on = LoginStatus {
+            enabled: true,
+            location: std::path::PathBuf::from("/tmp/x"),
+        };
+        let mut state = SettingsState {
+            login: LoginState::Known(on.clone()),
+            ..SettingsState::default()
+        };
+        state.login = LoginState::Busy(Some(on));
+        assert!(
+            state.login_enabled(),
+            "Busy must not flicker the switch off while a write is in flight"
+        );
+        assert!(state.login_error().is_none());
+
+        let unread = SettingsState {
+            login: LoginState::Busy(None),
+            ..SettingsState::default()
+        };
+        assert!(!unread.login_enabled(), "nothing confirmed yet reads off");
+        assert!(unread.login_known().is_none());
     }
 
     #[test]
