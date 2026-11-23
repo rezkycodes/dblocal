@@ -789,7 +789,7 @@ fn mock_reset_rotates_the_uri_password() {
 }
 
 #[test]
-fn mock_reports_unsupported_for_non_postgres_engines() {
+fn mock_reports_unsupported_for_valkey() {
     let service = super::MockService::deterministic();
     let id = service.seed_instance(
         spec("cache", EngineKey::Valkey, "8.1.0", 6379),
@@ -803,6 +803,43 @@ fn mock_reports_unsupported_for_non_postgres_engines() {
         .reset_superuser_password(&id)
         .expect_err("unsupported");
     assert_eq!(err.code, crate::admin::error::CODE_UNSUPPORTED);
+}
+
+#[test]
+fn mock_supports_mysql_and_mariadb_admin() {
+    for engine in [EngineKey::Mysql, EngineKey::Mariadb] {
+        let service = super::MockService::deterministic();
+        let id =
+            service.seed_instance(spec("shop", engine, "8.4.4", 3306), InstanceStatus::Running);
+        assert!(
+            !service.list_databases(&id).expect("databases").is_empty(),
+            "{} admin must be supported",
+            engine.display_name()
+        );
+        service.create_database(&id, "shop_db").expect("create");
+        assert!(
+            service
+                .list_databases(&id)
+                .expect("list")
+                .iter()
+                .any(|db| db.name() == "shop_db")
+        );
+        let password = service
+            .create_user(&id, "shop_user", "shop_db", PrivilegeLevel::ReadOnly)
+            .expect("create user");
+        assert!(password.expose().starts_with("pwd-user-"));
+    }
+}
+
+#[test]
+fn mock_no_password_instance_reports_no_password() {
+    let service = super::MockService::deterministic();
+    let id = service.seed_instance(
+        no_port_spec("nopw", EngineKey::Postgresql, "17.4"),
+        InstanceStatus::Running,
+    );
+    let err = service.list_databases(&id).expect_err("no password");
+    assert_eq!(err.code, crate::admin::error::CODE_NO_PASSWORD);
 }
 
 #[test]

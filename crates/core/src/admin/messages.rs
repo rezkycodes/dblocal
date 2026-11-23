@@ -47,3 +47,5 @@ pub const ERR_ROLLBACK: &str =
 pub const ERR_PASSWORD_GENERATE: &str = "Password baru tidak dapat dibuat.";
 /// `DBL-8117`: the instance has no password, so admin cannot authenticate.
 pub const ERR_NO_PASSWORD: &str = "Instance ini dibuat tanpa password, jadi pengelolaan database memerlukan instance yang dibuat dengan password.";
+/// `DBL-8118`: the database is one the MySQL/MariaDB engine owns.
+pub const ERR_SYSTEM_SCHEMA: &str = "Database sistem milik engine (mysql, sys, information_schema, performance_schema) tidak dapat dikelola dari sini.";

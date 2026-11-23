@@ -56,6 +56,11 @@ pub const CODE_AUTH_FAILED: &str = "DBL-8116";
 /// authenticate an admin session with. The fix is a different instance, not a
 /// later engine adapter.
 pub const CODE_NO_PASSWORD: &str = "DBL-8117";
+/// Code for [`AdminError::SystemSchema`].
+///
+/// MySQL/MariaDB own `mysql`, `sys`, `information_schema` and
+/// `performance_schema`; admin must never drop or manage them.
+pub const CODE_SYSTEM_SCHEMA: &str = "DBL-8118";
 
 /// Why an identifier was rejected. Static: it never echoes the rejected value.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -180,6 +185,9 @@ pub enum AdminError {
     /// The instance was created without a password, so admin needs a different
     /// instance (`F-DBU`); the engine itself is supported.
     NoPassword,
+    /// The requested database is one the MySQL/MariaDB engine owns (or a name
+    /// reserved by the engine), and admin must not manage it.
+    SystemSchema,
 }
 
 impl AdminError {
@@ -204,6 +212,7 @@ impl AdminError {
             Self::RollbackFailed(_) => CODE_ROLLBACK,
             Self::PasswordGenerate => CODE_PASSWORD_GENERATE,
             Self::NoPassword => CODE_NO_PASSWORD,
+            Self::SystemSchema => CODE_SYSTEM_SCHEMA,
         }
     }
 
@@ -229,6 +238,7 @@ impl AdminError {
             Self::RollbackFailed(_) => messages::ERR_ROLLBACK,
             Self::PasswordGenerate => messages::ERR_PASSWORD_GENERATE,
             Self::NoPassword => messages::ERR_NO_PASSWORD,
+            Self::SystemSchema => messages::ERR_SYSTEM_SCHEMA,
         }
     }
 
@@ -263,6 +273,7 @@ impl AdminError {
             Self::RollbackFailed(_) => "rollback failed, state inconsistent",
             Self::PasswordGenerate => "password generation failed",
             Self::NoPassword => "instance has no password",
+            Self::SystemSchema => "database is an engine-owned system schema",
         }
     }
 }
@@ -318,6 +329,7 @@ mod tests {
             }),
             AdminError::PasswordGenerate,
             AdminError::NoPassword,
+            AdminError::SystemSchema,
         ]
     }
 
@@ -369,6 +381,7 @@ mod tests {
             CODE_ROLLBACK,
             CODE_PASSWORD_GENERATE,
             CODE_NO_PASSWORD,
+            CODE_SYSTEM_SCHEMA,
         ];
         for code in declared {
             assert!(
@@ -400,6 +413,7 @@ mod tests {
             CODE_ROLLBACK,
             CODE_PASSWORD_GENERATE,
             CODE_NO_PASSWORD,
+            CODE_SYSTEM_SCHEMA,
         ]
         .iter()
         .map(|code| code_number(code).expect("well formed"))

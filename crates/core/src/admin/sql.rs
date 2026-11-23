@@ -335,16 +335,13 @@ pub fn create_role_postgres(user: &Identifier, credential: &str) -> SqlStatement
     SqlStatement::new(format!("CREATE ROLE {name} LOGIN PASSWORD {pw}"))
 }
 
-/// Builds a MySQL role creation statement.
+/// Builds a MySQL role creation statement for the loopback TCP account.
 ///
-/// MySQL/MariaDB takes a cleartext `IDENTIFIED BY '...'`; the later adapter must
-/// switch this to `IDENTIFIED WITH ... AS '<hash>'` so the cleartext never
-/// reaches its general query log (see `docs/architecture/admin.md`). Not
-/// executed in this task.
+/// Delegates to [`create_user_mysql_at`] with [`MYSQL_ADMIN_HOST`]; the admin
+/// executor keeps the value off the general query log with `sql_log_off`
+/// (see `docs/architecture/admin.md`).
 pub fn create_user_mysql(user: &Identifier, password: &str) -> SqlStatement {
-    let name = quote_identifier(Dialect::MySql, user);
-    let pw = quote_mysql_literal(password);
-    SqlStatement::new(format!("CREATE USER {name}@'127.0.0.1' IDENTIFIED BY {pw}"))
+    create_user_mysql_at(user, MYSQL_ADMIN_HOST, password)
 }
 
 /// Builds the statements that grant privileges for `user` on `db`.
@@ -399,14 +396,28 @@ fn grant_postgres(user: &Identifier, db: &Identifier, level: PrivilegeLevel) -> 
 }
 
 fn grant_mysql(user: &Identifier, db: &Identifier, level: PrivilegeLevel) -> Vec<SqlStatement> {
-    let user_q = quote_identifier(Dialect::MySql, user);
+    grant_privileges_mysql_at(user, db, level, MYSQL_ADMIN_HOST)
+}
+
+/// Builds the `GRANT` statements for one `user@host` account on `db` at `level`.
+///
+/// `ro` gets `SELECT` and `rw` gets `SELECT, INSERT, UPDATE, DELETE`, on
+/// `` `db`.* `` only — never `*.*`, never `WITH GRANT OPTION`, never a global
+/// privilege, so a managed user cannot touch another schema or grant rights.
+pub fn grant_privileges_mysql_at(
+    user: &Identifier,
+    db: &Identifier,
+    level: PrivilegeLevel,
+    host: &str,
+) -> Vec<SqlStatement> {
+    let account = mysql_account(user, host);
     let db_q = quote_identifier(Dialect::MySql, db);
     let privs = match level {
         PrivilegeLevel::ReadOnly => "SELECT",
         PrivilegeLevel::ReadWrite => "SELECT, INSERT, UPDATE, DELETE",
     };
     vec![SqlStatement::new(format!(
-        "GRANT {privs} ON {db_q}.* TO {user_q}@'127.0.0.1'"
+        "GRANT {privs} ON {db_q}.* TO {account}"
     ))]
 }
 
@@ -461,18 +472,120 @@ pub fn alter_role_password_postgres(user: &Identifier, credential: &str) -> SqlS
     SqlStatement::new(format!("ALTER ROLE {name} PASSWORD {pw}"))
 }
 
-/// Builds a MySQL `ALTER USER ... PASSWORD` statement (cleartext, see
-/// [`create_user_mysql`]; not executed in this task).
+/// Builds a MySQL `ALTER USER ... IDENTIFIED BY` for the loopback TCP account.
+///
+/// Delegates to [`alter_password_mysql_at`] with [`MYSQL_ADMIN_HOST`].
 pub fn alter_password_mysql(user: &Identifier, password: &str) -> SqlStatement {
-    let name = quote_identifier(Dialect::MySql, user);
-    let pw = quote_mysql_literal(password);
-    SqlStatement::new(format!("ALTER USER {name}@'127.0.0.1' IDENTIFIED BY {pw}"))
+    alter_password_mysql_at(user, MYSQL_ADMIN_HOST, password)
 }
 
 /// Builds `DROP ROLE` for PostgreSQL.
 pub fn drop_user_postgres(user: &Identifier) -> SqlStatement {
     let name = quote_identifier(Dialect::Postgres, user);
     SqlStatement::new(format!("DROP ROLE {name}"))
+}
+
+// --- MySQL / MariaDB execution builders -------------------------------------
+
+/// The host part of a managed MySQL account. Manage only loopback accounts;
+/// a user created for one host cannot log in from another.
+pub const MYSQL_ADMIN_HOST: &str = "127.0.0.1";
+
+/// The loopback hosts the superuser password is kept in sync on, so both the
+/// unix socket (`localhost`) and the TCP URI (`127.0.0.1`, `::1`) keep working.
+pub const MYSQL_LOOPBACK_HOSTS: [&str; 3] = ["localhost", "127.0.0.1", "::1"];
+
+/// The schemas MySQL and MariaDB own and which admin must never drop.
+///
+/// Compared case-insensitively in [`is_mysql_system_schema`], because MySQL
+/// lowercases schema names on some platforms.
+pub const MYSQL_SYSTEM_SCHEMAS: [&str; 4] =
+    ["mysql", "sys", "information_schema", "performance_schema"];
+
+/// Whether `name` is one of the engine's own schemas, which may never be
+/// dropped or managed as a user database.
+pub fn is_mysql_system_schema(name: &str) -> bool {
+    MYSQL_SYSTEM_SCHEMAS
+        .iter()
+        .any(|schema| schema.eq_ignore_ascii_case(name))
+}
+
+/// Builds the account specifier `` `user`@'host' `` for a managed MySQL role.
+///
+/// MySQL accounts are `user@host`. The user is backtick-quoted and the host is
+/// a single-quoted literal, so neither can leave the statement.
+pub fn mysql_account(user: &Identifier, host: &str) -> String {
+    format!(
+        "{}@{}",
+        quote_identifier(Dialect::MySql, user),
+        quote_mysql_literal(host)
+    )
+}
+
+/// Builds `CREATE USER` for one `user@host` account with a cleartext password.
+///
+/// The password is escaped by [`quote_mysql_literal`]; the admin executor runs
+/// over the unix socket (a secure channel) with `sql_log_off = 1`, so the value
+/// never reaches the general query log (see `docs/architecture/admin.md`).
+pub fn create_user_mysql_at(user: &Identifier, host: &str, password: &str) -> SqlStatement {
+    let account = mysql_account(user, host);
+    let pw = quote_mysql_literal(password);
+    SqlStatement::new(format!("CREATE USER {account} IDENTIFIED BY {pw}"))
+}
+
+/// Builds `ALTER USER` for one `user@host` account with a cleartext password.
+pub fn alter_password_mysql_at(user: &Identifier, host: &str, password: &str) -> SqlStatement {
+    let account = mysql_account(user, host);
+    let pw = quote_mysql_literal(password);
+    SqlStatement::new(format!("ALTER USER {account} IDENTIFIED BY {pw}"))
+}
+
+/// Builds `DROP USER` for one `user@host` account.
+pub fn drop_user_mysql_at(user: &Identifier, host: &str) -> SqlStatement {
+    let account = mysql_account(user, host);
+    SqlStatement::new(format!("DROP USER {account}"))
+}
+
+/// Query listing non-system databases with their size in bytes.
+///
+/// `information_schema.SCHEMATA` gives the name; the size is summed from
+/// `information_schema.TABLES` (`data_length + index_length`), which is 0 for an
+/// empty database rather than unknown. Owner is empty: MySQL has no per-schema
+/// owner.
+pub fn list_databases_mysql() -> SqlStatement {
+    SqlStatement::new(
+        "SELECT s.SCHEMA_NAME, \
+                COALESCE(SUM(t.DATA_LENGTH + t.INDEX_LENGTH), 0) \
+         FROM information_schema.SCHEMATA s \
+         LEFT JOIN information_schema.TABLES t ON t.TABLE_SCHEMA = s.SCHEMA_NAME \
+         WHERE s.SCHEMA_NAME NOT IN ('mysql','sys','information_schema','performance_schema') \
+         GROUP BY s.SCHEMA_NAME \
+         ORDER BY s.SCHEMA_NAME",
+    )
+}
+
+/// Query checking whether a database exists, with the name bound as `?`.
+pub fn database_exists_mysql(db: &Identifier) -> SqlStatement {
+    SqlStatement::with_params(
+        "SELECT COUNT(*) FROM information_schema.SCHEMATA WHERE SCHEMA_NAME = ?",
+        vec![SqlParam::Text(db.as_str().to_owned())],
+    )
+}
+
+/// Query counting live sessions connected to a database, with the name bound.
+pub fn database_connection_count_mysql(db: &Identifier) -> SqlStatement {
+    SqlStatement::with_params(
+        "SELECT COUNT(*) FROM information_schema.PROCESSLIST WHERE DB = ?",
+        vec![SqlParam::Text(db.as_str().to_owned())],
+    )
+}
+
+/// Query listing login-capable accounts as `(User, Host)` pairs.
+pub fn list_users_mysql() -> SqlStatement {
+    SqlStatement::new(
+        "SELECT User, Host FROM mysql.user \
+         WHERE User <> '' ORDER BY User, Host",
+    )
 }
 
 #[cfg(test)]

@@ -569,6 +569,22 @@ pub fn sibling_dir(data_dir: &Path, leaf: &str) -> PathBuf {
     }
 }
 
+/// The socket path the instance's `my.cnf` names, or the path `initialize`
+/// would choose when the config does not exist yet.
+///
+/// Admin connects over this socket instead of TCP so a
+/// `caching_sha2_password` handshake counts as a secure channel and the
+/// password is never sent over a plaintext TCP stream. Both steps delegate to
+/// the shared [`crate::engine::sockdir`] (`socket_path_from_my_cnf` reads the
+/// directive, `resolve_socket_path` applies the same fallback `initialize`
+/// uses), so this adds no socket logic of its own.
+pub fn configured_socket_path(run_dir: &Path, port: u16, instance_dir: &Path) -> Result<PathBuf> {
+    if let Some(socket) = socket::socket_path_from_my_cnf(&my_cnf_path(run_dir)) {
+        return Ok(socket);
+    }
+    resolve_socket_path(run_dir, port, instance_dir)
+}
+
 fn ensure_private_dir(dir: &Path, label: &str) -> Result<()> {
     crate::fsutil::ensure_private_dir(dir).map_err(|e| DblError::Engine {
         reason: format!(
