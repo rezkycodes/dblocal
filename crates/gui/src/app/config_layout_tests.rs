@@ -115,6 +115,10 @@ fn every_config_field_shares_one_x_and_stays_inside_the_card(cx: &mut TestAppCon
     }
     let first = xs[0];
     for (key, x) in keys.iter().zip(&xs) {
+        eprintln!(
+            "F3 1280x820 field x={x:.1} (card right={:.1}) key={key}",
+            card.origin.x.as_f32() + card.size.width.as_f32()
+        );
         assert!(
             (*x - first).abs() < 1.0,
             "F3: {key} starts its field at x={x}, not the shared {first}"
@@ -150,6 +154,7 @@ fn the_grid_holds_at_the_minimum_window_size(cx: &mut TestAppContext) {
         let side = bounds_of(cx, &config_row_id("config-side-cell", &id, key))
             .unwrap_or_else(|| panic!("F3: no side-cell bounds for {key} at 900 wide"));
         let right = side.origin.x.as_f32() + side.size.width.as_f32();
+        eprintln!("F3 900x600 side right={right:.1} (card right={card_right:.1}) key={key}");
         assert!(
             right <= card_right + 1.0,
             "F3: {key} overflows at 900 wide ({right} > {card_right})"
