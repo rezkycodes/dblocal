@@ -165,73 +165,68 @@ fn serve(
     log: &Mutex<Vec<String>>,
 ) {
     let _ = stream.set_nodelay(true);
-    if write_packet(&mut stream, 0, &handshake()).is_err() {
+    if write_packet(&mut stream, 0, &handshake()).is_err() || read_packet(&mut stream).is_err() {
         return;
     }
-    // Handshake response: contents do not matter, only that it exists.
-    if read_packet(&mut stream).is_err() {
+    if !complete_auth(&mut stream, reply) {
         return;
     }
-    // The connect-time `auth_ok`. A test can refuse the login by answering with
-    // an `ERR` instead, which is how the driver's connect-error mapping is
-    // reached. The handshake response was sequence 1, so this reply is 2.
-    let ok = match reply("@@connect") {
-        Reply::Err { code, message } => {
-            let _ = write_packet(&mut stream, 2, &err_packet(code, message));
-            return;
-        }
-        Reply::Ok | Reply::Rows { .. } => ok_packet(),
-    };
-    if write_packet(&mut stream, 2, &ok).is_err() {
-        return;
-    }
-    let mut prepared: HashMap<u32, String> = HashMap::new();
-    let mut next_id: u32 = 1;
-    loop {
-        let (_, payload) = match read_packet(&mut stream) {
-            Ok(packet) => packet,
-            Err(_) => return,
-        };
+    let mut state = Session::default();
+    while let Ok((_, payload)) = read_packet(&mut stream) {
         let Some((&command, rest)) = payload.split_first() else {
             return;
         };
+        if !state.handle(&mut stream, command, rest, reply, log) {
+            return;
+        }
+    }
+}
+
+/// Answers the connect-time `auth_ok`. A test can refuse the login by answering
+/// with an `ERR` instead, which is how the driver's connect-error mapping is
+/// reached. The handshake response was sequence 1, so this reply is 2.
+///
+/// Returns whether the session may continue.
+fn complete_auth(stream: &mut TcpStream, reply: &(dyn Fn(&str) -> Reply + Send + Sync)) -> bool {
+    let ok = match reply("@@connect") {
+        Reply::Err { code, message } => {
+            let _ = write_packet(stream, 2, &err_packet(code, message));
+            return false;
+        }
+        Reply::Ok | Reply::Rows { .. } => ok_packet(),
+    };
+    write_packet(stream, 2, &ok).is_ok()
+}
+
+/// Per-connection prepared statements.
+#[derive(Default)]
+struct Session {
+    prepared: HashMap<u32, String>,
+    next_id: u32,
+}
+
+impl Session {
+    fn handle(
+        &mut self,
+        stream: &mut TcpStream,
+        command: u8,
+        rest: &[u8],
+        reply: &(dyn Fn(&str) -> Reply + Send + Sync),
+        log: &Mutex<Vec<String>>,
+    ) -> bool {
         match command {
             // COM_QUIT
-            0x01 => return,
+            0x01 => false,
             // COM_PING: a failed write means the client went away.
-            0x0e => {
-                let _ = write_packet(&mut stream, 1, &ok_packet());
-            }
+            0x0e => write_packet(stream, 1, &ok_packet()).is_ok(),
             // COM_QUERY
             0x03 => {
                 let sql = String::from_utf8_lossy(rest).into_owned();
                 record(log, &sql);
-                if respond(&mut stream, server_settings(&sql, reply(&sql)), false).is_err() {
-                    return;
-                }
+                respond(stream, server_settings(&sql, reply(&sql)), false).is_ok()
             }
             // COM_STMT_PREPARE
-            0x16 => {
-                let sql = String::from_utf8_lossy(rest).into_owned();
-                record(log, &sql);
-                let id = next_id;
-                next_id += 1;
-                prepared.insert(id, sql.clone());
-                let params = sql.matches('?').count() as u16;
-                if write_packet(&mut stream, 1, &prepare_ok(id, params)).is_err() {
-                    return;
-                }
-                for index in 0..params {
-                    let col = Col::text("param");
-                    if write_packet(&mut stream, 2 + index as u8, &column_def(&col)).is_err() {
-                        return;
-                    }
-                }
-                if params > 0 && write_packet(&mut stream, 2 + params as u8, &eof_packet()).is_err()
-                {
-                    return;
-                }
-            }
+            0x16 => self.prepare(stream, String::from_utf8_lossy(rest).into_owned(), log),
             // COM_STMT_EXECUTE: binary result set
             0x17 => {
                 let id = if rest.len() >= 4 {
@@ -239,14 +234,30 @@ fn serve(
                 } else {
                     0
                 };
-                let sql = prepared.get(&id).cloned().unwrap_or_default();
-                if respond(&mut stream, reply(&sql), true).is_err() {
-                    return;
-                }
+                let sql = self.prepared.get(&id).cloned().unwrap_or_default();
+                respond(stream, reply(&sql), true).is_ok()
             }
             // COM_STMT_CLOSE and anything else: no response.
-            _ => {}
+            _ => true,
         }
+    }
+
+    fn prepare(&mut self, stream: &mut TcpStream, sql: String, log: &Mutex<Vec<String>>) -> bool {
+        record(log, &sql);
+        self.next_id = self.next_id.wrapping_add(1).max(1);
+        let id = self.next_id;
+        let params = sql.matches('?').count() as u16;
+        self.prepared.insert(id, sql);
+        if write_packet(stream, 1, &prepare_ok(id, params)).is_err() {
+            return false;
+        }
+        let col = Col::text("param");
+        for index in 0..params {
+            if write_packet(stream, 2 + index as u8, &column_def(&col)).is_err() {
+                return false;
+            }
+        }
+        params == 0 || write_packet(stream, 2 + params as u8, &eof_packet()).is_ok()
     }
 }
 
