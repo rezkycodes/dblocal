@@ -96,31 +96,56 @@ fn a_grandchild_survives_its_parent_exiting() {
         "the helper itself must be gone before we claim reparenting"
     );
 
-    // The grandchild is alive and adoptable, with a complete identity.
-    let mut identity = None;
-    for _ in 0..50 {
-        if let crate::process::probe::ProcessObservation::Found {
+    // The grandchild is alive and adoptable, with a complete identity. Poll to a
+    // deadline rather than a fixed attempt count: under load the first observation
+    // after the helper exits can still be the pre-exec image or arrive late, and a
+    // 50 x 20 ms budget is only ~1 s.
+    let identity = wait_for_identity(&probe, pid, Duration::from_secs(10))
+        .unwrap_or_else(|| panic!("reparented engine {pid} was never observable as ours"));
+    assert_eq!(probe.validate(&identity), ProcessState::Match);
+
+    let outcome = terminate(&identity, Duration::from_secs(3)).expect("terminate");
+    // Report *why* nothing was signalled, not just that it was not: `NotRunning`
+    // means the grandchild had already exited, `Refused { state }` means the
+    // identity no longer matched (a reuse or an unreadable process), and a `None`
+    // outcome here would be impossible because `terminate` returned. The first
+    // version of this assertion said only "must still be stoppable", which is why
+    // the single whole-lib failure (flake 8 fix 1, F3) could not name its cause.
+    assert!(
+        outcome.signalled(),
+        "adopted engine {pid} must still be stoppable, got {outcome:?} \
+         (state now {:?}); identity exe={:?} started_at={:?}",
+        probe.validate(&identity),
+        identity.exe(),
+        identity.started_at(),
+    );
+    assert_eq!(probe.validate(&identity), ProcessState::Absent);
+}
+
+/// Polls the process table until `pid` validates as the identity we would record,
+/// or the deadline passes.
+///
+/// Split out so the grandchild test can say what it actually observed at the
+/// deadline instead of failing on an `expect` with no facts.
+fn wait_for_identity(probe: &SysinfoProbe, pid: u32, limit: Duration) -> Option<ProcessIdentity> {
+    use crate::process::probe::ProcessObservation;
+    let deadline = std::time::Instant::now() + limit;
+    loop {
+        if let ProcessObservation::Found {
             exe: Some(exe),
             started_at: Some(started_at),
         } = probe.observe(pid)
         {
-            let candidate = ProcessIdentity::new(pid, exe, started_at).expect("identity");
+            let candidate = ProcessIdentity::new(pid, exe, started_at).ok()?;
             if probe.validate(&candidate) == ProcessState::Match {
-                identity = Some(candidate);
-                break;
+                return Some(candidate);
             }
+        }
+        if std::time::Instant::now() >= deadline {
+            return None;
         }
         std::thread::sleep(Duration::from_millis(20));
     }
-    let identity = identity.expect("reparented engine must be observable");
-    assert_eq!(probe.validate(&identity), ProcessState::Match);
-
-    let outcome = terminate(&identity, Duration::from_secs(3)).expect("terminate");
-    assert!(
-        outcome.signalled(),
-        "adopted engine must still be stoppable"
-    );
-    assert_eq!(probe.validate(&identity), ProcessState::Absent);
 }
 
 #[test]
