@@ -103,6 +103,18 @@ impl RedisClient {
             .get(key)
             .map_err(|err| format!("GET {key}: {err}"))
     }
+
+    /// `CONFIG GET key`, returning the current value.
+    pub fn config_get(&mut self, key: &str) -> Result<String, String> {
+        let pair: Vec<String> = redis::cmd("CONFIG")
+            .arg("GET")
+            .arg(key)
+            .query(&mut self.connection)
+            .map_err(|err| format!("CONFIG GET {key}: {err}"))?;
+        pair.into_iter()
+            .nth(1)
+            .ok_or_else(|| format!("CONFIG GET {key} returned no value"))
+    }
 }
 
 /// A `mysql_async` session kept alive by its own small runtime.
