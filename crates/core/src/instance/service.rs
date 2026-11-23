@@ -690,14 +690,6 @@ impl LocalService {
         self.inner.is_stopping()
     }
 
-    /// How many supervisor ticks have completed, for a deterministic boundary.
-    #[cfg(test)]
-    pub(crate) fn supervisor_tick_count_for_test(&self) -> u64 {
-        self.inner
-            .supervisor_ticks
-            .load(std::sync::atomic::Ordering::SeqCst)
-    }
-
     /// Whether the supervisor task is still looping.
     #[cfg(test)]
     pub(crate) fn supervisor_alive_for_test(&self) -> bool {

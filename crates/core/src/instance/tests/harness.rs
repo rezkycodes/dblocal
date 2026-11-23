@@ -342,10 +342,16 @@ impl Harness {
     /// that window is closed: the next tick cannot begin before this one ends,
     /// and the lock is taken immediately after.
     pub fn wait_for_supervisor_tick(&self) {
-        let before = self.service.supervisor_tick_count_for_test();
+        let ticks = || {
+            self.service
+                .inner()
+                .supervisor_ticks
+                .load(std::sync::atomic::Ordering::SeqCst)
+        };
+        let before = ticks();
         let deadline = std::time::Instant::now() + Duration::from_secs(10);
         loop {
-            if self.service.supervisor_tick_count_for_test() > before {
+            if ticks() > before {
                 return;
             }
             assert!(
