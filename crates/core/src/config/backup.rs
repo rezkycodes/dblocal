@@ -70,12 +70,24 @@ impl BackupStore {
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_else(|| "config".to_owned());
         // A file that does not exist yet has nothing to back up.
-        let target = self.dir.join(format!("{name}.{now_secs}.bak"));
+        //
+        // Two backups in the same second (an apply immediately followed by a
+        // restore) must not collide on the timestamp name, or the second would
+        // silently overwrite the first and break "a restore is undoable". Bump to
+        // the next free second when the name is taken.
+        let mut ts = now_secs;
+        let target = loop {
+            let candidate = self.dir.join(format!("{name}.{ts}.bak"));
+            if !candidate.exists() {
+                break candidate;
+            }
+            ts = ts.saturating_add(1);
+        };
         copy_private(source, &target)?;
         self.prune(&name);
         Ok(BackupInfo {
-            taken_at: now_secs,
-            taken_at_secs: now_secs,
+            taken_at: ts,
+            taken_at_secs: ts,
             path: target,
         })
     }

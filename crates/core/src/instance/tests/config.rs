@@ -170,6 +170,33 @@ fn restore_without_a_backup_is_a_typed_error() {
 }
 
 #[test]
+fn a_restore_is_itself_undoable_because_it_backs_up_the_file_it_replaces() {
+    // `F-CFG-01` AC3: after apply(A) then restore, the file the restore replaced
+    // is kept as a backup, so a second restore can bring back A.
+    let (harness, id, path) = created(EngineKey::Valkey);
+    seed(&path, EngineKey::Valkey);
+    let original = fs::read(&path).expect("read");
+    harness
+        .service
+        .config_apply(&id, vec![("maxmemory".to_owned(), "1gb".to_owned())])
+        .expect("apply A");
+    let after_apply = fs::read(&path).expect("after apply");
+    assert_ne!(after_apply, original);
+
+    harness.service.config_restore(&id).expect("restore 1");
+    assert_eq!(fs::read(&path).expect("after restore 1"), original);
+
+    // Restore again: the newest backup now holds the applied value, so a second
+    // restore undoes the first (the restore is undoable).
+    harness.service.config_restore(&id).expect("restore 2");
+    assert_eq!(
+        fs::read(&path).expect("after restore 2"),
+        after_apply,
+        "the second restore must bring back the applied value"
+    );
+}
+
+#[test]
 fn raw_path_points_at_the_file_the_editor_opens() {
     let (harness, id, path) = created(EngineKey::Postgresql);
     let raw = harness.service.config_raw_path(&id).expect("raw");
