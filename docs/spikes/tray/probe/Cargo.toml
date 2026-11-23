@@ -1,0 +1,25 @@
+[workspace]
+members = ["core-stub"]
+
+[package]
+name = "tray-probe"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+# Compiles the real crates/gui/src/tray/{mod,spec,desktop}.rs (copied verbatim)
+# against stub dblocal-core/format types and the real tray-icon/muda tree, so the
+# Windows/macOS tray code is type-checked for those targets on a Linux host where
+# the full workspace cannot cross-compile (aws-lc-sys needs a mingw C compiler).
+# See ../README.md. Not a workspace member of the main Cargo workspace.
+
+[dependencies]
+dblocal-core = { path = "core-stub", package = "core-stub" }
+flume = { version = "0.11", default-features = false, features = ["async"] }
+tracing = "0.1"
+
+[target.'cfg(any(target_os = "windows", target_os = "macos"))'.dependencies]
+tray-icon = { version = "0.26", default-features = false }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+ksni = { version = "0.3", default-features = false, features = ["blocking", "async-io"] }
