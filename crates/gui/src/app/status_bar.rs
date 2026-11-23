@@ -135,9 +135,10 @@ fn count_pill(count: usize, label: &str, theme: &Theme, danger: bool) -> impl In
         .gap_1p5()
         .text_color(colour)
         .child(status_glyph(status, 8.0, theme))
-        .child(Label::new(format!("{count} {label}")).id(SharedString::from(format!(
-            "status-count-{label}"
-        ))))
+        .child(
+            Label::new(format!("{count} {label}"))
+                .id(SharedString::from(format!("status-count-{label}"))),
+        )
 }
 
 /// Which credential backend the bar reports: the file fallback wins if any

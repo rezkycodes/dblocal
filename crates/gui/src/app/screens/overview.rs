@@ -171,7 +171,7 @@ impl Workspace {
         }
 
         let header = format::connection_header(&credential_note);
-        card(header.card_title, theme)
+        card(header.card_title, Some("connection"), theme)
             .child(
                 h_flex()
                     .justify_between()
@@ -285,7 +285,7 @@ impl Workspace {
             .map(format::format_bytes_id)
             .unwrap_or_else(|| strings::UI_VALUE_UNKNOWN.to_owned());
         let canonical = format::is_canonical_port(view);
-        card(Some(strings::UI_OVERVIEW_DETAIL), theme)
+        card(Some(strings::UI_OVERVIEW_DETAIL), None, theme)
             .child(kv(
                 strings::UI_OVERVIEW_ENGINE,
                 Label::new(format::engine_detail(view, arch)),
@@ -341,7 +341,7 @@ impl Workspace {
             _ => (strings::UI_OVERVIEW_HEALTH_OFFLINE, theme.muted_foreground),
         };
         let id = view.id.clone();
-        card(Some(strings::UI_OVERVIEW_PROCESS), theme)
+        card(Some(strings::UI_OVERVIEW_PROCESS), None, theme)
             .child(kv(
                 strings::UI_OVERVIEW_PID,
                 Label::new(pid).font_family(theme.mono_font_family.clone()),
@@ -406,7 +406,7 @@ impl Workspace {
             lines =
                 lines.child(Label::new(strings::UI_LOGS_EMPTY).text_color(theme.muted_foreground));
         }
-        card(Some(strings::UI_OVERVIEW_RECENT_LOGS), theme)
+        card(Some(strings::UI_OVERVIEW_RECENT_LOGS), None, theme)
             .child(
                 h_flex()
                     .justify_between()

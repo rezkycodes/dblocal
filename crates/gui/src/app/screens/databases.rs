@@ -45,7 +45,7 @@ impl Workspace {
         if view.engine == EngineKey::Valkey {
             return page()
                 .child(
-                    card(None, &theme).child(
+                    card(None, Some("valkey-note"), &theme).child(
                         Label::new(strings::UI_DATABASES_VALKEY_NOTE)
                             .text_color(theme.muted_foreground),
                     ),
@@ -157,11 +157,11 @@ fn placeholder_card(
                 theme,
             ));
         }
-        let mut c = card(None, theme);
+        let mut c = card(None, Some(&format!("placeholder-{index}")), theme);
         c = c.child(hdr);
         c
     } else {
-        let mut c = card(spec.title, theme);
+        let mut c = card(spec.title, Some(&format!("placeholder-{index}")), theme);
         if !spec.controls.is_empty() {
             let mut row = h_flex().gap_2().items_center().flex_wrap();
             for (control_index, control) in spec.controls.iter().enumerate() {
@@ -323,7 +323,7 @@ fn demo_databases_table(theme: &Theme) -> impl IntoElement {
 /// The demo user list and the superuser password card.
 fn demo_users_card(theme: &Theme) -> impl IntoElement {
     let mono = theme.mono_font_family.clone();
-    card(Some(strings::UI_DATABASES_USERS), theme).children(
+    card(Some(strings::UI_DATABASES_USERS), None, theme).children(
         [
             ("postgres", "semua", "superuser"),
             ("app_rw", "app_dev", "read-write"),

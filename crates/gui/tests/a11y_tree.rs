@@ -30,17 +30,13 @@ use a11y_platform::A11yPlatform;
 
 type Build = fn(Arc<dyn DblService>, &mut Window, &mut Context<Workspace>) -> Workspace;
 
-
 /// The colliding `accesskit` node ids in one tree, sorted for a stable message.
 fn duplicates(tree: &TreeUpdate) -> Vec<(String, usize)> {
     let mut counts: BTreeMap<String, usize> = BTreeMap::new();
     for (id, _) in &tree.nodes {
         *counts.entry(format!("{id:?}")).or_insert(0) += 1;
     }
-    let mut dups: Vec<(String, usize)> = counts
-        .into_iter()
-        .filter(|(_, n)| *n > 1)
-        .collect();
+    let mut dups: Vec<(String, usize)> = counts.into_iter().filter(|(_, n)| *n > 1).collect();
     dups.sort();
     dups
 }

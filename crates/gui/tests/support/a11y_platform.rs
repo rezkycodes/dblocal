@@ -18,11 +18,11 @@ use gpui_kit::accesskit::TreeUpdate;
 use gpui_kit::{
     A11yCallbacks, Action, ActivityGuard, AnyWindowHandle, BackgroundExecutor, Bounds, Capslock,
     ClipboardItem, CursorStyle, DispatchEventResult, ForegroundExecutor, GpuSpecs, Keymap, Menu,
-    MenuItem, Modifiers, PathPromptOptions, Pixels, Platform, PlatformAtlas, PlatformDisplay, PlatformInfo,
-    PlatformInput, PlatformInputHandler, PlatformKeyboardLayout, PlatformKeyboardMapper,
-    PlatformTextSystem, PlatformWindow, Point, PromptButton, PromptLevel, RequestFrameOptions, Scene, Size, Task,
-    ThermalState, WindowAppearance, WindowBackgroundAppearance, WindowBounds, WindowControlArea,
-    WindowParams, WindowVisibility,
+    MenuItem, Modifiers, PathPromptOptions, Pixels, Platform, PlatformAtlas, PlatformDisplay,
+    PlatformInfo, PlatformInput, PlatformInputHandler, PlatformKeyboardLayout,
+    PlatformKeyboardMapper, PlatformTextSystem, PlatformWindow, Point, PromptButton, PromptLevel,
+    RequestFrameOptions, Scene, Size, Task, ThermalState, WindowAppearance,
+    WindowBackgroundAppearance, WindowBounds, WindowControlArea, WindowParams, WindowVisibility,
 };
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 
@@ -208,7 +208,12 @@ impl gpui_kit::Platform for A11yPlatform {
     fn write_to_primary(&self, item: ClipboardItem) {
         self.inner.write_to_primary(item);
     }
-    fn write_credentials(&self, url: &str, username: &str, password: &[u8]) -> Task<anyhow::Result<()>> {
+    fn write_credentials(
+        &self,
+        url: &str,
+        username: &str,
+        password: &[u8],
+    ) -> Task<anyhow::Result<()>> {
         self.inner.write_credentials(url, username, password)
     }
     fn read_credentials(&self, url: &str) -> Task<anyhow::Result<Option<(String, Vec<u8>)>>> {

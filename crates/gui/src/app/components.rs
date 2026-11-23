@@ -10,7 +10,10 @@
 use gpui_kit::assets::IconName;
 use gpui_kit::component::label::Label;
 use gpui_kit::component::{Theme, h_flex, v_flex};
-use gpui_kit::{Div, Hsla, InteractiveElement as _, IntoElement, ParentElement, SharedString, Styled, div, px, svg};
+use gpui_kit::{
+    Div, Hsla, InteractiveElement as _, IntoElement, ParentElement, SharedString, Styled, div, px,
+    svg,
+};
 
 use dblocal_core::model::{EngineKey, InstanceStatus};
 
@@ -126,8 +129,10 @@ pub fn status_pill(status: InstanceStatus, theme: &Theme) -> Div {
         .font_weight(gpui_kit::FontWeight::MEDIUM)
         .child(status_glyph(status, 8.0, theme))
         .child(
-            Label::new(format::status_label(status))
-                .id(SharedString::from(format!("status-pill-{}", status_word(status)))),
+            Label::new(format::status_label(status)).id(SharedString::from(format!(
+                "status-pill-{}",
+                status_word(status)
+            ))),
         )
 }
 
@@ -156,15 +161,17 @@ pub fn section_label(text: impl Into<SharedString>) -> Label {
 
 /// A bordered card with an optional heading.
 ///
-/// A11y: the card root takes an id from its heading (or `card`) so two cards'
-/// inner labels never share one path. `Label::new`'s heading id would otherwise
-/// be the same call site for every card.
-pub fn card(title: Option<&str>, theme: &Theme) -> gpui_kit::Stateful<Div> {
+/// A11y: callers that draw several cards pass a `key` that tells them apart (a
+/// loop index); two cards with the same key, or two title-less cards, would
+/// otherwise share one element path, because `Label::new`'s id is the call site.
+/// `key` falls back to the heading, then to a fixed name.
+pub fn card(title: Option<&str>, key: Option<&str>, theme: &Theme) -> gpui_kit::Stateful<Div> {
+    let card_key = key
+        .map(str::to_owned)
+        .or_else(|| title.map(str::to_owned))
+        .unwrap_or_else(|| "card".to_owned());
     let mut base = v_flex()
-        .id(SharedString::from(match title {
-            Some(title) => format!("card-{title}"),
-            None => "card".to_owned(),
-        }))
+        .id(SharedString::from(format!("card-{card_key}")))
         .gap_3()
         .p(px(18.))
         .pb(px(18.))
@@ -175,7 +182,7 @@ pub fn card(title: Option<&str>, theme: &Theme) -> gpui_kit::Stateful<Div> {
     if let Some(title) = title {
         base = base.child(
             Label::new(title.to_owned())
-                .id(SharedString::from(format!("card-title-{title}")))
+                .id(SharedString::from(format!("card-title-{card_key}")))
                 .text_sm()
                 .font_weight(gpui_kit::FontWeight::SEMIBOLD),
         );
