@@ -289,7 +289,9 @@ fn render_versions(
                 )
             });
         list = list.child(match (version_unavailable, focus) {
-            (false, Some(focus)) => super::components::apply_focus_ring(row, &focus, window, cx),
+            (false, Some(focus)) => {
+                super::components::apply_inset_focus_ring(row, &focus, window, cx)
+            }
             _ => row,
         });
     }

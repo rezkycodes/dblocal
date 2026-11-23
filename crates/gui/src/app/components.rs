@@ -9,7 +9,7 @@
 
 use gpui_kit::assets::IconName;
 use gpui_kit::component::label::Label;
-use gpui_kit::component::{Theme, ThemeStyled as _, h_flex, v_flex};
+use gpui_kit::component::{ActiveTheme as _, Theme, ThemeStyled as _, h_flex, v_flex};
 use gpui_kit::{
     Div, FocusHandle, Hsla, InteractiveElement, IntoElement, ParentElement, SharedString, Styled,
     Window, div, px, svg,
@@ -277,4 +277,40 @@ pub fn keyed_focus(
         .use_keyed_state(key, cx, |_, cx| cx.focus_handle())
         .read(cx)
         .clone()
+}
+
+/// A focus ring drawn **inside** the element's own bounds, on all four edges.
+///
+/// `apply_focus_ring` uses gpui-component's `focus_ring_style`, whose ring sits
+/// *outside* the border. In a clipped container — the version list has
+/// `overflow_hidden`, so a row's border is the only visible edge — that outside
+/// ring is cut off and the user sees at most a thin line on one edge (`G2`). This
+/// variant paints a 2px `theme.ring` border on every side, inset so it stays
+/// within the row and cannot be clipped, so the focused row reads as a full
+/// outline regardless of its parent. It replaces the tint-only look for the
+/// version rows and engine-group headers.
+pub fn apply_inset_focus_ring<E: InteractiveElement + Styled + ParentElement + 'static>(
+    row: E,
+    focus: &FocusHandle,
+    window: &Window,
+    cx: &gpui_kit::App,
+) -> E {
+    let focused = focus.contains_focused(window, cx);
+    let stop = focus.clone().tab_stop(true);
+    // `relative` so the absolute inset ring below is positioned against this row,
+    // not the window.
+    let row = row.track_focus(&stop).relative();
+    if focused {
+        let ring = cx.theme().ring;
+        row.child(
+            div()
+                .absolute()
+                .inset_0()
+                .border_2()
+                .border_color(ring)
+                .rounded(px(4.)),
+        )
+    } else {
+        row
+    }
 }

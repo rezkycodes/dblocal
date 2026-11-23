@@ -153,7 +153,9 @@ impl Workspace {
                     .text_color(theme.muted_foreground)
                     .child(format!("{count}")),
             );
-        let header = super::components::apply_focus_ring(header, &header_focus, window, cx);
+        // `G2`: an inset full outline (all four edges), not the outside ring the
+        // dock's clipping can reduce to a single line.
+        let header = super::components::apply_inset_focus_ring(header, &header_focus, window, cx);
 
         let mut group_box = v_flex().gap_0p5().child(header);
         if !collapsed {

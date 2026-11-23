@@ -190,6 +190,41 @@ impl Workspace {
         }
     }
 
+    /// `Ctrl/Cmd+Shift+S`: start the selected instance, but only when the same
+    /// predicate the palette uses allows it (stopped/failed). `G1`: a selection
+    /// in the wrong state, or no selection, is a no-op — never a call, dialog or
+    /// panic. The verb itself is [`Self::start_instance`], not a copy.
+    pub(crate) fn start_selected(&mut self, cx: &mut Context<Self>) {
+        let Some(id) = self.selected_instance_id() else {
+            return;
+        };
+        let Some(view) = self.instance(&id) else {
+            return;
+        };
+        if crate::format::can_start(view.status) {
+            self.start_instance(id, cx);
+        }
+    }
+
+    /// `Ctrl/Cmd+Shift+X`: stop the selected instance, only when it is running.
+    /// Same predicate as the palette's stop rows; otherwise a no-op (`G1`).
+    pub(crate) fn stop_selected(&mut self, cx: &mut Context<Self>) {
+        let Some(id) = self.selected_instance_id() else {
+            return;
+        };
+        let Some(view) = self.instance(&id) else {
+            return;
+        };
+        if crate::format::can_stop(view.status) {
+            self.stop_instance(id, cx);
+        }
+    }
+
+    /// The instance of the selected centre-pane tab, if any.
+    fn selected_instance_id(&self) -> Option<InstanceId> {
+        self.tabs.selected_instance().cloned()
+    }
+
     pub(crate) fn report_error(&mut self, err: &dblocal_core::DblError) {
         let facing = UserFacingError::from(err);
         self.report_user_facing_error(&facing);

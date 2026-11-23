@@ -660,6 +660,16 @@ impl Render for Workspace {
                 this.toggle_run_selected(cx);
                 cx.notify();
             }))
+            .on_action(
+                cx.listener(|this, _: &actions::StartSelected, _window, cx| {
+                    this.start_selected(cx);
+                    cx.notify();
+                }),
+            )
+            .on_action(cx.listener(|this, _: &actions::StopSelected, _window, cx| {
+                this.stop_selected(cx);
+                cx.notify();
+            }))
             .on_action(cx.listener(|this, _: &actions::CloseOverlay, _window, cx| {
                 this.close_modals();
                 cx.notify();

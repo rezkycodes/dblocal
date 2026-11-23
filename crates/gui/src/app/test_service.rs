@@ -63,6 +63,8 @@ pub(crate) struct QuietService {
     created: Arc<Mutex<Vec<InstanceSpec>>>,
     /// Every `start_instance` id, in order (F3: assert the started instance).
     started: Arc<Mutex<Vec<InstanceId>>>,
+    /// Every `stop_instance` id, in order (G1: assert the stopped instance).
+    stopped: Arc<Mutex<Vec<InstanceId>>>,
     /// Every `connection_uri` request `(id, format)`, in order (F3: copy URI).
     uris: Arc<Mutex<Vec<(InstanceId, UriFormat)>>>,
     tx: broadcast::Sender<ServiceEvent>,
@@ -101,6 +103,7 @@ impl QuietService {
             calls: Arc::new(AtomicUsize::new(0)),
             created: Arc::new(Mutex::new(Vec::new())),
             started: Arc::new(Mutex::new(Vec::new())),
+            stopped: Arc::new(Mutex::new(Vec::new())),
             uris: Arc::new(Mutex::new(Vec::new())),
             tx,
         }
@@ -119,6 +122,11 @@ impl QuietService {
     /// Every `start_instance` id, in call order.
     pub(crate) fn started(&self) -> Vec<InstanceId> {
         self.started.lock().expect("started lock").clone()
+    }
+
+    /// Every `stop_instance` id, in call order.
+    pub(crate) fn stopped(&self) -> Vec<InstanceId> {
+        self.stopped.lock().expect("stopped lock").clone()
     }
 
     /// Every `connection_uri` request, in call order.
@@ -175,8 +183,9 @@ impl DblService for QuietService {
         self.started.lock().expect("started lock").push(id.clone());
         Ok(OperationId::new(format!("op-start-{n}")))
     }
-    fn stop_instance(&self, _id: &InstanceId) -> Result<OperationId> {
+    fn stop_instance(&self, id: &InstanceId) -> Result<OperationId> {
         let n = self.calls.fetch_add(1, Ordering::SeqCst);
+        self.stopped.lock().expect("stopped lock").push(id.clone());
         Ok(OperationId::new(format!("op-stop-{n}")))
     }
     fn delete_instance(&self, _id: &InstanceId, _mode: DeleteMode) -> Result<OperationId> {
