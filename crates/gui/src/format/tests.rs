@@ -79,6 +79,53 @@ fn every_status_has_a_glyph_and_a_nonempty_label() {
     assert!(!is_busy(InstanceStatus::Running));
 }
 
+/// `F-PLH-02` AC2: status is never colour alone — every status maps to a
+/// non-empty label **and** a glyph shape, and no two status families share a
+/// shape. This is the table the requirement names: a label per variant, and a
+/// distinct glyph per family so the shape alone also distinguishes them.
+#[test]
+fn every_status_has_a_label_and_the_glyph_families_are_distinct() {
+    let all = [
+        InstanceStatus::Running,
+        InstanceStatus::Stopped,
+        InstanceStatus::Failed,
+        InstanceStatus::Provisioning,
+        InstanceStatus::Initializing,
+        InstanceStatus::Starting,
+        InstanceStatus::Stopping,
+        InstanceStatus::Deleting,
+        InstanceStatus::Draft,
+    ];
+    // Every variant: a non-empty label (never colour alone).
+    for status in all {
+        assert!(
+            !status_label(status).trim().is_empty(),
+            "{status:?} must have a text label, not colour alone"
+        );
+    }
+    // The four glyph shapes are pairwise distinct, so the shape is a second,
+    // colour-blind-safe signal.
+    let glyphs = [
+        StatusGlyph::Running,
+        StatusGlyph::Stopped,
+        StatusGlyph::Failed,
+        StatusGlyph::Busy,
+    ];
+    for (i, a) in glyphs.iter().enumerate() {
+        for b in &glyphs[i + 1..] {
+            assert_ne!(a, b, "glyph shapes must be distinct: {a:?} vs {b:?}");
+        }
+    }
+    // Each family is reachable from at least one status, so none is dead.
+    let mapped: Vec<StatusGlyph> = all.iter().map(|s| status_glyph(*s)).collect();
+    for glyph in glyphs {
+        assert!(
+            mapped.contains(&glyph),
+            "glyph {glyph:?} is never used by any status"
+        );
+    }
+}
+
 #[test]
 fn actions_follow_the_state_machine() {
     assert!(can_start(InstanceStatus::Stopped));
