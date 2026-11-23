@@ -28,8 +28,12 @@ impl Workspace {
     }
 
     /// Closes the dialog; an in-flight install keeps its state.
-    pub(crate) fn close_settings(&mut self) {
+    ///
+    /// `F1`: closing returns the keyboard (opener, or the root fallback).
+    pub(crate) fn close_settings(&mut self, cx: &mut Context<Self>) {
         self.settings.close();
+        self.restore_dialog_focus_after_close();
+        cx.notify();
     }
 
     /// The login-item seam, built once and reused.

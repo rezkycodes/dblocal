@@ -621,19 +621,53 @@ impl Workspace {
         }
         if self.settings.open {
             self.settings.close();
+            self.restore_dialog_focus_after_close();
         }
     }
 
-    /// Gives focus back to the field a Databases dialog covered (F3).
+    /// Whether any overlay is on screen, so a caller can decide whether a
+    /// dismissal should return focus (an action that opened a new overlay owns
+    /// its own capture; one that ran a command and opened nothing must restore).
+    pub(crate) fn any_overlay_open(&self) -> bool {
+        self.palette_open
+            || self.create.is_some()
+            || self.delete_target.is_some()
+            || self.settings.open
+            || self.drop_dialog.is_some()
+            || self.reset_confirm.is_some()
+            || self.secret_dialog.is_some()
+            || self.config_restore_confirm.is_some()
+            || self.quit.is_confirming()
+    }
+
+    /// The single place every overlay dismissal returns the keyboard.
     ///
-    /// `close_modals` runs from the Escape listener with no window of its own,
-    /// so the focus goes through the entity's current window, which GPUI
-    /// resolves from the frame the workspace last rendered in.
-    fn restore_dialog_focus_after_close(&mut self) {
-        let Some(target) = self.dialog_focus.closed() else {
-            return;
-        };
+    /// `F1`: when an overlay closes — by Escape, by confirming, by a button, or
+    /// because the action finished — focus must land back on something. The
+    /// opener's handle is restored when it was captured and still exists;
+    /// otherwise (the overlay was opened with nothing focused, as at startup, or
+    /// the opener was removed) focus falls back to the Workspace root, so the
+    /// keyboard never ends with `window.focused() == None` (a dead keyboard: the
+    /// real window needed a mouse click before `ctrl-k` worked again).
+    ///
+    /// Runs from listeners that may have no window (Escape, a background
+    /// confirmation), so it parks the handle for `render` to apply on the next
+    /// frame rather than focusing here.
+    pub(crate) fn restore_dialog_focus_after_close(&mut self) {
+        let target = self
+            .dialog_focus
+            .closed()
+            .unwrap_or_else(|| self.focus_handle.clone());
         self.pending_focus_restore = Some(target);
+    }
+
+    /// Closes the create dialog after a successful submit and returns focus.
+    ///
+    /// `submit_create` takes `self.create` before the async submit, so the
+    /// success arm has to restore focus itself; a failed submit re-opens the
+    /// form and keeps focus in it, so it does not.
+    pub(crate) fn finish_create_overlay(&mut self) {
+        self.restore_dialog_focus_after_close();
     }
 }
 
@@ -658,6 +692,16 @@ impl Render for Workspace {
         // here; the frame is the first place it can be focused.
         if let Some(target) = self.pending_focus_restore.take() {
             target.focus(window, cx);
+        }
+        // `F1`: when nothing holds focus (startup, or a dismissal whose opener
+        // is gone, or a background event that dropped focus) the keyboard is
+        // dead — Tab and every shortcut do nothing until a mouse click. Focus
+        // the root once so `ctrl-k`/`ctrl-n` work on a fresh window. Only when
+        // nothing is focused, so it never steals focus from a control the user
+        // or a dialog placed.
+        if window.focused(cx).is_none() {
+            let root = self.focus_handle.clone();
+            root.focus(window, cx);
         }
         // The Config tab's text fields are GPUI entities created once; build any
         // the visible tab needs before the frame reads them (`F-CFG-01`).
@@ -716,27 +760,29 @@ impl Render for Workspace {
             .when(creating, |this| {
                 this.child(create_dialog::render(self, window, cx))
             })
-            .when(deleting, |this| this.child(delete_dialog::render(self, cx)))
+            .when(deleting, |this| {
+                this.child(delete_dialog::render(self, window, cx))
+            })
             .when(self.palette_open, |this| {
-                this.child(palette::render(self, cx))
+                this.child(palette::render(self, window, cx))
             })
             .when(self.settings.open, |this| {
-                this.child(settings_dialog::render(self, cx))
+                this.child(settings_dialog::render(self, window, cx))
             })
             .when(self.drop_dialog.is_some(), |this| {
-                this.child(admin_dialogs::render_drop(self, cx))
+                this.child(admin_dialogs::render_drop(self, window, cx))
             })
             .when(self.reset_confirm.is_some(), |this| {
-                this.child(admin_dialogs::render_reset(self, cx))
+                this.child(admin_dialogs::render_reset(self, window, cx))
             })
             .when(self.secret_dialog.is_some(), |this| {
-                this.child(admin_dialogs::render_secret(self, cx))
+                this.child(admin_dialogs::render_secret(self, window, cx))
             })
             .when(self.config_restore_confirm.is_some(), |this| {
-                this.child(config_dialogs::render_restore(self, cx))
+                this.child(config_dialogs::render_restore(self, window, cx))
             })
             .when(self.quit.is_confirming(), |this| {
-                this.child(self.render_quit_dialog(cx))
+                this.child(self.render_quit_dialog(window, cx))
             })
     }
 }

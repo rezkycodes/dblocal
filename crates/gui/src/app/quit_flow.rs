@@ -222,8 +222,22 @@ impl Workspace {
 
     /// The quit dialog: default "Biarkan tetap berjalan", alternative
     /// "Hentikan semua lalu keluar", a stop-in-flight state, and a failure state.
-    pub(crate) fn render_quit_dialog(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    pub(crate) fn render_quit_dialog(
+        &self,
+        window: &mut gpui_kit::Window,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        use gpui_kit::component::FocusTrapElement as _;
         let theme = cx.theme().clone();
+        // `F2`: a focus trap keeps Tab inside the quit dialog's buttons.
+        let trap = window
+            .use_keyed_state(
+                gpui_kit::SharedString::from("modal-focus-quit"),
+                cx,
+                |_, cx| cx.focus_handle(),
+            )
+            .read(cx)
+            .clone();
         let (body, stopping, failed) = match self.quit.state() {
             QuitState::Confirming { .. } => (strings::UI_QUIT_BODY.to_owned(), false, false),
             QuitState::StoppingAll { .. } => (strings::UI_QUIT_STOPPING.to_owned(), true, false),
@@ -262,7 +276,8 @@ impl Workspace {
                             .text_color(theme.muted_foreground)
                             .child(body),
                     )
-                    .child(self.quit_dialog_buttons(cx, stopping, failed)),
+                    .child(self.quit_dialog_buttons(cx, stopping, failed))
+                    .focus_trap(gpui_kit::SharedString::from("trap-quit"), &trap),
             )
     }
 

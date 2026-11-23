@@ -9,14 +9,20 @@ use gpui_kit::component::button::Button;
 use gpui_kit::component::button::ButtonVariants;
 use gpui_kit::component::label::Label;
 use gpui_kit::component::{ActiveTheme, h_flex, v_flex};
-use gpui_kit::{AnyElement, Context, IntoElement, ParentElement, SharedString, Styled, div, px};
+use gpui_kit::{
+    AnyElement, Context, IntoElement, ParentElement, SharedString, Styled, Window, div, px,
+};
 
 use super::Workspace;
 use super::config_state::config_action_id;
 use super::create_dialog::overlay;
 
 /// The restore-confirmation dialog (`F-CFG-01` AC3).
-pub(super) fn render_restore(workspace: &Workspace, cx: &mut Context<Workspace>) -> AnyElement {
+pub(super) fn render_restore(
+    workspace: &Workspace,
+    window: &mut Window,
+    cx: &mut Context<Workspace>,
+) -> AnyElement {
     let theme = cx.theme().clone();
     let Some(id) = workspace.config_restore_confirm().cloned() else {
         return div().into_any_element();
@@ -94,6 +100,7 @@ pub(super) fn render_restore(workspace: &Workspace, cx: &mut Context<Workspace>)
                     ),
             )
             .child(body),
+        window,
         cx,
     )
     .into_any_element()

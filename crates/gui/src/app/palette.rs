@@ -23,9 +23,19 @@ use super::Workspace;
 /// Renders the command palette overlay.
 pub(super) fn render(
     workspace: &Workspace,
+    window: &mut gpui_kit::Window,
     cx: &mut gpui_kit::Context<Workspace>,
 ) -> impl IntoElement {
+    use gpui_kit::component::FocusTrapElement as _;
     let theme = cx.theme().clone();
+    // `F2`: the palette is a modal variant, so a focus trap keeps Tab inside
+    // its query field and rows instead of walking the page behind the scrim.
+    let trap = window
+        .use_keyed_state(SharedString::from("modal-focus-palette"), cx, |_, cx| {
+            cx.focus_handle()
+        })
+        .read(cx)
+        .clone();
     let items = workspace.palette_items();
     let entries = items.into_iter().map(|item| {
         let label = SharedString::from(item.label.clone());
@@ -111,7 +121,8 @@ pub(super) fn render(
                 .on_mouse_down(gpui_kit::MouseButton::Left, |_, _, cx| {
                     cx.stop_propagation()
                 })
-                .child(palette),
+                .child(palette)
+                .focus_trap(SharedString::from("trap-palette"), &trap),
         )
         .into_any_element()
 }

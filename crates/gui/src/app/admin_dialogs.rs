@@ -16,7 +16,7 @@ use gpui_kit::component::input::{Input, InputState};
 use gpui_kit::component::label::Label;
 use gpui_kit::component::{ActiveTheme, Disableable, Sizable, h_flex, v_flex};
 use gpui_kit::{
-    AnyElement, Context, Entity, IntoElement, ParentElement, SharedString, Styled, div, px,
+    AnyElement, Context, Entity, IntoElement, ParentElement, SharedString, Styled, Window, div, px,
 };
 
 use super::Workspace;
@@ -78,7 +78,11 @@ impl SecretDialog {
 }
 
 /// The drop-database confirmation (`F-DBU-01` AC3).
-pub(super) fn render_drop(workspace: &Workspace, cx: &mut Context<Workspace>) -> AnyElement {
+pub(super) fn render_drop(
+    workspace: &Workspace,
+    window: &mut Window,
+    cx: &mut Context<Workspace>,
+) -> AnyElement {
     let theme = cx.theme().clone();
     let Some(dialog) = workspace.drop_dialog().cloned() else {
         return div().into_any_element();
@@ -169,12 +173,17 @@ pub(super) fn render_drop(workspace: &Workspace, cx: &mut Context<Workspace>) ->
                     ),
             )
             .child(body),
+        window,
         cx,
     )
 }
 
 /// The reset-password confirmation (`F-DBU-03`).
-pub(super) fn render_reset(workspace: &Workspace, cx: &mut Context<Workspace>) -> AnyElement {
+pub(super) fn render_reset(
+    workspace: &Workspace,
+    window: &mut Window,
+    cx: &mut Context<Workspace>,
+) -> AnyElement {
     let theme = cx.theme().clone();
     let Some(id) = workspace.reset_confirm().cloned() else {
         return div().into_any_element();
@@ -240,13 +249,18 @@ pub(super) fn render_reset(workspace: &Workspace, cx: &mut Context<Workspace>) -
                     ),
             )
             .child(body),
+        window,
         cx,
     )
     .into_any_element()
 }
 
 /// The one-time secret dialog (`F-DBU-02` AC2, `F-DBU-03` AC1).
-pub(super) fn render_secret(workspace: &Workspace, cx: &mut Context<Workspace>) -> AnyElement {
+pub(super) fn render_secret(
+    workspace: &Workspace,
+    window: &mut Window,
+    cx: &mut Context<Workspace>,
+) -> AnyElement {
     let theme = cx.theme().clone();
     let Some(dialog) = workspace.secret_dialog().cloned() else {
         return div().into_any_element();
@@ -331,6 +345,7 @@ pub(super) fn render_secret(workspace: &Workspace, cx: &mut Context<Workspace>) 
                     ),
             )
             .child(body),
+        window,
         cx,
     )
     .into_any_element()

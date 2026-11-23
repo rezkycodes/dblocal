@@ -12,7 +12,7 @@ use gpui_kit::component::label::Label;
 use gpui_kit::component::{ActiveTheme, Disableable, Sizable, h_flex, input::Input, v_flex};
 use gpui_kit::{
     AnyElement, Context, InteractiveElement, IntoElement, MouseButton, ParentElement, SharedString,
-    Styled, div, prelude::*, px,
+    Styled, Window, div, prelude::*, px,
 };
 
 use crate::format;
@@ -21,7 +21,11 @@ use super::Workspace;
 use super::create_dialog::overlay;
 
 /// Renders the delete modal when a target is selected.
-pub(super) fn render(workspace: &Workspace, cx: &mut Context<Workspace>) -> AnyElement {
+pub(super) fn render(
+    workspace: &Workspace,
+    window: &mut Window,
+    cx: &mut Context<Workspace>,
+) -> AnyElement {
     let theme = cx.theme().clone();
     let Some(name) = workspace.delete_target_name(cx) else {
         return div().into_any_element();
@@ -130,6 +134,7 @@ pub(super) fn render(workspace: &Workspace, cx: &mut Context<Workspace>) -> AnyE
                     ),
             )
             .child(body),
+        window,
         cx,
     )
 }

@@ -208,33 +208,38 @@ impl Workspace {
     ) {
         let action = self.palette_actions().get(index).cloned().flatten();
         self.palette_open = false;
-        let Some(action) = action else {
-            // A disabled row or an out-of-range index: close without running.
-            cx.notify();
-            return;
-        };
         match action {
-            PaletteAction::NewInstance => self.open_new_instance(window, cx),
-            PaletteAction::Open(value) => {
+            Some(PaletteAction::NewInstance) => self.open_new_instance(window, cx),
+            Some(PaletteAction::Open(value)) => {
                 if let Ok(id) = value.parse::<InstanceId>() {
                     self.open_tab(id, cx);
                 }
             }
-            PaletteAction::Start(value) => {
+            Some(PaletteAction::Start(value)) => {
                 if let Ok(id) = value.parse::<InstanceId>() {
                     self.start_instance(id, cx);
                 }
             }
-            PaletteAction::Stop(value) => {
+            Some(PaletteAction::Stop(value)) => {
                 if let Ok(id) = value.parse::<InstanceId>() {
                     self.stop_instance(id, cx);
                 }
             }
-            PaletteAction::CopyUri(value) => {
+            Some(PaletteAction::CopyUri(value)) => {
                 if let Ok(id) = value.parse::<InstanceId>() {
                     self.copy_uri(id, UriFormat::Uri, window, cx);
                 }
             }
+            // A disabled row or an out-of-range index: close without running.
+            None => {}
+        }
+        // `F1`: a confirm is a dismissal, but an action that opened another
+        // overlay (NewInstance -> create dialog) owns its own focus capture, so
+        // only restore when no overlay is open now. Returning focus here (or to
+        // the root fallback) is what keeps `ctrl-k` working right after a
+        // command ran; without it the keyboard was dead until a mouse click.
+        if !self.any_overlay_open() {
+            self.restore_dialog_focus_after_close();
         }
         cx.notify();
     }

@@ -120,6 +120,7 @@ pub(super) fn render(
                     .child(body),
             )
             .child(footer),
+        window,
         cx,
     )
 }
@@ -479,14 +480,29 @@ fn input_or_empty(
     }
 }
 
-/// Shared modal chrome: a full-screen backdrop that closes on click, and a
-/// centred panel that swallows clicks.
+/// Shared modal chrome: a full-screen backdrop that closes on click, a centred
+/// panel that swallows clicks, and a **focus trap** (`F2`).
+///
+/// The panel registers a `gpui-base` focus trap on a per-overlay keyed handle,
+/// so when it holds focus, `Tab`/`Shift+Tab` cycle inside the dialog only — the
+/// modal no longer lets Tab reach the header, sidebar and status bar behind its
+/// scrim. `window` is needed for the keyed handle.
 pub(super) fn overlay(
     overlay_id: &'static str,
     panel_id: &'static str,
     panel: impl IntoElement,
+    window: &mut Window,
     cx: &mut Context<Workspace>,
 ) -> AnyElement {
+    use gpui_kit::component::FocusTrapElement as _;
+    let container = window
+        .use_keyed_state(
+            SharedString::from(format!("modal-focus-{overlay_id}")),
+            cx,
+            |_, cx| cx.focus_handle(),
+        )
+        .read(cx)
+        .clone();
     gpui_kit::deferred(
         div()
             .id(overlay_id)
@@ -507,7 +523,8 @@ pub(super) fn overlay(
                 div()
                     .id(panel_id)
                     .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                    .child(panel),
+                    .child(panel)
+                    .focus_trap(SharedString::from(format!("trap-{overlay_id}")), &container),
             ),
     )
     .with_priority(10)

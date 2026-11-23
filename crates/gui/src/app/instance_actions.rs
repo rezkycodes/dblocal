@@ -515,6 +515,10 @@ impl Workspace {
             move |this: &mut Workspace, cx: &mut Context<Workspace>| match result {
                 Ok(submitted) => {
                     this.state.downloads.push(submitted.download);
+                    // `F1`: the dialog closed by confirming; return the keyboard
+                    // to the opener (or the root) so `ctrl-n`/`ctrl-k` keep
+                    // working without a mouse click.
+                    this.finish_create_overlay();
                     cx.notify();
                 }
                 Err(create_submit::SubmitError::Invalid(message)) => {
@@ -598,6 +602,8 @@ impl Workspace {
                         this.close_tab_by_instance(&id, cx);
                         this.delete_target = None;
                         this.delete_name_input = None;
+                        // `F1`: a confirm dismisses the overlay; return the keyboard.
+                        this.restore_dialog_focus_after_close();
                         this.toast = Some(SharedString::from(strings::UI_TOAST_DELETED));
                         this.refresh_instances_bg(cx);
                     }
