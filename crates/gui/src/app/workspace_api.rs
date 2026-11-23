@@ -296,6 +296,12 @@ impl Workspace {
         self.delete_focus.clone()
     }
 
+    /// The two delete-dialog mode cards' handles, `[archive, purge]`. Used on the
+    /// render path (each card is a tab stop) and by keyboard tests.
+    pub(crate) fn delete_mode_focus(&self) -> [gpui_kit::FocusHandle; 2] {
+        self.delete_mode_focus.clone()
+    }
+
     /// The instance the open delete dialog targets, for assertions.
     #[cfg(test)]
     pub(crate) fn delete_target_id(&self) -> Option<InstanceId> {

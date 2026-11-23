@@ -233,6 +233,55 @@ fn purge_mode_needs_the_typed_name(cx: &mut TestAppContext) {
     );
 }
 
+/// `F2` + `F-INS-05` AC2: the two mode cards are real tab stops, so a
+/// keyboard-only user can reach purge mode and turn it on with Enter. Before this
+/// the cards listened only for the mouse, so "Hapus instance & data" was
+/// unreachable without a pointer.
+#[gpui_kit::test]
+fn tab_reaches_the_purge_mode_card_and_enter_selects_it(cx: &mut TestAppContext) {
+    let (view, service, cx) = harness(cx);
+    let running = service.id_with(InstanceStatus::Running);
+
+    cx.update(|window, cx| {
+        view.update(cx, |this, cx| {
+            this.open_delete_dialog(running.clone(), window, cx)
+        });
+    });
+    cx.run_until_parked();
+    draw(cx);
+    assert_eq!(
+        view.read_with(cx, |this, _| this.delete_mode()),
+        DeleteMode::ArchiveData,
+        "the dialog opens in archive mode"
+    );
+
+    // Tab from the dialog container: archive card, purge card, Batal, Hapus, wrap.
+    // Walk until the purge card holds focus, then Enter selects it. The mode is
+    // read from the workspace, not a direct setter call, so only a real control
+    // activation can flip it.
+    let [_archive, purge] = view.read_with(cx, |this, _| this.delete_mode_focus());
+    let mut reached_purge = false;
+    for _ in 0..10 {
+        press(cx, "tab");
+        if cx.update(|window, _cx| purge.is_focused(window)) {
+            reached_purge = true;
+            break;
+        }
+    }
+    assert!(
+        reached_purge,
+        "Tab must reach the purge mode card (F-INS-05 AC2: purge needs no pointer)"
+    );
+    press(cx, "enter");
+    cx.run_until_parked();
+    draw(cx);
+    assert_eq!(
+        view.read_with(cx, |this, _| this.delete_mode()),
+        DeleteMode::PurgeData,
+        "Enter on the focused purge card must switch the dialog to purge mode"
+    );
+}
+
 /// `F2`: Tab stays inside the delete dialog opened from the header, and Escape
 /// returns focus to the button that opened it.
 #[gpui_kit::test]

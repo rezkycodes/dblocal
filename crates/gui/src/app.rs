@@ -295,6 +295,10 @@ pub struct Workspace {
     /// The instance header's "Hapus" button handle (`F-INS-05`): a stable tab
     /// stop the keyboard tests can focus to prove Enter opens the dialog.
     delete_focus: FocusHandle,
+    /// The delete dialog's two mode cards' handles, in order
+    /// `[archive, purge]` (`F-INS-05` AC2). Stable so the cards are real tab
+    /// stops and the tests can focus each to prove the keyboard reaches purge.
+    delete_mode_focus: [FocusHandle; 2],
     started_at: Instant,
     first_paint_logged: bool,
     /// Whether the demo build may show sample rows in the placeholder tabs.
@@ -328,6 +332,7 @@ struct Parts {
     focus_handle: FocusHandle,
     dock_focus: HashMap<EngineKey, FocusHandle>,
     delete_focus: FocusHandle,
+    delete_mode_focus: [FocusHandle; 2],
 }
 
 impl Workspace {
@@ -355,6 +360,7 @@ impl Workspace {
         let (db_name_input, user_name_input) = databases_tab_inputs(window, cx);
         let dock_focus = dock_focus_handles(cx);
         let delete_focus = cx.focus_handle();
+        let delete_mode_focus = [cx.focus_handle(), cx.focus_handle()];
         let mut workspace = Self::assemble(Parts {
             service,
             tray_available,
@@ -365,6 +371,7 @@ impl Workspace {
             focus_handle,
             dock_focus,
             delete_focus,
+            delete_mode_focus,
         });
         workspace.startup_load(cx);
         // `F7a`: the external editor DBLocal launches, the CLI and a second
@@ -406,6 +413,7 @@ impl Workspace {
         let (db_name_input, user_name_input) = databases_tab_inputs(window, cx);
         let dock_focus = dock_focus_handles(cx);
         let delete_focus = cx.focus_handle();
+        let delete_mode_focus = [cx.focus_handle(), cx.focus_handle()];
         let mut workspace = Self::assemble(Parts {
             service,
             tray_available: false,
@@ -416,6 +424,7 @@ impl Workspace {
             focus_handle,
             dock_focus,
             delete_focus,
+            delete_mode_focus,
         });
         workspace.tray_note_shown = true;
         workspace.tray_note = Some(SharedString::from(strings::UI_TRAY_UNAVAILABLE_NOTE));
@@ -445,6 +454,7 @@ impl Workspace {
             filter_input: Some(parts.filter_input),
             focus_handle: parts.focus_handle,
             delete_focus: parts.delete_focus,
+            delete_mode_focus: parts.delete_mode_focus,
             state: ShellState::default(),
             catalog: Self::offline_catalog(),
             runtimes: Vec::new(),

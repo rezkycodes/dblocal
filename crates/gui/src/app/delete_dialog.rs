@@ -11,8 +11,8 @@ use gpui_kit::component::button::ButtonVariants;
 use gpui_kit::component::label::Label;
 use gpui_kit::component::{ActiveTheme, Disableable, Sizable, h_flex, input::Input, v_flex};
 use gpui_kit::{
-    AnyElement, Context, InteractiveElement, IntoElement, MouseButton, ParentElement, SharedString,
-    Styled, Window, div, prelude::*, px,
+    AnyElement, Context, InteractiveElement, IntoElement, ParentElement, SharedString, Styled,
+    Window, div, prelude::*, px,
 };
 
 use crate::format;
@@ -34,6 +34,10 @@ pub(super) fn render(
     let typed_matches = workspace.delete_confirmation_ok(cx);
     let size = workspace.delete_size();
     let can_purge = mode == DeleteMode::PurgeData && typed_matches;
+    // Each mode card is a tab stop with the ring and Enter/Space activation, so a
+    // keyboard-only user can reach purge mode (W4-I: the cards used to only
+    // listen for the mouse, leaving "Hapus instance & data" unreachable by key).
+    let [archive_focus, purge_focus] = workspace.delete_mode_focus();
 
     let modes = v_flex()
         .gap_2()
@@ -43,7 +47,9 @@ pub(super) fn render(
             strings::UI_DELETE_ARCHIVE_HINT,
             format!("~{}", format::format_bytes_id(size)),
             mode,
+            &archive_focus,
             &theme,
+            window,
             cx,
         ))
         .child(mode_card(
@@ -52,7 +58,9 @@ pub(super) fn render(
             strings::UI_DELETE_PURGE_HINT,
             format!("~{}", format::format_bytes_id(size)),
             mode,
+            &purge_focus,
             &theme,
+            window,
             cx,
         ));
 
@@ -140,7 +148,8 @@ pub(super) fn render(
     )
 }
 
-/// One selectable delete mode: title, hint, size, and the selected border.
+/// One selectable delete mode: title, hint, size, the selected border, and a
+/// keyboard path (focus ring, Tab stop, Enter/Space activation).
 #[allow(clippy::too_many_arguments)]
 fn mode_card(
     candidate: DeleteMode,
@@ -148,11 +157,13 @@ fn mode_card(
     hint: &str,
     size: String,
     mode: DeleteMode,
+    focus: &gpui_kit::FocusHandle,
     theme: &gpui_kit::component::Theme,
+    window: &Window,
     cx: &mut Context<Workspace>,
 ) -> impl IntoElement {
     let selected = candidate == mode;
-    div()
+    let card = div()
         .id(SharedString::from(format!(
             "delete-mode-{}",
             candidate.as_str()
@@ -167,13 +178,12 @@ fn mode_card(
             theme.border
         })
         .when(selected, |this| this.bg(theme.muted))
-        .on_mouse_down(
-            MouseButton::Left,
-            cx.listener(move |this, _, _, cx| {
-                this.set_delete_mode(candidate);
-                cx.notify();
-            }),
-        )
+        // `on_click` (not `on_mouse_down`) so gpui synthesises Enter/Space from
+        // the focused element as well as a pointer click.
+        .on_click(cx.listener(move |this, _, _, cx| {
+            this.set_delete_mode(candidate);
+            cx.notify();
+        }))
         .child(
             v_flex()
                 .gap_1()
@@ -192,5 +202,9 @@ fn mode_card(
                         .text_xs()
                         .text_color(theme.muted_foreground),
                 ),
-        )
+        );
+    // `apply_inset_focus_ring` adds the Tab stop and the 2px inset `theme.ring`
+    // outline; the card sits inside the dialog's bordered panel, so the inset
+    // variant cannot be clipped.
+    super::components::apply_inset_focus_ring(card, focus, window, cx)
 }
