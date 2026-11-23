@@ -99,16 +99,11 @@ fn mysql_admin(
         tracing::warn!(engine, instance = %name, error = %err, "cannot resolve the admin socket");
         UserFacingError::from(AdminError::Connect)
     })?;
-    let target = crate::admin::MysqlTarget::new(
-        socket,
-        instance.port().get(),
-        instance.superuser(),
-        password,
-    )
-    .with_timeouts(
-        Duration::from_secs(consts::ADMIN_CONNECT_TIMEOUT_SECS),
-        Duration::from_secs(consts::ADMIN_STATEMENT_TIMEOUT_SECS),
-    );
+    let target = crate::admin::MysqlTarget::new(socket, instance.superuser(), password)
+        .with_timeouts(
+            Duration::from_secs(consts::ADMIN_CONNECT_TIMEOUT_SECS),
+            Duration::from_secs(consts::ADMIN_STATEMENT_TIMEOUT_SECS),
+        );
     Ok(Box::new(crate::admin::MysqlAdmin::new(target)))
 }
 

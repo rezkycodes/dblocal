@@ -1,12 +1,14 @@
 //! MySQL / MariaDB admin execution over the instance unix socket.
 //!
-//! All connections go over the instance's **unix socket**, not TCP. This is
-//! deliberate: MySQL 8.4's default `caching_sha2_password` over plaintext TCP
-//! demands an RSA public-key exchange whose result is still sent unencrypted, so
-//! the socket (a secure channel) is the only loopback path that keeps the
-//! password off the wire; MariaDB's bootstrap only configures `root@localhost`,
-//! reachable solely through the socket. The password never appears in argv, a log
-//! line, an error or `Debug` output.
+//! All connections go over the instance's **unix socket**, never TCP. This is
+//! deliberate and unconditional: the socket is a secure (never-transmitted)
+//! channel, so no byte — the password included — crosses the loopback TCP
+//! stream, and it routes admin as `root@localhost`, the only account MariaDB's
+//! bootstrap configures. (`mysql_async` would itself perform the
+//! `caching_sha2_password` RSA public-key exchange over TCP, so the socket is not
+//! *required* to complete the handshake — but it is the only path that keeps the
+//! traffic off TCP.) The password never appears in argv, a log line, an error or
+//! `Debug` output.
 //!
 //! Statements that carry a password literal (`CREATE USER ... IDENTIFIED BY`) run
 //! with `sql_log_off = 1` on the session so a failing statement never reaches the
@@ -24,7 +26,6 @@ use std::time::Duration;
 use mysql_async::prelude::Queryable;
 use mysql_async::{Conn, Opts, OptsBuilder, ServerError};
 
-use crate::consts;
 use crate::secret::SecretString;
 use crate::secrets::generate_password;
 
@@ -48,10 +49,9 @@ pub const MANAGED_ACCOUNT_HOST: &str = "127.0.0.1";
 /// Immutable: the builders return a new value.
 #[derive(Clone)]
 pub struct MysqlTarget {
-    /// The instance's unix socket. When empty, the target dials loopback TCP on
-    /// `port` instead (the documented fallback when a socket is unavailable).
+    /// The instance's unix socket. Admin **always** connects over it; there is no
+    /// TCP path (see [`MysqlTarget::opts`]).
     socket: std::path::PathBuf,
-    port: u16,
     superuser: String,
     password: SecretString,
     connect_timeout: Duration,
@@ -64,17 +64,14 @@ impl MysqlTarget {
     /// Default statement timeout.
     pub const DEFAULT_STATEMENT_TIMEOUT: Duration = Duration::from_secs(30);
 
-    /// Creates a target that dials `socket` as `superuser` (port for the TCP
-    /// fallback).
+    /// Creates a target that dials `socket` as `superuser`.
     pub fn new(
         socket: impl Into<std::path::PathBuf>,
-        port: u16,
         superuser: impl Into<String>,
         password: SecretString,
     ) -> Self {
         Self {
             socket: socket.into(),
-            port,
             superuser: superuser.into(),
             password,
             connect_timeout: Self::DEFAULT_CONNECT_TIMEOUT,
@@ -82,14 +79,9 @@ impl MysqlTarget {
         }
     }
 
-    /// The unix socket this target dials (empty means the TCP fallback).
+    /// The unix socket this target dials.
     pub fn socket(&self) -> &std::path::Path {
         &self.socket
-    }
-
-    /// The loopback TCP port the fallback dials.
-    pub fn port(&self) -> u16 {
-        self.port
     }
 
     /// Superuser name.
@@ -124,30 +116,18 @@ impl MysqlTarget {
 
     /// The `mysql_async` connection options for this target.
     ///
-    /// Prefers the unix socket, and only falls back to loopback TCP on `port` when
-    /// no socket path is known. The socket is a secure channel, so a
-    /// `caching_sha2_password` handshake completes there without the
-    /// unencrypted RSA exchange TCP would need.
+    /// Always the unix socket, never TCP: the socket is a secure channel, so the
+    /// `caching_sha2_password` handshake needs no RSA exchange and no password or
+    /// statement text ever crosses the loopback TCP stream. There is no TCP
+    /// fallback — a fallback nothing reaches would be a lie in the docs.
     fn opts(&self, db_name: Option<&str>) -> Opts {
-        let db = db_name.unwrap_or("");
-        if self.socket.as_os_str().is_empty() {
-            let builder = OptsBuilder::default()
-                .user(Some(self.superuser.as_str()))
-                .pass(Some(self.password.expose()))
-                .ip_or_hostname("127.0.0.1")
-                .tcp_port(self.port)
-                .prefer_socket(false)
-                .stmt_cache_size(0)
-                .db_name(Some(db));
-            return Opts::from(builder);
-        }
         let builder = OptsBuilder::default()
             .user(Some(self.superuser.as_str()))
             .pass(Some(self.password.expose()))
             .socket(Some(self.socket.to_string_lossy().into_owned()))
             .prefer_socket(true)
             .stmt_cache_size(0)
-            .db_name(Some(db));
+            .db_name(Some(db_name.unwrap_or("")));
         Opts::from(builder)
     }
 }
@@ -156,7 +136,6 @@ impl std::fmt::Debug for MysqlTarget {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("MysqlTarget")
             .field("socket", &self.socket)
-            .field("port", &self.port)
             .field("superuser", &self.superuser)
             .field("password", &"[REDACTED]")
             .field("connect_timeout", &self.connect_timeout)
@@ -490,13 +469,6 @@ impl super::executor::AdminExecutor for MysqlAdmin {
     }
 }
 
-/// `database_exists` and `with_count` return a bool from a count; this lets the
-/// same helper serve the "exists" and "in use" queries. Kept private.
-#[allow(dead_code)]
-fn _conn_timeout_defaults() -> Duration {
-    Duration::from_secs(consts::ADMIN_CONNECT_TIMEOUT_SECS)
-}
-
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -506,7 +478,6 @@ mod tests {
         // A non-existent socket: calls fail at connect, never at a live server.
         MysqlTarget::new(
             "/nonexistent/dblocal-test.sock",
-            3306,
             "root",
             SecretString::from("secret-canary-pw"),
         )
@@ -535,21 +506,9 @@ mod tests {
         assert_eq!(opts.db_name(), Some("appdb"));
         // A named db for the statement, none for the admin connection.
         assert_eq!(target().opts(None).db_name(), Some(""));
-    }
-
-    #[test]
-    fn opts_fall_back_to_tcp_when_no_socket_is_known() {
-        let no_socket = MysqlTarget::new(
-            std::path::PathBuf::new(),
-            3307,
-            "root",
-            SecretString::from("pw"),
-        );
-        let opts = no_socket.opts(None);
-        assert_eq!(opts.socket(), None);
-        assert!(!opts.prefer_socket());
-        assert_eq!(opts.tcp_port(), 3307);
-        assert_eq!(opts.ip_or_hostname(), "127.0.0.1");
+        // There is no TCP fallback: an empty socket path is the only way to make
+        // the target TCP, and nothing constructs one, so `opts` always carries the
+        // socket. Pinned by the fact that the type has no port to dial.
     }
 
     #[test]

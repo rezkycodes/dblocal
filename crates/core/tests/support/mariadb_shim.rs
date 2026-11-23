@@ -8,6 +8,11 @@
 //! `libcrypt.so.1` to the system's `libcrypt.so.2`, whose symbols are compatible
 //! for what `mariadbd` calls. Nothing is written outside a temp dir, and the
 //! variable is process-local to the test binary.
+//!
+//! The directory is **fixed per uid** (`dblocal-libshim-<uid>`), so however many
+//! e2e runs happen, at most one shim directory ever exists; setup is idempotent
+//! and reuses an existing valid symlink. The `LD_LIBRARY_PATH` prepend is the
+//! only per-process work.
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
@@ -32,6 +37,13 @@ fn system_has_so1() -> bool {
         .unwrap_or(false)
 }
 
+/// The fixed, per-uid shim directory. One per machine user, not per process, so
+/// repeated e2e runs never accumulate directories.
+fn shim_dir() -> PathBuf {
+    let uid = dblocal_core::engine::sockdir::current_uid();
+    std::env::temp_dir().join(format!("dblocal-libshim-{uid}"))
+}
+
 /// Builds the shim (once per process), prepends it to `LD_LIBRARY_PATH`, and
 /// returns `true` when a usable `libcrypt.so.1` is now reachable.
 pub fn ensure_shim_for_runtime() -> bool {
@@ -43,7 +55,7 @@ pub fn ensure_shim_for_runtime() -> bool {
         let Some(target) = CANDIDATES.iter().map(Path::new).find(|p| p.exists()) else {
             return false;
         };
-        let dir = std::env::temp_dir().join(format!("dblocal-w4e-libshim-{}", std::process::id()));
+        let dir = shim_dir();
         if std::fs::create_dir_all(&dir).is_err() {
             return false;
         }
@@ -55,8 +67,19 @@ pub fn ensure_shim_for_runtime() -> bool {
     })
 }
 
+/// Ensures `dir/libcrypt.so.1` links to `target`, reusing a valid link.
+///
+/// Idempotent: a symlink that already resolves to `target` is left alone, so two
+/// test processes sharing the per-uid directory (or a second run over a leftover
+/// directory) never race the remove-and-recreate into a transient failure.
 fn install_link(dir: &Path, target: &Path) -> std::io::Result<PathBuf> {
     let link = dir.join("libcrypt.so.1");
+    if let Ok(existing) = std::fs::read_link(&link)
+        && existing == target
+        && link.exists()
+    {
+        return Ok(link);
+    }
     let _ = std::fs::remove_file(&link);
     std::os::unix::fs::symlink(target, &link)?;
     Ok(link)
@@ -64,6 +87,13 @@ fn install_link(dir: &Path, target: &Path) -> std::io::Result<PathBuf> {
 
 fn prepend_to_ld_library_path(dir: &Path) {
     let previous = std::env::var("LD_LIBRARY_PATH").unwrap_or_default();
+    // Do not double-prepend the same directory (a second call in one process).
+    let already = previous
+        .split(':')
+        .any(|part| part == dir.to_string_lossy());
+    if already {
+        return;
+    }
     let value = if previous.is_empty() {
         dir.display().to_string()
     } else {
