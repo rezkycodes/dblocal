@@ -73,9 +73,17 @@ pub fn init(cx: &mut App) {
 /// "follow the OS". The value is read once per call so a test can set it in the
 /// process environment before `init`.
 pub fn theme_override() -> Option<&'static str> {
-    match std::env::var("DBLOCAL_THEME") {
-        Ok(value) if value.eq_ignore_ascii_case("dark") => Some(DARK_THEME),
-        Ok(value) if value.eq_ignore_ascii_case("light") => Some(LIGHT_THEME),
+    override_for(std::env::var("DBLOCAL_THEME").ok().as_deref())
+}
+
+/// The theme name a `DBLOCAL_THEME` value selects, or `None` to follow the OS.
+///
+/// Split from [`theme_override`] so the mapping is unit-tested without mutating
+/// the process environment (which other parallel tests would see).
+fn override_for(value: Option<&str>) -> Option<&'static str> {
+    match value {
+        Some(v) if v.eq_ignore_ascii_case("dark") => Some(DARK_THEME),
+        Some(v) if v.eq_ignore_ascii_case("light") => Some(LIGHT_THEME),
         _ => None,
     }
 }
@@ -356,5 +364,18 @@ mod tests {
         let soft = tokens::tint(base, 0.14);
         assert!((soft.a - 0.14).abs() < f32::EPSILON);
         assert_eq!((soft.h, soft.s, soft.l), (base.h, base.s, base.l));
+    }
+
+    #[test]
+    fn the_theme_override_maps_light_and_dark_and_ignores_system() {
+        assert_eq!(override_for(Some("dark")), Some(DARK_THEME));
+        assert_eq!(override_for(Some("DARK")), Some(DARK_THEME));
+        assert_eq!(override_for(Some("light")), Some(LIGHT_THEME));
+        assert_eq!(override_for(Some("Light")), Some(LIGHT_THEME));
+        // "system", an unset value and garbage all mean "follow the OS".
+        assert_eq!(override_for(Some("system")), None);
+        assert_eq!(override_for(Some("")), None);
+        assert_eq!(override_for(Some("solarized")), None);
+        assert_eq!(override_for(None), None);
     }
 }

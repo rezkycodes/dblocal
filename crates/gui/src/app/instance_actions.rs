@@ -544,6 +544,10 @@ impl Workspace {
         });
         self.delete_target = Some(id.clone());
         self.delete_mode = DeleteMode::ArchiveData;
+        // `F-PLH-01` AC1: the dialog takes the keyboard so the type-the-name
+        // confirmation can be typed without a click first.
+        self.dialog_focus.opened(window.focused(cx));
+        name_input.update(cx, |state, cx| state.focus(window, cx));
         self.delete_name_input = Some(name_input);
         self.delete_size = 0;
         let service = self.service.clone();
