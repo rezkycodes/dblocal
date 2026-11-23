@@ -12,7 +12,7 @@ use gpui_kit::{Focusable, TestAppContext};
 
 use super::config_tests::{open_config, view_with_backup};
 use super::databases_support::{fixture, settle};
-use crate::app::{InnerTab, Workspace};
+use crate::app::InnerTab;
 use crate::service_bridge::UiEvent;
 
 /// `F1`: a failed restore is reported typed and never starts the instance.

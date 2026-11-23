@@ -11,11 +11,10 @@ use std::sync::Arc;
 
 use dblocal_core::model::{InstanceId, InstanceStatus, StartFailure};
 use dblocal_core::service::{DblService, FailureInfo, mock::MockService};
-use gpui_kit::{AppContext as _, TestAppContext, VisualTestContext, px, size};
+use gpui_kit::{TestAppContext, VisualTestContext, px, size};
 
 use super::config_state::{config_action_id, config_row_id};
-use super::InnerTab;
-use super::Workspace;
+use super::{InnerTab, Workspace};
 
 /// A workspace on the demo service, showing one instance's Config tab.
 fn config_window<'a>(
@@ -24,7 +23,7 @@ fn config_window<'a>(
     cx.update(gpui_kit::init);
     cx.update(crate::theme::init);
     let service: Arc<dyn DblService> = Arc::new(MockService::demo());
-    let (view, mut cx) = cx.add_window_view(|window, cx| {
+    let (view, cx) = cx.add_window_view(|window, cx| {
         let mut workspace = Workspace::preview_product_config(service, window, cx);
         workspace
             .tabs
@@ -75,7 +74,7 @@ fn selected(view: &gpui_kit::Entity<Workspace>, cx: &VisualTestContext) -> Insta
 /// and the rightmost element of every row stays inside the card's right edge.
 #[gpui_kit::test]
 fn every_config_field_shares_one_x_and_stays_inside_the_card(cx: &mut TestAppContext) {
-    let (view, mut cx) = config_window(cx);
+    let (view, cx) = config_window(cx);
     let id = selected(&view, &cx);
     draw(cx);
     let card = bounds_of(cx, &config_action_id("config-card", &id)).expect("the card records its bounds");
@@ -125,7 +124,7 @@ fn every_config_field_shares_one_x_and_stays_inside_the_card(cx: &mut TestAppCon
 /// far worse.
 #[gpui_kit::test]
 fn the_grid_holds_at_the_minimum_window_size(cx: &mut TestAppContext) {
-    let (view, mut cx) = config_window(cx);
+    let (view, cx) = config_window(cx);
     cx.simulate_resize(size(px(900.), px(600.)));
     settle(cx);
     let id = selected(&view, &cx);
@@ -159,7 +158,7 @@ fn the_grid_holds_at_the_minimum_window_size(cx: &mut TestAppContext) {
 /// draws "Nanti" alone.
 #[gpui_kit::test]
 fn restart_now_is_drawn_only_for_a_running_instance(cx: &mut TestAppContext) {
-    let (view, mut cx) = config_window(cx);
+    let (view, cx) = config_window(cx);
     let running = selected(&view, &cx);
     // Raise the banner with a successful apply while the instance runs.
     view.update(cx, |this, cx| {
@@ -212,7 +211,7 @@ fn the_failed_overview_draws_the_restore_action_and_it_restores(cx: &mut TestApp
     cx.update(crate::theme::init);
     let service = super::scripted_service::ScriptedService::new();
     let svc: Arc<dyn DblService> = Arc::new(service.clone());
-    let (_view, mut cx) = cx.add_window_view(|window, cx| {
+    let (_view, cx) = cx.add_window_view(|window, cx| {
         let mut workspace = Workspace::new_preview(svc, window, cx);
         let id = service.id_with(InstanceStatus::Running);
         let mut failed = workspace.instance(&id).cloned().expect("instance view");
