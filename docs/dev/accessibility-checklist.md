@@ -61,26 +61,40 @@ mutation above proving the control is focusable and draws the theme ring only wh
 
 The focus indicator is **a ring/outline**, not a background tint: gpui-component
 draws `theme.ring` at its edge (or a contrasting inside line on filled
-controls), and a DELIBERATE test asserts the focused element renders it.
+controls). `apply_focus_ring` (the helpers documented in
+`docs/architecture/gui.md`) calls `focus_ring_style` on a focused row, and the
+`focus_ring_pairs` contrast test proves `theme.ring` clears 3:1 on every surface
+it is drawn on.
 
 ## Automated here (Linux, headless, CI)
 
 Every row below is a test that ships in `crates/gui`. A row is only "automated"
-when the test **fails without the code it tests** (see the mutation checks in the
-worker report).
+when the test **fails without the code it tests** (see the mutation checks above).
 
-| Screen / state | What is checked | Test |
-|---|---|---|
-| Shell, all overlays | no duplicate a11y node ids in a rendered frame | `tests/a11y_tree.rs` |
-| Palette | `Ctrl/Cmd+K` opens, typing filters, Up/Down/Enter run a command | `app/palette_*` (see report) |
-| Palette | start/stop/copy entries appear for the matching instance and are disabled with a reason when not applicable | `app/palette_*` |
-| Palette / dialogs | `Escape` closes the top overlay and returns focus to the opener | `app/palette_*`, `app/dialog_focus.rs` |
-| Create dialog | one end-to-end key-only first session: open → pick engine/version → name → create → start → copy URI | `app/keyboard_flow_tests.rs` |
-| First-session focus | the focused control renders a focus indicator the theme guarantees | `app/focus_indicator_tests.rs` |
-| Theme/contrast | every text/background pair the screens use, both themes, ≥ 4.5:1 | `contrast.rs` + `tests/contrast_table.rs` |
-| Theme following | the system appearance selects light or dark; `DBLOCAL_THEME` forces one | `theme::tests`, `tests/render.rs` |
-| Status | every status variant maps to a non-empty label **and** a distinct glyph | `format/tests.rs` |
-| Every screen, both themes | renders without layout crash, sampled against tokens | `tests/render.rs` |
+| Screen / state | What is checked | How | Result | Test |
+|---|---|---|---|---|
+| Shell, all overlays | no duplicate a11y node ids in a rendered frame | headless a11y tree | pass (27 cases) | `tests/a11y_tree.rs` |
+| Sidebar tree + filter | filter input is a real `Input` tab stop; rows are mouse-only (reach an instance by **palette → Buka**) | code audit | rows not tab stops (by design; palette covers) | manual |
+| Instance tabs | each tab's close `Button` is a tab stop; selecting a tab is mouse-only; palette "Buka" selects | code audit | selection via palette | `keyboard_flow_tests` |
+| Overview (every card + failure banner) | status text + glyph; copy/reveal are `Button`s (tab stops, Enter/Space) | code audit + render | pass | `tests/render.rs` |
+| Logs | follow/copy are `Button`s; list scrolls by wheel/keyboard | code audit | pass | `tests/render.rs` |
+| Databases (tables, drop/secret/reset dialogs) | drop and reset dialogs take focus on open and return it (W4-B `dialog_focus`) | unit | pass | `app/admin_fix_tests.rs` |
+| Config (W4-H) | fields are `Input`s; Apply/Restore/Open are `Button`s; "perlu restart" is text | code audit + render | pass | `tests/render.rs` |
+| Create dialog | focus on open; engine cards + version rows are tab stops that activate on Enter/Space; Batal/Buat are tab stops | headless key events | pass | `keyboard_flow_tests.rs` |
+| Create dialog → first session | open (Ctrl+N) → pick engine → pick version → create, by key only, no pointer; then start and copy URI are the root commands / palette on the opened instance | headless key events | pass | `keyboard_flow_tests.rs` |
+| Delete dialog | takes focus on open; type-the-name; Batal/Hapus are tab stops | unit + code audit | pass | `app/instance_actions_tests.rs` |
+| Quit dialog | three named `Button`s, primary default; Escape cancels | code audit + render | pass | `tests/render.rs` |
+| Settings dialog | Check/Pasang/Close `Button`s, login `Switch` (tab stop, Enter/Space) | code audit + render | pass | `tests/render.rs`, `app/settings_tests.rs` |
+| Open in… menu | `DropdownButton` builds on `PopupMenuItem`s (menu items are keyboard-navigable) | code audit | pass | `app/open_in_tests.rs` |
+| Command palette | Ctrl/Cmd+K opens + focuses query; typing filters by name/engine/version/port; Up/Down/Enter run; disabled rows carry a text reason | headless key events + unit | pass | `keyboard_flow_tests.rs`, `format/tests.rs` |
+| Toasts | a `Label` in the status bar (text, not colour) | code audit | pass | — |
+| Status bar | every counter is text + glyph; pending/tray notes are text | code audit | pass | `tests/render.rs` |
+| Tray menu labels | `TrayMenuModel` rows carry shape+word status | unit | pass | `tray::tests` |
+| Every screen, both themes | renders without layout crash; light frame lighter than dark | headless wgpu | pass (9 screens ×2) | `tests/render.rs::every_screen_renders_in_both_themes` |
+| Theme following | system appearance selects light/dark; `DBLOCAL_THEME` forces one | unit | pass | `theme::tests` |
+| Contrast | every text/background pair incl. tinted badges, link, active tab, danger; both themes ≥ 4.5:1 | parse theme JSON | pass | `contrast.rs`, `tests/contrast_table.rs` |
+| Focus ring visibility | `theme.ring` ≥ 3:1 on every surface | parse theme JSON | pass | `contrast::tests` |
+| Status never colour alone | every status → non-empty label + a distinct glyph family | unit | pass | `format/tests.rs` |
 
 ## Manual, per release (Windows, macOS; also a human pass on Linux)
 
