@@ -450,10 +450,7 @@ fn reconciliation_skips_a_deleting_row_owned_by_a_live_delete() {
     // service sharing the home. The marker records its full identity, because a
     // bare PID is not proof of ownership.
     let owner = h.procs.spawn("/some/other/dblocal");
-    let marker = h
-        .paths
-        .instance_dir(&name)
-        .join(super::super::delete::IN_FLIGHT_MARKER);
+    let marker = super::super::delete::marker_path(&h.paths, &id);
     let started = owner
         .started_at()
         .duration_since(std::time::UNIX_EPOCH)
@@ -531,10 +528,7 @@ fn an_unverifiable_marker_identity_is_treated_as_interrupted_and_never_purges() 
     // never match (a foreign instant) — the same shape `own_identity`'s `now()`
     // fallback leaves behind.
     let owner = h.procs.spawn("/some/other/dblocal");
-    let marker = h
-        .paths
-        .instance_dir(&name)
-        .join(super::super::delete::IN_FLIGHT_MARKER);
+    let marker = super::super::delete::marker_path(&h.paths, &id);
     std::fs::write(
         &marker,
         format!(

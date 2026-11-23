@@ -366,6 +366,9 @@ async fn finish_delete(inner: &Arc<Inner>, instance: &Instance) {
             store.transition_status(&id2, InstanceStatus::Deleting, InstanceStatus::Stopped)
         })
         .await;
+        // We just concluded this delete is not running, so its marker is stale.
+        // Leaving it would keep a crashed delete's dotfile in the home forever.
+        super::delete::clear_in_flight_marker(&inner.paths, &id);
         emit_changed(inner, &id);
         return;
     }
@@ -429,6 +432,9 @@ async fn finish_delete(inner: &Arc<Inner>, instance: &Instance) {
     .await
     .unwrap_or(false);
     inner.log_watchers.disable(&id);
+    // This delete is over, so its marker no longer means anything. A crash left
+    // it behind and nothing else would ever remove it.
+    super::delete::clear_in_flight_marker(&inner.paths, &id);
     if removed {
         // Only announce a removal that happened.
         super::helpers::emit_removed(inner, &id);

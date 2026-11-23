@@ -19,8 +19,7 @@ use super::service::Inner;
 /// a supervisor poll landing between the read and the compare-and-set.
 const CLAIM_ATTEMPTS: usize = 4;
 
-/// Name of the in-flight marker a live delete writes inside the instance
-/// directory.
+/// File-name suffix of the in-flight marker a live delete writes.
 ///
 /// The row alone cannot distinguish "a delete is running" from "the app died
 /// mid-delete", and both look like `Deleting`. The marker carries the owning
@@ -35,6 +34,15 @@ const CLAIM_ATTEMPTS: usize = 4;
 /// Trusting a bare PID is exactly what AGENTS.md invariant 7 forbids: after a
 /// reboot an unrelated process can hold the same number, and a marker keyed on
 /// the number alone would keep a half-deleted row unrecoverable forever.
+///
+/// The marker is **not** inside the instance directory. A delete removes that
+/// directory (data, logs, shell) before it removes the row, so a marker living
+/// there would be destroyed by the very operation it is supposed to announce:
+/// a sibling service reconciling at that instant would see `Deleting` with no
+/// owner, take the row over and remove it while the delete is still running
+/// (flake 8: `operation start: NotFound` for the re-inserted row). It lives
+/// beside the instance directories, keyed by the instance **id**, whose UUID
+/// form can never collide with an instance name (`^[a-z0-9][a-z0-9-]{0,30}$`).
 pub(crate) const IN_FLIGHT_MARKER: &str = "delete.inflight";
 
 /// Nonces of deletes running in **this process**, keyed by nothing: membership is
@@ -165,8 +173,7 @@ impl MarkerOwner {
 /// Both the cross-process and the in-process case are covered, because the GUI
 /// and a CLI can share one home and one process can host two services.
 pub(crate) fn delete_in_flight(inner: &Arc<Inner>, instance: &Instance) -> bool {
-    let marker = instance_marker(inner, instance);
-    let Ok(contents) = std::fs::read_to_string(&marker) else {
+    let Ok(contents) = std::fs::read_to_string(marker_path(&inner.paths, instance.id())) else {
         return false;
     };
     let Some(owner) = MarkerOwner::parse(&contents) else {
@@ -185,11 +192,27 @@ pub(crate) fn delete_in_flight(inner: &Arc<Inner>, instance: &Instance) -> bool 
     inner.probe.validate(&identity) == crate::process::identity::ProcessState::Match
 }
 
-fn instance_marker(inner: &Inner, instance: &Instance) -> std::path::PathBuf {
-    inner
-        .paths
-        .instance_dir(instance.name())
-        .join(IN_FLIGHT_MARKER)
+/// Where a live delete announces itself.
+///
+/// Beside `instances/<name>/`, not inside it, because the delete removes that
+/// directory before it removes the row (see [`IN_FLIGHT_MARKER`]). The file is a
+/// dotfile keyed by the instance **id**, so it can never be mistaken for an
+/// instance directory (a name must start with `[a-z0-9]`) and a purge or archive
+/// of the instance cannot take it away from the delete that owns it.
+pub(crate) fn marker_path(paths: &crate::paths::DblPaths, id: &InstanceId) -> std::path::PathBuf {
+    paths
+        .instances_dir()
+        .join(format!(".{}.{IN_FLIGHT_MARKER}", id.as_str()))
+}
+
+/// Removes the marker of a delete that is known to be over.
+///
+/// A delete's own `Drop` removes its file; this covers the other exit: a process
+/// that crashed mid-delete leaves the file behind, and reconciliation is what
+/// decides that delete is finished. Without this the home would keep one stale
+/// dotfile per crashed delete forever.
+pub(crate) fn clear_in_flight_marker(paths: &crate::paths::DblPaths, id: &InstanceId) {
+    let _ = std::fs::remove_file(marker_path(paths, id));
 }
 
 /// The identity of this process, read from the same probe every other identity
@@ -220,9 +243,8 @@ struct InFlightMarker {
 }
 
 impl InFlightMarker {
-    fn create(inner: &Arc<Inner>, dir: &std::path::Path, nonce: &str) -> Option<Self> {
-        std::fs::create_dir_all(dir).ok()?;
-        let path = dir.join(IN_FLIGHT_MARKER);
+    fn create(inner: &Arc<Inner>, id: &InstanceId, nonce: &str) -> Option<Self> {
+        let path = marker_path(&inner.paths, id);
         let identity = own_identity(inner)?;
         let owner = MarkerOwner {
             pid: identity.pid(),
@@ -230,12 +252,18 @@ impl InFlightMarker {
             exe: identity.exe().to_path_buf(),
             nonce: nonce.to_owned(),
         };
+        // Write beside the instance directories, creating the parent if this is
+        // a fresh home; never validate through the instance name (the directory
+        // may already be gone when a delete writes or replaces its marker).
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).ok()?;
+        }
         std::fs::write(&path, owner.render()).ok()?;
         register_nonce(nonce);
         // Record the nonce the production code actually wrote, so a test observes the
         // real call-site value (not a helper's) and catches a call-site mutation.
         #[cfg(test)]
-        record_created_nonce(&dir.display().to_string(), nonce);
+        record_created_nonce(&path.display().to_string(), nonce);
         Some(Self {
             path,
             nonce: nonce.to_owned(),
@@ -243,8 +271,8 @@ impl InFlightMarker {
     }
 }
 
-/// Marker nonces written by [`InFlightMarker::create`], keyed by the instance
-/// directory, for the item-5(b) test.
+/// Marker nonces written by [`InFlightMarker::create`], keyed by the marker file
+/// they were written to, for the item-5(b) test.
 #[cfg(test)]
 fn created_nonce_log() -> &'static std::sync::Mutex<Vec<(String, String)>> {
     static LOG: std::sync::OnceLock<std::sync::Mutex<Vec<(String, String)>>> =
@@ -253,22 +281,22 @@ fn created_nonce_log() -> &'static std::sync::Mutex<Vec<(String, String)>> {
 }
 
 #[cfg(test)]
-fn record_created_nonce(dir: &str, nonce: &str) {
+fn record_created_nonce(marker: &str, nonce: &str) {
     if let Ok(mut log) = created_nonce_log().lock() {
-        log.push((dir.to_owned(), nonce.to_owned()));
+        log.push((marker.to_owned(), nonce.to_owned()));
     }
 }
 
-/// Every marker nonce [`InFlightMarker::create`] wrote for `dir`, in order.
+/// Every marker nonce [`InFlightMarker::create`] wrote to `marker`, in order.
 #[cfg(test)]
-pub(crate) fn take_created_nonces(dir: &std::path::Path) -> Vec<String> {
-    let dir = dir.display().to_string();
+pub(crate) fn take_created_nonces(marker: &std::path::Path) -> Vec<String> {
+    let marker = marker.display().to_string();
     let Ok(mut log) = created_nonce_log().lock() else {
         return Vec::new();
     };
     let mut out = Vec::new();
     log.retain(|(seen, nonce)| {
-        if seen == &dir {
+        if seen == &marker {
             out.push(nonce.clone());
             false
         } else {
@@ -323,7 +351,7 @@ pub(crate) fn delete_instance(
     // sequence guarantees a distinct nonce for every delete regardless of service.
     let op_id = inner.ops.next_id();
     let nonce = delete_nonce(next_delete_sequence(), op_id.as_str());
-    let marker = InFlightMarker::create(inner, &inner.paths.instance_dir(instance.name()), &nonce);
+    let marker = InFlightMarker::create(inner, id, &nonce);
 
     // Claim `Deleting` synchronously, like `start_instance` claims `Starting`.
     // The compare-and-set is the cross-process lock, so a second service (or a
@@ -382,6 +410,39 @@ pub(crate) fn delete_instance(
     Ok(op_id)
 }
 
+/// Test-only seam fired by [`run_delete`] once the data is gone but the row is
+/// still there, i.e. exactly the window in which the old marker lived inside a
+/// directory that no longer exists.
+///
+/// It exists so a test can park a real delete at that instant, start a second
+/// service over the same home and prove reconciliation does not take the row
+/// over. The hook is one-shot, like the reconcile hooks.
+#[cfg(test)]
+fn data_gone_hook() -> &'static std::sync::Mutex<Option<Box<dyn FnOnce() + Send>>> {
+    static HOOK: std::sync::OnceLock<std::sync::Mutex<Option<Box<dyn FnOnce() + Send>>>> =
+        std::sync::OnceLock::new();
+    HOOK.get_or_init(|| std::sync::Mutex::new(None))
+}
+
+/// Registers a one-shot hook fired when a delete has removed the data and not
+/// yet the row.
+#[cfg(test)]
+pub(crate) fn on_data_gone(hook: impl FnOnce() + Send + 'static) {
+    if let Ok(mut slot) = data_gone_hook().lock() {
+        *slot = Some(Box::new(hook));
+    }
+}
+
+#[cfg(test)]
+fn run_data_gone() {
+    if let Some(hook) = data_gone_hook().lock().ok().and_then(|mut slot| slot.take()) {
+        hook();
+    }
+}
+
+#[cfg(not(test))]
+fn run_data_gone() {}
+
 async fn run_delete(
     inner: Arc<Inner>,
     id: &InstanceId,
@@ -401,6 +462,10 @@ async fn run_delete(
             None
         }
     };
+    // The instance directory (with its data) is gone; the row still says
+    // `Deleting`. A sibling service reconciling now must still see this delete
+    // as in flight, which is what the marker outside that directory is for.
+    run_data_gone();
     if let Some(archive) = archive {
         let row = archive;
         // `AlreadyExists` means another writer (a second process's

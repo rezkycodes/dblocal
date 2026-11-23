@@ -323,6 +323,11 @@ pub(crate) struct Inner {
     /// `stopping`, so a caller can wait for it to actually exit before taking
     /// over the home (a test restart, or a clean shutdown).
     pub supervisor_alive: std::sync::atomic::AtomicBool,
+    /// How many supervisor ticks have **completed**, for a test that needs a
+    /// deterministic tick boundary instead of racing a tick that started before
+    /// it took the instance lock (flake 8).
+    #[cfg(test)]
+    pub supervisor_ticks: std::sync::atomic::AtomicU64,
     /// Detected external clients, cached for the process (`F-OPN-01`).
     pub client_cache: ClientCache,
     /// Host probe behind client detection.
@@ -555,6 +560,8 @@ impl LocalService {
             stopping: std::sync::atomic::AtomicBool::new(false),
             handles: std::sync::atomic::AtomicUsize::new(1),
             supervisor_alive: std::sync::atomic::AtomicBool::new(true),
+            #[cfg(test)]
+            supervisor_ticks: std::sync::atomic::AtomicU64::new(0),
             runtime_handle: runtime.handle.clone(),
             client_cache: ClientCache::new(None),
             host_probe,
@@ -681,6 +688,14 @@ impl LocalService {
     #[cfg(test)]
     pub(crate) fn stopping_for_test(&self) -> bool {
         self.inner.is_stopping()
+    }
+
+    /// How many supervisor ticks have completed, for a deterministic boundary.
+    #[cfg(test)]
+    pub(crate) fn supervisor_tick_count_for_test(&self) -> u64 {
+        self.inner
+            .supervisor_ticks
+            .load(std::sync::atomic::Ordering::SeqCst)
     }
 
     /// Whether the supervisor task is still looping.
