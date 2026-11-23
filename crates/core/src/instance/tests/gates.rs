@@ -279,7 +279,7 @@ fn a_live_delete_keeps_its_row_while_another_service_reconciles() {
     // still `Deleting`, and the marker still held by the live operation.
     let (parked_tx, parked_rx) = std::sync::mpsc::channel::<()>();
     let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
-    crate::instance::delete::on_data_gone(move || {
+    crate::instance::delete::on_data_gone(&id, move || {
         let _ = parked_tx.send(());
         let _ = release_rx.recv_timeout(Duration::from_secs(30));
     });

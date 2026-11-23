@@ -416,39 +416,40 @@ pub(crate) fn delete_instance(
 ///
 /// It exists so a test can park a real delete at that instant, start a second
 /// service over the same home and prove reconciliation does not take the row
-/// over. The hook is one-shot, like the reconcile hooks.
+/// over. Hooks are keyed by instance id and are one-shot, so a delete running in
+/// a parallel test cannot consume this test's hook.
 #[cfg(test)]
 type DataGoneHook = Box<dyn FnOnce() + Send>;
 
 #[cfg(test)]
-fn data_gone_hook() -> &'static std::sync::Mutex<Option<DataGoneHook>> {
-    static HOOK: std::sync::OnceLock<std::sync::Mutex<Option<DataGoneHook>>> =
+fn data_gone_hooks() -> &'static std::sync::Mutex<Vec<(String, DataGoneHook)>> {
+    static HOOKS: std::sync::OnceLock<std::sync::Mutex<Vec<(String, DataGoneHook)>>> =
         std::sync::OnceLock::new();
-    HOOK.get_or_init(|| std::sync::Mutex::new(None))
+    HOOKS.get_or_init(|| std::sync::Mutex::new(Vec::new()))
 }
 
-/// Registers a one-shot hook fired when a delete has removed the data and not
-/// yet the row.
+/// Registers a one-shot hook fired when the delete of `id` has removed the data
+/// and not yet the row.
 #[cfg(test)]
-pub(crate) fn on_data_gone(hook: impl FnOnce() + Send + 'static) {
-    if let Ok(mut slot) = data_gone_hook().lock() {
-        *slot = Some(Box::new(hook));
+pub(crate) fn on_data_gone(id: &InstanceId, hook: impl FnOnce() + Send + 'static) {
+    if let Ok(mut hooks) = data_gone_hooks().lock() {
+        hooks.push((id.as_str().to_owned(), Box::new(hook)));
     }
 }
 
 #[cfg(test)]
-fn run_data_gone() {
-    if let Some(hook) = data_gone_hook()
-        .lock()
-        .ok()
-        .and_then(|mut slot| slot.take())
-    {
+fn run_data_gone(id: &InstanceId) {
+    let hook = data_gone_hooks().lock().ok().and_then(|mut hooks| {
+        let at = hooks.iter().position(|(owner, _)| owner == id.as_str())?;
+        Some(hooks.remove(at).1)
+    });
+    if let Some(hook) = hook {
         hook();
     }
 }
 
 #[cfg(not(test))]
-fn run_data_gone() {}
+fn run_data_gone(_: &InstanceId) {}
 
 async fn run_delete(
     inner: Arc<Inner>,
@@ -472,7 +473,7 @@ async fn run_delete(
     // The instance directory (with its data) is gone; the row still says
     // `Deleting`. A sibling service reconciling now must still see this delete
     // as in flight, which is what the marker outside that directory is for.
-    run_data_gone();
+    run_data_gone(id);
     if let Some(archive) = archive {
         let row = archive;
         // `AlreadyExists` means another writer (a second process's
