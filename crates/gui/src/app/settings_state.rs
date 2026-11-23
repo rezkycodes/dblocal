@@ -215,10 +215,10 @@ mod tests {
         UpdateStatus {
             current: "0.8.0".to_owned(),
             available: available_update,
-            install_kind: kind,
             package_manager_hint: kind
                 .package_manager_hint()
                 .map(dblocal_core::update::PackageManagerHint::message),
+            install_kind: kind,
         }
     }
 

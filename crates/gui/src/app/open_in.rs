@@ -134,7 +134,7 @@ mod tests {
         let clients = [
             client(ClientKind::Psql),
             client(ClientKind::TablePlus),
-            client(ClientKind::Dbeaver),
+            client(ClientKind::DBeaver),
         ];
         let menu = OpenInMenu::build(&clients, EngineKey::Postgresql);
         assert!(!menu.copy_uri_fallback);
@@ -144,7 +144,7 @@ mod tests {
             dblocal_core::strings::UI_OPEN_IN_GUI_GROUP
         );
         let gui: Vec<ClientKind> = menu.groups[0].entries.iter().map(|e| e.kind).collect();
-        assert_eq!(gui, vec![ClientKind::TablePlus, ClientKind::Dbeaver]);
+        assert_eq!(gui, vec![ClientKind::TablePlus, ClientKind::DBeaver]);
         assert_eq!(
             menu.groups[1].heading,
             dblocal_core::strings::UI_OPEN_IN_CLI_GROUP
@@ -186,7 +186,7 @@ mod tests {
                 .is_some_and(OpenInEntry::enabled)
         );
         assert!(
-            menu.entry(ClientKind::Dbeaver).is_none(),
+            menu.entry(ClientKind::DBeaver).is_none(),
             "a client that was not detected must not appear"
         );
     }
