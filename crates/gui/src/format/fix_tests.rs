@@ -52,8 +52,8 @@ fn only_a_failed_instance_offers_the_restore_banner() {
 /// is a failure with no backup to restore, so no banner.
 #[test]
 fn a_failure_without_a_restore_offers_no_banner() {
-    let port_conflict =
-        view("shop", EngineKey::Postgresql, InstanceStatus::Failed, 5434).with_failure(FailureInfo {
+    let port_conflict = view("shop", EngineKey::Postgresql, InstanceStatus::Failed, 5434)
+        .with_failure(FailureInfo {
             code: "DBL-1005".to_owned(),
             message: strings::ERR_PORT_IN_USE.to_owned(),
             diagnosis: StartFailure::PortInUse,
@@ -64,15 +64,13 @@ fn a_failure_without_a_restore_offers_no_banner() {
         !offers_restore(&port_conflict),
         "M6: a failure with restore_available == false must not offer the restore"
     );
-    let with_backup = view("pg", EngineKey::Postgresql, InstanceStatus::Failed, 5432).with_failure(
-        FailureInfo {
+    let with_backup =
+        view("pg", EngineKey::Postgresql, InstanceStatus::Failed, 5432).with_failure(FailureInfo {
             code: "DBL-4001".to_owned(),
             message: strings::ERR_ENGINE.to_owned(),
             diagnosis: StartFailure::Unknown,
             log_tail: vec![],
             restore_available: true,
-        },
-    );
+        });
     assert!(offers_restore(&with_backup));
 }
-

@@ -139,10 +139,7 @@ impl Workspace {
         // restart can never happen. Drop it here — matching the operation id,
         // never clearing on an unrelated operation — instead of leaving it to
         // fire on the next manual stop.
-        if let UiEvent::OperationFinished {
-            id,
-            result: Err(_),
-        } = &event
+        if let UiEvent::OperationFinished { id, result: Err(_) } = &event
             && self.config_restart_stop_op.as_ref() == Some(id)
         {
             self.config_restart_after_stop = None;

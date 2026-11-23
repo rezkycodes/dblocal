@@ -301,10 +301,16 @@ fn apply_is_disabled_and_enter_is_inert_while_a_field_has_an_error(cx: &mut Test
     settle(cx);
     let (can_apply, has_error) = view.read_with(cx, |this, _| {
         let config = this.config_state_for(&id).expect("config state");
-        (config.can_apply(), config.errors.contains_key("max_connections"))
+        (
+            config.can_apply(),
+            config.errors.contains_key("max_connections"),
+        )
     });
     assert!(has_error, "F5: the field shows its DBL-8601 error");
-    assert!(!can_apply, "F5: Terapkan is disabled while a field has an error");
+    assert!(
+        !can_apply,
+        "F5: Terapkan is disabled while a field has an error"
+    );
 
     let before = service.counts().config_apply;
     // Enter in the field runs the same guarded path a keypress runs.
@@ -443,7 +449,6 @@ fn a_re_read_keeps_the_typed_text_and_the_rows(cx: &mut TestAppContext) {
     );
     let _ = service;
 }
-
 
 /// `M9`: typing an invalid value shows the `DBL-8601` sentence under the field
 /// immediately, before any Terapkan — the real window does, and only the apply

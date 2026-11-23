@@ -17,9 +17,7 @@ use super::config_state::{config_action_id, config_row_id};
 use super::{InnerTab, Workspace};
 
 /// A workspace on the demo service, showing one instance's Config tab.
-fn config_window<'a>(
-    cx: &'a mut TestAppContext,
-) -> (gpui_kit::Entity<Workspace>, &'a mut VisualTestContext) {
+fn config_window(cx: &mut TestAppContext) -> (gpui_kit::Entity<Workspace>, &mut VisualTestContext) {
     cx.update(gpui_kit::init);
     cx.update(crate::theme::init);
     let service: Arc<dyn DblService> = Arc::new(MockService::demo());
@@ -46,7 +44,10 @@ fn draw(cx: &mut VisualTestContext) {
 /// `debug_bounds` takes a `&'static str`; the selectors carry the runtime
 /// instance id, so the test leaks its own labels (a bounded, tiny allocation)
 /// instead of widening a product API for a test.
-fn bounds_of(cx: &mut VisualTestContext, selector: &str) -> Option<gpui_kit::Bounds<gpui_kit::Pixels>> {
+fn bounds_of(
+    cx: &mut VisualTestContext,
+    selector: &str,
+) -> Option<gpui_kit::Bounds<gpui_kit::Pixels>> {
     let selector: &'static str = Box::leak(selector.to_owned().into_boxed_str());
     cx.debug_bounds(selector)
 }
@@ -75,9 +76,10 @@ fn selected(view: &gpui_kit::Entity<Workspace>, cx: &VisualTestContext) -> Insta
 #[gpui_kit::test]
 fn every_config_field_shares_one_x_and_stays_inside_the_card(cx: &mut TestAppContext) {
     let (view, cx) = config_window(cx);
-    let id = selected(&view, &cx);
+    let id = selected(&view, cx);
     draw(cx);
-    let card = bounds_of(cx, &config_action_id("config-card", &id)).expect("the card records its bounds");
+    let card =
+        bounds_of(cx, &config_action_id("config-card", &id)).expect("the card records its bounds");
     let keys = view.read_with(cx, |this, _| {
         this.config_state_for(&id)
             .map(|config| {
@@ -98,8 +100,7 @@ fn every_config_field_shares_one_x_and_stays_inside_the_card(cx: &mut TestAppCon
     let mut xs: Vec<f32> = Vec::new();
     for key in &keys {
         let selector = config_row_id("config-field-cell", &id, key);
-        let bounds = bounds_of(cx, &selector)
-            .unwrap_or_else(|| panic!("F3: no bounds for {key}"));
+        let bounds = bounds_of(cx, &selector).unwrap_or_else(|| panic!("F3: no bounds for {key}"));
         xs.push(bounds.origin.x.as_f32());
         // Nothing in the row may cross the card's right edge.
         let side = bounds_of(cx, &config_row_id("config-side-cell", &id, key))
@@ -107,7 +108,8 @@ fn every_config_field_shares_one_x_and_stays_inside_the_card(cx: &mut TestAppCon
         let right = side.origin.x.as_f32() + side.size.width.as_f32();
         let card_right = card.origin.x.as_f32() + card.size.width.as_f32();
         assert!(
-            right <= card_right + 1.0 && bounds.origin.x.as_f32() + bounds.size.width.as_f32() <= card_right + 1.0,
+            right <= card_right + 1.0
+                && bounds.origin.x.as_f32() + bounds.size.width.as_f32() <= card_right + 1.0,
             "F3: row {key} runs past the card border (right {right} > card {card_right})"
         );
     }
@@ -127,9 +129,10 @@ fn the_grid_holds_at_the_minimum_window_size(cx: &mut TestAppContext) {
     let (view, cx) = config_window(cx);
     cx.simulate_resize(size(px(900.), px(600.)));
     settle(cx);
-    let id = selected(&view, &cx);
+    let id = selected(&view, cx);
     draw(cx);
-    let card = bounds_of(cx, &config_action_id("config-card", &id)).expect("the card records its bounds");
+    let card =
+        bounds_of(cx, &config_action_id("config-card", &id)).expect("the card records its bounds");
     let card_right = card.origin.x.as_f32() + card.size.width.as_f32();
     let keys = view.read_with(cx, |this, _| {
         this.config_state_for(&id)
@@ -159,7 +162,7 @@ fn the_grid_holds_at_the_minimum_window_size(cx: &mut TestAppContext) {
 #[gpui_kit::test]
 fn restart_now_is_drawn_only_for_a_running_instance(cx: &mut TestAppContext) {
     let (view, cx) = config_window(cx);
-    let running = selected(&view, &cx);
+    let running = selected(&view, cx);
     // Raise the banner with a successful apply while the instance runs.
     view.update(cx, |this, cx| {
         this.config.entry(&running).applied = Some(applied());
@@ -259,4 +262,3 @@ fn applied() -> dblocal_core::config::ConfigApplied {
         changed: 1,
     }
 }
-

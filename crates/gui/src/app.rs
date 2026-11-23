@@ -25,13 +25,13 @@ mod bootstrap_tests;
 mod components;
 mod config_actions;
 mod config_dialogs;
-mod config_state;
 #[cfg(test)]
 #[path = "app/config_fix_tests.rs"]
 mod config_fix_tests;
 #[cfg(test)]
 #[path = "app/config_layout_tests.rs"]
 mod config_layout_tests;
+mod config_state;
 #[cfg(test)]
 #[path = "app/config_tests.rs"]
 mod config_tests;
@@ -326,14 +326,11 @@ impl Workspace {
         // window all write the file without an in-process `ConfigChanged`. On
         // the way back to this window the visible Config tab re-reads, so the
         // form is never stale.
-        workspace._activation = Some(cx.observe_window_activation(
-            window,
-            |this, window, cx| {
-                if window.is_window_active() {
-                    this.refresh_config_on_activation(cx);
-                }
-            },
-        ));
+        workspace._activation = Some(cx.observe_window_activation(window, |this, window, cx| {
+            if window.is_window_active() {
+                this.refresh_config_on_activation(cx);
+            }
+        }));
         // No per-window event pump: the app-level loop is the single consumer of
         // the one bridge and forwards each event here (R3). Two pumps on one
         // flume channel would split the stream between them.
@@ -365,14 +362,11 @@ impl Workspace {
         workspace.tray_note = Some(SharedString::from(strings::UI_TRAY_UNAVAILABLE_NOTE));
         // The same activation re-read the live window installs (`F7a`), so a
         // test can prove the return-to-window path.
-        workspace._activation = Some(cx.observe_window_activation(
-            window,
-            |this, window, cx| {
-                if window.is_window_active() {
-                    this.refresh_config_on_activation(cx);
-                }
-            },
-        ));
+        workspace._activation = Some(cx.observe_window_activation(window, |this, window, cx| {
+            if window.is_window_active() {
+                this.refresh_config_on_activation(cx);
+            }
+        }));
         workspace
     }
 
