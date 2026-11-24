@@ -30,11 +30,46 @@ feature-depth = 1
 # ---------------------------------------------------------------------------
 [advisories]
 version = 2
-# db-path / db-urls default to the RustSec advisory-db. No ignores here:
-# a GPL-distributed binary must not ship with known vulnerabilities. Any
-# future ignore must be a single entry with an explicit reason and a tracking
-# issue, added only when no fixed version exists.
-ignore = []
+# db-path / db-urls default to the RustSec advisory-db. A GPL-distributed
+# binary must not ship with known vulnerabilities. Any ignore must be a single
+# entry with an explicit reason and a tracking issue, added only when no fixed
+# version exists.
+#
+# `unmaintained` is set explicitly to "all": cargo-deny 0.22.0 changed the
+# default from "all" to "workspace", which would silently stop reporting the
+# transitive unmaintained advisories ignored below (and would then flag every
+# one of those ignores as unused). Pinning the value keeps CI (0.21.0) and a
+# local 0.22.0 in agreement.
+unmaintained = "all"
+#
+# The eight entries below are all `informational = "unmaintained"` advisories
+# (no vulnerability, no unsound advisory). Seven reach DBLocal only through the
+# pinned GPUI stack; the zvariant/zbus_names/zvariant_derive trio additionally
+# reaches it through keyring's zbus-secret-service store. AGENTS.md forbids
+# moving the GPUI pins (gpui-pre 0.3.12 / gpui-component 0.10.0 /
+# gpui-kit 0.10.0), and the advisory database reports `patched = []` for all of
+# them, so there is no fixed version to move to at this pin.
+#
+# Tracking: review every entry whenever the GPUI pins are raised (gpui-kit,
+# gpui-component, gpui-pre). Drop the entry when the upgrade removes the crate.
+ignore = [
+    # Tracking: re-check on the next GPUI pin bump. https://rustsec.org/advisories/RUSTSEC-2024-0384
+    { id = "RUSTSEC-2024-0384", reason = "instant 0.1.13: unmaintained, transitive via gpui-base/gpui-component; upstream suggests web-time; no safe upgrade at the pinned GPUI versions; no vulnerability" },
+    # Tracking: re-check on the next GPUI pin bump. https://rustsec.org/advisories/RUSTSEC-2024-0436
+    { id = "RUSTSEC-2024-0436", reason = "paste 1.0.15: unmaintained procedural macro, transitive via gpui-component and rav1e; no safe upgrade at the pinned GPUI versions; no vulnerability" },
+    # Tracking: re-check on the next GPUI pin bump. https://rustsec.org/advisories/RUSTSEC-2026-0192
+    { id = "RUSTSEC-2026-0192", reason = "ttf-parser 0.25.1: unmaintained, transitive via fontdb/cosmic-text/usvg under gpui-pre; upstream suggests skrifa; no safe upgrade at the pinned GPUI versions; no vulnerability" },
+    # Tracking: re-check on the next GPUI pin bump. https://rustsec.org/advisories/RUSTSEC-2026-0206
+    { id = "RUSTSEC-2026-0206", reason = "rustybuzz 0.20.1: unmaintained, transitive via usvg under gpui-pre/gpui-component; upstream suggests harfrust; no safe upgrade at the pinned GPUI versions; no vulnerability" },
+    # Tracking: re-check on the next GPUI pin bump. https://rustsec.org/advisories/RUSTSEC-2026-0370
+    { id = "RUSTSEC-2026-0370", reason = "zvariant 5.15.1: unmaintained, transitive via zbus/atspi/accesskit_unix and keyring's secret-service store; merged into zbus 6.0.0; no safe upgrade at the pinned GPUI versions; no vulnerability" },
+    # Tracking: re-check on the next GPUI pin bump. https://rustsec.org/advisories/RUSTSEC-2026-0371
+    { id = "RUSTSEC-2026-0371", reason = "zbus_names 4.3.5: unmaintained, transitive via zbus/atspi/accesskit_unix and keyring's secret-service store; merged into zbus 6.0.0; no safe upgrade at the pinned GPUI versions; no vulnerability" },
+    # Tracking: re-check on the next GPUI pin bump. https://rustsec.org/advisories/RUSTSEC-2026-0372
+    { id = "RUSTSEC-2026-0372", reason = "zvariant_derive 5.15.1: unmaintained procedural macro, transitive via zvariant; merged into zbus 6.0.0; no safe upgrade at the pinned GPUI versions; no vulnerability" },
+    # Tracking: re-check on the next GPUI pin bump. https://rustsec.org/advisories/RUSTSEC-2026-0543
+    { id = "RUSTSEC-2026-0543", reason = "chrono 0.4.45: unmaintained, transitive via gpui-pre/gpui-base/gpui-component; upstream suggests jiff or time; no safe upgrade at the pinned GPUI versions; no vulnerability" },
+]
 
 # ---------------------------------------------------------------------------
 # Licences — allowlist limited to GPL-3.0-compatible licences.
