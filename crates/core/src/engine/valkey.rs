@@ -396,17 +396,21 @@ mod tests {
     #[test]
     fn config_with_password_has_requirepass_and_loopback_bind() {
         let pw = SecretString::from("vk-pass-123");
-        let conf = render_config(&params(Some(&pw), AuthMode::Password))
-            .expose()
-            .to_owned();
+        let p = params(Some(&pw), AuthMode::Password);
+        let conf = render_config(&p).expose().to_owned();
+        // The config file spells joined paths with the host separator, so the
+        // expectations are built with `Path::join` too (`\` on Windows).
+        let dir = p.data_dir.to_string_lossy().into_owned();
+        let pidfile = pidfile_path(p.run_dir).to_string_lossy().into_owned();
+        let logfile = logfile_path(p.logs_dir).to_string_lossy().into_owned();
         assert!(conf.contains("bind 127.0.0.1 -::1\n"));
         assert!(conf.contains("protected-mode yes\n"));
         assert!(conf.contains("port 41300\n"));
         assert!(conf.contains("daemonize no\n"));
         assert!(conf.contains("supervised no\n"));
-        assert!(conf.contains("dir /home/u/.dblocal/instances/app/data\n"));
-        assert!(conf.contains("pidfile /home/u/.dblocal/instances/app/run/valkey.pid\n"));
-        assert!(conf.contains("logfile /home/u/.dblocal/instances/app/logs/valkey.log\n"));
+        assert!(conf.contains(&format!("dir {dir}\n")));
+        assert!(conf.contains(&format!("pidfile {pidfile}\n")));
+        assert!(conf.contains(&format!("logfile {logfile}\n")));
         assert!(conf.contains("requirepass vk-pass-123\n"));
         assert!(conf.contains("appendonly yes\n"));
         assert!(!conf.contains("0.0.0.0"));
