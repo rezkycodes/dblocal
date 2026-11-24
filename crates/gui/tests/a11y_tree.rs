@@ -12,6 +12,17 @@
 //! fail on any duplicate — the same assertion gpui makes in a debug build.
 //!
 //! Run: `cargo test -p dblocal-gui --test a11y_tree`
+//!
+//! The harness wraps `gpui_platform::current_platform(true)`, i.e. the *headless*
+//! platform. The Linux headless backend implements `open_window` (it has a
+//! `HeadlessClient`), and macOS creates real `NSWindow`s, but the Windows one
+//! refuses it ("cannot open windows while headless": a headless `WindowsPlatform`
+//! never attaches the DirectX devices that `is_windowed()` checks) and its
+//! `Platform::run` pumps `GetMessageW` forever, so `run_embedded` never returns.
+//! GPUI's own cross-platform test platform (`TestAppContext`) does not build the
+//! real a11y tree, so there is no way to reach the `Duplicate a11y node id`
+//! assertion on Windows. The support module still compiles there (and is checked
+//! by `cargo clippy --all-targets`); each test skips with a stated reason.
 
 #![allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
 
@@ -43,7 +54,17 @@ fn duplicates(tree: &TreeUpdate) -> Vec<(String, usize)> {
 
 /// Builds one `Workspace` case in a window whose a11y tree is active, renders
 /// a frame, and returns the duplicate node ids the tree reported.
-fn duplicates_for(name: &str, build: Build) -> (usize, Vec<(String, usize)>) {
+///
+/// Returns `None` on Windows, where the headless platform cannot open a window,
+/// so the caller skips instead of hanging or failing on a platform limit.
+fn duplicates_for(name: &str, build: Build) -> Option<(usize, Vec<(String, usize)>)> {
+    if cfg!(target_os = "windows") {
+        eprintln!(
+            "{name}: skipped — a headless GPUI platform cannot open a window on Windows, \
+             so the a11y tree cannot be built there"
+        );
+        return None;
+    }
     let platform = A11yPlatform::new();
     let trees = platform.clone();
     let build: Build = build;
@@ -95,7 +116,7 @@ fn duplicates_for(name: &str, build: Build) -> (usize, Vec<(String, usize)>) {
         }
     }
     drop(app);
-    (captured.len(), worst)
+    Some((captured.len(), worst))
 }
 
 /// One `#[test]` per case: gpui's `debug_assert` panics inside the frame, so a
@@ -106,7 +127,9 @@ macro_rules! case_tests {
         $(
             #[test]
             fn $fn_name() {
-                let (trees, dups) = duplicates_for($name, $build);
+                let Some((trees, dups)) = duplicates_for($name, $build) else {
+                    return;
+                };
                 let detail: Vec<String> = dups
                     .iter()
                     .map(|(id, n)| format!("{id} x{n}"))
