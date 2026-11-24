@@ -202,9 +202,14 @@ impl gpui_kit::Platform for A11yPlatform {
     fn write_to_clipboard(&self, item: ClipboardItem) {
         self.inner.write_to_clipboard(item);
     }
+    // `read_from_primary`/`write_to_primary` exist on the trait only on
+    // Linux/FreeBSD (X11/Wayland PRIMARY selection); macOS uses the find
+    // pasteboard and Windows has no PRIMARY selection at all.
+    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
     fn read_from_primary(&self) -> Option<ClipboardItem> {
         self.inner.read_from_primary()
     }
+    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
     fn write_to_primary(&self, item: ClipboardItem) {
         self.inner.write_to_primary(item);
     }
@@ -405,5 +410,11 @@ impl gpui_kit::PlatformWindow for A11yWindow {
             trees.push(tree_update.clone());
         }
         self.inner.a11y_tree_update(tree_update);
+    }
+    // The Windows trait adds one method the other platforms do not have; the
+    // returning `HWND` is what Win32 needs to identify a native window.
+    #[cfg(target_os = "windows")]
+    fn get_raw_handle(&self) -> windows::Win32::Foundation::HWND {
+        self.inner.get_raw_handle()
     }
 }

@@ -6,7 +6,14 @@
 //!
 //! Frames go to `target/renders/` by default. Tracked screenshots under
 //! `docs/design/renders/` are refreshed only with `DBLOCAL_UPDATE_RENDERS=1`.
+//!
+//! Screen capture needs a GPUI headless renderer, and `gpui_platform`
+//! `current_headless_renderer()` provides one only on Linux (wgpu) and macOS
+//! (Metal); on Windows it returns `Ok(None)`, so `capture_screenshot` bails with
+//! "no HeadlessRenderer configured". These tests therefore compile and run only
+//! where a renderer exists.
 
+#![cfg(any(target_os = "linux", target_os = "macos"))]
 #![allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
 use std::collections::HashSet;
 use std::sync::Arc;
