@@ -79,6 +79,9 @@ gh attestation verify dblocal-<version>-linux-x86_64.AppImage --repo rezkycodes/
 | macOS 13+ | arm64 + x86_64 (universal) | Signed with an Apple Developer ID and **notarized** when release secrets are configured. |
 | Windows 10 22H2+ / 11 | x86_64 | **Unsigned** in v1 — see below. |
 
+> **macOS: deferred for the first release.** The first release targets Linux and Windows only;
+> macOS is postponed, not dropped — see [`docs/dev/macos-deferred.md`](docs/dev/macos-deferred.md).
+
 ## Windows: "Unknown publisher"
 
 The Windows build is **not code-signed in v1** (a code-signing certificate is a recurring cost the
