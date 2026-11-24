@@ -378,7 +378,33 @@ pub(crate) fn pid_alive(pid: u32) -> bool {
     }
 }
 
-#[cfg(not(unix))]
+/// Windows has no signal 0, and the workspace denies `unsafe_code` outside the
+/// process module, so liveness comes from the process table via `sysinfo` — the
+/// same path `process::probe` and the Windows terminate path already use. A PID
+/// that is absent, or that the table marks dead/zombie, is not alive.
+///
+/// This used to return `false` unconditionally, which made the MariaDB stop path
+/// believe every Windows server was already gone: `verify_pid_identity` reports
+/// `NoSuchProcess` for a live server and the grace loop never waits.
+#[cfg(windows)]
+pub(crate) fn pid_alive(pid: u32) -> bool {
+    let Ok(mut system) = sysinfo::System::new() else {
+        // Without a process table nothing can be proven; "not alive" makes the
+        // caller treat the PID as gone instead of waiting out the whole grace.
+        return false;
+    };
+    let target = sysinfo::Pid::from_u32(pid);
+    system.refresh_processes(sysinfo::ProcessesToUpdate::Some(&[target]), true);
+    match system.process(target) {
+        Some(process) => !matches!(
+            process.status(),
+            sysinfo::ProcessStatus::Zombie | sysinfo::ProcessStatus::Dead
+        ),
+        None => false,
+    }
+}
+
+#[cfg(not(any(unix, windows)))]
 pub(crate) fn pid_alive(pid: u32) -> bool {
     let _ = pid;
     false
