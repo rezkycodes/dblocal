@@ -1,0 +1,24 @@
+# Byte-stable fixtures whose checked-out bytes are hashed by tests.
+#
+# `mysql-archive.bin` is read with `fs::read` and its SHA-256/MD5 are asserted
+# against recorded sidecar values (`crates/xtask/src/catalog/sources/tests.rs`,
+# `crates/xtask/src/catalog/build/mod.rs`). Git's `text`/`eol` conversion would
+# rewrite its LF line endings to CRLF on a Windows checkout, changing every
+# byte-level digest and failing the test. `-text` disables all conversion so the
+# bytes checked in are the bytes the test reads on every host.
+crates/xtask/tests/fixtures/mysql-archive.bin -text
+
+# Recorded JSON fixtures are parsed, not hashed, but are kept LF for reviewable,
+# host-independent diffs when the catalog automation regenerates them.
+crates/xtask/tests/fixtures/*.json text eol=lf
+
+# Shell scripts and desktop entries must keep LF endings: a CRLF shebang makes
+# the kernel/EISDIR herald fail on Linux (bad interpreter) and a CRLF `Exec=`
+# line breaks the desktop entry parser.
+*.sh          text eol=lf
+*.bash        text eol=lf
+*.desktop     text eol=lf
+packaging/deb/postinst  text eol=lf
+packaging/deb/postrm    text eol=lf
+packaging/deb/control.template text eol=lf
+packaging/rpm/dblocal.spec     text eol=lf
