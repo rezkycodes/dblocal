@@ -96,7 +96,7 @@ use std::time::{Duration, Instant};
 
 use dblocal_core::admin::PrivilegeLevel;
 use dblocal_core::clients::DetectedClient;
-use dblocal_core::model::{AuthMode, DeleteMode, EngineKey, InstanceId, Port, Runtime};
+use dblocal_core::model::{DeleteMode, EngineKey, InstanceId, Runtime};
 use dblocal_core::service::{CatalogView, DblService, InstanceView, UriFormat, UserFacingError};
 use dblocal_core::strings;
 use gpui_kit::component::{ActiveTheme, command::CommandState, h_flex, input::InputState};
@@ -147,36 +147,7 @@ fn dock_focus_handles(cx: &mut Context<Workspace>) -> HashMap<EngineKey, FocusHa
         .collect()
 }
 
-/// What the create dialog currently has selected.
-#[derive(Clone)]
-pub struct CreateForm {
-    /// Engine chosen.
-    pub engine: EngineKey,
-    /// Version tag chosen (must exist in the catalog entry).
-    pub version: String,
-    /// Auth mode.
-    pub auth: AuthMode,
-    /// Suggested port for the engine, refreshed on open.
-    pub suggested_port: Option<Port>,
-    /// Name field state. `None` only in headless tests, which drive
-    /// [`Workspace::submit_draft`] with explicit strings.
-    pub name_input: Option<Entity<InputState>>,
-    /// Port field state; see [`CreateForm::name_input`].
-    pub port_input: Option<Entity<InputState>>,
-    /// Per-engine-card keyboard focus handles, in catalog order. Owned by the
-    /// form so the view and the keyboard tests share one handle per card rather
-    /// than each reaching into window element state (`F-PLH-01` AC1).
-    pub engine_focus: Vec<(EngineKey, FocusHandle)>,
-    /// Per-version-row keyboard focus handles, for the currently selected
-    /// engine's versions, in list order.
-    pub version_focus: Vec<(String, FocusHandle)>,
-    /// The footer "Buat" (create) button's focus handle.
-    pub submit_focus: FocusHandle,
-    /// The footer "Batal" (cancel) button's focus handle.
-    pub cancel_focus: FocusHandle,
-}
-
-pub use create_submit::{CreateDraft, SubmitError, Submitted};
+pub use create_submit::{CreateDraft, CreateForm, SubmitError, Submitted};
 
 /// The main workspace entity.
 pub struct Workspace {
