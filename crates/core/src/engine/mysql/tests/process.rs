@@ -13,7 +13,17 @@ fn cleanup_init_file_removes_one_shot_sql() {
 fn shutdown_command_uses_mysql_pwd_env_not_argv_password_mode() {
     let ctx = run_ctx(42345, AuthMode::Password, Some(SECRET));
     let cmd = shutdown_command(&ctx);
-    assert!(cmd.get_program().to_string_lossy().ends_with("mysqladmin"));
+    // The bundled binary is `mysqladmin` on unix and `mysqladmin.exe` on
+    // Windows (via `exe_name`), so compare the file stem rather than the raw
+    // string: `ends_with("mysqladmin")` is false for the `.exe` spelling.
+    let program = Path::new(cmd.get_program());
+    assert_eq!(
+        program.file_stem().and_then(|s| s.to_str()),
+        Some("mysqladmin"),
+        "shutdown must run the bundled mysqladmin: {}",
+        program.display()
+    );
+    assert_eq!(program.extension().and_then(|s| s.to_str()) == Some("exe"), cfg!(windows));
     assert_no_secret_in_command(&cmd, SECRET);
     let args: Vec<String> = cmd
         .get_args()
