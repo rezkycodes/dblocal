@@ -12,6 +12,23 @@ use std::time::Duration;
 const EXEC_BUSY_RETRY_WINDOW: Duration = Duration::from_secs(5);
 const EXEC_BUSY_RETRY_DELAY: Duration = Duration::from_millis(20);
 
+/// A path as a value in a MySQL/MariaDB option file (`my.cnf`).
+///
+/// Option files treat a backslash as an escape (`\r`, `\s`, `\t`, `\b`, `\n`),
+/// so `C:\dbl\home\instances\x\run` would be read with a carriage return in
+/// it. Both servers accept forward slashes on Windows, so a Windows path is
+/// written with them. `windows` is a parameter so both spellings are testable
+/// on every platform.
+#[must_use]
+pub fn option_file_path(path: &Path, windows: bool) -> String {
+    let text = path.display().to_string();
+    if windows {
+        text.replace('\\', "/")
+    } else {
+        text
+    }
+}
+
 /// Creates `path` (and parents) and tightens it to `0700` on Unix.
 ///
 /// Existing directories are also tightened, so a permissive pre-existing directory

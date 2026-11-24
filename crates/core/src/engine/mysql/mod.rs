@@ -148,28 +148,13 @@ struct MyCnfParams<'a> {
     socket: &'a Path,
 }
 
-/// A path as an option-file value.
-///
-/// MySQL option files treat a backslash as an escape (`\r`, `\s`, `\t`, `\b`,
-/// `\n`), so `C:\dbl\home\instances\x\run` would be read with a carriage
-/// return in it. Both servers accept forward slashes on Windows, so a Windows
-/// path is written with them.
-pub(crate) fn cnf_path_for(path: &Path, windows: bool) -> String {
-    let text = path.display().to_string();
-    if windows {
-        text.replace('\\', "/")
-    } else {
-        text
-    }
-}
-
 fn render_my_cnf(params: &MyCnfParams<'_>) -> String {
     render_my_cnf_for(params, cfg!(windows))
 }
 
 /// [`render_my_cnf`] with the platform passed in, so both spellings are tested.
 fn render_my_cnf_for(params: &MyCnfParams<'_>, windows: bool) -> String {
-    let path = |p: &Path| cnf_path_for(p, windows);
+    let path = |p: &Path| crate::fsutil::option_file_path(p, windows);
     let mut out = String::new();
     let _ = writeln!(out, "[mysqld]");
     let _ = writeln!(out, "bind-address={BIND}");
@@ -569,7 +554,11 @@ pub fn sync_port(run_dir: &Path, port: u16) -> Result<()> {
             let _ = writeln!(out, "port={port}");
             replaced_port = true;
         } else if trimmed.starts_with("socket=") || trimmed.starts_with("socket =") {
-            let _ = writeln!(out, "socket={}", cnf_path_for(&socket, cfg!(windows)));
+            let _ = writeln!(
+                out,
+                "socket={}",
+                crate::fsutil::option_file_path(&socket, cfg!(windows))
+            );
         } else {
             out.push_str(line);
             out.push('\n');

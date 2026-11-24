@@ -10,6 +10,8 @@ mod tests;
 #[cfg(test)]
 mod tests_hardening;
 #[cfg(test)]
+mod tests_windows;
+#[cfg(test)]
 mod testutil;
 
 use std::fmt::Write as _;
@@ -54,8 +56,15 @@ impl EngineAdapter for MariaDbAdapter {
         sockdir::validate_socket_path_len(&sock)?;
         let conf = config_path(&ctx.data_dir);
         let rendered = render_config(&config_params(ctx, &sock)?);
-        write_private_config(&conf, rendered.expose())?;
-        run_install_db(ctx)?;
+        if cfg!(windows) {
+            // The Windows tool refuses a data directory that is not empty, so
+            // the option file goes in after it ran.
+            run_install_db(ctx)?;
+            write_private_config(&conf, rendered.expose())?;
+        } else {
+            write_private_config(&conf, rendered.expose())?;
+            run_install_db(ctx)?;
+        }
         if ctx.auth == AuthMode::Password {
             bootstrap_password(ctx)?;
         }
@@ -187,16 +196,22 @@ fn sibling_dir(data_dir: &Path, leaf: &str) -> PathBuf {
 }
 
 fn render_config(p: &ConfigParams) -> SecretString {
+    render_config_for(p, cfg!(windows))
+}
+
+/// [`render_config`] with the platform passed in, so both spellings are tested.
+fn render_config_for(p: &ConfigParams, windows: bool) -> SecretString {
+    let path = |value: &Path| crate::fsutil::option_file_path(value, windows);
     let mut out = String::new();
     let _ = writeln!(out, "[mysqld]");
-    let _ = writeln!(out, "basedir={}", p.basedir.display());
-    let _ = writeln!(out, "datadir={}", p.datadir.display());
+    let _ = writeln!(out, "basedir={}", path(&p.basedir));
+    let _ = writeln!(out, "datadir={}", path(&p.datadir));
     let _ = writeln!(out, "bind-address=127.0.0.1");
     let _ = writeln!(out, "port={}", p.port);
-    let _ = writeln!(out, "socket={}", p.socket.display());
-    let _ = writeln!(out, "pid-file={}", p.pid_file.display());
-    let _ = writeln!(out, "log-error={}", p.log_error.display());
-    let _ = writeln!(out, "tmpdir={}", p.tmpdir.display());
+    let _ = writeln!(out, "socket={}", path(&p.socket));
+    let _ = writeln!(out, "pid-file={}", path(&p.pid_file));
+    let _ = writeln!(out, "log-error={}", path(&p.log_error));
+    let _ = writeln!(out, "tmpdir={}", path(&p.tmpdir));
     let _ = writeln!(out, "skip-name-resolve");
     // Never 0.0.0.0; never a password in config.
     SecretString::new(out)
@@ -255,17 +270,45 @@ fn write_private_config(path: &Path, contents: &str) -> Result<()> {
     })
 }
 
-fn install_db_program(runtime_dir: &Path) -> PathBuf {
-    runtime_dir.join("scripts").join("mariadb-install-db")
+/// The bootstrap tool. Unix ships the `scripts/mariadb-install-db` shell
+/// script; the Windows zip has no `scripts/` directory and ships
+/// `bin/mariadb-install-db.exe` instead.
+fn install_db_program(runtime_dir: &Path, windows: bool) -> PathBuf {
+    if windows {
+        runtime_dir.join("bin").join("mariadb-install-db.exe")
+    } else {
+        runtime_dir.join("scripts").join("mariadb-install-db")
+    }
+}
+
+/// Arguments of the bootstrap tool.
+///
+/// The Windows tool is a different program: it takes neither `--basedir`
+/// (it finds `mariadbd.exe` next to itself), `--auth-root-authentication-method`
+/// nor `--skip-test-db`, and it leaves `root` with an empty password, which
+/// `bootstrap_password` replaces afterwards like on Unix.
+fn install_db_args(data_dir: &Path, runtime_dir: &Path, windows: bool) -> Vec<String> {
+    if windows {
+        return vec![
+            format!("--datadir={}", data_dir.display()),
+            "--silent".to_owned(),
+        ];
+    }
+    vec![
+        format!("--datadir={}", data_dir.display()),
+        format!("--basedir={}", runtime_dir.display()),
+        "--auth-root-authentication-method=normal".to_owned(),
+        "--skip-test-db".to_owned(),
+    ]
 }
 
 fn build_install_db_command(ctx: &InitContext) -> Command {
-    let program = install_db_program(&ctx.runtime_dir);
-    let mut cmd = Command::new(program);
-    cmd.arg(format!("--datadir={}", ctx.data_dir.display()))
-        .arg(format!("--basedir={}", ctx.runtime_dir.display()))
-        .arg("--auth-root-authentication-method=normal")
-        .arg("--skip-test-db");
+    build_install_db_command_for(ctx, cfg!(windows))
+}
+
+fn build_install_db_command_for(ctx: &InitContext, windows: bool) -> Command {
+    let mut cmd = Command::new(install_db_program(&ctx.runtime_dir, windows));
+    cmd.args(install_db_args(&ctx.data_dir, &ctx.runtime_dir, windows));
     cmd.stdin(Stdio::null());
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
@@ -566,7 +609,11 @@ pub fn sync_port(data_dir: &Path, port: u16) -> Result<()> {
             let _ = writeln!(out, "port={port}");
             replaced_port = true;
         } else if trimmed.starts_with("socket=") || trimmed.starts_with("socket =") {
-            let _ = writeln!(out, "socket={}", sock.display());
+            let _ = writeln!(
+                out,
+                "socket={}",
+                crate::fsutil::option_file_path(&sock, cfg!(windows))
+            );
         } else {
             out.push_str(line);
             out.push('\n');

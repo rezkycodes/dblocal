@@ -428,7 +428,7 @@ fn windows_paths_are_written_with_forward_slashes() {
 #[test]
 fn unix_paths_are_written_unchanged() {
     assert_eq!(
-        cnf_path_for(Path::new("/i/run/with space/sock"), false),
+        crate::fsutil::option_file_path(Path::new("/i/run/with space/sock"), false),
         "/i/run/with space/sock"
     );
 }
