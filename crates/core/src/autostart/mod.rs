@@ -143,8 +143,15 @@ mod tests {
 
     #[test]
     fn login_item_for_exe_appends_the_autostart_flag() {
-        let item = login_item_for_exe("/usr/bin/dblocal").expect("item");
-        assert_eq!(item.argv(), vec!["/usr/bin/dblocal", AUTOSTART_FLAG]);
+        // Build the exe from the manifest dir so the path is absolute in this
+        // host's own syntax: a POSIX `/usr/bin/...` literal is not absolute on
+        // Windows, where the leading root alone is drive-relative.
+        let exe = Path::new(env!("CARGO_MANIFEST_DIR")).join("dblocal");
+        let item = login_item_for_exe(&exe).expect("item");
+        assert_eq!(
+            item.argv(),
+            vec![exe.display().to_string(), AUTOSTART_FLAG.to_owned()]
+        );
     }
 
     #[test]
