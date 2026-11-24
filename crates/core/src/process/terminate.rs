@@ -157,6 +157,32 @@ pub fn terminate_with(
     }
 }
 
+/// Waits up to `limit` for `identity` to leave the process table on its own.
+///
+/// Used after an engine was *asked* to shut itself down (an SQL `SHUTDOWN`,
+/// `mysqladmin shutdown`, `pg_ctl stop`): the request can return before the
+/// process has finished flushing and exited, and on Windows the next step,
+/// `terminate`, is an immediate `TerminateProcess`, so signalling right away
+/// cuts a graceful shutdown short (a MySQL `stop` returned in 340 ms while
+/// `mysqld.exe` ran another second; the instance directory was still locked).
+///
+/// Never signals anything. Returns `true` when the process is gone (absent or
+/// replaced by another), `false` when it still matches after `limit` or when its
+/// identity cannot be verified (the caller then escalates through `terminate`,
+/// which has its own refusal rules).
+pub fn await_exit(identity: &ProcessIdentity, limit: Duration) -> bool {
+    await_exit_with(identity, &SysinfoProbe::new(), limit)
+}
+
+/// [`await_exit`] with an explicit probe.
+pub fn await_exit_with(
+    identity: &ProcessIdentity,
+    probe: &dyn ProcessProbe,
+    limit: Duration,
+) -> bool {
+    matches!(wait_for_exit(identity, probe, limit), Exit::Gone)
+}
+
 /// `true` when a failed signal means "no such process".
 ///
 /// The engine can exit between our validation and `kill(2)`, which makes the
@@ -355,6 +381,62 @@ mod tests {
             exe: Some(PathBuf::from("/opt/engine/bin/postgres")),
             started_at: Some(SystemTime::UNIX_EPOCH),
         }
+    }
+
+    #[test]
+    fn await_exit_returns_true_once_the_process_leaves() {
+        let probe = FakeProbe::new();
+        probe.set(20, process(20));
+        let gone = std::thread::scope(|scope| {
+            scope.spawn(|| {
+                std::thread::sleep(Duration::from_millis(120));
+                probe.remove(20);
+            });
+            await_exit_with(&identity(20), &probe, Duration::from_secs(5))
+        });
+        assert!(gone, "the wait must end as soon as the process is absent");
+    }
+
+    #[test]
+    fn await_exit_gives_up_after_the_limit_and_signals_nothing() {
+        let probe = FakeProbe::new();
+        probe.set(21, process(21));
+        let started = Instant::now();
+        assert!(!await_exit_with(
+            &identity(21),
+            &probe,
+            Duration::from_millis(150)
+        ));
+        assert!(started.elapsed() >= Duration::from_millis(150));
+    }
+
+    #[test]
+    fn await_exit_does_not_claim_exit_for_an_unverifiable_process() {
+        let probe = FakeProbe::new();
+        probe.set(
+            22,
+            ProcessObservation::Found {
+                exe: None,
+                started_at: None,
+            },
+        );
+        assert!(!await_exit_with(
+            &identity(22),
+            &probe,
+            Duration::from_millis(100)
+        ));
+    }
+
+    #[test]
+    fn await_exit_on_an_already_absent_process_is_immediate() {
+        let probe = FakeProbe::new();
+        let started = Instant::now();
+        assert!(await_exit_with(
+            &identity(23),
+            &probe,
+            Duration::from_secs(5)
+        ));
+        assert!(started.elapsed() < Duration::from_secs(1));
     }
 
     #[test]

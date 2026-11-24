@@ -202,6 +202,8 @@ pub struct FakeTerminator {
     pub refuse: AtomicBool,
     /// How many terminate calls were made, for assertions.
     pub calls: AtomicUsize,
+    /// How many graceful-exit waits were requested, for assertions.
+    pub awaits: AtomicUsize,
 }
 
 impl FakeTerminator {
@@ -211,11 +213,17 @@ impl FakeTerminator {
             forced: AtomicBool::new(false),
             refuse: AtomicBool::new(false),
             calls: AtomicUsize::new(0),
+            awaits: AtomicUsize::new(0),
         }
     }
 }
 
 impl Terminator for FakeTerminator {
+    fn await_exit(&self, _identity: &ProcessIdentity, _limit: Duration) -> bool {
+        self.awaits.fetch_add(1, Ordering::SeqCst);
+        false
+    }
+
     fn terminate(&self, identity: &ProcessIdentity, _grace: Duration) -> Result<TerminateOutcome> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         if self.refuse.load(Ordering::SeqCst) {

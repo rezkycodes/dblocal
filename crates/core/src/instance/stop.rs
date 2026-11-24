@@ -71,12 +71,23 @@ async fn run_stop(
 
     let identity = identity_of(&instance);
     let had_identity = identity.is_some();
-    let terminated = terminate_verified(
-        &inner,
-        identity,
-        Duration::from_secs(crate::consts::STOP_GRACE_SECS),
-    )
-    .await;
+    // The engine accepted its shutdown request, so it is on its way out: give it
+    // the whole grace period to finish and exit before any signal. Without the
+    // wait, `terminate` ran straight after the request, which on Windows is an
+    // immediate `TerminateProcess` over a shutdown that was still flushing, and
+    // on every platform could report "stopped" while the process still held its
+    // files. Only a process that outlives the grace is escalated.
+    let escalation_grace = match (&identity, graceful_ok) {
+        (Some(identity), true) => {
+            let identity = identity.clone();
+            let terminator = Arc::clone(&inner.terminator);
+            let limit = Duration::from_secs(crate::consts::STOP_GRACE_SECS);
+            let _ = blocking(move || Ok(terminator.await_exit(&identity, limit))).await;
+            Duration::from_secs(crate::consts::STOP_ESCALATION_SECS)
+        }
+        _ => Duration::from_secs(crate::consts::STOP_GRACE_SECS),
+    };
+    let terminated = terminate_verified(&inner, identity, escalation_grace).await;
 
     // No recorded process at all: a successful adapter shutdown is the whole
     // story. Otherwise the termination probe decided it.

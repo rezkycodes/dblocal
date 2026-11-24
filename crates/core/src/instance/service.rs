@@ -105,6 +105,13 @@ where
 pub trait Terminator: Send + Sync {
     /// Stops `identity`, escalating after `grace`.
     fn terminate(&self, identity: &ProcessIdentity, grace: Duration) -> Result<TerminateOutcome>;
+
+    /// Waits up to `limit` for an engine that was just asked to shut itself
+    /// down to leave the process table. Signals nothing; `true` means it is
+    /// gone. The default does not wait, which is what test doubles want.
+    fn await_exit(&self, _identity: &ProcessIdentity, _limit: Duration) -> bool {
+        false
+    }
 }
 
 /// Production terminator: the process layer's validate-before-signal path.
@@ -114,6 +121,10 @@ pub struct ProcessTerminator;
 impl Terminator for ProcessTerminator {
     fn terminate(&self, identity: &ProcessIdentity, grace: Duration) -> Result<TerminateOutcome> {
         crate::process::terminate(identity, grace)
+    }
+
+    fn await_exit(&self, identity: &ProcessIdentity, limit: Duration) -> bool {
+        crate::process::await_exit(identity, limit)
     }
 }
 

@@ -22,6 +22,9 @@ pub const START_TIMEOUT_SECS: u64 = 30;
 pub const START_TIMEOUT_VALKEY_SECS: u64 = 10;
 /// Grace period before a stop escalates to a forced kill.
 pub const STOP_GRACE_SECS: u64 = 20;
+/// Grace given to the escalation after an engine that accepted its own shutdown
+/// request still ran for the whole `STOP_GRACE_SECS`.
+pub const STOP_ESCALATION_SECS: u64 = 5;
 /// How often the instance supervisor polls process health.
 pub const STATUS_POLL_SECS: u64 = 2;
 /// How long a cached catalog snapshot stays fresh.

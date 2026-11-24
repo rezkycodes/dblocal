@@ -30,5 +30,6 @@ pub use probe::{ProcessObservation, ProcessProbe, SysinfoProbe};
 pub use reconcile::{ReconcileOutcome, ReconcileRecord, reconcile};
 pub use spawn::spawn_detached;
 pub use terminate::{
-    KILL_CONFIRM, SignalSender, TERMINATE_POLL, TerminateOutcome, terminate, terminate_with,
+    KILL_CONFIRM, SignalSender, TERMINATE_POLL, TerminateOutcome, await_exit, await_exit_with,
+    terminate, terminate_with,
 };

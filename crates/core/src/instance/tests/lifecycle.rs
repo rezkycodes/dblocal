@@ -388,3 +388,50 @@ fn no_auth_instances_store_no_credential() {
         "no-auth instances have no credential pointer"
     );
 }
+
+/// An engine that accepted its shutdown request is given time to exit on its
+/// own before anything is signalled: a Windows `terminate` is an immediate
+/// `TerminateProcess`, and `mysqld.exe` was still flushing (and holding its
+/// files) when `stop` already reported "stopped".
+#[test]
+fn stop_waits_for_the_engine_to_exit_after_a_successful_shutdown_request() {
+    let h = Harness::new(EngineKey::Postgresql);
+    let instance = created(&h, "waits");
+    let id = instance.id().clone();
+    let (_op, run) = start(&h, &id);
+    assert!(matches!(run.result(), Some(Ok(()))));
+    h.wait_for_status(&id, InstanceStatus::Running);
+
+    let (_op, run) = stop(&h, &id);
+    assert!(matches!(run.result(), Some(Ok(()))));
+    assert_eq!(
+        h.terminator
+            .awaits
+            .load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "the stop must wait for the exit once the shutdown request succeeded"
+    );
+}
+
+/// When the shutdown request itself failed there is nothing to wait for, so the
+/// stop goes straight to the escalation instead of idling for the grace period.
+#[test]
+fn stop_does_not_wait_when_the_shutdown_request_failed() {
+    let h = Harness::new(EngineKey::Postgresql);
+    let instance = created(&h, "nowait");
+    let id = instance.id().clone();
+    let (_op, run) = start(&h, &id);
+    assert!(matches!(run.result(), Some(Ok(()))));
+    h.wait_for_status(&id, InstanceStatus::Running);
+    *h.adapter.fail_at.lock().unwrap() = FailAt::Shutdown;
+
+    let (_op, run) = stop(&h, &id);
+    assert!(matches!(run.result(), Some(Ok(()))));
+    assert_eq!(
+        h.terminator
+            .awaits
+            .load(std::sync::atomic::Ordering::SeqCst),
+        0,
+        "no wait without an accepted shutdown request"
+    );
+}
