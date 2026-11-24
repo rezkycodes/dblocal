@@ -101,7 +101,7 @@ pub const FAILURE_LOG_TAIL_LINES: usize = LOG_TAIL_ON_FAILURE;
 pub const HEALTH_CHECK_POLL_MS: u64 = 250;
 
 /// GitHub repository the self-update check queries (`F-PKG-05`).
-pub const UPDATE_REPO: &str = "dblocal-org/dblocal";
+pub const UPDATE_REPO: &str = "rezkycodes/dblocal";
 /// Sub-directory of the home where a downloaded update is staged before apply.
 pub const DIR_UPDATE_STAGING: &str = "update";
 /// Timeout for the update check request, in seconds.

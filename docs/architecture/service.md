@@ -791,8 +791,7 @@ repository missing or private, not a connection failure. It now maps to
      TOCTOU window the lock does not. It is not implemented in this round.
 3. **`update check` against a missing/private repo** is answered in code above:
    `DBL-8011` "sumber rilis tidak ditemukan atau tidak publik", with a fake-fetcher
-   test. Note the release repository in `consts::UPDATE_REPO` is
-   `dblocal-org/dblocal`, which does not exist; the real one is
-   `rezkycodes/db-local` (private), so a production check will hit `DBL-8011`
-   until that constant is corrected or the repo is made public — the message now
-   says so instead of blaming the connection.
+   test. `consts::UPDATE_REPO` now names the real repository,
+   `rezkycodes/dblocal`, but that repository is private, so a production check
+   still hits `DBL-8011` until it is made public (or releases are published
+   elsewhere) — the message says so instead of blaming the connection.

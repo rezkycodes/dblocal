@@ -24,7 +24,7 @@ pub const MAX_CHECKSUMS_BODY_BYTES: usize = 64 * 1024;
 /// Options controlling an update check.
 #[derive(Debug, Clone)]
 pub struct UpdateCheckOptions {
-    /// GitHub repository owner/name, e.g. `dblocal-org/dblocal`.
+    /// GitHub repository owner/name, e.g. `rezkycodes/dblocal`.
     pub repo: String,
     /// Release channel.
     pub channel: ReleaseChannel,

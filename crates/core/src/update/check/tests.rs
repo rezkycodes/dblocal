@@ -35,7 +35,7 @@ fn asset(name: &str, url: &str) -> GhAsset {
 }
 
 fn linux_options() -> UpdateCheckOptions {
-    UpdateCheckOptions::for_repo("dblocal-org/dblocal").with_platform(Os::Linux, Arch::X86_64)
+    UpdateCheckOptions::for_repo("rezkycodes/dblocal").with_platform(Os::Linux, Arch::X86_64)
 }
 
 fn sample_release_json(tag: &str) -> String {
