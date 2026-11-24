@@ -164,6 +164,14 @@ fn serve(
     reply: &(dyn Fn(&str) -> Reply + Send + Sync),
     log: &Mutex<Vec<String>>,
 ) {
+    // Winsock's `accept` returns a socket that inherits the listener's
+    // non-blocking mode, unlike Linux and macOS where the accepted socket is
+    // always blocking. The listener here is non-blocking (the accept loop polls
+    // it), so without this every accepted stream would inherit that flag and the
+    // first `read_exact` would fail with `WouldBlock` before the handshake
+    // finished — the client then reports `Connect` instead of reading the reply.
+    // Each stream owns a dedicated thread, so blocking mode is what it wants.
+    let _ = stream.set_nonblocking(false);
     let _ = stream.set_nodelay(true);
     if write_packet(&mut stream, 0, &handshake()).is_err() || read_packet(&mut stream).is_err() {
         return;
