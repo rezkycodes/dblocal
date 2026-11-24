@@ -266,6 +266,9 @@ mod tests {
         );
     }
 
+    /// ` (deleted)` is Linux's `/proc/<pid>/exe` marker; `strip_deleted` is a
+    /// no-op on Windows, so the suffix carries no meaning there.
+    #[cfg(unix)]
     #[test]
     fn deleted_suffix_is_tolerated_on_the_recorded_side_too() {
         let path = "/home/u/.dblocal/runtimes/postgresql/18.7/x86_64/bin/postgres";

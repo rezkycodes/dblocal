@@ -532,6 +532,9 @@ fn cmdline_rejects_datadir_with_suffix_collision() {
     assert!(!cmdline_targets_instance(&args, &expected));
 }
 
+/// The ` (deleted)` marker is appended to `/proc/<pid>/exe` by Linux only, and
+/// `strip_deleted` is a no-op elsewhere, so this behaviour exists on unix alone.
+#[cfg(unix)]
 #[test]
 fn same_executable_strips_deleted_suffix() {
     let expected = PathBuf::from("/opt/mariadb/bin/mariadbd");
