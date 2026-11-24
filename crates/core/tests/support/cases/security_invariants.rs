@@ -320,6 +320,9 @@ fn audit(
         "archive",
         "cache",
         "app.log",
+        // Config backups (`F-CFG`, docs/architecture/config.md): 0600 `.bak`
+        // copies of the engine config, never of a password.
+        "dblocal-backups",
     ];
     for entry in list_dir(home.path()) {
         let Some(file_name) = entry.file_name().and_then(|name| name.to_str()) else {
