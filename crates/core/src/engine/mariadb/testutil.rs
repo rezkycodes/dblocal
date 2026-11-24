@@ -63,10 +63,15 @@ where
 /// descriptor of the `flock` guarding the heavy gate, it keeps that machine-wide
 /// lock held with nothing alive to release it. This guard makes the kill happen on
 /// every exit path, and `reap` lets the happy path wait explicitly.
+///
+/// Only the POSIX fake-binary tests spawn a child (`sleep`, `sh` scripts), so the
+/// guard is Unix-only; on Windows those tests are not compiled.
+#[cfg(unix)]
 pub(super) struct ChildGuard {
     child: std::process::Child,
 }
 
+#[cfg(unix)]
 impl ChildGuard {
     /// Wraps a freshly spawned child.
     pub(super) fn new(child: std::process::Child) -> Self {
@@ -93,6 +98,9 @@ impl ChildGuard {
 /// observation and failed for no real reason. Polling the exact condition the
 /// assertion needs removes that guess; the deadline only has to be long enough to
 /// catch a genuine hang.
+///
+/// Only the POSIX fake-binary tests spawn such a helper, so this is Unix-only.
+#[cfg(unix)]
 pub(super) fn wait_until(
     what: &str,
     timeout: std::time::Duration,
@@ -111,6 +119,7 @@ pub(super) fn wait_until(
     }
 }
 
+#[cfg(unix)]
 impl Drop for ChildGuard {
     fn drop(&mut self) {
         let _ = self.child.kill();

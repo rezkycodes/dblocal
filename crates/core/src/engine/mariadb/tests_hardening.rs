@@ -5,6 +5,8 @@ use super::*;
 use crate::engine::{InitContext, RunContext};
 use crate::model::{AuthMode, Port};
 use std::ffi::OsString;
+// `Command`/`Stdio` are only used by the POSIX fake-child tests below.
+#[cfg(unix)]
 use std::process::{Command, Stdio};
 use std::time::Duration;
 use tempfile::tempdir;
@@ -436,6 +438,9 @@ fn write_config_with_socket(data_dir: &Path, socket: &Path) {
         .expect("write conf");
 }
 
+/// The fallback-socket directory is an AF_UNIX path with POSIX mode bits, so
+/// the assertions below are POSIX-only.
+#[cfg(unix)]
 #[test]
 fn prepare_run_recreates_missing_tmpdir_and_socket_dir() {
     let dir = tempdir().expect("tmp");
@@ -460,7 +465,6 @@ fn prepare_run_recreates_missing_tmpdir_and_socket_dir() {
     prepare_run(&ctx).expect("prepare");
     assert!(fallback.is_dir(), "fallback dir recreated");
     assert!(run.join("tmp").is_dir(), "tmpdir recreated");
-    #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt;
         let meta = fs::symlink_metadata(&fallback).expect("meta");
@@ -500,8 +504,12 @@ fn prepare_run_refuses_symlinked_fallback_dir() {
     assert!(matches!(err, DblError::Engine { .. }));
 }
 
+/// A `0755` fallback directory can only be created with POSIX mode bits.
+#[cfg(unix)]
 #[test]
 fn prepare_run_refuses_wrong_mode_fallback_dir() {
+    use std::os::unix::fs::PermissionsExt;
+
     let dir = tempdir().expect("tmp");
     let root = dir.path();
     let data = root.join("inst/data");
@@ -510,11 +518,7 @@ fn prepare_run_refuses_wrong_mode_fallback_dir() {
     fs::create_dir_all(&run).expect("run");
     let fallback = root.join("fallback-sockets");
     fs::create_dir_all(&fallback).expect("fallback");
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&fallback, fs::Permissions::from_mode(0o755)).expect("chmod");
-    }
+    fs::set_permissions(&fallback, fs::Permissions::from_mode(0o755)).expect("chmod");
     let sock = fallback.join("m3307-abc123def456.sock");
     write_config_with_socket(&data, &sock);
     let ctx = RunContext {

@@ -1,3 +1,7 @@
+//! The POSIX launcher path (`sh` scripts, 0700 launcher directory, `/proc`
+//! argv checks). Declared `#[cfg(unix)]` in `tests/mod.rs`: the Windows launcher
+//! is a `cmd` script exercised by `windows_script`.
+
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;

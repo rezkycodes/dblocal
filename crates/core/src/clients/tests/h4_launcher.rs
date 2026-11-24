@@ -1,3 +1,7 @@
+//! The POSIX launcher hardening path (0700 launcher directory, owner checks,
+//! `sh` scripts, symlinks). Declared `#[cfg(unix)]` in `tests/mod.rs`: the Windows
+//! launcher is a `cmd` script exercised by `windows_script`.
+
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
