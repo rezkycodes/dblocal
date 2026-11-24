@@ -153,6 +153,45 @@ file.
 - Uninstall must keep `%USERPROFILE%\.dblocal`.
 - The MSI built by CI is unsigned unless signing is added later; document the exact warning text you saw.
 
+## Run in a Windows 10 x64 VM (diuji di VM, not bare metal)
+
+A reviewer ran the **CLI** (no GUI, no tray, no MSI) in a VirtualBox VM `dblocal-win64`
+(Windows 10 22H2 x64, built inside the VM with Rust stable + VS 2022 Build Tools + NASM, home
+`C:\dbl\home`). This is **not** the dual-boot bare-metal check: it does not replace the matrix
+above, it only means the first Windows build was exercised once before the owner's run and that
+the defects it exposed are already fixed on `main`.
+
+### Defects the VM run found (all Windows-only, none visible from Linux, all fixed with tests)
+
+| Commit | Defect | Symptom in the VM |
+|---|---|---|
+| `b07f911` | `mariadb/identity.rs` non-unix arm built an `Unsupported` error with a field that no longer exists | `cargo build` failed on MSVC |
+| `c81c217` | `gui/src/vulkan.rs` used `wgpu` on every OS but `wgpu` is a Linux/BSD-only dependency | GUI crate did not compile on Windows |
+| `a92f35e` | install check looked for `bin/postgres` (no `.exe`) | no engine could be installed (`DBL-4001`) |
+| `fb58d8a` | `pg_ctl start -l <log>` while the supervisor already redirects the log | `pg_ctl` sharing violation, start failed |
+| `1a83f89` | PostgreSQL unix-socket plan on Windows (`C:\...` mangled in `postgresql.conf`) | server exited at start |
+| `7532782` | MySQL `my.cnf` paths with backslashes (`\r`, `\s`, `\t`, `\n` are escapes in option files) | `mysqld` could not start the bootstrap |
+| `2a419c6` | MariaDB: Windows zip has no `scripts/`, the tool is `bin/mariadb-install-db.exe`, takes only `--datadir/--silent`, refuses a non-empty datadir | create failed at `initializing` |
+| `e28d82d` | MariaDB bootstrap: `--skip-networking` alone aborts `mariadbd.exe`; it also exits 1 after the init-file `SHUTDOWN` although the password change is applied | create failed at `initializing` |
+| `9b84d4f` | MySQL bootstrap passed `--daemonize=OFF` (unknown variable on Windows) | `mysqld.exe` aborted |
+| `9baa592` | `stop` signalled right after the shutdown request; Windows `terminate` is `TerminateProcess` and `mysqladmin shutdown` returns before the process exits | `stop` said "Siap" after 340 ms while `mysqld.exe` ran another second; an immediate `delete` failed on locked files (`DBL-3001`, row stuck in `deleting`) |
+
+### What ran green in the VM (CLI, labelled "diuji di VM")
+
+| Flow | Result |
+|---|---|
+| PostgreSQL 18.7.0: `create` (download, verify, extract, initdb), `start`, `status`, listener on `127.0.0.1` only, `uri`, `db create/list`, `config show/set` (+ backup file), `stop`, `start`, `logs`, `autostart enable/disable` (HKCU Run value written and removed; second `disable` no error), `delete` (archive), no `postgres.exe` left after `stop` | all exit 0 |
+| MariaDB 11.8.10: `create`, `start`, `status`, listener `127.0.0.1:<port>` only, `db create/list`, `user create` (ro, rw), `logs`, `stop` (no `mariadbd.exe` left), `delete --purge` | all exit 0 |
+| MySQL 8.4.11: same flow | all exit 0 |
+
+### Still **not** covered by the VM run
+
+- GUI window, tray, quit dialog, high DPI, Credential Manager (credential rows), MSI, SmartScreen, `cmd.exe`/Windows Terminal launchers, real login autostart (only the Registry value was checked), `config restore`/`config open`, `db drop`, `password reset`, Valkey (no Windows artifact), `rename`/symlink/ACL behaviour.
+- MariaDB on Windows keeps the empty `test` database created by `mariadb-install-db.exe` (the Unix path passes `--skip-test-db`, which the Windows tool does not have).
+- MariaDB's server log shows `Aborted connection ... Got an error reading communication packets` warnings after admin calls (the admin client closes without a clean `COM_QUIT`; harmless, not seen as a failure).
+- Cosmetic: `autostart status` prints the location as `C:\Users\<user>\HKCU\Software\...\Run#DBLocal`; a detached engine inherits the CLI's stdout pipe, so `dblocal start x | ...` in a pipeline does not reach EOF while the engine runs.
+- A VM has no GPU: rendering here would not say anything about Vulkan/DirectX on the real machine.
+
 ## What to report back to the coordinator
 
 Paste back:
