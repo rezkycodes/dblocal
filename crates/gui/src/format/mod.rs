@@ -254,6 +254,11 @@ pub fn format_bytes(bytes: u64) -> String {
 /// `7.5 MB` becomes `7,5 MB`, so a size reads as a sentence rather than a
 /// machine figure.
 /// Abbreviate a path by replacing the home prefix with `~`.
+///
+/// The remainder is joined onto `~` with `Path::join`, so the printed path uses
+/// the host separator throughout. Formatting it as `format!("~/{rest}")` mixed
+/// `~/.dblocal` with a native remainder and produced `~/.dblocal\instances\...`
+/// on Windows.
 pub fn abbreviate_home(path: &std::path::Path, home: Option<&std::path::Path>) -> String {
     if let Some(home) = home
         && let Ok(rest) = path.strip_prefix(home)
@@ -261,8 +266,10 @@ pub fn abbreviate_home(path: &std::path::Path, home: Option<&std::path::Path>) -
         if rest.as_os_str().is_empty() {
             return "~".to_owned();
         }
-        let rest = rest.to_string_lossy();
-        return format!("~/{rest}");
+        return std::path::Path::new("~")
+            .join(rest)
+            .to_string_lossy()
+            .into_owned();
     }
     path.to_string_lossy().into_owned()
 }

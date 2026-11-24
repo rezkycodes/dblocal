@@ -314,10 +314,17 @@ fn detail_values_name_the_engine_and_mark_the_canonical_port() {
     assert!(is_canonical_port(&v));
     let off = view("app2", EngineKey::Postgresql, InstanceStatus::Running, 5433);
     assert!(!is_canonical_port(&off));
-    assert_eq!(
-        data_dir(std::path::Path::new("/home/u/.dblocal"), None, "app"),
-        "/home/u/.dblocal/instances/app/data"
-    );
+    // `data_dir` joins natively, so a POSIX literal root prints with the host
+    // separator for the joined components (`/home/u/.dblocal\instances\app\data`
+    // on Windows). Build the expectation the same way instead of hardcoding `/`.
+    let data_root = std::path::Path::new("/home/u/.dblocal");
+    let expected_data = data_root
+        .join("instances")
+        .join("app")
+        .join("data")
+        .to_string_lossy()
+        .into_owned();
+    assert_eq!(data_dir(data_root, None, "app"), expected_data);
     assert_eq!(credential_ref("app"), "dblocal:app");
 }
 
@@ -802,9 +809,15 @@ fn the_config_tab_has_its_own_live_strings() {
 #[test]
 fn abbreviate_home_replaces_prefix() {
     let home = std::path::Path::new("/home/alice");
+    // The remainder is joined natively onto `~`, so the expectation is built the
+    // same way (`~\.dblocal` on Windows).
+    let expected = std::path::Path::new("~")
+        .join(".dblocal")
+        .to_string_lossy()
+        .into_owned();
     assert_eq!(
         abbreviate_home(std::path::Path::new("/home/alice/.dblocal"), Some(home)),
-        "~/.dblocal"
+        expected
     );
     assert_eq!(
         abbreviate_home(std::path::Path::new("/home/alice"), Some(home)),

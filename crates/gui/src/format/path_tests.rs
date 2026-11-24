@@ -16,23 +16,21 @@ fn instance_paths_come_from_the_real_home_root() {
     let root = std::path::Path::new("/tmp/dblocal-home-w2b");
     let data = data_dir(root, Some(user_home), "app");
     let log = engine_log_path(root, Some(user_home), "app");
-    let expected_data = format!(
-        "~/{}",
-        std::path::Path::new("dblocal-home-w2b")
-            .join("instances")
-            .join("app")
-            .join("data")
-            .to_string_lossy()
-    );
-    let expected_log = format!(
-        "~/{}",
-        std::path::Path::new("dblocal-home-w2b")
-            .join("instances")
-            .join("app")
-            .join("logs")
-            .join("engine.log")
-            .to_string_lossy()
-    );
+    let expected_data = std::path::Path::new("~")
+        .join("dblocal-home-w2b")
+        .join("instances")
+        .join("app")
+        .join("data")
+        .to_string_lossy()
+        .into_owned();
+    let expected_log = std::path::Path::new("~")
+        .join("dblocal-home-w2b")
+        .join("instances")
+        .join("app")
+        .join("logs")
+        .join("engine.log")
+        .to_string_lossy()
+        .into_owned();
     assert_eq!(data, expected_data);
     assert_eq!(log, expected_log);
     assert!(!data.contains("~/.dblocal") && !log.contains("~/.dblocal"));
