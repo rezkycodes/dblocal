@@ -183,10 +183,11 @@ the defects it exposed are already fixed on `main`.
 | PostgreSQL 18.7.0: `create` (download, verify, extract, initdb), `start`, `status`, listener on `127.0.0.1` only, `uri`, `db create/list`, `config show/set` (+ backup file), `stop`, `start`, `logs`, `autostart enable/disable` (HKCU Run value written and removed; second `disable` no error), `delete` (archive), no `postgres.exe` left after `stop` | all exit 0 |
 | MariaDB 11.8.10: `create`, `start`, `status`, listener `127.0.0.1:<port>` only, `db create/list`, `user create` (ro, rw), `logs`, `stop` (no `mariadbd.exe` left), `delete --purge` | all exit 0 |
 | MySQL 8.4.11: same flow | all exit 0 |
+| PostgreSQL 18.7.0 and MySQL 8.4.11 admin: `db create`, `user create --level rw`, `db list`, `password reset` (new URI printed once), `db drop` with a wrong confirmation (`DBL-1001`, nothing dropped) then the right one, `config set` + `config restore` (backup in `dblocal-backups`), `delete --purge`, no `postgres.exe`/`mysqld.exe` left | all as expected |
 
 ### Still **not** covered by the VM run
 
-- GUI window, tray, quit dialog, high DPI, Credential Manager (credential rows), MSI, SmartScreen, `cmd.exe`/Windows Terminal launchers, real login autostart (only the Registry value was checked), `config restore`/`config open`, `db drop`, `password reset`, Valkey (no Windows artifact), `rename`/symlink/ACL behaviour.
+- GUI window, tray, quit dialog, high DPI, Credential Manager (credential rows), MSI, SmartScreen, `cmd.exe`/Windows Terminal launchers, real login autostart (only the Registry value was checked), `config open` (the `rundll32` launcher), the `ro` user's actual privileges over a client connection, Valkey (no Windows artifact), `rename`/symlink/ACL behaviour.
 - MariaDB on Windows keeps the empty `test` database created by `mariadb-install-db.exe` (the Unix path passes `--skip-test-db`, which the Windows tool does not have).
 - MariaDB's server log shows `Aborted connection ... Got an error reading communication packets` warnings after admin calls (the admin client closes without a clean `COM_QUIT`; harmless, not seen as a failure).
 - Cosmetic: `autostart status` prints the location as `C:\Users\<user>\HKCU\Software\...\Run#DBLocal`; a detached engine inherits the CLI's stdout pipe, so `dblocal start x | ...` in a pipeline does not reach EOF while the engine runs.
