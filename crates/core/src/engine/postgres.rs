@@ -63,6 +63,19 @@ impl SocketDir {
 /// disables the unix socket instead of failing creation, and the choice is
 /// logged so a support log shows which path was taken.
 pub fn choose_socket_dir(dir: &Path, port: u16) -> SocketDir {
+    choose_socket_dir_for(dir, port, cfg!(windows))
+}
+
+/// [`choose_socket_dir`] with the platform passed in, so both are testable.
+///
+/// PostgreSQL has no unix sockets on Windows. Writing `unix_socket_directories`
+/// there made the server try to create a lock file in a path whose backslashes
+/// the configuration parser had consumed as escapes (`FATAL: could not create
+/// lock file "C:dblhomeinstances..."`), so Windows stays TCP-only.
+fn choose_socket_dir_for(dir: &Path, port: u16, windows: bool) -> SocketDir {
+    if windows {
+        return SocketDir::Disabled;
+    }
     match validate_socket_path_len(dir, port) {
         Ok(()) => SocketDir::Enabled(dir.to_path_buf()),
         Err(err) => {

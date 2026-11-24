@@ -702,3 +702,27 @@ fn pg_ctl_start_on_windows_does_not_name_the_log_file() {
     assert!(args.iter().any(|arg| arg == "-D"));
     assert_eq!(args.last(), Some(&OsString::from("start")));
 }
+
+/// PostgreSQL has no unix sockets on Windows, and writing a Windows path into
+/// `unix_socket_directories` made the server fail with a mangled lock-file path.
+#[test]
+fn windows_never_plans_a_unix_socket() {
+    let dir = PathBuf::from("/short/run/sock");
+    assert_eq!(
+        super::choose_socket_dir_for(&dir, 41012, true),
+        SocketDir::Disabled
+    );
+    assert_eq!(
+        super::choose_socket_dir_for(&dir, 41012, true).config_value(),
+        ""
+    );
+}
+
+#[test]
+fn unix_keeps_a_short_socket_directory_enabled() {
+    let dir = PathBuf::from("/short/run/sock");
+    assert_eq!(
+        super::choose_socket_dir_for(&dir, 41012, false),
+        SocketDir::Enabled(dir)
+    );
+}
