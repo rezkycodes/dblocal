@@ -376,7 +376,11 @@ fn display(path: &Path) -> String {
     path.display().to_string()
 }
 
-#[cfg(test)]
+// The backend type is compiled on every host (so `backend_for(Os::Linux, ...)`
+// keeps type-checking), but its behaviour is a POSIX one: systemd `.wants`
+// symlinks and `/`-rooted XDG paths. Windows has neither, so its filesystem
+// tests cannot assert anything true there and are only built on unix.
+#[cfg(all(test, unix))]
 mod tests {
     #![allow(clippy::expect_used, clippy::unwrap_used)]
 
