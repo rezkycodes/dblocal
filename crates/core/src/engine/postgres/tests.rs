@@ -119,8 +119,15 @@ fn prepare_run_returns_plan_and_creates_dir_when_enabled() {
     };
     let plan = prepare_run(&ctx).expect("prepare");
     let sock = run.join("sock");
-    assert_eq!(plan, SocketDir::Enabled(sock.clone()));
-    assert!(sock.is_dir());
+    if cfg!(windows) {
+        // PostgreSQL has no unix sockets on Windows, so the plan is TCP-only and
+        // the socket directory is deliberately not created.
+        assert_eq!(plan, SocketDir::Disabled);
+        assert!(!sock.exists(), "a disabled plan must not create {sock:?}");
+    } else {
+        assert_eq!(plan, SocketDir::Enabled(sock.clone()));
+        assert!(sock.is_dir());
+    }
 }
 
 #[test]
@@ -682,6 +689,8 @@ fn start_args_ctx() -> RunContext {
 }
 
 /// Unix keeps `-l <log>` (the same file the supervisor already appends to).
+/// The expectation is built with `Path::join`, so it holds where the separator
+/// is `\` too (`/logs\postgres.log`) instead of only on POSIX.
 #[test]
 fn pg_ctl_start_on_unix_names_the_log_file() {
     let args = super::pg_ctl_start_args(&start_args_ctx(), false);
@@ -689,7 +698,10 @@ fn pg_ctl_start_on_unix_names_the_log_file() {
         .iter()
         .position(|arg| arg == "-l")
         .expect("unix passes -l");
-    assert_eq!(args[position + 1], OsString::from("/logs/postgres.log"));
+    assert_eq!(
+        args[position + 1],
+        OsString::from(Path::new("/logs").join("postgres.log"))
+    );
     assert_eq!(args.last(), Some(&OsString::from("start")));
 }
 
