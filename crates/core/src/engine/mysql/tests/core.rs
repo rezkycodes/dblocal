@@ -399,3 +399,36 @@ fn diagnose_bind_and_loader_branches_stay_unknown_or_port_in_use() {
         StartFailure::BinaryMissing
     );
 }
+
+/// An option file reads `\r`, `\s`, `\t` and `\n` as escapes, so a Windows path
+/// with backslashes (`...\run\...`, `...\sock`) was corrupted and the bootstrap
+/// server could not start. Windows paths are written with forward slashes.
+#[test]
+fn windows_paths_are_written_with_forward_slashes() {
+    let cnf = render_my_cnf_for(
+        &MyCnfParams {
+            port: 42346,
+            data_dir: Path::new(r"C:\dbl\home\instances\w\data"),
+            run_dir: Path::new(r"C:\dbl\home\instances\w\run"),
+            logs_dir: Path::new(r"C:\dbl\home\instances\w\logs"),
+            runtime_dir: Path::new(r"C:\dbl\home\runtimes\mysql\8.4.11\x86_64"),
+            socket: Path::new(r"C:\dbl\home\instances\w\run\mysqld-42346.sock"),
+        },
+        true,
+    );
+    assert!(
+        !cnf.contains('\\'),
+        "no backslash may reach the option file:\n{cnf}"
+    );
+    assert!(cnf.contains("datadir=C:/dbl/home/instances/w/data\n"));
+    assert!(cnf.contains("basedir=C:/dbl/home/runtimes/mysql/8.4.11/x86_64\n"));
+    assert!(cnf.contains("socket=C:/dbl/home/instances/w/run/mysqld-42346.sock\n"));
+}
+
+#[test]
+fn unix_paths_are_written_unchanged() {
+    assert_eq!(
+        cnf_path_for(Path::new("/i/run/with space/sock"), false),
+        "/i/run/with space/sock"
+    );
+}

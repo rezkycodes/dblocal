@@ -148,19 +148,40 @@ struct MyCnfParams<'a> {
     socket: &'a Path,
 }
 
+/// A path as an option-file value.
+///
+/// MySQL option files treat a backslash as an escape (`\r`, `\s`, `\t`, `\b`,
+/// `\n`), so `C:\dbl\home\instances\x\run` would be read with a carriage
+/// return in it. Both servers accept forward slashes on Windows, so a Windows
+/// path is written with them.
+pub(crate) fn cnf_path_for(path: &Path, windows: bool) -> String {
+    let text = path.display().to_string();
+    if windows {
+        text.replace('\\', "/")
+    } else {
+        text
+    }
+}
+
 fn render_my_cnf(params: &MyCnfParams<'_>) -> String {
+    render_my_cnf_for(params, cfg!(windows))
+}
+
+/// [`render_my_cnf`] with the platform passed in, so both spellings are tested.
+fn render_my_cnf_for(params: &MyCnfParams<'_>, windows: bool) -> String {
+    let path = |p: &Path| cnf_path_for(p, windows);
     let mut out = String::new();
     let _ = writeln!(out, "[mysqld]");
     let _ = writeln!(out, "bind-address={BIND}");
     let _ = writeln!(out, "port={}", params.port);
-    let _ = writeln!(out, "datadir={}", params.data_dir.display());
-    let _ = writeln!(out, "socket={}", params.socket.display());
-    let _ = writeln!(out, "pid-file={}", pidfile_path(params.run_dir).display());
-    let _ = writeln!(out, "log-error={}", log_path(params.logs_dir).display());
-    let _ = writeln!(out, "tmpdir={}", tmpdir_path(params.run_dir).display());
+    let _ = writeln!(out, "datadir={}", path(params.data_dir));
+    let _ = writeln!(out, "socket={}", path(params.socket));
+    let _ = writeln!(out, "pid-file={}", path(&pidfile_path(params.run_dir)));
+    let _ = writeln!(out, "log-error={}", path(&log_path(params.logs_dir)));
+    let _ = writeln!(out, "tmpdir={}", path(&tmpdir_path(params.run_dir)));
     let _ = writeln!(out, "mysqlx=OFF");
     let _ = writeln!(out, "skip-name-resolve");
-    let _ = writeln!(out, "basedir={}", params.runtime_dir.display());
+    let _ = writeln!(out, "basedir={}", path(params.runtime_dir));
     out
 }
 
@@ -548,7 +569,7 @@ pub fn sync_port(run_dir: &Path, port: u16) -> Result<()> {
             let _ = writeln!(out, "port={port}");
             replaced_port = true;
         } else if trimmed.starts_with("socket=") || trimmed.starts_with("socket =") {
-            let _ = writeln!(out, "socket={}", socket.display());
+            let _ = writeln!(out, "socket={}", cnf_path_for(&socket, cfg!(windows)));
         } else {
             out.push_str(line);
             out.push('\n');
