@@ -13,6 +13,38 @@ use dblocal_core::strings;
 use super::state::ActiveDownload;
 use crate::format;
 
+use gpui_kit::component::input::InputState;
+use gpui_kit::{Entity, FocusHandle};
+
+/// What the create dialog currently has selected.
+#[derive(Clone)]
+pub struct CreateForm {
+    /// Engine chosen.
+    pub engine: EngineKey,
+    /// Version tag chosen (must exist in the catalog entry).
+    pub version: String,
+    /// Auth mode.
+    pub auth: AuthMode,
+    /// Suggested port for the engine, refreshed on open.
+    pub suggested_port: Option<Port>,
+    /// Name field state. `None` only in headless tests, which drive
+    /// [`Workspace::submit_draft`] with explicit strings.
+    pub name_input: Option<Entity<InputState>>,
+    /// Port field state; see [`CreateForm::name_input`].
+    pub port_input: Option<Entity<InputState>>,
+    /// Per-engine-card keyboard focus handles, in catalog order. Owned by the
+    /// form so the view and the keyboard tests share one handle per card rather
+    /// than each reaching into window element state (`F-PLH-01` AC1).
+    pub engine_focus: Vec<(EngineKey, FocusHandle)>,
+    /// Per-version-row keyboard focus handles, for the currently selected
+    /// engine's versions, in list order.
+    pub version_focus: Vec<(String, FocusHandle)>,
+    /// The footer "Buat" (create) button's focus handle.
+    pub submit_focus: FocusHandle,
+    /// The footer "Batal" (cancel) button's focus handle.
+    pub cancel_focus: FocusHandle,
+}
+
 /// The values the form has, independent of any GPUI entity.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CreateDraft {

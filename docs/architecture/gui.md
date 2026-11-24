@@ -115,6 +115,27 @@ completable from the keyboard, with the focus always visible. The rules:
   keywords (engine name, version, port) so a query finds an instance by any of
   them; a start/stop/copy command that does not apply is listed **disabled with a
   plain-text reason**, never hidden, and Enter on it does nothing.
+- **`F-INS-05` has two entry points, both through the same handler (W4-I D1).**
+  The instance header carries a "Hapus" button after "Open in…" (ghost style like
+  its neighbours, danger-toned; always enabled because the dialog explains the
+  consequence) and the palette carries a "Hapus <name>" row per instance (always
+  enabled, same reason). Both call `Workspace::open_delete_dialog`, so the dialog,
+  the typed-name check and `confirm_delete` cannot drift between them, and the
+  palette row still returns focus through `run_palette_action`'s restore.
+- **Overlay rows must not stretch (`W4-I` D2).** A full-screen overlay is a flex
+  **row** (`justify_center`); the default cross-axis alignment is `stretch`, so a
+  panel child without an `items_start` (or `items_center`) on the row fills the
+  window height from the inset to the bottom. `app/palette.rs` adds `items_start`
+  so the palette panel follows its content; the `overlay()` dialogs already use
+  `items_center`. `tests/render/palette_panel.rs` measures the panel's drawn
+  borders and asserts a one-row list draws a short panel.
+- **Log rows are one line, never wrapped (`W4-I` D3).** The Logs viewer is a
+  `UniformList` with a fixed row height; a wrapped line would paint a second
+  visual line inside its single-height row and overprint the next one. Rows clip
+  and ellipsise (`screens/logs.rs`, `LOG_ROW_HEIGHT`), and "Salin log" copies the
+  full buffer lines unchanged. Horizontal scrolling was rejected: it needs a
+  second scroll axis inside the uniform virtual list and breaks its fixed-height
+  model.
 - Controls owned by `gpui-component` (Button, Checkbox, Switch, Input, the
   palette rows) already carry focus handles, tab stops and Enter/Space
   activation; the app adds them only to the hand-built rows.

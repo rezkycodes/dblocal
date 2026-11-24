@@ -256,6 +256,8 @@ pub const UI_PALETTE_STOP: &str = "Hentikan";
 pub const UI_PALETTE_COPY_URI: &str = "Salin URI";
 /// Palette: open an instance tab (prefix).
 pub const UI_PALETTE_OPEN: &str = "Buka";
+/// Palette: delete an instance (prefix), opening the delete dialog (`F-INS-05`).
+pub const UI_PALETTE_DELETE: &str = "Hapus";
 /// Palette: why "Start" cannot run (the instance is already running).
 pub const UI_PALETTE_REASON_ALREADY_RUNNING: &str = "sudah berjalan";
 /// Palette: why "Stop" cannot run (the instance is not running).

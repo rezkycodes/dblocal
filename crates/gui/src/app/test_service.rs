@@ -67,6 +67,12 @@ pub(crate) struct QuietService {
     stopped: Arc<Mutex<Vec<InstanceId>>>,
     /// Every `connection_uri` request `(id, format)`, in order (F3: copy URI).
     uris: Arc<Mutex<Vec<(InstanceId, UriFormat)>>>,
+    /// Every `delete_instance` request `(id, mode)`, in order (W4-I D1: the
+    /// dialog must pass the mode the user chose for the instance they opened).
+    deleted: Arc<Mutex<Vec<(InstanceId, DeleteMode)>>>,
+    /// Ids a delete removed, hidden from later `list_instances` reads so the
+    /// sidebar refresh after a delete shows the row gone (as the real store does).
+    removed: Arc<Mutex<Vec<InstanceId>>>,
     tx: broadcast::Sender<ServiceEvent>,
 }
 
@@ -105,6 +111,8 @@ impl QuietService {
             started: Arc::new(Mutex::new(Vec::new())),
             stopped: Arc::new(Mutex::new(Vec::new())),
             uris: Arc::new(Mutex::new(Vec::new())),
+            deleted: Arc::new(Mutex::new(Vec::new())),
+            removed: Arc::new(Mutex::new(Vec::new())),
             tx,
         }
     }
@@ -134,6 +142,11 @@ impl QuietService {
         self.uris.lock().expect("uris lock").clone()
     }
 
+    /// Every `delete_instance` request `(id, mode)`, in call order.
+    pub(crate) fn deleted(&self) -> Vec<(InstanceId, DeleteMode)> {
+        self.deleted.lock().expect("deleted lock").clone()
+    }
+
     /// The id of the first instance in the given status.
     pub(crate) fn id_with(&self, status: InstanceStatus) -> InstanceId {
         self.instances
@@ -151,7 +164,13 @@ impl QuietService {
 impl DblService for QuietService {
     fn list_instances(&self) -> Result<Vec<InstanceView>> {
         self.bump();
-        Ok(self.instances.as_ref().clone())
+        let removed = self.removed.lock().expect("removed lock");
+        Ok(self
+            .instances
+            .iter()
+            .filter(|view| !removed.contains(&view.id))
+            .cloned()
+            .collect())
     }
     fn catalog(&self) -> Result<CatalogView> {
         self.bump();
@@ -188,8 +207,16 @@ impl DblService for QuietService {
         self.stopped.lock().expect("stopped lock").push(id.clone());
         Ok(OperationId::new(format!("op-stop-{n}")))
     }
-    fn delete_instance(&self, _id: &InstanceId, _mode: DeleteMode) -> Result<OperationId> {
+    fn delete_instance(&self, id: &InstanceId, mode: DeleteMode) -> Result<OperationId> {
         let n = self.calls.fetch_add(1, Ordering::SeqCst);
+        self.deleted
+            .lock()
+            .expect("deleted lock")
+            .push((id.clone(), mode));
+        // The real store drops the row when a delete completes. Hiding it here
+        // makes the post-delete sidebar refresh show it gone, exactly as the
+        // product does, without a second event.
+        self.removed.lock().expect("removed lock").push(id.clone());
         Ok(OperationId::new(format!("op-del-{n}")))
     }
     fn change_port(&self, _id: &InstanceId, _port: Port) -> Result<()> {

@@ -736,3 +736,6 @@ mod page_reachability_tests;
 
 #[path = "keyboard_fix2_tests.rs"]
 mod keyboard_fix2_tests;
+
+#[path = "delete_entry_tests.rs"]
+mod delete_entry_tests;

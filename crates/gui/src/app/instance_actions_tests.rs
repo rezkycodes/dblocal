@@ -479,7 +479,9 @@ fn palette_actions_reach_the_same_handlers(cx: &mut TestAppContext) {
     view.update(cx, |this, _| this.cancel_create());
 
     // Start, stop, open and copy each route to their handler. The list now
-    // carries disabled rows too (`None`), so only the runnable ones run.
+    // carries disabled rows too (`None`), so only the runnable ones run. The
+    // delete row opens a modal, which another test drives; skip it here so this
+    // walk covers the direct-service actions.
     let id = service.id_with(InstanceStatus::Stopped);
     let entries = view.read_with(cx, |this, _| this.palette_actions());
     for (index, action) in entries.iter().enumerate() {
@@ -497,7 +499,10 @@ fn palette_actions_reach_the_same_handlers(cx: &mut TestAppContext) {
                     cx.run_until_parked();
                 }
             }
-            Some(crate::format::PaletteAction::NewInstance) | None => {}
+            Some(
+                crate::format::PaletteAction::NewInstance | crate::format::PaletteAction::Delete(_),
+            )
+            | None => {}
         }
     }
     assert!(

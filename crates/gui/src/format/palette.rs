@@ -24,6 +24,8 @@ pub enum PaletteAction {
     Stop(String),
     /// Copy an instance URI.
     CopyUri(String),
+    /// Open the delete dialog for an instance (`F-INS-05`).
+    Delete(String),
 }
 
 /// A palette row: a label, the words it also matches, the action it runs, and
@@ -118,6 +120,15 @@ pub fn palette_items(instances: &[InstanceView]) -> Vec<PaletteItem> {
             label: format!("{} {}", strings::UI_PALETTE_OPEN, view.name),
             keywords: keywords.clone(),
             action: Some(PaletteAction::Open(view.id.to_string())),
+            reason: None,
+        });
+        // Delete (`F-INS-05`) is always offered: the dialog shows the data size
+        // and both modes and explains the consequence, so there is no state in
+        // which the row would mislead a user by opening.
+        items.push(PaletteItem {
+            label: format!("{} {}", strings::UI_PALETTE_DELETE, view.name),
+            keywords: keywords.clone(),
+            action: Some(PaletteAction::Delete(view.id.to_string())),
             reason: None,
         });
         // Copy URI only needs a settled instance with a known URI: a busy

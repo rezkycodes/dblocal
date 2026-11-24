@@ -241,6 +241,7 @@ impl Workspace {
         let running = view.status == InstanceStatus::Running;
         let id_run = view.id.clone();
         let id_restart = view.id.clone();
+        let id_delete = view.id.clone();
         let label = if running {
             strings::UI_STOP
         } else {
@@ -309,7 +310,22 @@ impl Workspace {
                                 cx.notify();
                             })),
                     )
-                    .child(self.render_open_in(view, "header", &theme, cx)),
+                    .child(self.render_open_in(view, "header", &theme, cx))
+                    // `F-INS-05`: the delete entry point beside the other header
+                    // actions. Ghost style like its neighbours, but danger-toned so
+                    // it reads as destructive; the dialog itself explains the
+                    // consequence, so the button is always enabled. A normal Tab
+                    // stop with the ring and Enter/Space activation.
+                    .child(
+                        Button::new("header-delete")
+                            .ghost()
+                            .icon(IconName::Delete)
+                            .label(strings::UI_DELETE)
+                            .track_focus(&self.delete_focus.clone().tab_stop(true))
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                this.open_delete_dialog(id_delete.clone(), window, cx);
+                            })),
+                    ),
             )
     }
 

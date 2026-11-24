@@ -59,6 +59,9 @@ mod open_in_actions;
 mod open_in_tests;
 mod palette;
 mod preview;
+#[cfg(test)]
+#[path = "app/preview_tests.rs"]
+mod preview_tests;
 mod quit_flow;
 #[cfg(test)]
 #[path = "app/quit_flow_tests.rs"]
@@ -93,7 +96,7 @@ use std::time::{Duration, Instant};
 
 use dblocal_core::admin::PrivilegeLevel;
 use dblocal_core::clients::DetectedClient;
-use dblocal_core::model::{AuthMode, DeleteMode, EngineKey, InstanceId, Port, Runtime};
+use dblocal_core::model::{DeleteMode, EngineKey, InstanceId, Runtime};
 use dblocal_core::service::{CatalogView, DblService, InstanceView, UriFormat, UserFacingError};
 use dblocal_core::strings;
 use gpui_kit::component::{ActiveTheme, command::CommandState, h_flex, input::InputState};
@@ -144,36 +147,7 @@ fn dock_focus_handles(cx: &mut Context<Workspace>) -> HashMap<EngineKey, FocusHa
         .collect()
 }
 
-/// What the create dialog currently has selected.
-#[derive(Clone)]
-pub struct CreateForm {
-    /// Engine chosen.
-    pub engine: EngineKey,
-    /// Version tag chosen (must exist in the catalog entry).
-    pub version: String,
-    /// Auth mode.
-    pub auth: AuthMode,
-    /// Suggested port for the engine, refreshed on open.
-    pub suggested_port: Option<Port>,
-    /// Name field state. `None` only in headless tests, which drive
-    /// [`Workspace::submit_draft`] with explicit strings.
-    pub name_input: Option<Entity<InputState>>,
-    /// Port field state; see [`CreateForm::name_input`].
-    pub port_input: Option<Entity<InputState>>,
-    /// Per-engine-card keyboard focus handles, in catalog order. Owned by the
-    /// form so the view and the keyboard tests share one handle per card rather
-    /// than each reaching into window element state (`F-PLH-01` AC1).
-    pub engine_focus: Vec<(EngineKey, FocusHandle)>,
-    /// Per-version-row keyboard focus handles, for the currently selected
-    /// engine's versions, in list order.
-    pub version_focus: Vec<(String, FocusHandle)>,
-    /// The footer "Buat" (create) button's focus handle.
-    pub submit_focus: FocusHandle,
-    /// The footer "Batal" (cancel) button's focus handle.
-    pub cancel_focus: FocusHandle,
-}
-
-pub use create_submit::{CreateDraft, SubmitError, Submitted};
+pub use create_submit::{CreateDraft, CreateForm, SubmitError, Submitted};
 
 /// The main workspace entity.
 pub struct Workspace {
@@ -289,6 +263,13 @@ pub struct Workspace {
     quit_timeout_task: Option<Task<()>>,
     version: &'static str,
     focus_handle: FocusHandle,
+    /// The instance header's "Hapus" button handle (`F-INS-05`): a stable tab
+    /// stop the keyboard tests can focus to prove Enter opens the dialog.
+    delete_focus: FocusHandle,
+    /// The delete dialog's two mode cards' handles, in order
+    /// `[archive, purge]` (`F-INS-05` AC2). Stable so the cards are real tab
+    /// stops and the tests can focus each to prove the keyboard reaches purge.
+    delete_mode_focus: [FocusHandle; 2],
     started_at: Instant,
     first_paint_logged: bool,
     /// Whether the demo build may show sample rows in the placeholder tabs.
@@ -321,6 +302,8 @@ struct Parts {
     user_name_input: Entity<InputState>,
     focus_handle: FocusHandle,
     dock_focus: HashMap<EngineKey, FocusHandle>,
+    delete_focus: FocusHandle,
+    delete_mode_focus: [FocusHandle; 2],
 }
 
 impl Workspace {
@@ -347,6 +330,8 @@ impl Workspace {
         cx.observe(&filter_input, |_, _, cx| cx.notify()).detach();
         let (db_name_input, user_name_input) = databases_tab_inputs(window, cx);
         let dock_focus = dock_focus_handles(cx);
+        let delete_focus = cx.focus_handle();
+        let delete_mode_focus = [cx.focus_handle(), cx.focus_handle()];
         let mut workspace = Self::assemble(Parts {
             service,
             tray_available,
@@ -356,6 +341,8 @@ impl Workspace {
             user_name_input,
             focus_handle,
             dock_focus,
+            delete_focus,
+            delete_mode_focus,
         });
         workspace.startup_load(cx);
         // `F7a`: the external editor DBLocal launches, the CLI and a second
@@ -396,6 +383,8 @@ impl Workspace {
         cx.observe(&filter_input, |_, _, cx| cx.notify()).detach();
         let (db_name_input, user_name_input) = databases_tab_inputs(window, cx);
         let dock_focus = dock_focus_handles(cx);
+        let delete_focus = cx.focus_handle();
+        let delete_mode_focus = [cx.focus_handle(), cx.focus_handle()];
         let mut workspace = Self::assemble(Parts {
             service,
             tray_available: false,
@@ -405,6 +394,8 @@ impl Workspace {
             user_name_input,
             focus_handle,
             dock_focus,
+            delete_focus,
+            delete_mode_focus,
         });
         workspace.tray_note_shown = true;
         workspace.tray_note = Some(SharedString::from(strings::UI_TRAY_UNAVAILABLE_NOTE));
@@ -433,6 +424,8 @@ impl Workspace {
             command_state: parts.command_state,
             filter_input: Some(parts.filter_input),
             focus_handle: parts.focus_handle,
+            delete_focus: parts.delete_focus,
+            delete_mode_focus: parts.delete_mode_focus,
             state: ShellState::default(),
             catalog: Self::offline_catalog(),
             runtimes: Vec::new(),
