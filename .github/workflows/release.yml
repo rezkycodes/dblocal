@@ -177,6 +177,13 @@ jobs:
 
   build-macos-arch:
     name: build (macos-${{ matrix.arch }})
+    # macOS is DEFERRED for the first release (Linux + Windows only); see
+    # docs/dev/macos-deferred.md. These jobs are skipped unless the repository
+    # variable ENABLE_MACOS is set to the string 'true' (repo Settings >
+    # Secrets and variables > Actions > Variables), so a macOS build can never
+    # fail the release. The `release` job below states explicitly which jobs it
+    # requires, because GitHub skips a job whose `needs` was skipped.
+    if: ${{ vars.ENABLE_MACOS == 'true' }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -228,6 +235,9 @@ jobs:
 
   build-macos-universal:
     name: build (macos-universal dmg)
+    # macOS is DEFERRED for the first release (Linux + Windows only); see
+    # docs/dev/macos-deferred.md. Same gate as build-macos-arch above.
+    if: ${{ vars.ENABLE_MACOS == 'true' }}
     runs-on: macos-15
     needs: build-macos-arch
     env:
@@ -454,6 +464,19 @@ jobs:
 
   release:
     name: Checksums, provenance and release
+    # macOS is DEFERRED for the first release (Linux + Windows only); see
+    # docs/dev/macos-deferred.md. A skipped `needs` job would normally skip this
+    # one, so the condition below is explicit instead of bare `needs`: it requires
+    # every Linux and Windows job to succeed and does not require the macOS job at
+    # all (success, skipped or failed all publish the Linux/Windows artifacts).
+    # A plain `always()` was rejected on purpose because it would also publish a
+    # release when a Linux/Windows build failed.
+    if: >-
+      ${{ !cancelled()
+          && needs.build-linux.result == 'success'
+          && needs.package-linux.result == 'success'
+          && needs.build-windows.result == 'success'
+          && needs.package-msi.result == 'success' }}
     runs-on: ubuntu-24.04
     needs:
       - build-linux
@@ -525,10 +548,10 @@ jobs:
           body: |
             ## DBLocal ${{ github.ref_name }}
 
-            Release artifacts: `.AppImage` and `.tar.gz` (Linux x86_64/aarch64), `.deb` and `.rpm` (Linux x86_64/aarch64), `.dmg` (macOS universal), `.zip` and `.msi` (Windows x86_64), plus `checksums.txt` and GitHub build provenance attestations.
+            Release artifacts: `.AppImage` and `.tar.gz` (Linux x86_64/aarch64), `.deb` and `.rpm` (Linux x86_64/aarch64), `.zip` and `.msi` (Windows x86_64), plus `checksums.txt` and GitHub build provenance attestations. macOS artifacts (`.dmg`, universal `.tar.gz`) appear only when macOS is enabled.
 
             - **Windows:** `.zip` and `.msi` are unsigned in v1. Expect SmartScreen "Unknown publisher" — see `docs/install/windows-smartscreen.md` and verify checksums before running/installing.
-            - **macOS:** signed + notarized with Apple Developer ID when secrets are configured; otherwise an unsigned `.dmg` is produced with a loud workflow warning (D-20).
+            - **macOS:** **deferred for the first release** (Linux + Windows only); see `docs/dev/macos-deferred.md`. When enabled, it is signed + notarized with an Apple Developer ID if secrets are configured, otherwise an unsigned `.dmg` is produced with a loud workflow warning (D-20).
             - **Linux packages:** `.deb`/`.rpm` install only under `/usr`; uninstall keeps `~/.dblocal` user data (F-PKG-04).
             - **MSI:** per-user install by default (no elevation). Uninstall keeps `%USERPROFILE%\.dblocal`.
 

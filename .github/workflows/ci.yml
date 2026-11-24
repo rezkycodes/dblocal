@@ -19,6 +19,16 @@ jobs:
   test:
     name: test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    # macOS is DEFERRED for the first release (Linux + Windows only); see
+    # docs/dev/macos-deferred.md. Its legs stay in the matrix so the logs keep
+    # showing the real state, but `continue-on-error` keeps a macOS failure from
+    # turning the run red (GitHub docs: jobs.<job_id>.continue-on-error "Prevents
+    # a workflow run from failing when a job fails"). `startsWith` on matrix.os is
+    # used because a job-level `if` is evaluated before the matrix exists and
+    # cannot see matrix.os — that would need splitting this shared job, which
+    # Linux and Windows own. The macOS legs are not removed so reviving them is
+    # a one-line change here plus the recipe in the deferred doc.
+    continue-on-error: ${{ startsWith(matrix.os, 'macos') }}
     strategy:
       fail-fast: false
       matrix:
