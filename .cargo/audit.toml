@@ -37,4 +37,13 @@ ignore = [
     "RUSTSEC-2026-0372", # zvariant_derive 5.15.1: unmaintained proc-macro via zvariant; merged into zbus 6.0.0; no patch; no vulnerability
     # Tracking: re-check on the next GPUI pin bump. https://rustsec.org/advisories/RUSTSEC-2026-0543
     "RUSTSEC-2026-0543", # chrono 0.4.45: unmaintained via gpui-pre/gpui-base/gpui-component; no patch; no vulnerability
+    # Tracking: re-check on the next GPUI pin bump. https://rustsec.org/advisories/RUSTSEC-2025-0134
+    # rustls-pemfile 2.2.0 — unmaintained, `patched = []`, no vulnerability and
+    # no unsound advisory. Reachable ONLY through the wasm-only dependency of
+    # gpui-kit-assets: `cfg(target_family = "wasm")` gpui-pre-reqwest -> rustls-pemfile.
+    # It is not compiled for our Linux/Windows targets (absent from the host
+    # `cargo tree`), but it is present in Cargo.lock, so `cargo audit` reports it
+    # while `cargo deny` (target-filtered) does not. Ninth entry, added beyond
+    # the eight in deny.toml; see the commit message for the reason it stands alone.
+    "RUSTSEC-2025-0134",
 ]
