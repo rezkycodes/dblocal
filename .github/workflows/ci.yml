@@ -52,6 +52,22 @@ jobs:
         # (see scripts/install-linux-deps.sh header for the exact reference).
         run: bash scripts/install-linux-deps.sh
 
+      # The debug test build (every workspace test target, incl. the GPUI/wgpu
+      # GUI) is large enough that an uncached run exhausted the runner's disk
+      # while linking on 2026-11-24 (`ld terminated with signal 7 [Bus error]`,
+      # `LLVM ERROR: IO failure on output stream: No space left on device`). The
+      # hosted image ships toolchains this project never uses; reclaiming them
+      # is additive and changes nothing that gets compiled.
+      - name: Free disk space (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          df -h /
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc \
+            /usr/local/.ghcup /opt/hostedtoolcache/CodeQL
+          sudo apt-get clean
+          df -h /
+
       - name: Rust cache
         uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
 
