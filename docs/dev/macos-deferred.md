@@ -1,7 +1,8 @@
 # macOS deferred for the first release
 
-**Decision:** the first release targets **Linux and Windows only**. macOS is **deferred**, not
-dropped. This file records why, with evidence, and the exact recipe to switch it back on.
+**macOS is deferred for the first release: Linux and Windows ship first, and macOS is postponed.**
+To revive it, set the repository variable `ENABLE_MACOS=true` (Settings > Secrets and variables >
+Actions > Variables) and follow "Reviving macOS" below.
 
 ## Current state (what "deferred" means in the workflows)
 
@@ -99,16 +100,27 @@ Chosen for now: **defer** (this change). When macOS is revived, start from optio
    ```
    (Must be *after* checkout: `rust-toolchain.toml` only exists after checkout, and
    `RUSTUP_TOOLCHAIN` overrides it.)
-5. Fix the two our-code blockers first (they also unblock Windows):
+5. Fix the our-code blockers before the legs can go green (they also block Windows). As of
+   `ci/linux-windows` (`3ec1016`) the first two are already fixed there; re-check on whatever
+   branch you revive from:
    - gate `use std::time::Duration` in `crates/core/src/process/probe.rs` tests to
-     `#[cfg(target_os = "linux")]`;
-   - give the six `mariadb::identity` helpers a `#[cfg(any(test, target_os = "linux"))]` gate
-     (their callers are all Linux-only or test-only);
+     `#[cfg(target_os = "linux")]` (**already fixed on `ci/linux-windows`**);
+   - give the six `mariadb::identity` helpers a `#[cfg(any(target_os = "linux", test))]` gate
+     (their callers are all Linux-only or test-only) (**already fixed on `ci/linux-windows`**);
    - after moving to 1.98.0, `crates/xtask/src/catalog/sources/mysql.rs` must use
-     `message.as_chunks::<64>().0` instead of `chunks_exact(64)` (new 1.98 lint).
+     `message.as_chunks::<64>().0` instead of `chunks_exact(64)` (new 1.98 lint; the earlier
+     `as_chunks` change was reverted in `4e95c01` and must be reapplied).
 6. Re-enable Apple signing/notarization secrets when a Developer ID is available.
 
 ## Not proven here
 
 There is no macOS machine. Everything above is from CI logs, published crate sources, rustc
 behaviour on this host, and official docs. Only a real macOS CI run can confirm the legs go green.
+
+## Note on the expression form
+
+`continue-on-error: ${{ runner.os == 'macOS' }}` does **not** work: `runner` is not an allowed
+context there. GitHub allows only `github`, `needs`, `strategy`, `vars`, `matrix`, `inputs` for
+`jobs.<job_id>.continue-on-error`, and `actionlint` rejects the `runner.os` form
+(`context "runner" is not allowed here`). Use `startsWith(matrix.os, 'macos')`, as `ci.yml` does.
+A job-level `if:` cannot replace it either: `jobs.<job_id>.if` also cannot see `matrix`.
