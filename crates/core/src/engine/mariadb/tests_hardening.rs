@@ -1,5 +1,8 @@
 //! Hardening and S1-S4 regression tests for MariaDB adapter.
 
+// `write_fake_script`/`retry_etxtbsy` drive POSIX `#!/bin/sh` fakes; on Windows
+// the tests that use them are not compiled, so the import would be unused.
+#[cfg(unix)]
 use super::testutil::{retry_etxtbsy, write_fake_script};
 use super::*;
 use crate::engine::{InitContext, RunContext};
@@ -40,9 +43,12 @@ fn config_tmpdir_is_instance_private() {
     let ctx = init_ctx(AuthMode::None, None);
     let sock = socket_path(&ctx.data_dir, ctx.port.get());
     let conf = render_config(&config_params(&ctx, &sock).expect("params"));
+    // The option file carries the platform spelling of the joined path, so build
+    // the expectation the same way (`\` would be a Windows backslash otherwise).
+    let expected = crate::fsutil::option_file_path(&tmpdir_path(&ctx.data_dir), cfg!(windows));
     assert!(
-        conf.expose()
-            .contains("tmpdir=/tmp/dblocal/instances/mdb/run/tmp")
+        conf.expose().contains(&format!("tmpdir={expected}")),
+        "config must name its private tmpdir"
     );
 }
 
@@ -59,14 +65,13 @@ fn spawn_command_sets_tmpdir_env() {
         auth: AuthMode::None,
         credential: None,
     };
+    // `spawn_command` sets the raw joined path, which uses the host separator.
+    let expected = tmpdir_path(&ctx.data_dir);
     let cmd = MariaDbAdapter.spawn_command(&ctx);
     let mut saw = false;
     for (k, v) in cmd.get_envs() {
         if k == OsString::from("TMPDIR").as_os_str() {
-            assert_eq!(
-                v.expect("tmpdir value").to_string_lossy(),
-                "/tmp/dblocal/instances/mdb/run/tmp"
-            );
+            assert_eq!(Path::new(v.expect("tmpdir value")), expected);
             saw = true;
         }
     }
@@ -77,14 +82,12 @@ fn spawn_command_sets_tmpdir_env() {
 fn bootstrap_command_sets_tmpdir_env() {
     let ctx = init_ctx(AuthMode::Password, Some("pw"));
     let init_file = PathBuf::from("/tmp/dblocal/instances/mdb/run/.mariadb-init.sql");
+    let expected = tmpdir_path(&ctx.data_dir);
     let cmd = build_bootstrap_command(&ctx, &init_file);
     let mut saw = false;
     for (k, v) in cmd.get_envs() {
         if k == OsString::from("TMPDIR").as_os_str() {
-            assert_eq!(
-                v.expect("tmpdir value").to_string_lossy(),
-                "/tmp/dblocal/instances/mdb/run/tmp"
-            );
+            assert_eq!(Path::new(v.expect("tmpdir value")), expected);
             saw = true;
         }
     }
@@ -307,6 +310,9 @@ fn pid_alive_reports_zombie_as_dead() {
     let _ = waitpid(Pid::from_raw(pid as i32), None);
 }
 
+/// A fake `mariadb-install-db` is a `#!/bin/sh` script, which Windows cannot
+/// exec, so the failure round-trip is proved on POSIX hosts only.
+#[cfg(unix)]
 #[test]
 fn install_db_failure_removes_data_dir() {
     let dir = tempdir().expect("tmp");
@@ -336,6 +342,9 @@ fn install_db_failure_removes_data_dir() {
     );
 }
 
+/// A fake `mariadbd` is a `#!/bin/sh` script, which Windows cannot exec, so the
+/// bootstrap failure tail is proved on POSIX hosts only.
+#[cfg(unix)]
 #[test]
 fn bootstrap_failure_carries_output_tail() {
     let dir = tempdir().expect("tmp");

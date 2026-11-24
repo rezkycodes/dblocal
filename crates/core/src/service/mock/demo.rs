@@ -169,10 +169,16 @@ impl MockService {
     /// Creates a mock seeded with the prototype scenario (demo/headless builds).
     ///
     /// Timing stays deterministic and non-blocking, so a headless render sees
-    /// the same cast on every run.
+    /// the same cast on every run. Unlike [`MockConfig::deterministic`], the
+    /// demo reports the **host** platform: it is a preview of what this user's
+    /// catalog and create gate would show, so on Windows it must mark Valkey
+    /// unavailable (D-26) exactly as the real service does.
     pub fn demo() -> Self {
-        let service =
-            Self::with_config(MockConfig::deterministic().with_start_time(SystemTime::UNIX_EPOCH));
+        let service = Self::with_config(
+            MockConfig::deterministic()
+                .with_platform(crate::platform::Platform::current())
+                .with_start_time(SystemTime::UNIX_EPOCH),
+        );
         service.seed_demo();
         service
     }

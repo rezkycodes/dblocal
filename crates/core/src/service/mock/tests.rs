@@ -499,6 +499,26 @@ async fn refresh_catalog_emits_catalog_updated() {
     );
 }
 
+#[test]
+fn deterministic_config_pins_the_platform_regardless_of_the_host() {
+    // "deterministic" must mean the same thing on every host: the CLI tests
+    // create a Valkey on it, which the D-26 gate only allows on Linux x86_64.
+    // A host-derived platform made those tests fail on Windows CI with DBL-6001.
+    let config = super::MockConfig::deterministic();
+    let service = super::MockService::with_config(config);
+    let runtimes = service.list_runtimes().expect("runtimes");
+    assert!(
+        runtimes.iter().any(|rt| rt.engine() == EngineKey::Valkey),
+        "the deterministic mock must offer Valkey on every host"
+    );
+    assert!(
+        service
+            .validate_spec(&spec("vk", EngineKey::Valkey, "8.1.0", 46379))
+            .is_ok(),
+        "creating a Valkey on the deterministic mock must be allowed on every host"
+    );
+}
+
 #[tokio::test]
 async fn cancel_marks_the_operation() {
     let service = super::MockService::deterministic();

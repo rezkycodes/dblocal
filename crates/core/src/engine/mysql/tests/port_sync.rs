@@ -28,8 +28,14 @@ fn sync_port_rewrites_port_and_socket() {
     let after = fs::read_to_string(my_cnf_path(&run)).expect("read after");
     assert!(after.contains("port=43110"), "port must move:\n{after}");
     assert!(!after.contains("port=42345"), "old port must be gone");
+    // `sync_port` writes option-file paths with the platform spelling (forward
+    // slashes on Windows), so build the expectation the same way. `display()`
+    // would carry backslashes there and never match.
     assert!(
-        after.contains(&format!("socket={}", socket_path(&run, 43110).display())),
+        after.contains(&format!(
+            "socket={}",
+            crate::fsutil::option_file_path(&socket_path(&run, 43110), cfg!(windows))
+        )),
         "socket must follow the port:\n{after}"
     );
     // Everything else is preserved.

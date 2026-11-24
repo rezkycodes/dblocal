@@ -99,6 +99,10 @@ pub(crate) fn diag_cases() -> Vec<(&'static str, StartFailure)> {
     ]
 }
 
+/// Writes a fake `mysqld`/`mysqladmin` as an executable `#!/bin/sh` script. The
+/// tests that use it are POSIX-only (Windows cannot exec a `#!` script), so the
+/// helper is too, which also keeps it from being dead code there.
+#[cfg(unix)]
 pub(crate) fn write_fake_bin(dir: &Path, name: &str, script: &str) -> PathBuf {
     let bin = dir.join("bin");
     fs::create_dir_all(&bin).expect("bin");
@@ -124,7 +128,9 @@ pub(crate) fn write_fake_bin(dir: &Path, name: &str, script: &str) -> PathBuf {
 /// Another test in the same binary can fork while our fake script is still open
 /// for writing; the forked child inherits that descriptor and the following exec
 /// of the script fails with `Text file busy` (os error 26). That is a test
-/// environment artifact, not product behaviour, so retry briefly.
+/// environment artifact, not product behaviour, so retry briefly. The tests that
+/// need this run a POSIX fake script, so it is POSIX-only.
+#[cfg(unix)]
 pub(crate) fn retry_etxtbsy<T, E>(
     mut f: impl FnMut() -> std::result::Result<T, E>,
 ) -> std::result::Result<T, E>

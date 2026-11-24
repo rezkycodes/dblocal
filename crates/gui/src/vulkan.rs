@@ -192,6 +192,13 @@ fn report(reason: &str) -> String {
 mod tests {
     use super::*;
 
+    /// The OS path-list separator `invalid_override` splits on: `;` on Windows,
+    /// `:` elsewhere. The tests build their inputs with it so they assert the
+    /// splitting rule on every host rather than only on Linux.
+    fn list_sep() -> char {
+        if cfg!(windows) { ';' } else { ':' }
+    }
+
     #[test]
     fn detects_missing_override_file() {
         let value = OsString::from("/nonexistent/icd.json");
@@ -235,13 +242,20 @@ mod tests {
     #[test]
     fn multiple_override_entries_accept_any_existing_manifest() {
         let existing = Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml");
-        let value = OsString::from(format!("/nonexistent/a.json:{}", existing.display()));
+        let value = OsString::from(format!(
+            "/nonexistent/a.json{sep}{}",
+            existing.display(),
+            sep = list_sep()
+        ));
         assert!(invalid_override("VK_ICD_FILENAMES", &value).is_none());
     }
 
     #[test]
     fn override_with_only_missing_entries_lists_them_all() {
-        let value = OsString::from("/missing/one.json:/missing/two.json");
+        let value = OsString::from(format!(
+            "/missing/one.json{sep}/missing/two.json",
+            sep = list_sep()
+        ));
         let reason = invalid_override("VK_DRIVER_FILES", &value).expect("reason");
         assert!(reason.contains("/missing/one.json"));
         assert!(reason.contains("/missing/two.json"));
@@ -250,7 +264,9 @@ mod tests {
     #[test]
     fn override_with_no_entries_is_reported_as_empty() {
         // Just separators: nothing to resolve either way.
-        let reason = invalid_override("VK_ICD_FILENAMES", &OsString::from("::")).expect("reason");
+        let only_seps: String = std::iter::repeat_n(list_sep(), 2).collect();
+        let reason =
+            invalid_override("VK_ICD_FILENAMES", &OsString::from(only_seps)).expect("reason");
         assert!(reason.contains("does not name any ICD manifest"));
     }
 

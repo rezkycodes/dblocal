@@ -118,6 +118,9 @@ fn windows_bootstrap_command_has_no_daemonize_option() {
     assert!(args.iter().any(|a| a.starts_with("--init-file=")));
 }
 
+/// A fake `mysqld` is a `#!/bin/sh` script, which Windows cannot exec, so this
+/// failure round-trip is proved on POSIX hosts only.
+#[cfg(unix)]
 #[test]
 fn initialize_insecure_command_failure_cleans_up_and_reports_tail() {
     let dir = tempfile::tempdir().expect("tmp");
@@ -151,6 +154,9 @@ fn initialize_insecure_command_failure_cleans_up_and_reports_tail() {
     assert!(!run.join("dblocal-init.sql").exists());
 }
 
+/// A fake `mysqld` is a `#!/bin/sh` script, which Windows cannot exec, so the
+/// log-tail round-trip is proved on POSIX hosts only.
+#[cfg(unix)]
 #[test]
 fn initialize_reports_init_err_log_tail() {
     let dir = tempfile::tempdir().expect("tmp");
@@ -201,13 +207,16 @@ fn health_check_maps_connection_refused_to_error() {
 #[test]
 fn command_builders_set_tmpdir_env() {
     let ctx_i = init_ctx(42345, AuthMode::Password, Some(SECRET));
+    // The expected value uses the host separator (`run\tmp` on Windows), which
+    // is what `tmpdir_path` produces there; a POSIX literal failed on Windows.
+    let expected = tmpdir_path(Path::new("/run"));
     let init_cmd = initialize_insecure_command(&ctx_i, Path::new("/logs/init.err"));
     let tmp = init_cmd
         .get_envs()
         .find(|(k, _)| *k == "TMPDIR")
         .and_then(|(_, v)| v)
         .expect("TMPDIR");
-    assert_eq!(tmp.to_string_lossy(), "/run/tmp");
+    assert_eq!(Path::new(tmp), expected);
 
     let boot =
         bootstrap_mysqld_command(&ctx_i, Path::new("/run/my.cnf"), Path::new("/run/init.sql"));
@@ -216,7 +225,7 @@ fn command_builders_set_tmpdir_env() {
         .find(|(k, _)| *k == "TMPDIR")
         .and_then(|(_, v)| v)
         .expect("TMPDIR");
-    assert_eq!(tmp.to_string_lossy(), "/run/tmp");
+    assert_eq!(Path::new(tmp), expected);
 
     let ctx_r = run_ctx(42345, AuthMode::Password, Some(SECRET));
     let spawn = MysqlAdapter.spawn_command(&ctx_r);
@@ -225,7 +234,7 @@ fn command_builders_set_tmpdir_env() {
         .find(|(k, _)| *k == "TMPDIR")
         .and_then(|(_, v)| v)
         .expect("TMPDIR");
-    assert_eq!(tmp.to_string_lossy(), "/run/tmp");
+    assert_eq!(Path::new(tmp), expected);
 }
 
 #[test]
@@ -258,6 +267,9 @@ fn read_log_tail_bounds_and_missing_file() {
     assert_eq!(read_log_tail(&p, 10).lines().count(), 3);
 }
 
+/// The second half runs a fake `mysqladmin` that is a `#!/bin/sh` script, which
+/// Windows cannot exec, so the whole round-trip is proved on POSIX hosts only.
+#[cfg(unix)]
 #[test]
 fn shutdown_bootstrap_reports_spawn_and_exit_failure() {
     let dir = tempfile::tempdir().expect("tmp");
@@ -284,6 +296,9 @@ fn shutdown_bootstrap_reports_spawn_and_exit_failure() {
     assert!(msg.contains("code Some(5)"), "{msg}");
 }
 
+/// The early-exit half runs a fake `mysqld` that is a `#!/bin/sh` script, which
+/// Windows cannot exec, so the whole round-trip is proved on POSIX hosts only.
+#[cfg(unix)]
 #[test]
 fn run_initialize_insecure_missing_binary_and_early_exit() {
     let dir = tempfile::tempdir().expect("tmp");

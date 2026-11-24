@@ -63,9 +63,13 @@ fn main() -> ExitCode {
     }
 }
 
-/// Runs the same gates as CI, in order, stopping at the first failure.
-fn ci() -> ExitCode {
-    let steps: [(&str, Vec<&str>, Duration); 3] = [
+/// The CI gates, in order, with their wall-clock limits.
+///
+/// Extracted so a test can assert the exact cargo arguments without running
+/// them: the `tests` step must carry `--no-fail-fast` so one Windows CI run
+/// reports every failing crate, not just the first.
+fn steps() -> [(&'static str, Vec<&'static str>, Duration); 3] {
+    [
         (
             "fmt check",
             vec!["fmt", "--all", "--", "--check"],
@@ -83,8 +87,22 @@ fn ci() -> ExitCode {
             ],
             CLIPPY_LIMIT,
         ),
-        ("tests", vec!["test", "--workspace"], TESTS_LIMIT),
-    ];
+        (
+            "tests",
+            // `--no-fail-fast` keeps the whole workspace run going past the
+            // first failing test binary. Cargo otherwise stops at the first
+            // failing crate, so a Windows run that fails in `dblocal-cli` never
+            // reaches `dblocal-core` or `dblocal-gui`; one expensive CI run then
+            // hides every other failure behind the first.
+            vec!["test", "--workspace", "--no-fail-fast"],
+            TESTS_LIMIT,
+        ),
+    ]
+}
+
+/// Runs the same gates as CI, in order, stopping at the first failure.
+fn ci() -> ExitCode {
+    let steps = steps();
 
     for (label, args, limit) in steps {
         println!("==> cargo {}", args.join(" "));
@@ -112,4 +130,26 @@ fn ci() -> ExitCode {
     }
     println!("xtask ci: all gates passed");
     ExitCode::SUCCESS
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The tests gate must keep `--no-fail-fast`: stopping at the first failing
+    /// crate hid the `dblocal-core` and `dblocal-gui` failures behind a
+    /// `dblocal-cli` failure on Windows, wasting a full CI iteration each time.
+    #[test]
+    fn the_tests_gate_does_not_fail_fast() {
+        let (_, tests_args, _) = steps()
+            .into_iter()
+            .find(|(label, _, _)| *label == "tests")
+            .expect("a tests gate");
+        assert_eq!(tests_args.first(), Some(&"test"));
+        assert!(tests_args.contains(&"--workspace"));
+        assert!(
+            tests_args.contains(&"--no-fail-fast"),
+            "the tests gate must not stop at the first failing crate: {tests_args:?}"
+        );
+    }
 }

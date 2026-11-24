@@ -48,6 +48,10 @@ fn socket_path_boundary() {
     assert!(validate_socket_path_len(&dir, port).is_ok());
 }
 
+/// PostgreSQL has no unix sockets on Windows, so the host-level chooser always
+/// disables them there; `windows_never_plans_a_unix_socket` proves that arm via
+/// the injected platform. This one is the non-Windows half of the same proof.
+#[cfg(not(windows))]
 #[test]
 fn choose_socket_dir_enables_short_path() {
     let plan = choose_socket_dir(Path::new("/tmp/s"), 41010);

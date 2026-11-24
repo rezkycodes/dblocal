@@ -1,5 +1,8 @@
 //! Unit tests for the MariaDB adapter.
 
+// `write_fake_script`/`retry_etxtbsy` drive POSIX `#!/bin/sh` fakes; on Windows
+// the tests that use them are not compiled, so the import would be unused.
+#[cfg(unix)]
 use super::testutil::{retry_etxtbsy, write_fake_script};
 use super::*;
 use crate::engine::{Credential, InitContext, RunContext};
@@ -295,13 +298,20 @@ fn install_db_command_has_no_password_and_uses_normal_auth() {
         .get_args()
         .map(|a| a.to_string_lossy().into_owned())
         .collect();
-    assert!(
-        args.iter()
-            .any(|a| a == "--auth-root-authentication-method=normal")
-    );
-    assert!(args.iter().any(|a| a == "--skip-test-db"));
+    // The Windows tool is a different program and rejects these flags; the
+    // per-platform spelling is proved in `tests_windows.rs`. Here only the
+    // Unix arm makes these assertions.
+    if cfg!(windows) {
+        assert!(args.iter().any(|a| a == "--silent"), "{args:?}");
+    } else {
+        assert!(
+            args.iter()
+                .any(|a| a == "--auth-root-authentication-method=normal")
+        );
+        assert!(args.iter().any(|a| a == "--skip-test-db"));
+        assert!(args.iter().any(|a| a.starts_with("--basedir=")));
+    }
     assert!(args.iter().any(|a| a.starts_with("--datadir=")));
-    assert!(args.iter().any(|a| a.starts_with("--basedir=")));
     for a in &args {
         assert!(
             !a.contains("super-secret"),
@@ -312,6 +322,9 @@ fn install_db_command_has_no_password_and_uses_normal_auth() {
             "password-ish arg: {a}"
         );
     }
+    // Expectation built with the same helper the adapter uses, so it carries the
+    // host separator (`run\tmp` on Windows) instead of a POSIX literal.
+    let expected_tmp = tmpdir_path(&ctx.data_dir);
     let mut saw_tmpdir = false;
     for (k, v) in cmd.get_envs() {
         if let Some(v) = v {
@@ -319,7 +332,7 @@ fn install_db_command_has_no_password_and_uses_normal_auth() {
             assert_ne!(k.as_ref(), "MYSQL_PWD");
             assert!(!v.to_string_lossy().contains("super-secret"));
             if k == "TMPDIR" {
-                assert_eq!(v.to_string_lossy(), "/tmp/dblocal/instances/mdb/run/tmp");
+                assert_eq!(Path::new(v), expected_tmp);
                 saw_tmpdir = true;
             }
         }
@@ -327,6 +340,9 @@ fn install_db_command_has_no_password_and_uses_normal_auth() {
     assert!(saw_tmpdir, "install-db must set TMPDIR to instance tmpdir");
 }
 
+/// A fake `mariadbd` is a `#!/bin/sh` script, which Windows cannot exec, so the
+/// bootstrap round-trip is proved on POSIX hosts only.
+#[cfg(unix)]
 #[test]
 fn bootstrap_init_file_is_0600_and_removed_after_success() {
     let dir = tempdir().expect("tmp");
@@ -365,6 +381,9 @@ fn bootstrap_init_file_is_0600_and_removed_after_success() {
     );
 }
 
+/// A fake `mariadbd` is a `#!/bin/sh` script, which Windows cannot exec, so the
+/// bootstrap failure path is proved on POSIX hosts only.
+#[cfg(unix)]
 #[test]
 fn bootstrap_init_file_is_removed_on_failure() {
     let dir = tempdir().expect("tmp");
@@ -411,6 +430,9 @@ fn mutation_bind_address_must_be_loopback() {
     assert!(!conf.expose().contains("0.0.0.0"));
 }
 
+/// The Windows tool does not take `--auth-root-authentication-method`; its arm
+/// is proved in `tests_windows.rs`. This test owns the Unix spelling.
+#[cfg(not(windows))]
 #[test]
 fn mutation_auth_root_normal_required_in_install_db() {
     let ctx = init_ctx(AuthMode::Password, Some("pw"));
@@ -424,6 +446,10 @@ fn mutation_auth_root_normal_required_in_install_db() {
     );
 }
 
+/// `--skip-networking` is a Unix-only bootstrap flag: `mariadbd.exe` refuses to
+/// start with TCP and named pipes both off, so Windows keeps the loopback port
+/// (proved in `tests_windows.rs`).
+#[cfg(not(windows))]
 #[test]
 fn bootstrap_command_skips_networking() {
     // The bootstrap server runs before the password exists; binding the
@@ -1136,8 +1162,13 @@ fn sync_port_keeps_the_fallback_socket_path_it_started_with() {
     let expected = resolve_socket_path(&data, 43111).expect("new socket");
     let updated = fs::read_to_string(config_path(&data)).expect("read");
     assert!(updated.contains("port=43111"));
+    // `sync_port` rewrites `socket=` through `option_file_path`, which uses
+    // forward slashes on Windows; `display()` would carry backslashes there.
     assert!(
-        updated.contains(&format!("socket={}", expected.display())),
+        updated.contains(&format!(
+            "socket={}",
+            crate::fsutil::option_file_path(&expected, cfg!(windows))
+        )),
         "sync_port must write the same resolver's socket:\n{updated}"
     );
 }

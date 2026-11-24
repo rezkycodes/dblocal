@@ -97,12 +97,22 @@ impl Default for MockConfig {
 
 impl MockConfig {
     /// Zero-delay, fixed-clock config for unit tests.
+    ///
+    /// Every field is pinned, including the platform: it reports Linux
+    /// `x86_64` rather than the host's OS/arch. The name says "deterministic",
+    /// and the platform filters the mock catalog and gates `create` (D-26: no
+    /// Valkey build for Windows), so a host-derived default made the same test
+    /// assert different things on Windows than on Linux. A test that needs a
+    /// different platform pins one explicitly with [`Self::with_platform`].
     pub fn deterministic() -> Self {
         Self {
             seed: 1,
             step_delay: Duration::from_millis(0),
             start_time: SystemTime::UNIX_EPOCH,
-            platform: crate::platform::Platform::current(),
+            platform: crate::platform::Platform::new(
+                crate::platform::Os::Linux,
+                crate::platform::Arch::X86_64,
+            ),
         }
     }
 

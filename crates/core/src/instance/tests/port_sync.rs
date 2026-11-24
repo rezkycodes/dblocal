@@ -74,7 +74,12 @@ fn sync_instance_port_rewrites_mysql_my_cnf() {
     assert!(
         after.contains(&format!(
             "socket={}",
-            paths.run_dir(&name).join("mysqld-43110.sock").display()
+            // `sync_mysql_port` writes the option-file spelling (forward slashes
+            // on Windows), so the expectation must use the same formatter.
+            crate::fsutil::option_file_path(
+                &paths.run_dir(&name).join("mysqld-43110.sock"),
+                cfg!(windows),
+            )
         )),
         "socket must follow the port:\n{after}"
     );

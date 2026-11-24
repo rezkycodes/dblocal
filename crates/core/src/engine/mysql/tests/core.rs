@@ -32,9 +32,17 @@ fn spawn_command_uses_defaults_file_and_no_password() {
         .map(|a| a.to_string_lossy().into_owned())
         .collect();
     assert_eq!(args.len(), 1);
-    assert!(args[0].starts_with("--defaults-file="));
-    assert!(args[0].contains("/run/my.cnf"));
-    assert!(cmd.get_program().to_string_lossy().ends_with("bin/mysqld"));
+    // Built with the same path helpers the adapter uses, so the expected value
+    // carries the host separator (`\` and `.exe` on Windows) instead of a
+    // POSIX literal.
+    assert_eq!(
+        args[0],
+        format!("--defaults-file={}", my_cnf_path(&ctx.run_dir).display())
+    );
+    assert_eq!(
+        Path::new(cmd.get_program()),
+        ctx.runtime_dir.join("bin").join(exe_name("mysqld"))
+    );
     assert_no_secret_in_command(&cmd, SECRET);
 }
 
