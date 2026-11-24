@@ -3,6 +3,12 @@
 //! The behaviour (candidates, verification, cleanup rules, `prepare_run`) is
 //! tested once in `engine::sockdir`; here we only prove this adapter maps the
 //! MySQL layout onto it correctly.
+//!
+//! Windows has no AF_UNIX socket path of this shape and no POSIX mode bits, so
+//! the whole module is POSIX-only. The adapter's Windows path is covered by
+//! `engine::sockdir`'s pure resolution tests, which run on every host.
+
+#![cfg(unix)]
 
 use super::*;
 use crate::engine::sockdir;

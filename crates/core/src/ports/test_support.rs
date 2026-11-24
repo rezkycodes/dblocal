@@ -155,6 +155,11 @@ pub fn attempt<T>(mut action: impl FnMut() -> Result<T, String>) -> T {
 /// `std::net::TcpListener::bind` sets that option on Unix (see the std source),
 /// so it models an engine listener exactly; on Windows it deliberately does not,
 /// which matches the platform behaviour the probe has there.
+///
+/// Only the Unix `TIME_WAIT` tests drive this, so it is Unix-only: on Windows the
+/// engine-style bind and a plain bind are the same call, which is why those tests
+/// do not run there.
+#[cfg(unix)]
 pub fn bind_engine_v4() -> Option<(TcpListener, Port)> {
     for _ in 0..ATTEMPTS {
         let port = next_candidate();
@@ -168,6 +173,7 @@ pub fn bind_engine_v4() -> Option<(TcpListener, Port)> {
 /// Binds `[::1]` the way an engine does, on a port whose IPv4 side stays free.
 ///
 /// Returns `None` when the host has no IPv6 loopback.
+#[cfg(unix)]
 pub fn bind_engine_v6() -> Option<(TcpListener, Port)> {
     for _ in 0..ATTEMPTS {
         let port = next_candidate();
@@ -186,6 +192,7 @@ pub fn bind_engine_v6() -> Option<(TcpListener, Port)> {
 /// This is the control socket for the `TIME_WAIT` test: it is what `bind(2)`
 /// does for a caller that does not opt in, so it fails while a closed connection
 /// still holds the local port.
+#[cfg(unix)]
 pub fn bind_plain_v4(port: Port) -> std::io::Result<()> {
     let addr = std::net::SocketAddr::from((Ipv4Addr::LOCALHOST, port.get()));
     let socket = tokio::net::TcpSocket::new_v4()?;

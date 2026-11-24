@@ -39,8 +39,11 @@ fn resolve_falls_back_to_the_first_verifiable_candidate_that_fits() {
     assert!(socket_path_fits(&chosen));
 }
 
+#[cfg(unix)]
 #[test]
 fn resolve_skips_a_candidate_that_cannot_be_verified() {
+    use std::os::unix::fs::PermissionsExt as _;
+
     let dir = tempdir().expect("tmp");
     let bad = dir.path().join("bad");
     fs::create_dir_all(&bad).expect("bad");
@@ -82,6 +85,8 @@ fn resolve_skips_a_verified_candidate_whose_socket_would_not_fit() {
     assert!(!chosen.starts_with(&long_but_valid));
 }
 
+/// The "wrong owner" wording only exists in the POSIX verification arm.
+#[cfg(unix)]
 #[test]
 fn resolve_error_names_every_candidate_and_both_lengths() {
     let dir = tempdir().expect("tmp");

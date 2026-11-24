@@ -169,10 +169,34 @@ fn copy_tree(from: &Path, to: &Path) -> std::io::Result<()> {
     } else if meta.file_type().is_symlink() {
         let target = fs::read_link(from)?;
         let _ = fs::remove_file(to);
-        std::os::unix::fs::symlink(target, to)?;
+        symlink(&target, to)?;
     } else {
         fs::copy(from, to)?;
         fs::set_permissions(to, meta.permissions())?;
     }
     Ok(())
+}
+
+/// Creates a filesystem symlink to a file, as the engine archives do.
+///
+/// Windows distinguishes file and directory symlinks, so try a file link first
+/// and fall back to a directory link, the same way the production extractor does
+/// (`download::extract::fsops::create_symlink`).
+#[cfg(unix)]
+fn symlink(target: &Path, link: &Path) -> std::io::Result<()> {
+    std::os::unix::fs::symlink(target, link)
+}
+
+#[cfg(windows)]
+fn symlink(target: &Path, link: &Path) -> std::io::Result<()> {
+    std::os::windows::fs::symlink_file(target, link)
+        .or_else(|_| std::os::windows::fs::symlink_dir(target, link))
+}
+
+#[cfg(not(any(unix, windows)))]
+fn symlink(_target: &Path, _link: &Path) -> std::io::Result<()> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "symlinks are not supported on this platform",
+    ))
 }

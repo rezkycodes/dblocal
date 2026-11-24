@@ -6,8 +6,11 @@
 
 mod prelude;
 
+#[cfg(unix)]
 mod cleanup;
 mod limits;
+#[cfg(unix)]
 mod prepare;
 mod resolve;
+#[cfg(unix)]
 mod verify;

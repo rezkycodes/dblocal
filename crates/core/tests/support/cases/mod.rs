@@ -18,6 +18,7 @@ pub mod numbers;
 pub mod port_in_use;
 pub mod postgres_happy_path;
 pub mod repro_change_port;
+#[cfg(unix)]
 pub mod repro_data_dir_mode;
 pub mod repro_hardlink;
 pub mod security_invariants;

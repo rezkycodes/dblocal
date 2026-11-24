@@ -30,11 +30,13 @@ use crate::model::{AuthMode, EngineKey, StartFailure};
 use crate::secret::SecretString;
 use crate::service::UriFormat;
 
+#[cfg(all(test, target_os = "linux"))]
+pub(super) use identity::verify_pid_identity;
 #[cfg(test)]
 pub(super) use identity::{
     ExpectedIdentity, PidIdentity, cmdline_targets_instance, contains_arg_token, is_zombie_stat,
     parse_cmdline, path_arg_matches, pid_alive, read_pidfile, same_executable,
-    shutdown_verified_pid, strip_deleted, verify_pid_identity, verify_ps_command_output,
+    shutdown_verified_pid, strip_deleted, verify_ps_command_output,
 };
 /// MariaDB protocol version byte for the server greeting.
 const PROTOCOL_VERSION_10: u8 = 10;

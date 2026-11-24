@@ -330,6 +330,10 @@ mod tests {
 
     /// R7: `dir_size_bytes` must not follow symlinks, neither a parent loop nor
     /// a big file outside the home.
+    ///
+    /// A symlink needs Developer Mode or an admin token on Windows, so the proof
+    /// lives with the POSIX build.
+    #[cfg(unix)]
     #[test]
     fn dir_size_ignores_symlinks() {
         let root = std::env::temp_dir().join(format!(

@@ -341,6 +341,9 @@ fn a_live_delete_keeps_its_row_while_another_service_reconciles() {
     );
 }
 
+/// A directory symlink needs Developer Mode or an admin token on Windows, so
+/// this containment proof is POSIX-only.
+#[cfg(unix)]
 #[test]
 fn a_rollback_through_a_symlinked_instance_directory_removes_nothing() {
     // A symlink named `<home>/instances/<name>` pointing outside the home is the

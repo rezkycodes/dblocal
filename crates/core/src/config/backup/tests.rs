@@ -1,8 +1,12 @@
 //! Tests for config backups and the last-good marker.
 
 use super::*;
+#[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 
+/// POSIX mode bits of `path`. Windows has none, and the corresponding assertions
+/// are gated out there instead of comparing a meaningless value.
+#[cfg(unix)]
 fn mode(path: &Path) -> u32 {
     fs::symlink_metadata(path)
         .expect("meta")
@@ -26,8 +30,11 @@ fn take_copies_the_file_privately_and_returns_the_backup() {
         fs::read(&info.path).expect("read"),
         b"max_connections = 100\n"
     );
-    assert_eq!(mode(&info.path), 0o600, "backup must be 0600");
-    assert_eq!(mode(store.dir()), 0o700, "backup dir must be 0700");
+    #[cfg(unix)]
+    {
+        assert_eq!(mode(&info.path), 0o600, "backup must be 0600");
+        assert_eq!(mode(store.dir()), 0o700, "backup dir must be 0700");
+    }
 }
 
 #[test]
@@ -41,6 +48,7 @@ fn valkey_requirepass_is_copied_verbatim_and_never_parsed() {
     let store = BackupStore::for_instance(home, "vk");
     let info = store.take(&source, 1).expect("take");
     assert_eq!(fs::read(&info.path).expect("read"), body);
+    #[cfg(unix)]
     assert_eq!(mode(&info.path), 0o600);
 }
 
@@ -100,6 +108,7 @@ fn last_good_marker_round_trips() {
     assert!(store.last_good("my.cnf").is_none());
     store.record_last_good("my.cnf", "abc123").expect("record");
     assert_eq!(store.last_good("my.cnf"), Some("abc123".to_owned()));
+    #[cfg(unix)]
     assert_eq!(mode(&store.marker_path("my.cnf")), 0o600);
 }
 

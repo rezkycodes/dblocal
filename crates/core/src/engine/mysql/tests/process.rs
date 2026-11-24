@@ -312,6 +312,9 @@ fn run_initialize_insecure_missing_binary_and_early_exit() {
     assert!(msg.contains("init failed hard"), "{msg}");
 }
 
+/// The unwritable-parent half of this test uses POSIX mode bits; Windows would
+/// need an ACL to express it, so the case is POSIX-only.
+#[cfg(unix)]
 #[test]
 fn bootstrap_credentials_reports_unwritable_init_file_and_early_exit() {
     use std::os::unix::fs::PermissionsExt;

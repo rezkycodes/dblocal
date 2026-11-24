@@ -1,7 +1,9 @@
 mod applescript;
 mod detect;
+#[cfg(unix)]
 mod f1_terminal;
 mod golden;
+#[cfg(unix)]
 mod h4_launcher;
 mod hostile;
 mod plan;
