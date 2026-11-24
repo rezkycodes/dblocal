@@ -63,6 +63,17 @@ deps=(
 # Ubuntu 24.04 runner used by CI.
 deps+=( libstdc++-14-dev )
 
+# `libvulkan1` (above) is only the loader: it enumerates ICD manifests and
+# loads the driver behind them. Without a driver package there is no manifest
+# in /usr/share/vulkan/icd.d and Vulkan reports zero adapters, so
+# the GUI (`vulkan::preflight`) and every headless render test fail with
+# "No usable headless GPU adapter found". GitHub's ubuntu-24.04 and
+# ubuntu-24.04-arm images do not preinstall a Vulkan driver, so CI installs
+# one explicitly. `mesa-vulkan-drivers` ships several ICDs; on a host with no
+# GPU, mesa's lavapipe (`lvp_icd.*.json`, a CPU implementation) is the one that
+# answers, which is exactly what the off-screen render tests need.
+deps+=( mesa-vulkan-drivers )
+
 sudo apt-get update
 sudo apt-get install -y --no-install-recommends "${deps[@]}"
 
