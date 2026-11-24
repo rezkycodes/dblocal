@@ -58,29 +58,51 @@ sh install.sh --prefix "$HOME/bin"
 |---|---|
 | Linux x86_64 | `dblocal-<version>-linux-x86_64.AppImage`, `…-linux-x86_64.tar.gz` |
 | Linux aarch64 | `dblocal-<version>-linux-aarch64.AppImage`, `…-linux-aarch64.tar.gz` |
-| macOS (universal, arm64 + x86_64) | `dblocal-<version>-macos-universal.dmg`, `…-macos-universal.tar.gz` |
 | Windows x86_64 | `dblocal-<version>-windows-x86_64.zip` |
+
+macOS (`.dmg`, `.tar.gz`) is **not** part of the first release — see
+[Supported platforms](#supported-platforms).
 
 Each release also ships **`checksums.txt`** and GitHub **build provenance attestations**. Verify
 before running:
 
 ```sh
 sha256sum -c checksums.txt --ignore-missing      # Linux
-shasum -a 256 -c checksums.txt                   # macOS
 gh attestation verify dblocal-<version>-linux-x86_64.AppImage --repo rezkycodes/dblocal
 ```
 
 ## Supported platforms
 
+The first release targets **Linux and Windows**. macOS is deferred, not dropped.
+
 | OS | Architecture | Notes |
 |---|---|---|
 | Linux (Fedora 41+, Ubuntu 22.04+, Debian 12+) | x86_64 | Requires a working **Vulkan** driver (Mesa). Without one, the app exits with an actionable message instead of crashing. |
 | Linux | aarch64 | Best effort. |
-| macOS 13+ | arm64 + x86_64 (universal) | Signed with an Apple Developer ID and **notarized** when release secrets are configured. |
 | Windows 10 22H2+ / 11 | x86_64 | **Unsigned** in v1 — see below. |
+| macOS 13+ | arm64 + x86_64 (universal) | **Deferred for the first release.** |
 
 > **macOS: deferred for the first release.** The first release targets Linux and Windows only;
 > macOS is postponed, not dropped — see [`docs/dev/macos-deferred.md`](docs/dev/macos-deferred.md).
+
+### Engine availability
+
+Not every engine has a build for every OS. The matrix below is what the catalog
+(`catalog/engines.json`) ships. A combination with no build is shown in the app as
+**"Tidak tersedia di platform ini"** — never as a hidden engine or a download that fails later. The
+CLI refuses the same combination with the `DBL-6001` code. The macOS column lists catalog coverage
+only; macOS is not in the first release.
+
+| Engine | Linux x86_64 | Linux aarch64 | Windows x86_64 | macOS (catalog only) |
+|---|---|---|---|---|
+| PostgreSQL | ✅ | ✅ | ✅ | ✅ |
+| MySQL | ✅ | — | ✅ | ✅ |
+| MariaDB | ✅ | — | ✅ | — |
+| Valkey | ✅ | ✅ | **not available yet** | — |
+
+Dashes mean the upstream project publishes no binary for that target. **Valkey has no Windows
+build in this release** (deferred together with its CI job); on Windows the engine card and
+`dblocal create valkey` report that it is not available on the platform.
 
 ## Windows: "Unknown publisher"
 
