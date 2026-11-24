@@ -1,23 +1,36 @@
 # macOS deferred for the first release
 
 **macOS is deferred for the first release: Linux and Windows ship first, and macOS is postponed.**
-To revive it, set the repository variable `ENABLE_MACOS=true` (Settings > Secrets and variables >
-Actions > Variables) and follow "Reviving macOS" below.
+To revive it, either set the repository variable `ENABLE_MACOS=true` (Settings > Secrets and
+variables > Actions > Variables) or start the CI workflow by hand with **Run workflow**
+(`workflow_dispatch`). See "Reviving macOS" below — turning the legs on is not enough on its own;
+a toolchain step must be added first.
 
 ## Current state (what "deferred" means in the workflows)
 
-- `.github/workflows/ci.yml`: the `test` job keeps `macos-15` and `macos-15-intel` in the matrix
-  but sets `continue-on-error: ${{ startsWith(matrix.os, 'macos') }}`, so a macOS failure does not
-  turn the run red (GitHub docs, `jobs.<job_id>.continue-on-error`: "Prevents a workflow run from
-  failing when a job fails"). The legs stay visible in the logs.
+- `.github/workflows/ci.yml`: the `test` job computes its `matrix.os` from `vars.ENABLE_MACOS` and
+  `github.event_name`. On a normal push or pull request the matrix is exactly
+  `ubuntu-24.04`, `ubuntu-24.04-arm`, `windows-latest`; the `macos-15` and `macos-15-intel` legs are
+  added only when `ENABLE_MACOS == 'true'` or the run was started with `workflow_dispatch`. Gating
+  the matrix (rather than `continue-on-error`) means a macOS failure on an opt-in run is a real red
+  failure, which is what you want when you are deliberately testing macOS. There is no
+  `continue-on-error` on the job any more.
+- The `concurrency` group includes `github.event_name`, so a manual run is never cancelled by, and
+  never cancels, a push/PR run on the same ref.
 - `.github/workflows/release.yml`: `build-macos-arch` and `build-macos-universal` carry
   `if: ${{ vars.ENABLE_MACOS == 'true' }}`, so they are skipped by default. The `release` job no
   longer depends on the macOS job succeeding — it requires the Linux and Windows jobs to succeed
   and ignores the macOS result, so Linux/Windows artifacts are always published.
 - `rust-toolchain.toml` and every crate pin are unchanged: Linux stays on **1.95.0**.
 
-Enable macOS again by setting the repository variable `ENABLE_MACOS=true`
-(Settings > Secrets and variables > Actions > Variables) and following "Reviving macOS" below.
+## Why the legs are off by default
+
+CI costs. GitHub Actions minutes are billed by the runner's cost multiplier, and macOS runs at
+**10x** the Linux rate while the first release does not ship a macOS artifact at all. Keeping two
+macOS legs in every push and pull request spent that budget on builds that could not go green (see
+the failure below). They are now opt-in, and on a private repository that is the difference between
+a CI bill you can predict and one you cannot.
+
 
 ## The failure that started this
 
@@ -82,13 +95,13 @@ Chosen for now: **defer** (this change). When macOS is revived, start from optio
 
 ## Reviving macOS (recipe)
 
-1. Set repository variable `ENABLE_MACOS=true`.
-2. In `.github/workflows/ci.yml`, replace `continue-on-error: ${{ startsWith(matrix.os, 'macos') }}`
-   with `false` (or delete the line).
-3. In `.github/workflows/release.yml`, drop `if: ${{ vars.ENABLE_MACOS == 'true' }}` from
-   `build-macos-arch` and `build-macos-universal`, and restore `build-macos-universal` to the
-   `release` job's required `needs` results.
-4. Add the macOS toolchain step back to `ci.yml` (macOS leg only):
+1. Either set repository variable `ENABLE_MACOS=true` (every push and PR then runs the macOS legs),
+   or leave it unset and start each macOS run by hand: **Actions > CI > Run workflow**. Prefer the
+   manual route while macOS is still red — it costs nothing on ordinary pushes.
+2. Expect the first opt-in run to be **red**, not just slow: `ci.yml` does not yet install Rust
+   1.98.0 for macOS, so the leg still hits the `map_or_default` E0658 error. That is deliberate —
+   the switch above only costs minutes when you ask for them. Step 3 fixes the toolchain.
+3. Add the macOS toolchain step to `ci.yml` before the CI task (macOS leg only):
    ```yaml
    - name: Use Rust 1.98.0 for the macOS gpui stack
      if: runner.os == 'macOS'
@@ -100,6 +113,10 @@ Chosen for now: **defer** (this change). When macOS is revived, start from optio
    ```
    (Must be *after* checkout: `rust-toolchain.toml` only exists after checkout, and
    `RUSTUP_TOOLCHAIN` overrides it.)
+4. In `.github/workflows/release.yml`, drop `if: ${{ vars.ENABLE_MACOS == 'true' }}` from
+   `build-macos-arch` and `build-macos-universal`, and restore `build-macos-universal` to the
+   `release` job's required `needs` results (only when you want macOS artifacts gated as release
+   blockers; leaving the `if:` in place keeps release.yml driven by the same variable).
 5. Fix the our-code blockers before the legs can go green (they also block Windows). As of
    `ci/linux-windows` (`3ec1016`) the first two are already fixed there; re-check on whatever
    branch you revive from:
@@ -119,8 +136,11 @@ behaviour on this host, and official docs. Only a real macOS CI run can confirm 
 
 ## Note on the expression form
 
-`continue-on-error: ${{ runner.os == 'macOS' }}` does **not** work: `runner` is not an allowed
-context there. GitHub allows only `github`, `needs`, `strategy`, `vars`, `matrix`, `inputs` for
-`jobs.<job_id>.continue-on-error`, and `actionlint` rejects the `runner.os` form
-(`context "runner" is not allowed here`). Use `startsWith(matrix.os, 'macos')`, as `ci.yml` does.
-A job-level `if:` cannot replace it either: `jobs.<job_id>.if` also cannot see `matrix`.
+`jobs.<job_id>.continue-on-error` cannot use the `runner` context — GitHub allows only `github`,
+`needs`, `strategy`, `vars`, `matrix`, `inputs` there, and `actionlint` rejects the `runner.os` form
+(`context "runner" is not allowed here`).
+
+`jobs.<job_id>.if` also cannot see `matrix`, so it cannot turn individual matrix legs on or off. That
+is why `ci.yml` gates the **matrix itself**: `matrix.os` is computed with `fromJSON(...)` from
+`vars.ENABLE_MACOS` and `github.event_name`, so the macOS labels are simply not in the list unless
+they are switched on. One job, one step list, no `continue-on-error`.

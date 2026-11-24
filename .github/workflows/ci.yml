@@ -4,12 +4,18 @@ on:
   push:
     branches: ["**"]
   pull_request:
+  # Manual runs let the deferred macOS legs be exercised on demand without
+  # setting a repository variable; see the matrix comment below and
+  # docs/dev/macos-deferred.md.
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
+  # `event_name` is part of the group so a manual `workflow_dispatch` run never
+  # cancels, and is never cancelled by, a push or PR run on the same ref.
+  group: ci-${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
   cancel-in-progress: true
 
 env:
@@ -20,15 +26,13 @@ jobs:
     name: test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     # macOS is DEFERRED for the first release (Linux + Windows only); see
-    # docs/dev/macos-deferred.md. Its legs stay in the matrix so the logs keep
-    # showing the real state, but `continue-on-error` keeps a macOS failure from
-    # turning the run red (GitHub docs: jobs.<job_id>.continue-on-error "Prevents
-    # a workflow run from failing when a job fails"). `startsWith` on matrix.os is
-    # used because a job-level `if` is evaluated before the matrix exists and
-    # cannot see matrix.os — that would need splitting this shared job, which
-    # Linux and Windows own. The macOS legs are not removed so reviving them is
-    # a one-line change here plus the recipe in the deferred doc.
-    continue-on-error: ${{ startsWith(matrix.os, 'macos') }}
+    # docs/dev/macos-deferred.md and decision D-26 in the PRD. The default matrix
+    # is Linux (x64 + arm64) and Windows. The macOS legs are opt-in: they run
+    # only when the repository variable ENABLE_MACOS is the string 'true' (the
+    # same switch release.yml already uses) or when the workflow is started by
+    # hand with `workflow_dispatch`. A `vars`-driven matrix is used instead of a
+    # `continue-on-error` hack because a job-level `if:` cannot see `matrix`:
+    # gating the matrix itself keeps one job definition and one step list.
     strategy:
       fail-fast: false
       matrix:
@@ -38,12 +42,14 @@ jobs:
         # macOS entries below use the currently available labels:
         # macos-15 (arm64) and macos-15-intel (x86_64).
         # See docs/release/RELEASING.md "Runner label notes".
-        os:
-          - ubuntu-24.04
-          - ubuntu-24.04-arm
-          - macos-15
-          - macos-15-intel
-          - windows-latest
+        os: >-
+          ${{
+            fromJSON(
+              (vars.ENABLE_MACOS == 'true' || github.event_name == 'workflow_dispatch')
+              && '["ubuntu-24.04","ubuntu-24.04-arm","windows-latest","macos-15","macos-15-intel"]'
+              || '["ubuntu-24.04","ubuntu-24.04-arm","windows-latest"]'
+            )
+          }}
 
     steps:
       - name: Checkout
