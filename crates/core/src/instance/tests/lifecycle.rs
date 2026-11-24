@@ -61,17 +61,6 @@ fn happy_path_create_start_stop_delete() {
     assert!(h.service.list_instances().expect("list").is_empty());
 }
 
-fn last_op(events: &[ServiceEvent]) -> crate::service::OperationId {
-    events
-        .iter()
-        .rev()
-        .find_map(|event| match event {
-            ServiceEvent::OperationFinished { id, .. } => Some(id.clone()),
-            _ => None,
-        })
-        .expect("an operation finished")
-}
-
 #[test]
 fn create_emits_stages_in_order_and_one_operation_finished() {
     let h = Harness::new(EngineKey::Postgresql);
