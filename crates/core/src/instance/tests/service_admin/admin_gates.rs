@@ -244,6 +244,10 @@ fn the_mysql_target_carries_the_instance_port_not_zero() {
     }
 }
 
+// `mysql_target` resolves the socket through `admin_socket(cfg!(unix), ...)`,
+// which is empty on Windows by design (there the target dials loopback TCP), so
+// this socket assertion can only hold on a unix host.
+#[cfg(unix)]
 #[test]
 fn the_mysql_target_carries_the_configured_socket_on_unix() {
     for engine in [EngineKey::Mysql, EngineKey::Mariadb] {
