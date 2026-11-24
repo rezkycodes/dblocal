@@ -131,7 +131,16 @@ fn icd_manifest_present() -> bool {
     })
 }
 
+/// Windows and macOS never reach the Vulkan check (`os_uses_vulkan_preflight`),
+/// and `wgpu` is a Linux/BSD-only dependency of this crate, so this arm exists
+/// only so `detect` compiles there. It reports no problem.
+#[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
+fn probe_vulkan_adapters() -> Option<String> {
+    None
+}
+
 /// Enumerates wgpu Vulkan adapters; returns a reason when none is usable.
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
 fn probe_vulkan_adapters() -> Option<String> {
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
     let mut future = std::pin::pin!(instance.enumerate_adapters(wgpu::Backends::VULKAN));
