@@ -75,6 +75,21 @@ fn has_windows_drive_prefix(raw: &str) -> bool {
     bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':'
 }
 
+/// Whether `raw` names an absolute path in *any* host's syntax.
+///
+/// An archive (or an `expected_binaries` entry) must stay relative, and the
+/// meaning of "absolute" cannot be left to the host's parser:
+/// `Path::is_absolute` on Windows says a bare `/x` is **not** absolute (it is
+/// drive-relative), so a POSIX absolute entry would slip through there; on Unix
+/// a `C:\x` drive path parses as one relative component, and would slip through
+/// here. Both must be rejected on every host, so this checks the raw string:
+/// a root (`/` or `\`, which covers `//server/share` and `\\?\…`), or a drive
+/// letter. Separators are normalised first so a Windows path is caught on Unix.
+pub(super) fn is_absolute_like(raw: &str) -> bool {
+    let probe = raw.replace('\\', "/");
+    probe.starts_with('/') || has_windows_drive_prefix(&probe)
+}
+
 fn normalize_prefix(prefix: &str) -> PathBuf {
     let trimmed = prefix.trim_end_matches(['/', '\\']);
     PathBuf::from(trimmed)
@@ -93,10 +108,9 @@ fn normalize_archive_path(path: &Path, raw_name: &str) -> Result<PathBuf> {
     // Windows drive letters, UNC prefixes and backslash separators are rejected
     // on every host so an archive built on one OS cannot smuggle an escape on
     // another. `\` is treated as `/` first, matching what Windows extractors do.
-    let probe = raw_name.replace('\\', "/");
-    if has_windows_drive_prefix(&probe) || probe.starts_with("//") {
+    if is_absolute_like(raw_name) {
         return Err(DblError::UnsafeArchive {
-            entry: format!("{raw_name}: Windows drive or UNC paths are not allowed"),
+            entry: format!("{raw_name}: absolute paths are not allowed"),
         });
     }
     let mut out = PathBuf::new();
@@ -220,8 +234,15 @@ pub(super) fn validate_symlink_target(
     raw_name: &str,
     _seen_dirs: &HashSet<PathBuf>,
 ) -> Result<()> {
-    // Absolute symlink targets are never safe in a relocatable runtime.
-    if target.is_absolute() || matches!(target.components().next(), Some(Component::Prefix(_))) {
+    // Absolute symlink targets are never safe in a relocatable runtime. The
+    // check is syntax-agnostic (`is_absolute_like`): a POSIX `/etc/passwd`
+    // target is drive-relative on Windows and a `C:\x` target is one relative
+    // component on Unix, so `Path::is_absolute` alone would let either through
+    // on the host that parses it the other way.
+    if target.is_absolute()
+        || is_absolute_like(&target.to_string_lossy())
+        || matches!(target.components().next(), Some(Component::Prefix(_)))
+    {
         return Err(DblError::UnsafeArchive {
             entry: format!(
                 "{raw_name}: absolute symlink target '{}' is not allowed",
@@ -325,6 +346,46 @@ mod tests {
                 "{raw}: {err:?}"
             );
         }
+    }
+
+    #[test]
+    fn absolute_like_recognises_every_host_syntax() {
+        // POSIX absolute: a leading root.
+        assert!(is_absolute_like("/bin/app"));
+        assert!(is_absolute_like("/"));
+        // Windows drive and UNC/verbatim prefixes, in either separator spelling.
+        assert!(is_absolute_like(r"C:\app"));
+        assert!(is_absolute_like("c:/app"));
+        assert!(is_absolute_like(r"\\server\share\x"));
+        assert!(is_absolute_like(r"\\?\C:\app"));
+        // Relative paths are not absolute on any host.
+        assert!(!is_absolute_like("bin/app"));
+        assert!(!is_absolute_like("./bin/app"));
+        assert!(!is_absolute_like(".."));
+        // A drive-qualified path (`a:b` is drive-relative on Windows) is still
+        // rejected, as the drive-prefix rule always did.
+        assert!(is_absolute_like("a:b/app"));
+    }
+
+    #[test]
+    fn posix_absolute_entry_is_rejected_on_every_host() {
+        // The regression: on Windows `Path::new("/x").is_absolute()` is false, so
+        // a bare-root entry used to reach `staging.join("/x")`.
+        let err = normalize_archive_path(Path::new("/bin/app"), "/bin/app").unwrap_err();
+        assert!(matches!(err, DblError::UnsafeArchive { .. }), "{err:?}");
+    }
+
+    #[test]
+    fn posix_absolute_symlink_target_is_rejected_on_every_host() {
+        let err = validate_symlink_target(
+            Path::new("/tmp/stage"),
+            Path::new("/tmp/stage/bin/x"),
+            Path::new("/etc/passwd"),
+            "bin/x",
+            &HashSet::new(),
+        )
+        .unwrap_err();
+        assert!(matches!(err, DblError::UnsafeArchive { .. }), "{err:?}");
     }
 
     #[test]

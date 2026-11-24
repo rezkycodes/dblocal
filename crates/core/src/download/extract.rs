@@ -225,13 +225,17 @@ impl ExtractState {
 
 async fn verify_expected_binaries(staging: &Path, expected: &[String]) -> Result<()> {
     for rel in expected {
-        let rel_path = Path::new(rel);
-        if rel_path.is_absolute() {
+        // Reject an absolute path in any syntax, not just the host's: on
+        // Windows `Path::new("/bin/app").is_absolute()` is false (a bare root is
+        // drive-relative), so a POSIX-absolute entry would pass and then resolve
+        // outside the staging tree. See `path::is_absolute_like`.
+        if path::is_absolute_like(rel) {
             return Err(DblError::InvalidInput {
                 field: "expected_binaries",
                 reason: format!("expected binary path must be relative: {rel}"),
             });
         }
+        let rel_path = Path::new(rel);
         let full = staging.join(rel_path);
         let meta = tokio::fs::symlink_metadata(&full).await.map_err(|e| {
             if e.kind() == std::io::ErrorKind::NotFound {
