@@ -398,7 +398,13 @@ fn build_bootstrap_command(ctx: &InitContext, init_file: &Path) -> Command {
     // The bootstrap server only needs the local socket for the init-file SQL
     // (including SHUTDOWN). Binding the TCP instance port would make initialize
     // depend on that port being free between the port check and bootstrap.
-    cmd.arg("--skip-networking");
+    if !cfg!(windows) {
+        // `mariadbd.exe` refuses to start with TCP and named pipes both off
+        // ("Either TCP connections or named pipe connections must be enabled"),
+        // so on Windows the bootstrap listens on the loopback port that
+        // `my.cnf` binds (`bind-address=127.0.0.1`).
+        cmd.arg("--skip-networking");
+    }
     cmd.stdin(Stdio::null());
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
@@ -406,6 +412,19 @@ fn build_bootstrap_command(ctx: &InitContext, init_file: &Path) -> Command {
     cmd.env_remove("MYSQL_TCP_PORT");
     cmd.env("TMPDIR", tmpdir_path(&ctx.data_dir));
     cmd
+}
+
+/// Whether the bootstrap server's exit counts as success.
+///
+/// The server runs the init-file and then its `SHUTDOWN` statement. On Unix that
+/// ends with status 0. On Windows `mariadbd.exe` exits with status 1 after the
+/// same `SHUTDOWN` even though the password change was applied (verified in a
+/// Windows 10 VM: the password logs in, the empty one is refused). A statement
+/// that fails does not end that way: the error is logged and `SHUTDOWN` never
+/// runs, so the server keeps running and the caller's start timeout reports it.
+/// A Windows exit therefore means "the init-file ran to its end".
+fn bootstrap_exit_ok(success: bool, windows: bool) -> bool {
+    success || windows
 }
 
 fn run_bootstrap_server(ctx: &InitContext, init_file: &Path) -> Result<()> {
@@ -443,7 +462,7 @@ fn run_bootstrap_server(ctx: &InitContext, init_file: &Path) -> Result<()> {
         }
     };
 
-    if !status.success() {
+    if !bootstrap_exit_ok(status.success(), cfg!(windows)) {
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
         if let Some(mut out) = child.stdout.take() {

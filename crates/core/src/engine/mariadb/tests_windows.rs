@@ -96,3 +96,24 @@ fn unix_option_file_is_unchanged() {
             .contains("socket=/h/instances/m/run/mariadb-13306.sock\n")
     );
 }
+
+/// Windows exits 1 after the init-file `SHUTDOWN` although the change was
+/// applied; Unix exits 0. A non-zero Unix exit stays a failure.
+#[test]
+fn bootstrap_exit_policy_per_platform() {
+    assert!(bootstrap_exit_ok(true, false));
+    assert!(
+        !bootstrap_exit_ok(false, false),
+        "unix failure must stay one"
+    );
+    assert!(bootstrap_exit_ok(false, true), "windows exits 1 on success");
+    assert!(bootstrap_exit_ok(true, true));
+}
+
+#[test]
+fn unix_bootstrap_still_skips_networking_and_windows_does_not() {
+    let init_file = PathBuf::from("/tmp/init.sql");
+    let args = args_of(&build_bootstrap_command(&ctx(), &init_file));
+    let skips = args.iter().any(|a| a == "--skip-networking");
+    assert_eq!(skips, !cfg!(windows), "{args:?}");
+}
