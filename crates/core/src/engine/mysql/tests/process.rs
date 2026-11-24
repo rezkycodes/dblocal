@@ -23,7 +23,10 @@ fn shutdown_command_uses_mysql_pwd_env_not_argv_password_mode() {
         "shutdown must run the bundled mysqladmin: {}",
         program.display()
     );
-    assert_eq!(program.extension().and_then(|s| s.to_str()) == Some("exe"), cfg!(windows));
+    assert_eq!(
+        program.extension().and_then(|s| s.to_str()) == Some("exe"),
+        cfg!(windows)
+    );
     assert_no_secret_in_command(&cmd, SECRET);
     let args: Vec<String> = cmd
         .get_args()

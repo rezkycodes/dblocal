@@ -276,6 +276,27 @@ fn pid_alive_reports_reaped_child_as_dead() {
     assert!(!pid_alive(pid));
 }
 
+/// Windows must not over-report liveness either: a child that has exited and
+/// been waited on is gone from the process table within a moment.
+#[cfg(windows)]
+#[test]
+fn pid_alive_reports_a_reaped_child_as_dead_on_windows() {
+    let mut child = std::process::Command::new("cmd")
+        .args(["/C", "exit", "0"])
+        .spawn()
+        .expect("spawn cmd");
+    let pid = child.id();
+    let _ = child.wait().expect("wait");
+    let deadline = std::time::Instant::now() + Duration::from_secs(2);
+    while std::time::Instant::now() < deadline {
+        if !pid_alive(pid) {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    panic!("reaped child {pid} still reported alive after 2s");
+}
+
 #[cfg(target_os = "linux")]
 #[test]
 fn pid_alive_reports_zombie_as_dead() {
