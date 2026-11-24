@@ -662,3 +662,43 @@ fn initialize_reports_a_missing_initdb_binary() {
         "{err:?}"
     );
 }
+
+fn start_args_ctx() -> RunContext {
+    RunContext {
+        instance_name: "app".into(),
+        runtime_dir: PathBuf::from("/opt/pg"),
+        data_dir: PathBuf::from("/data"),
+        logs_dir: PathBuf::from("/logs"),
+        run_dir: PathBuf::from("/run"),
+        port: Port::new(41011).expect("port"),
+        superuser: "postgres".into(),
+        auth: AuthMode::None,
+        credential: None,
+    }
+}
+
+/// Unix keeps `-l <log>` (the same file the supervisor already appends to).
+#[test]
+fn pg_ctl_start_on_unix_names_the_log_file() {
+    let args = super::pg_ctl_start_args(&start_args_ctx(), false);
+    let position = args
+        .iter()
+        .position(|arg| arg == "-l")
+        .expect("unix passes -l");
+    assert_eq!(args[position + 1], OsString::from("/logs/postgres.log"));
+    assert_eq!(args.last(), Some(&OsString::from("start")));
+}
+
+/// Windows must not pass `-l`: `pg_ctl` reopens the file through `cmd.exe` and
+/// the open is refused while the supervisor's handle is open (`DBL-4001`).
+#[test]
+fn pg_ctl_start_on_windows_does_not_name_the_log_file() {
+    let args = super::pg_ctl_start_args(&start_args_ctx(), true);
+    assert!(
+        !args.iter().any(|arg| arg == "-l"),
+        "Windows must rely on the inherited stdout/stderr handles: {args:?}"
+    );
+    assert!(args.iter().any(|arg| arg == "-w"));
+    assert!(args.iter().any(|arg| arg == "-D"));
+    assert_eq!(args.last(), Some(&OsString::from("start")));
+}

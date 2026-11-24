@@ -166,14 +166,7 @@ impl EngineAdapter for PostgresAdapter {
     fn spawn_command(&self, ctx: &RunContext) -> Command {
         let pg_ctl = ctx.runtime_dir.join("bin").join(exe_name("pg_ctl"));
         let mut cmd = Command::new(pg_ctl);
-        cmd.arg("-D")
-            .arg(&ctx.data_dir)
-            .arg("-l")
-            .arg(log_path(ctx))
-            .arg("-w")
-            .arg("-t")
-            .arg(consts::START_TIMEOUT_SECS.to_string())
-            .arg("start");
+        cmd.args(pg_ctl_start_args(ctx, cfg!(windows)));
         strip_password_env(&mut cmd);
         cmd.stdin(Stdio::null());
         cmd
@@ -349,6 +342,30 @@ pub fn read_postmaster_pid(data_dir: &Path) -> Result<PostmasterIdentity> {
 /// Returns the log file path for an instance.
 pub fn log_path(ctx: &RunContext) -> PathBuf {
     ctx.logs_dir.join("postgres.log")
+}
+
+/// Arguments of `pg_ctl start`.
+///
+/// The supervisor already appends the child's stdout and stderr to the log file
+/// (`process::spawn_detached`), and the server inherits them. On Unix `-l` names
+/// that same file, which is harmless. On Windows `pg_ctl -l` makes `cmd.exe`
+/// open the file again with `>>`, and that open is refused with "The process
+/// cannot access the file because it is being used by another process" while our
+/// handle is open, so the start failed with `DBL-4001`. Windows therefore relies
+/// on the inherited handles alone.
+fn pg_ctl_start_args(ctx: &RunContext, windows: bool) -> Vec<std::ffi::OsString> {
+    let mut args: Vec<std::ffi::OsString> = vec!["-D".into(), ctx.data_dir.clone().into()];
+    if !windows {
+        args.push("-l".into());
+        args.push(log_path(ctx).into());
+    }
+    args.extend([
+        "-w".into(),
+        "-t".into(),
+        consts::START_TIMEOUT_SECS.to_string().into(),
+        "start".into(),
+    ]);
+    args
 }
 
 /// Returns the unix socket directory for an instance.
