@@ -600,10 +600,10 @@ fn mysql_84_deep_socket_path_falls_back_and_cleans_up() {
         "fallback socket too long: {}",
         actual_sock.display()
     );
-    let fallback_dir = actual_sock.parent().expect("fallback dir");
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt;
+        let fallback_dir = actual_sock.parent().expect("fallback dir");
         let meta = fs::symlink_metadata(fallback_dir).expect("meta");
         assert!(meta.is_dir());
         assert_eq!(meta.uid(), nix::unistd::geteuid().as_raw());

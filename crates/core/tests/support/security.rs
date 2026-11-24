@@ -2,10 +2,14 @@
 //!
 //! Each check returns the violations it found so a test can assert once with the
 //! whole picture instead of failing on the first one.
+//!
+//! The mode/owner checks are POSIX-only (Windows has no `PermissionsExt::mode`
+//! and its ACLs are inherited, not set per file). They are compiled out on
+//! Windows; the caller skips the mode section there instead of asserting a
+//! meaningless result.
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 use dblocal_core::paths::DblPaths;
@@ -48,7 +52,10 @@ pub fn secret_in_cmdlines(pids: &[u32], secret: &str) -> Vec<String> {
 }
 
 /// A mode check: returns a violation when `path` is not a directory with `mode`.
+#[cfg(unix)]
 pub fn dir_mode_violation(path: &Path, mode: u32) -> Option<String> {
+    use std::os::unix::fs::PermissionsExt;
+
     let meta = std::fs::symlink_metadata(path).ok()?;
     if !meta.is_dir() {
         return Some(format!("{} is not a directory", path.display()));
@@ -65,7 +72,10 @@ pub fn dir_mode_violation(path: &Path, mode: u32) -> Option<String> {
 }
 
 /// A mode check for a regular file.
+#[cfg(unix)]
 pub fn file_mode_violation(path: &Path, mode: u32) -> Option<String> {
+    use std::os::unix::fs::PermissionsExt;
+
     let meta = std::fs::symlink_metadata(path).ok()?;
     if !meta.is_file() {
         return Some(format!("{} is not a regular file", path.display()));

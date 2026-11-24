@@ -32,9 +32,10 @@ use crate::support::clients::wait_tcp;
 use crate::support::env::{TempHome, list_dir};
 use crate::support::harness::{FileOnlySecrets, build, newest_version};
 use crate::support::security::{
-    credential_files, dir_mode_violation, file_mode_violation, non_loopback_listeners,
-    secret_in_cmdlines, secret_in_files,
+    credential_files, non_loopback_listeners, secret_in_cmdlines, secret_in_files,
 };
+#[cfg(unix)]
+use crate::support::security::{dir_mode_violation, file_mode_violation};
 use crate::support::{events, part_files, ports, proc};
 
 #[test]
@@ -273,37 +274,40 @@ fn audit(
         violations.push(format!("password found in {file}"));
     }
 
-    // 4. Modes.
-    let instance_name = InstanceName::new(name).expect("name");
-    let data_dir = paths.data_dir(&instance_name);
-    let logs_dir = paths.logs_dir(&instance_name);
-    let run_dir = paths.run_dir(&instance_name);
-    let secrets_dir = paths.secrets_dir();
-    for (label, dir) in [
-        ("instances directory", paths.instances_dir().as_path()),
-        ("data directory", data_dir.as_path()),
-        ("logs directory", logs_dir.as_path()),
-        ("run directory", run_dir.as_path()),
-        ("secrets directory", secrets_dir.as_path()),
-    ] {
-        if let Some(violation) = dir_mode_violation(dir, 0o700) {
-            violations.push(format!("{label}: {violation}"));
+    // 4. Modes (POSIX only: Windows has no per-file mode bits to assert).
+    #[cfg(unix)]
+    {
+        let instance_name = InstanceName::new(name).expect("name");
+        let data_dir = paths.data_dir(&instance_name);
+        let logs_dir = paths.logs_dir(&instance_name);
+        let run_dir = paths.run_dir(&instance_name);
+        let secrets_dir = paths.secrets_dir();
+        for (label, dir) in [
+            ("instances directory", paths.instances_dir().as_path()),
+            ("data directory", data_dir.as_path()),
+            ("logs directory", logs_dir.as_path()),
+            ("run directory", run_dir.as_path()),
+            ("secrets directory", secrets_dir.as_path()),
+        ] {
+            if let Some(violation) = dir_mode_violation(dir, 0o700) {
+                violations.push(format!("{label}: {violation}"));
+            }
         }
-    }
-    for credential in credential_files(paths) {
-        if let Some(violation) = file_mode_violation(&credential, 0o600) {
-            violations.push(format!("credential file: {violation}"));
+        for credential in credential_files(paths) {
+            if let Some(violation) = file_mode_violation(&credential, 0o600) {
+                violations.push(format!("credential file: {violation}"));
+            }
         }
-    }
-    // The engine-owned config that carries requirepass must itself be 0600.
-    if engine == EngineKey::Valkey {
-        let config = paths
-            .run_dir(&InstanceName::new(name).expect("name"))
-            .join("valkey.conf");
-        if config.exists()
-            && let Some(violation) = file_mode_violation(&config, 0o600)
-        {
-            violations.push(format!("valkey.conf: {violation}"));
+        // The engine-owned config that carries requirepass must itself be 0600.
+        if engine == EngineKey::Valkey {
+            let config = paths
+                .run_dir(&InstanceName::new(name).expect("name"))
+                .join("valkey.conf");
+            if config.exists()
+                && let Some(violation) = file_mode_violation(&config, 0o600)
+            {
+                violations.push(format!("valkey.conf: {violation}"));
+            }
         }
     }
 

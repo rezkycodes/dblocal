@@ -4,6 +4,10 @@
 //! Unix. PostgreSQL's data dir was 0700 only because initdb chose it; Valkey and
 //! the service-created instance layout dirs inherited the process umask.
 //!
+//! Windows has no per-file mode bits, so this module is compiled only on Unix
+//! (the declaration in `cases/mod.rs` carries the `#[cfg(unix)]`). It stays in
+//! the crate so the regression proof exists where the invariant does.
+//!
 //! Run:
 //!
 //! ```sh

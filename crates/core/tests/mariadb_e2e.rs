@@ -336,6 +336,12 @@ fn assert_no_ss_outside(port: u16) {
     }
 }
 
+/// Points `LD_LIBRARY_PATH` at a shim for `libcrypt.so.1`, for MariaDB builds
+/// that link the old library (see `support::mariadb_shim`).
+///
+/// `ldconfig`, `LD_LIBRARY_PATH` and `soname` symlinks are Unix mechanisms; the
+/// Windows MariaDB zip carries its own DLLs and links no `libcrypt.so.1`.
+#[cfg(unix)]
 fn ensure_libcrypt_shim(base: &Path) -> Option<PathBuf> {
     let probe = Command::new("ldconfig").arg("-p").output().ok();
     let has_so1 = probe
@@ -365,6 +371,13 @@ fn ensure_libcrypt_shim(base: &Path) -> Option<PathBuf> {
             return Some(shim);
         }
     }
+    None
+}
+
+/// The Windows MariaDB zip ships its own DLLs and never links `libcrypt.so.1`,
+/// so there is nothing to shim there.
+#[cfg(not(unix))]
+fn ensure_libcrypt_shim(_base: &Path) -> Option<PathBuf> {
     None
 }
 
