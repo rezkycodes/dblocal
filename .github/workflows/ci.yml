@@ -89,6 +89,76 @@ jobs:
       - name: Rust cache
         uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
 
+      # Extra swap for the arm64 leg only.
+      #
+      # Why: `test (ubuntu-24.04-arm)` was killed twice with exit 137 and no
+      # compiler diagnostic (runs 45376363348 and 45401429950), always in the
+      # compile+link phase of `cargo test --workspace`, after ~10 minutes and
+      # before any test binary ran. On a private repository GitHub provisions
+      # this label as a 2 vCPU / 8 GB VM. Cargo's default job count there is 2,
+      # so two links can be resident at once, and on this host (rustc 1.95.0,
+      # which drives the bundled LLD via `cc -fuse-ld=lld`) one link of a debug
+      # test binary with full DWARF measured 4.24 GB RSS. Commit 438f3ef cut that
+      # to 2.05 GB by switching the dev/test profiles to line-tables-only debug
+      # info. Two overlapping full-DWARF links is 8.4 GB against an 8 GB VM with
+      # no swap, which is the cheapest available explanation for a SIGKILL with
+      # no output. Swap does not make the build faster; it makes the overlap cost
+      # disk I/O instead of a dead runner.
+      #
+      # Cost: up to 8 GB of the free disk reclaimed by the step above, and the
+      # slowed-down pages if it is ever used. Nothing here changes what is
+      # compiled.
+      #
+      # Idempotent: skipped if /swapfile is already active. Self-hosted runners
+      # are excluded (`runner.environment`), because their memory layout and
+      # their disk are not ours to change. It also refuses to run below 12 GB of
+      # free disk (a warning, not a failure), so on a cramped runner it degrades
+      # to the previous behaviour instead of trading a memory problem for a disk
+      # one.
+      #
+      # Not proven to fix the kill: the local measurements above are x86_64 and
+      # GitHub's message was "the runner has received a shutdown signal", which
+      # means the runner was stopped from outside rather than a kernel OOM
+      # killer message. This step removes the most likely cause for the 8 GB leg
+      # and costs nothing on the legs that already pass; only the next arm run
+      # can show whether it is enough. To check it took effect, look for the
+      # "after:" `free -h` table in the step log — Swap should read 8.0Gi.
+      - name: Add swap for the 8 GB arm runner
+        if: runner.arch == 'ARM64' && runner.environment == 'github-hosted' && runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "before:"; free -h; swapon --show || true
+          if swapon --show=NAME --noheadings | grep -qx /swapfile; then
+            echo "/swapfile is already active; nothing to do"
+            exit 0
+          fi
+
+          # Never trade a memory problem for a disk problem: the debug test
+          # build needs tens of GB (the runner's free space after the
+          # "Free disk space" step was measured at 33-40 GB), and it once died
+          # of a full disk while linking. Require 24 GB free before creating an
+          # 8 GB file, so ~16 GB is still left for the build. Below that, skip
+          # with a warning rather than fail: the step then degrades to exactly
+          # the behaviour that exists today.
+          need_mb=24576
+          avail_mb="$(df -Pm / | awk 'NR==2 {print $4}')"
+          if [ "${avail_mb:-0}" -lt "$need_mb" ]; then
+            echo "::warning title=Swap skipped::Only ${avail_mb} MB free on /, want ${need_mb} MB so an 8 GB swapfile still leaves ~16 GB for the build. Continuing without swap."
+            exit 0
+          fi
+
+          # fallocate is instant but some filesystems refuse it for swap files;
+          # dd always works and only costs a few seconds.
+          if ! sudo fallocate -l 8G /swapfile; then
+            sudo rm -f /swapfile
+            sudo dd if=/dev/zero of=/swapfile bs=1M count=8192 status=none
+          fi
+          sudo chmod 600 /swapfile
+          sudo mkswap /swapfile
+          sudo swapon /swapfile
+          echo "after:"; free -h; swapon --show || true
+
       - name: Run workspace CI task
         run: cargo xtask ci
 
