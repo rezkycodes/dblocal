@@ -78,10 +78,11 @@ fn initialize_insecure_command_has_no_password() {
 #[test]
 fn bootstrap_mysqld_command_has_no_password() {
     let ctx = init_ctx(42345, AuthMode::Password, Some(SECRET));
-    let cmd = bootstrap_mysqld_command(
+    let cmd = bootstrap_mysqld_command_for(
         &ctx,
         Path::new("/run/my.cnf"),
         Path::new("/run/dblocal-init.sql"),
+        false,
     );
     assert_no_secret_in_command(&cmd, SECRET);
     let args: Vec<String> = cmd
@@ -91,6 +92,30 @@ fn bootstrap_mysqld_command_has_no_password() {
     assert!(args.iter().any(|a| a.starts_with("--defaults-file=")));
     assert!(args.iter().any(|a| a.starts_with("--init-file=")));
     assert!(args.iter().any(|a| a == "--daemonize=OFF"));
+}
+
+/// `mysqld.exe` aborts on `--daemonize` ("unknown variable"), so the Windows
+/// bootstrap must not pass it; the rest of the command is unchanged.
+#[test]
+fn windows_bootstrap_command_has_no_daemonize_option() {
+    let ctx = init_ctx(42345, AuthMode::Password, Some(SECRET));
+    let cmd = bootstrap_mysqld_command_for(
+        &ctx,
+        Path::new("/run/my.cnf"),
+        Path::new("/run/dblocal-init.sql"),
+        true,
+    );
+    assert_no_secret_in_command(&cmd, SECRET);
+    let args: Vec<String> = cmd
+        .get_args()
+        .map(|a| a.to_string_lossy().into_owned())
+        .collect();
+    assert!(
+        !args.iter().any(|a| a.starts_with("--daemonize")),
+        "{args:?}"
+    );
+    assert!(args.iter().any(|a| a.starts_with("--defaults-file=")));
+    assert!(args.iter().any(|a| a.starts_with("--init-file=")));
 }
 
 #[test]

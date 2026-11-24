@@ -309,10 +309,25 @@ fn bootstrap_credentials(ctx: &InitContext, run_dir: &Path, logs_dir: &Path) -> 
 }
 
 pub(super) fn bootstrap_mysqld_command(ctx: &InitContext, cfg: &Path, init_path: &Path) -> Command {
+    bootstrap_mysqld_command_for(ctx, cfg, init_path, cfg!(windows))
+}
+
+/// [`bootstrap_mysqld_command`] with the platform passed in, so both spellings
+/// are tested. `--daemonize` is a Unix-only option: `mysqld.exe` aborts on it
+/// with "unknown variable 'daemonize=OFF'" (checked in a Windows 10 VM), and it
+/// never daemonizes there anyway.
+pub(super) fn bootstrap_mysqld_command_for(
+    ctx: &InitContext,
+    cfg: &Path,
+    init_path: &Path,
+    windows: bool,
+) -> Command {
     let mut cmd = Command::new(ctx.runtime_dir.join("bin").join(exe_name("mysqld")));
     cmd.arg(format!("--defaults-file={}", cfg.display()))
-        .arg(format!("--init-file={}", init_path.display()))
-        .arg("--daemonize=OFF");
+        .arg(format!("--init-file={}", init_path.display()));
+    if !windows {
+        cmd.arg("--daemonize=OFF");
+    }
     cmd.stdin(Stdio::null());
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
