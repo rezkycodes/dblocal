@@ -235,6 +235,11 @@ pub(crate) fn contains_arg_token(haystack: &str, token: &str) -> bool {
     false
 }
 
+/// Linux `/proc` identity helpers. Only `verify_pid_identity_linux` calls them in
+/// a non-test build, so they must not exist on other targets (clippy runs with
+/// `-D warnings`, and a dead `pub(crate)` item is an error there). Tests use them
+/// on every host to pin the parsers without `/proc`.
+#[cfg(any(target_os = "linux", test))]
 pub(crate) fn same_executable(observed: &Path, expected: &Path) -> bool {
     let observed = strip_deleted(observed);
     let expected = strip_deleted(expected);
@@ -254,6 +259,7 @@ pub(crate) fn same_executable(observed: &Path, expected: &Path) -> bool {
     }
 }
 
+#[cfg(any(target_os = "linux", test))]
 pub(crate) fn strip_deleted(path: &Path) -> std::borrow::Cow<'_, Path> {
     #[cfg(unix)]
     {
@@ -268,6 +274,7 @@ pub(crate) fn strip_deleted(path: &Path) -> std::borrow::Cow<'_, Path> {
     std::borrow::Cow::Borrowed(path)
 }
 
+#[cfg(any(target_os = "linux", test))]
 pub(crate) fn parse_cmdline(bytes: &[u8]) -> Vec<String> {
     bytes
         .split(|b| *b == 0)
@@ -276,6 +283,7 @@ pub(crate) fn parse_cmdline(bytes: &[u8]) -> Vec<String> {
         .collect()
 }
 
+#[cfg(any(target_os = "linux", test))]
 pub(crate) fn cmdline_targets_instance(args: &[String], expected: &ExpectedIdentity) -> bool {
     let datadir = expected.data_dir.to_string_lossy();
     let conf = expected.config_path.to_string_lossy();
@@ -302,6 +310,7 @@ pub(crate) fn cmdline_targets_instance(args: &[String], expected: &ExpectedIdent
     saw_datadir || saw_conf
 }
 
+#[cfg(any(target_os = "linux", test))]
 pub(crate) fn path_arg_matches(arg: &str, expected: &str) -> bool {
     if arg == expected {
         return true;
@@ -314,6 +323,7 @@ pub(crate) fn path_arg_matches(arg: &str, expected: &str) -> bool {
     }
 }
 
+#[cfg(any(target_os = "linux", test))]
 pub(crate) fn is_zombie_stat(stat: &str) -> bool {
     let Some(close) = stat.rfind(')') else {
         return false;
@@ -369,7 +379,7 @@ pub(crate) fn pid_alive(pid: u32) -> bool {
 }
 
 #[cfg(not(unix))]
-pub(super) fn pid_alive(pid: u32) -> bool {
+pub(crate) fn pid_alive(pid: u32) -> bool {
     let _ = pid;
     false
 }
