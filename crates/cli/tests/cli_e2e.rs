@@ -301,12 +301,32 @@ fn copy_tree(from: &Path, to: &Path) -> std::io::Result<()> {
     } else if meta.file_type().is_symlink() {
         let target = std::fs::read_link(from)?;
         let _ = std::fs::remove_file(to);
-        std::os::unix::fs::symlink(target, to)?;
+        symlink(&target, to)?;
     } else {
         std::fs::copy(from, to)?;
         std::fs::set_permissions(to, meta.permissions())?;
     }
     Ok(())
+}
+
+/// Windows distinguishes file and directory symlinks; Unix has one call.
+#[cfg(unix)]
+fn symlink(target: &Path, link: &Path) -> std::io::Result<()> {
+    std::os::unix::fs::symlink(target, link)
+}
+
+#[cfg(windows)]
+fn symlink(target: &Path, link: &Path) -> std::io::Result<()> {
+    std::os::windows::fs::symlink_file(target, link)
+        .or_else(|_| std::os::windows::fs::symlink_dir(target, link))
+}
+
+#[cfg(not(any(unix, windows)))]
+fn symlink(_target: &Path, _link: &Path) -> std::io::Result<()> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "symlinks are not supported on this platform",
+    ))
 }
 
 #[test]

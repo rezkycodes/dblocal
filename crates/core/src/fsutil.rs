@@ -192,6 +192,8 @@ mod tests {
 
     #[test]
     fn write_private_file_atomic_removes_temp_on_failure() {
+        // `dir` is only used by the Unix arms below.
+        #[allow(unused_variables)]
         let dir = tempdir().expect("tmp");
         #[cfg(unix)]
         {

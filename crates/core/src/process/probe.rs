@@ -159,6 +159,7 @@ pub(crate) mod fake {
 mod tests {
     use super::*;
     use crate::process::probe::fake::FakeProbe;
+    #[cfg(target_os = "linux")]
     use std::time::Duration;
 
     #[test]

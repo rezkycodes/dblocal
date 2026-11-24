@@ -167,6 +167,10 @@ fn two_concurrent_deletes_remove_the_instance_once() {
     }
 }
 
+/// Creating a directory symlink without elevation is a POSIX capability; on
+/// Windows it needs Developer Mode or an admin token. The traversal and
+/// absolute-path arms still run everywhere, but the symlink arm is POSIX-only so
+/// the proof is honest instead of silently skipped.
 #[test]
 fn purge_archive_rejects_traversal_absolute_and_symlink_paths() {
     let h = Harness::new(EngineKey::Postgresql);
@@ -176,14 +180,24 @@ fn purge_archive_rejects_traversal_absolute_and_symlink_paths() {
     std::fs::create_dir_all(h.paths.archive_dir()).expect("archive dir");
     let store = h.store();
 
-    for (id, path) in [
+    #[cfg(unix)]
+    let mut cases = vec![
         ("evil-dotdot", PathBuf::from("../../../../etc")),
         ("evil-absolute", PathBuf::from("/etc")),
-        (
-            "evil-symlink",
-            h.paths.archive_dir().join("link-to-outside"),
-        ),
-    ] {
+    ];
+    #[cfg(not(unix))]
+    let cases = vec![
+        ("evil-dotdot", PathBuf::from("../../../../etc")),
+        ("evil-absolute", PathBuf::from("/etc")),
+    ];
+    #[cfg(unix)]
+    cases.push((
+        "evil-symlink",
+        h.paths.archive_dir().join("link-to-outside"),
+    ));
+
+    for (id, path) in cases {
+        #[cfg(unix)]
         if id == "evil-symlink" {
             std::os::unix::fs::symlink(&outside, &path).expect("symlink");
         }
@@ -199,12 +213,24 @@ fn purge_archive_rejects_traversal_absolute_and_symlink_paths() {
         store.add_archive(&record).expect("seed archive");
     }
 
-    for id in ["evil-dotdot", "evil-absolute", "evil-symlink"] {
+    for id in ["evil-dotdot", "evil-absolute"] {
         let err = h.service.purge_archive(id).expect_err("must refuse");
         assert_eq!(
             err.code(),
             crate::error::CODE_UNSAFE_ARCHIVE,
             "{id} must be refused as unsafe, got {err:?}"
+        );
+    }
+    #[cfg(unix)]
+    {
+        let err = h
+            .service
+            .purge_archive("evil-symlink")
+            .expect_err("must refuse");
+        assert_eq!(
+            err.code(),
+            crate::error::CODE_UNSAFE_ARCHIVE,
+            "evil-symlink must be refused as unsafe, got {err:?}"
         );
     }
     assert!(outside.exists(), "nothing outside the home may be removed");

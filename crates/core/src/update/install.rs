@@ -287,7 +287,7 @@ fn apply_step(step: &InstallStep, created_backup: &mut bool) -> UpdateResult<()>
             mode_from,
         } => {
             copy_with_mode(src, dst, mode_from)?;
-            #[cfg(test)]
+            #[cfg(all(test, unix))]
             maybe_fail_after_write()?;
             Ok(())
         }
@@ -295,7 +295,7 @@ fn apply_step(step: &InstallStep, created_backup: &mut bool) -> UpdateResult<()>
         InstallStep::Backup { target, backup } => {
             create_backup(target, backup)?;
             *created_backup = true;
-            #[cfg(test)]
+            #[cfg(all(test, unix))]
             maybe_fail_after_backup()?;
             Ok(())
         }
@@ -312,7 +312,7 @@ fn apply_step(step: &InstallStep, created_backup: &mut bool) -> UpdateResult<()>
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 fn maybe_fail_after_backup() -> UpdateResult<()> {
     FAIL_AFTER_BACKUP.with(|flag| {
         if flag.get() {
@@ -325,7 +325,7 @@ fn maybe_fail_after_backup() -> UpdateResult<()> {
     })
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 fn maybe_fail_after_write() -> UpdateResult<()> {
     FAIL_AFTER_WRITE.with(|flag| {
         if flag.get() {
@@ -338,23 +338,23 @@ fn maybe_fail_after_write() -> UpdateResult<()> {
     })
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 thread_local! {
     static FAIL_AFTER_BACKUP: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static FAIL_AFTER_WRITE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 pub fn inject_fail_after_backup_for_test() {
     FAIL_AFTER_BACKUP.with(|flag| flag.set(true));
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 pub fn clear_fail_after_backup_for_test() {
     FAIL_AFTER_BACKUP.with(|flag| flag.set(false));
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 pub fn inject_fail_after_write_for_test() {
     FAIL_AFTER_WRITE.with(|flag| flag.set(true));
 }

@@ -335,24 +335,22 @@ pub(crate) fn ensure_private_layout(paths: &DblPaths) -> Result<()> {
     Ok(())
 }
 
-#[cfg(test)]
+// Every test here asserts POSIX mode bits (`0700`), which Windows does not have,
+// so the module is Unix-only.
+#[cfg(all(test, unix))]
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
     use super::*;
+    use std::os::unix::fs::PermissionsExt;
     use tempfile::tempdir;
 
-    #[cfg(unix)]
-    use std::os::unix::fs::PermissionsExt;
-
-    #[cfg(unix)]
     fn mode(path: &Path) -> u32 {
         std::fs::metadata(path).expect("meta").permissions().mode() & 0o777
     }
 
     /// M7: creating a private dir under a deliberately permissive parent must
     /// produce a 0700 leaf, regardless of process umask.
-    #[cfg(unix)]
     #[test]
     fn ensure_private_dir_creates_0700_leaf_under_permissive_parent() {
         let root = tempdir().expect("tmp");
@@ -367,7 +365,6 @@ mod tests {
     }
 
     /// M7: a pre-existing 0755 directory is tightened to 0700.
-    #[cfg(unix)]
     #[test]
     fn ensure_private_dir_tightens_existing_0755_directory() {
         let root = tempdir().expect("tmp");

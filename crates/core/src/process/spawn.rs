@@ -165,9 +165,13 @@ fn observe_spawned(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
     use crate::process::identity::ProcessState;
+    #[cfg(unix)]
     use crate::process::probe::SysinfoProbe;
+    #[cfg(unix)]
     use crate::process::terminate::{TerminateOutcome, terminate};
+    #[cfg(unix)]
     use std::time::Duration;
     use tempfile::tempdir;
 
@@ -210,19 +214,12 @@ mod tests {
         }
     }
 
+    /// The fake "engine" command used by the Unix spawn tests below.
+    #[cfg(unix)]
     fn sleep_cmd(secs: u32) -> Command {
-        #[cfg(unix)]
-        {
-            let mut cmd = Command::new("/bin/sleep");
-            cmd.arg(secs.to_string());
-            cmd
-        }
-        #[cfg(not(unix))]
-        {
-            let mut cmd = Command::new("cmd");
-            cmd.args(["/C", "timeout", &secs.to_string()]);
-            cmd
-        }
+        let mut cmd = Command::new("/bin/sleep");
+        cmd.arg(secs.to_string());
+        cmd
     }
 
     #[cfg(unix)]

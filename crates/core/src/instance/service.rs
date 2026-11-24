@@ -731,7 +731,10 @@ impl LocalService {
 
     /// Runs the real create-rollback, for a test that must reach the path guard
     /// rather than assert on it indirectly.
-    #[cfg(test)]
+    ///
+    /// The one caller drives a symlinked instance directory, which needs a POSIX
+    /// symlink, so this hook is Unix-only.
+    #[cfg(all(test, unix))]
     pub(crate) fn rollback_for_test(
         &self,
         id: &InstanceId,

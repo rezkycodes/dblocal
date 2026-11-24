@@ -637,9 +637,18 @@ mod tests {
         );
     }
 
-    /// The error a POSIX `kill(2)` returns for a PID that no longer exists.
-    fn esrch() -> DblError {
+    /// The error a signal call returns for a PID that is no longer there.
+    ///
+    /// POSIX answers `ESRCH`; Windows reports `ERROR_NOT_FOUND` for the same
+    /// race, and `is_gone_errno` maps both. Using the host's own errno keeps the
+    /// "already gone is not an I/O error" tests meaningful on both.
+    fn vanished() -> DblError {
+        #[cfg(unix)]
         let errno = nix::errno::Errno::ESRCH as i32;
+        #[cfg(windows)]
+        let errno = 1168; // ERROR_NOT_FOUND
+        #[cfg(not(any(unix, windows)))]
+        let errno = 0;
         DblError::Io {
             source: std::io::Error::from_raw_os_error(errno),
         }
@@ -657,7 +666,7 @@ mod tests {
         impl SignalSender for Vanished<'_> {
             fn terminate(&self, pid: u32) -> Result<()> {
                 self.probe.remove(pid);
-                Err(esrch())
+                Err(vanished())
             }
             fn kill(&self, _pid: u32) -> Result<()> {
                 panic!("must not escalate after the process vanished");
@@ -698,7 +707,7 @@ mod tests {
                 // The process exited just before the signal arrived, so the
                 // kernel answers ESRCH.
                 self.probe.remove(pid);
-                Err(esrch())
+                Err(vanished())
             }
         }
         let outcome = terminate_with(

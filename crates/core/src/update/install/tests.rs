@@ -1,5 +1,8 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+// Every test that touches the filesystem here builds POSIX fake binaries, so the
+// import is only needed on Unix.
+#[cfg(unix)]
 use std::fs;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
