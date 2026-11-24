@@ -5,9 +5,14 @@
 //! inherit the write descriptor and make the following exec fail with
 //! `Text file busy` (ETXTBSY). Executions also retry that transient error.
 
+#[cfg(unix)]
 use std::path::Path;
 
-/// Writes `body` as an executable file at `path` atomically.
+/// Writes `body` as an executable `#!/bin/sh` file at `path` atomically.
+///
+/// Only the POSIX fake-binary tests call this: Windows cannot exec a `#!` script,
+/// so gating those tests leaves the helper unused there.
+#[cfg(unix)]
 pub(super) fn write_fake_script(path: &Path, body: &str) {
     let dir = path.parent().expect("fake script has a parent dir");
     std::fs::create_dir_all(dir).expect("fake script dir");
@@ -18,12 +23,9 @@ pub(super) fn write_fake_script(path: &Path, body: &str) {
     let tmp = dir.join(format!(".{name}.tmp-{}", std::process::id()));
     let _ = std::fs::remove_file(&tmp);
     std::fs::write(&tmp, body).expect("write fake script");
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o755))
-            .expect("chmod fake script");
-    }
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o755))
+        .expect("chmod fake script");
     let _ = std::fs::remove_file(path);
     std::fs::rename(&tmp, path).expect("rename fake script into place");
 }
@@ -32,6 +34,8 @@ pub(super) fn write_fake_script(path: &Path, body: &str) {
 ///
 /// A concurrent fork in another test can still hold a write descriptor to the
 /// script's inode; that is a test environment artifact, not product behaviour.
+/// Only the POSIX fake-binary tests need it, so Windows drops it with them.
+#[cfg(unix)]
 pub(super) fn retry_etxtbsy<T, E>(
     mut f: impl FnMut() -> std::result::Result<T, E>,
 ) -> std::result::Result<T, E>
