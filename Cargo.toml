@@ -59,6 +59,19 @@ tray-icon = { version = "0.26", default-features = false }
 dblocal-core = { path = "crates/core" }
 dblocal-gui = { path = "crates/gui" }
 
+# Candidate mitigation for the intermittent `test (ubuntu-24.04-arm)` SIGKILL.
+# On a private repository GitHub provisions `ubuntu-24.04-arm` as a 2 vCPU /
+# 8 GB VM; the debug test build links many ~0.9 GB binaries, each producing
+# ~0.7 GB of DWARF (`.debug_str` alone is ~320 MB). `line-tables-only` keeps
+# file:line in backtraces and symbol names (the panic location tests assert on
+# keeps working) while dropping the type/variable DWARF that dominates the
+# linker's memory and the artifact size.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.test]
+debug = "line-tables-only"
+
 [workspace.lints.rust]
 unsafe_code = "deny"
 
