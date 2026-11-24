@@ -36,6 +36,11 @@ image = "0.25"
 # so it needs the same raw-window-handle gpui uses, and futures' oneshot.
 futures = "0.3"
 raw-window-handle = "0.6"
+# The a11y harness implements gpui's `PlatformWindow::get_raw_handle` on Windows,
+# whose signature names `windows::Win32::Foundation::HWND`. This is the exact
+# version gpui-pre already resolves (Cargo.lock), so no new package is added.
+[target.'cfg(target_os = "windows")'.dev-dependencies]
+windows = { version = "0.62", features = ["Win32_Foundation"] }
 
 
 [lints]
