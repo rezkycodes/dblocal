@@ -6,7 +6,7 @@ use std::time::SystemTime;
 use crate::DblError;
 use crate::catalog::select_artifact;
 use crate::error::Result;
-use crate::model::InstanceSpec;
+use crate::model::{EngineKey, InstanceSpec};
 use crate::service::{OperationId, OperationStage, ServiceEvent};
 
 use super::helpers::{emit_stage, finish_operation};
@@ -67,6 +67,49 @@ async fn run_refresh(inner: &Arc<Inner>, force: bool) -> super::helpers::OpResul
     Ok(())
 }
 
+/// Refuses an engine that ships no artifact at all for this `(os, arch)`.
+///
+/// The catalog is the single source of truth for "can this engine run here",
+/// so the answer is data-driven rather than a `cfg!(windows)` list (D-26:
+/// Valkey has Linux tarballs only, so Windows has no Valkey). An injected
+/// runtime source is an explicit test seam and is treated as supported, so the
+/// download path can be exercised for an engine the test supplies itself.
+///
+/// This runs before any store write or spawn, so a user on an unsupported
+/// platform gets one typed `DBL-6001` and nothing is downloaded or started.
+pub(crate) fn ensure_engine_supported(inner: &Inner, engine: EngineKey) -> Result<()> {
+    if inner
+        .runtime_sources
+        .iter()
+        .any(|source| source.engine == engine)
+    {
+        return Ok(());
+    }
+    let state = inner
+        .catalog
+        .lock()
+        .map_err(|_| DblError::Storage {
+            reason: "the catalog lock was poisoned".to_owned(),
+        })?
+        .clone();
+    let supported = state
+        .snapshot()
+        .artifacts_for(inner.os, inner.arch)
+        .iter()
+        .any(|artifact| artifact.engine() == engine);
+    if supported {
+        return Ok(());
+    }
+    Err(DblError::Unsupported {
+        reason: format!(
+            "{} has no build for {} {}",
+            engine.display_name(),
+            inner.os,
+            inner.arch
+        ),
+    })
+}
+
 /// Picks the runtime source for `spec`.
 ///
 /// Sources injected via options win, which is how tests exercise the real
@@ -80,6 +123,10 @@ pub(crate) fn source_for(inner: &Inner, spec: &InstanceSpec) -> Result<RuntimeSo
     {
         return Ok(source.clone());
     }
+
+    // A version can be missing from a catalog that still lists the engine on
+    // this platform (a retired or not-yet-added tag); that is also unsupported.
+    ensure_engine_supported(inner, spec.engine())?;
 
     let state = inner
         .catalog

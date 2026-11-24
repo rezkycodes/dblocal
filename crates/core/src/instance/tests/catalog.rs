@@ -114,6 +114,113 @@ fn the_bundled_catalog_covers_all_four_engines_on_linux_x86_64() {
     assert!(!mariadb_arm.available, "MariaDB has no arm64 Linux tarball");
 }
 
+/// D-26: the bundled catalog has no Valkey artifact for Windows, so the
+/// platform-filtered view the GUI and CLI render must mark Valkey unavailable
+/// with the PRD's reason while keeping the other three engines selectable.
+#[test]
+fn the_bundled_catalog_marks_valkey_unavailable_on_windows() {
+    use crate::catalog::{InstalledVersions, build_catalog_view, bundled_snapshot};
+    use crate::platform::{Arch, Os};
+
+    let snapshot = bundled_snapshot().expect("bundled catalog");
+    let windows = build_catalog_view(
+        &snapshot,
+        Os::Windows,
+        Arch::X86_64,
+        &InstalledVersions::empty(),
+        None,
+    );
+    let valkey = windows
+        .engines
+        .iter()
+        .find(|e| e.engine == EngineKey::Valkey)
+        .expect("valkey entry");
+    assert!(
+        !valkey.available,
+        "Valkey has no Windows artifact and must be unavailable"
+    );
+    assert_eq!(
+        valkey.unavailable_reason.as_deref(),
+        Some(crate::catalog::UNAVAILABLE_ON_PLATFORM)
+    );
+    assert!(valkey.versions.is_empty(), "no version is installable");
+    for engine in [EngineKey::Postgresql, EngineKey::Mysql, EngineKey::Mariadb] {
+        let entry = windows
+            .engines
+            .iter()
+            .find(|e| e.engine == engine)
+            .expect("engine listed");
+        assert!(
+            entry.available,
+            "{} must be installable on Windows x86_64",
+            engine.as_str()
+        );
+    }
+}
+
+/// D-26: the first release ships no Valkey build for Windows, so the service
+/// must treat "Valkey on Windows" as unavailable on this OS — a typed
+/// `DBL-6001`, never a panic and never a download attempt — even when a leftover
+/// runtime directory exists in the home.
+#[test]
+fn valkey_on_windows_is_unsupported_before_any_download() {
+    use crate::model::{AuthMode, InstanceName, InstanceSpec, Port};
+    use crate::platform::Os;
+
+    let h = Harness::with_options(EngineKey::Valkey, |options| {
+        options.os = Some(Os::Windows);
+    });
+    // The harness pre-installs a Valkey runtime for the engine it is given, so
+    // this also proves the gate fires for an already-present runtime rather
+    // than only when a download would be attempted.
+    let spec = InstanceSpec::new(
+        InstanceName::new("vk-win").expect("name"),
+        EngineKey::Valkey,
+        "9.2.0",
+        Some(Port::new(super::harness::test_port()).expect("port")),
+        AuthMode::None,
+    )
+    .expect("spec");
+
+    let err = h
+        .service
+        .validate_spec(&spec)
+        .expect_err("valkey on windows");
+    assert_eq!(err.code(), crate::error::CODE_UNSUPPORTED);
+    assert_eq!(err.user_message(), crate::strings::ERR_UNSUPPORTED);
+
+    let err = h
+        .service
+        .create_instance(spec)
+        .expect_err("create must refuse synchronously");
+    assert_eq!(err.code(), crate::error::CODE_UNSUPPORTED);
+    assert!(h.service.list_instances().expect("list").is_empty());
+    assert_eq!(h.procs.spawned_count(), 0, "no engine process was spawned");
+}
+
+/// The gate is scoped to the engine, not the OS: PostgreSQL still works on
+/// Windows, so a blanket "Windows is unsupported" regression fails here.
+#[test]
+fn postgresql_on_windows_is_still_accepted() {
+    use crate::model::{AuthMode, InstanceName, InstanceSpec, Port};
+    use crate::platform::Os;
+
+    let h = Harness::with_options(EngineKey::Postgresql, |options| {
+        options.os = Some(Os::Windows);
+    });
+    let spec = InstanceSpec::new(
+        InstanceName::new("pg-win").expect("name"),
+        EngineKey::Postgresql,
+        "18.7",
+        Some(Port::new(super::harness::test_port()).expect("port")),
+        AuthMode::None,
+    )
+    .expect("spec");
+    h.service
+        .validate_spec(&spec)
+        .expect("postgres ships Windows builds");
+}
+
 #[test]
 fn a_failed_refresh_keeps_the_working_catalog() {
     let fetcher = AlwaysFails {

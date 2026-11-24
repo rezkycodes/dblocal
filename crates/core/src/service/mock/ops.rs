@@ -167,6 +167,21 @@ impl DblService for MockService {
 
     fn validate_spec(&self, spec: &InstanceSpec) -> Result<()> {
         let g = lock(&self.inner);
+        // Mirror the real service's platform gate (D-26): an engine with no
+        // build for this OS is `DBL-6001`, so `create valkey` on a Windows mock
+        // reports exactly what a Windows user sees.
+        if super::catalog::unavailable_reason(spec.engine(), g.platform.os, g.platform.arch)
+            .is_some()
+        {
+            return Err(DblError::Unsupported {
+                reason: format!(
+                    "{} has no build for {} {}",
+                    spec.engine().display_name(),
+                    g.platform.os,
+                    g.platform.arch
+                ),
+            });
+        }
         let name = spec.name().as_str();
         for view in g.views.values() {
             if view.name == name {

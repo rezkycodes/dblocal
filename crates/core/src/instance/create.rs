@@ -21,6 +21,9 @@ use super::service::{Inner, RuntimeSource};
 
 pub(crate) fn create_instance(inner: &Arc<Inner>, spec: InstanceSpec) -> Result<OperationId> {
     validate_spec_boundary(&spec)?;
+    // Refuse an engine with no artifact for this OS before locking an id or
+    // writing a row, so nothing is left half-created (D-26: Valkey on Windows).
+    super::catalog_ops::ensure_engine_supported(inner, spec.engine())?;
     if inner
         .db(|store| store.get_instance_by_name(spec.name().as_str()))?
         .is_some()

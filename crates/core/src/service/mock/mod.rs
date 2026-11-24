@@ -28,7 +28,6 @@ use crate::model::{
     ArchivedData, AuthMode, CatalogStatus, CredentialBackend, EngineKey, Instance, InstanceEvent,
     InstanceId, InstanceSpec, InstanceStatus, StartFailure,
 };
-use crate::platform::{Arch, Os};
 use crate::secret::SecretString;
 use crate::service::{CatalogView, FailureInfo, InstanceView, OperationId, ServiceEvent};
 use crate::update::InstallKind;
@@ -82,6 +81,7 @@ pub struct MockConfig {
     seed: u64,
     step_delay: Duration,
     start_time: SystemTime,
+    platform: crate::platform::Platform,
 }
 
 impl Default for MockConfig {
@@ -90,6 +90,7 @@ impl Default for MockConfig {
             seed: 1,
             step_delay: Duration::from_millis(DEFAULT_STEP_DELAY_MS),
             start_time: SystemTime::UNIX_EPOCH,
+            platform: crate::platform::Platform::current(),
         }
     }
 }
@@ -101,7 +102,18 @@ impl MockConfig {
             seed: 1,
             step_delay: Duration::from_millis(0),
             start_time: SystemTime::UNIX_EPOCH,
+            platform: crate::platform::Platform::current(),
         }
+    }
+
+    /// Reports the given OS/arch instead of the host's.
+    ///
+    /// The catalog read model and the create gate are platform-dependent, so a
+    /// test on Linux can prove what a Windows user sees (D-26: no Valkey on
+    /// Windows) without a Windows machine.
+    pub fn with_platform(mut self, platform: crate::platform::Platform) -> Self {
+        self.platform = platform;
+        self
     }
 
     /// Sets the RNG seed used for generated ids and passwords.
@@ -155,6 +167,8 @@ struct Inner {
     archives: BTreeMap<String, ArchivedData>,
     operations: HashMap<OperationId, OpRecord>,
     catalog_status: CatalogStatus,
+    /// OS/arch the mock pretends to run on, for the platform-filtered catalog.
+    platform: crate::platform::Platform,
     next_op: u64,
     failures: VecDeque<ScriptedFailure>,
     /// Admin view, per instance (`F-DBU`).
@@ -191,6 +205,7 @@ impl Inner {
             archives: BTreeMap::new(),
             operations: HashMap::new(),
             catalog_status: CatalogStatus::Fresh,
+            platform: config.platform,
             next_op: 1,
             failures: VecDeque::new(),
             databases: HashMap::new(),
@@ -235,8 +250,8 @@ impl Inner {
     fn catalog_view(&self) -> CatalogView {
         catalog::view(
             self.catalog_status,
-            Os::current(),
-            Arch::current(),
+            self.platform.os,
+            self.platform.arch,
             &self.runtimes,
         )
     }

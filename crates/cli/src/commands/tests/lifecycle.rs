@@ -147,6 +147,37 @@ fn create_bad_name_and_port_are_bad_arguments() {
 }
 
 #[test]
+fn create_valkey_on_windows_is_unsupported_and_creates_nothing() {
+    // D-26: no Valkey build for Windows, so `create valkey` must report
+    // `DBL-6001` on the platform it is refused on, not fail with a network or
+    // download error and not leave a row. Simulated on Linux via the mock's
+    // platform seam so this runs here too.
+    let svc = MockService::with_config(
+        dblocal_core::service::mock::MockConfig::deterministic().with_platform(
+            dblocal_core::platform::Platform::new(
+                dblocal_core::platform::Os::Windows,
+                dblocal_core::platform::Arch::X86_64,
+            ),
+        ),
+    );
+    let (code, out, err) = run_cmd(
+        &svc,
+        &Command::Create {
+            engine: "valkey".into(),
+            version: "8.1.0".into(),
+            name: "vk-win".into(),
+            port: None,
+            no_password: false,
+        },
+        false,
+    );
+    assert_eq!(code, EXIT_BAD_ARGS, "stderr: {err}");
+    assert!(err.contains("DBL-6001"), "stderr: {err}");
+    assert!(out.is_empty(), "no URI on stdout: {out}");
+    assert!(svc.list_instances().unwrap().is_empty(), "no row left");
+}
+
+#[test]
 fn create_duplicate_name_is_bad_arguments() {
     let svc = MockService::deterministic();
     svc.seed_instance(

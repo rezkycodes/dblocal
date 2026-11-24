@@ -50,6 +50,10 @@ pub(crate) fn catalog(inner: &Inner) -> Result<CatalogView> {
 
 pub(crate) fn validate_spec(inner: &Inner, spec: &InstanceSpec) -> Result<()> {
     validate_spec_boundary(spec)?;
+    // The dialog and the CLI both pre-flight through `validate_spec`, so the
+    // platform gate belongs here: an engine with no artifact for this OS is
+    // rejected with `DBL-6001` before the form even offers to submit (D-26).
+    super::catalog_ops::ensure_engine_supported(inner, spec.engine())?;
     let existing = inner.db(|store| store.get_instance_by_name(spec.name().as_str()))?;
     if existing.is_some() {
         return Err(DblError::AlreadyExists {

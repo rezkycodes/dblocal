@@ -510,6 +510,46 @@ fn form_validation_allows_an_empty_port_for_auto_allocation() {
     assert!(result.is_valid());
 }
 
+/// D-26: the create dialog's engine cards, built from the real catalog view
+/// for Windows, must show Valkey as unavailable with the PRD reason. This drives
+/// the same helpers the dialog renders (`create_engine_cards`,
+/// `engine_unavailable_reason`), so a Linux test proves the Windows dialog
+/// disables the card without a render test or a Windows machine.
+#[test]
+fn create_cards_mark_valkey_unavailable_on_windows() {
+    use dblocal_core::catalog::{InstalledVersions, build_catalog_view, bundled_snapshot};
+    use dblocal_core::platform::Os;
+
+    let snapshot = bundled_snapshot().expect("bundled catalog");
+    let view = build_catalog_view(
+        &snapshot,
+        Os::Windows,
+        Arch::X86_64,
+        &InstalledVersions::empty(),
+        None,
+    );
+    let cards = create_engine_cards(&view.engines);
+    let valkey = cards
+        .iter()
+        .find(|entry| entry.engine == EngineKey::Valkey)
+        .expect("valkey card present");
+    assert!(
+        !valkey.available,
+        "the Windows dialog must disable the Valkey card"
+    );
+    assert_eq!(
+        engine_unavailable_reason(valkey),
+        Some(dblocal_core::catalog::UNAVAILABLE_ON_PLATFORM)
+    );
+    // PostgreSQL keeps its Windows versions, so the dialog stays usable.
+    let postgres = cards
+        .iter()
+        .find(|entry| entry.engine == EngineKey::Postgresql)
+        .expect("postgres card");
+    assert!(postgres.available);
+    assert!(engine_unavailable_reason(postgres).is_none());
+}
+
 #[test]
 fn engine_unavailability_and_auth_expose_their_state() {
     let entry = EngineEntry {
