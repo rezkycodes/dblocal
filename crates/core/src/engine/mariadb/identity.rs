@@ -349,8 +349,7 @@ fn send_term(pid: u32) -> Result<()> {
 fn send_term(pid: u32) -> Result<()> {
     let _ = pid;
     Err(DblError::Unsupported {
-        capability: "mariadb SIGTERM shutdown",
-        reason: "not implemented on this platform".to_owned(),
+        reason: "mariadb SIGTERM shutdown is not implemented on this platform".to_owned(),
     })
 }
 
