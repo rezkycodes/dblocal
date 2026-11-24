@@ -12,6 +12,7 @@ mock = []
 [dependencies]
 directories = { workspace = true }
 flate2 = { workspace = true }
+jiff = { workspace = true }
 keyring = { workspace = true }
 liblzma = { workspace = true }
 mysql_async = { workspace = true }

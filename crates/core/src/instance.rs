@@ -5,6 +5,7 @@
 //! `docs/architecture/service.md`.
 
 mod admin_ops;
+mod archive_name;
 mod catalog_ops;
 mod clients_ops;
 mod config_ops;

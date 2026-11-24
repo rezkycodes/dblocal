@@ -561,47 +561,42 @@ async fn archive_data(inner: &Arc<Inner>, instance: &Instance) -> OpResult<Archi
     safe_within(&inner.paths, &instance_dir)?;
 
     let now = SystemTime::now();
-    let stamp = archive_stamp(now);
-    let target = inner
-        .paths
-        .archive_dir()
-        .join(format!("{}-{stamp}", instance.name().as_str()));
-    // The archive path is derived here, never from user text, and checked.
-    safe_within(&inner.paths, &target)?;
-    if !super::helpers::normalize(&target)
-        .starts_with(super::helpers::normalize(&inner.paths.archive_dir()))
+    let stamp = super::archive_name::stamp(now);
+    let dir_name = instance.name().as_str().to_owned();
+    let archive_root = inner.paths.archive_dir();
+    // The archive path is derived here, never from user text, and checked. The
+    // collision suffix `free_target` may add only extends this last component
+    // with `-<digits>`, so the checked path bounds every candidate.
+    let base_target = archive_root.join(format!("{dir_name}-{stamp}"));
+    safe_within(&inner.paths, &base_target)?;
+    if !super::helpers::normalize(&base_target)
+        .starts_with(super::helpers::normalize(&archive_root))
     {
         return Err(DblError::UnsafeArchive {
-            entry: target.display().to_string(),
+            entry: base_target.display().to_string(),
         }
         .into());
     }
 
     let size = dir_size(&data_dir);
-    let record_id = archive_id(instance, stamp);
+    let record_id = archive_id(instance);
     let name = instance.name().clone();
     let engine = instance.engine();
     let version = instance.version().to_owned();
-    let target_for_move = target.clone();
-    let archive_root = inner.paths.archive_dir();
-    blocking(move || {
+    let target = blocking(move || {
         super::helpers::ensure_private_dir(&archive_root)?;
+        // The stamp has minute resolution, so a name deleted twice within a minute
+        // gets `-2`, `-3`, … instead of reusing (and so losing) the first archive.
+        // Renaming onto a non-empty directory fails rather than overwriting it.
+        let target = super::archive_name::free_target(&archive_root, &dir_name, &stamp)?;
         if data_dir.exists() {
-            if target_for_move.exists() {
-                // Another process already moved this data (it crashed after the
-                // rename). Keep the data where it is rather than refusing.
-                tracing::warn!(
-                    path = %target_for_move.display(),
-                    "archive target already exists; keeping the existing copy"
-                );
-            } else {
-                std::fs::rename(&data_dir, &target_for_move)?;
-            }
-        } else if !target_for_move.exists() {
-            super::helpers::ensure_private_dir(&target_for_move)?;
+            std::fs::rename(&data_dir, &target)?;
+        } else {
+            super::helpers::ensure_private_dir(&target)?;
         }
         // The instance shell (logs, run) is gone once its data is archived.
-        remove_tree_retrying(&instance_dir)
+        remove_tree_retrying(&instance_dir)?;
+        Ok(target)
     })
     .await?;
 
@@ -610,7 +605,7 @@ async fn archive_data(inner: &Arc<Inner>, instance: &Instance) -> OpResult<Archi
     ))
 }
 
-fn archive_id(instance: &Instance, _stamp: u64) -> String {
+fn archive_id(instance: &Instance) -> String {
     // Deliberately stable, not time-derived: an instance is deleted once, and a
     // stable id makes registering the archive idempotent. That matters because a
     // second process's reconciliation can find the renamed directory in the
@@ -619,16 +614,6 @@ fn archive_id(instance: &Instance, _stamp: u64) -> String {
     let id = instance.id().as_str();
     let short = id.get(..8).unwrap_or(id);
     format!("arch-{short}")
-}
-
-fn archive_stamp(now: SystemTime) -> u64 {
-    let elapsed = now
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .unwrap_or_default();
-    elapsed
-        .as_secs()
-        .saturating_mul(1000)
-        .saturating_add(u64::from(elapsed.subsec_millis()))
 }
 
 #[cfg(test)]

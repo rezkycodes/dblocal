@@ -295,3 +295,116 @@ fn recovery_skips_a_recorded_directory_that_sorts_last() {
         "recorded data survives"
     );
 }
+
+/// Archives `name`'s freshly created instance, after writing `marker` into its
+/// data directory, and returns the recorded archive path.
+fn archive_with_marker(h: &Harness, name: &str, marker: &str) -> std::path::PathBuf {
+    let instance = create(h, name);
+    let data_dir = h.paths.data_dir(instance.name());
+    std::fs::write(data_dir.join("round.marker"), marker).expect("marker");
+    let (_op, run) = h.run_call(|| {
+        h.service
+            .delete_instance(instance.id(), crate::model::DeleteMode::ArchiveData)
+    });
+    assert!(matches!(run.result(), Some(Ok(()))), "{:?}", run.result());
+    h.service
+        .list_archives()
+        .expect("archives")
+        .into_iter()
+        .find(|archive| archive.id() == format!("arch-{}", &instance.id().as_str()[..8]))
+        .expect("the archive of this round")
+        .path()
+        .to_path_buf()
+}
+
+#[test]
+fn archive_directory_is_named_with_a_minute_stamp() {
+    // PRD F-INS-05 AC3: `<name>-<YYYYMMDD-HHMM>`, not an epoch.
+    let h = Harness::new(EngineKey::Postgresql);
+    let path = archive_with_marker(&h, "stamped", "one");
+    let dir_name = path.file_name().and_then(|n| n.to_str()).expect("name");
+    let stamp = dir_name.strip_prefix("stamped-").expect("name prefix");
+    assert!(
+        super::super::archive_name::matches_archive_name(dir_name, "stamped-"),
+        "{dir_name}"
+    );
+    let (date, time) = stamp.split_once('-').expect("date-time");
+    assert_eq!((date.len(), time.len()), (8, 4), "{dir_name}");
+    assert!(
+        date.starts_with("20"),
+        "a calendar year, not an epoch: {dir_name}"
+    );
+}
+
+#[test]
+fn deleting_a_name_twice_in_one_minute_keeps_both_archives() {
+    // Two deletes of the same name within a minute share a stamp. The second one
+    // must land beside the first, never inside or over it.
+    let h = Harness::new(EngineKey::Postgresql);
+    let first = archive_with_marker(&h, "again", "first");
+    let second = archive_with_marker(&h, "again", "second");
+
+    assert_ne!(first, second, "two archives need two directories");
+    assert_eq!(
+        std::fs::read_to_string(first.join("round.marker")).expect("first marker"),
+        "first"
+    );
+    assert_eq!(
+        std::fs::read_to_string(second.join("round.marker")).expect("second marker"),
+        "second"
+    );
+    assert_eq!(first.parent(), second.parent(), "both live in archive/");
+    assert_eq!(
+        h.service.list_archives().expect("archives").len(),
+        2,
+        "both archives are recorded"
+    );
+}
+
+#[test]
+fn a_taken_archive_name_is_never_overwritten_or_adopted() {
+    // Pre-create the directory for this minute and the next, so the delete is
+    // certain to collide whichever minute it lands in.
+    let h = Harness::new(EngineKey::Postgresql);
+    let archive_root = h.paths.archive_dir();
+    std::fs::create_dir_all(&archive_root).expect("archive root");
+    let now = SystemTime::now();
+    let taken: Vec<_> = [now, now + std::time::Duration::from_secs(60)]
+        .into_iter()
+        .map(|moment| {
+            let dir = archive_root.join(format!(
+                "busy-{}",
+                super::super::archive_name::stamp(moment)
+            ));
+            std::fs::create_dir_all(&dir).expect("taken dir");
+            std::fs::write(dir.join("keep.marker"), b"mine").expect("keep marker");
+            dir
+        })
+        .collect();
+
+    let archived = archive_with_marker(&h, "busy", "fresh");
+
+    assert!(
+        !taken.contains(&archived),
+        "{archived:?} reused a taken name"
+    );
+    assert!(
+        archived
+            .file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(|n| n.ends_with("-2")),
+        "{archived:?}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(archived.join("round.marker")).expect("new data"),
+        "fresh"
+    );
+    for dir in &taken {
+        assert_eq!(
+            std::fs::read(dir.join("keep.marker")).expect("kept"),
+            b"mine",
+            "{dir:?} was disturbed"
+        );
+        assert!(!dir.join("round.marker").exists(), "{dir:?} got new data");
+    }
+}

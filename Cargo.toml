@@ -18,6 +18,7 @@ anyhow = "1"
 clap = { version = "4.6", features = ["derive"] }
 directories = "6"
 flate2 = "1.1"
+jiff = { version = "1", default-features = false, features = ["std", "tz-system", "tzdb-zoneinfo", "tzdb-bundle-platform"] }
 keyring = "4.2"
 liblzma = "0.4"
 mysql_async = "0.37"

@@ -441,10 +441,10 @@ async fn finish_delete(inner: &Arc<Inner>, instance: &Instance) {
     }
 }
 
-/// An `archive/<name>-<digits>` directory that no archive row points at.
+/// An `archive/<name>-<stamp>` directory that no archive row points at.
 ///
-/// The match is exact, not a prefix: `pg` must never claim `pg-main-...`, whose
-/// remainder is not a stamp. Every directory that an existing archive row
+/// The match is exact, not a prefix (see `archive_name::matches_archive_name`):
+/// `pg` must never claim `pg-main-...`, whose remainder is not a stamp. Every directory that an existing archive row
 /// already references is skipped, so a recovered directory can never shadow
 /// another instance's archive. Each candidate is re-validated against the home.
 fn unrecorded_archive(inner: &Arc<Inner>, instance: &Instance) -> Option<PathBuf> {
@@ -465,25 +465,13 @@ fn unrecorded_archive(inner: &Arc<Inner>, instance: &Instance) -> Option<PathBuf
         .filter(|path| {
             path.file_name()
                 .and_then(|name| name.to_str())
-                .is_some_and(|name| matches_archive_name(name, &prefix))
+                .is_some_and(|name| super::archive_name::matches_archive_name(name, &prefix))
         })
         .filter(|path| super::helpers::safe_within(&inner.paths, path).is_ok())
         .filter(|path| !taken.contains(&super::helpers::normalize(path)))
         .collect();
     found.sort();
     found.pop()
-}
-
-/// Whether `name` is `<prefix><stamp>` with a stamp of ASCII digits only.
-///
-/// `prefix` already ends in `-`, so `pg-main-1700` does not match the prefix of
-/// `pg` (`pg-`); it starts with `pg-` but the remainder `main-1700` is not a
-/// stamp. The digits check is what enforces that.
-fn matches_archive_name(name: &str, prefix: &str) -> bool {
-    let Some(stamp) = name.strip_prefix(prefix) else {
-        return false;
-    };
-    !stamp.is_empty() && stamp.bytes().all(|byte| byte.is_ascii_digit())
 }
 
 fn short_id(id: &InstanceId) -> String {
