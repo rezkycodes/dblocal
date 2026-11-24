@@ -232,9 +232,6 @@ async fn install_runtime(
     // once the bytes have arrived, so a failed download never claims to verify.
     let expected: Vec<String> = if source.expected_binaries.is_empty() {
         expected_binaries(spec.engine())
-            .into_iter()
-            .map(str::to_owned)
-            .collect()
     } else {
         source.expected_binaries.clone()
     };
@@ -288,13 +285,26 @@ async fn install_runtime(
     Ok(())
 }
 
-fn expected_binaries(engine: crate::model::EngineKey) -> Vec<&'static str> {
-    match engine {
-        crate::model::EngineKey::Postgresql => vec!["bin/postgres", "bin/initdb", "bin/pg_ctl"],
-        crate::model::EngineKey::Valkey => vec!["bin/valkey-server"],
-        crate::model::EngineKey::Mysql => vec!["bin/mysqld"],
-        crate::model::EngineKey::Mariadb => vec!["bin/mariadbd", "bin/mysqld"],
-    }
+/// Binaries the extracted runtime must contain, relative to its root, named as
+/// the engine drivers launch them (`exe_name`: `.exe` on Windows).
+fn expected_binaries(engine: crate::model::EngineKey) -> Vec<String> {
+    expected_binaries_for(engine, cfg!(windows))
+}
+
+/// [`expected_binaries`] with the platform passed in, so both spellings are
+/// testable on any host.
+fn expected_binaries_for(engine: crate::model::EngineKey, windows: bool) -> Vec<String> {
+    let bases: &[&str] = match engine {
+        crate::model::EngineKey::Postgresql => &["postgres", "initdb", "pg_ctl"],
+        crate::model::EngineKey::Valkey => &["valkey-server"],
+        crate::model::EngineKey::Mysql => &["mysqld"],
+        crate::model::EngineKey::Mariadb => &["mariadbd", "mysqld"],
+    };
+    let suffix = if windows { ".exe" } else { "" };
+    bases
+        .iter()
+        .map(|base| format!("bin/{base}{suffix}"))
+        .collect()
 }
 
 fn check_cancel(token: &CancellationToken) -> super::helpers::OpResult<()> {
@@ -317,5 +327,72 @@ async fn rollback(inner: &Arc<Inner>, id: &InstanceId, spec: &InstanceSpec) {
     let removed = super::helpers::rollback_create(inner, id, spec.name()).await;
     if removed {
         super::helpers::emit_removed(inner, id);
+    }
+}
+
+#[cfg(test)]
+mod expected_binaries_tests {
+    use super::expected_binaries_for;
+    use crate::model::EngineKey;
+
+    const ENGINES: [EngineKey; 4] = [
+        EngineKey::Postgresql,
+        EngineKey::Valkey,
+        EngineKey::Mysql,
+        EngineKey::Mariadb,
+    ];
+
+    /// The install check looks for these files inside the extracted archive. A
+    /// Windows archive ships `bin/postgres.exe`, so a name without the suffix made
+    /// every Windows install fail with `DBL-1001` ("missing expected binary").
+    #[test]
+    fn windows_names_carry_the_exe_suffix() {
+        for engine in ENGINES {
+            let names = expected_binaries_for(engine, true);
+            assert!(!names.is_empty(), "{engine:?} must expect a binary");
+            for name in names {
+                assert!(
+                    name.starts_with("bin/") && name.ends_with(".exe"),
+                    "{engine:?}: `{name}` must be `bin/<name>.exe` on Windows"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn unix_names_have_no_suffix() {
+        for engine in ENGINES {
+            for name in expected_binaries_for(engine, false) {
+                assert!(
+                    name.starts_with("bin/") && !name.ends_with(".exe"),
+                    "{engine:?}: `{name}` must be a bare `bin/<name>` on unix"
+                );
+            }
+        }
+    }
+
+    /// The names must be the ones the engine drivers launch (`exe_name`), so the
+    /// install check and the start path cannot drift apart.
+    #[test]
+    fn the_install_check_matches_what_the_drivers_launch() {
+        let launched = |engine: EngineKey| -> Vec<String> {
+            let bases: &[&str] = match engine {
+                EngineKey::Postgresql => &["postgres", "initdb", "pg_ctl"],
+                EngineKey::Valkey => &["valkey-server"],
+                EngineKey::Mysql => &["mysqld"],
+                EngineKey::Mariadb => &["mariadbd", "mysqld"],
+            };
+            bases
+                .iter()
+                .map(|base| format!("bin/{}", crate::engine::uri::exe_name(base)))
+                .collect()
+        };
+        for engine in ENGINES {
+            assert_eq!(
+                expected_binaries_for(engine, cfg!(windows)),
+                launched(engine),
+                "{engine:?}"
+            );
+        }
     }
 }
