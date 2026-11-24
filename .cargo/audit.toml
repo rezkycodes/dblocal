@@ -1,0 +1,49 @@
+# .cargo/audit.toml — cargo-audit policy for DBLocal
+#
+# This file MUST stay in sync with the `[advisories] ignore` list in
+# ../deny.toml. CI runs two different tools that read two different files:
+#   * `cargo deny check advisories` reads `deny.toml`.
+#   * `cargo audit --deny warnings` reads this file (`.cargo/audit.toml`,
+#     or `~/.cargo/audit.toml`); it does NOT read `deny.toml`.
+# Editing one without the other means one CI gate passes and the other fails.
+# When an advisory is dropped from `deny.toml`, drop it here too.
+#
+# Every entry below is an `informational = "unmaintained"` advisory only:
+# no vulnerability and no unsound advisory. Each is transitive through the
+# pinned GPUI stack (AGENTS.md forbids moving the gpui-pre 0.3.12 /
+# gpui-component 0.10.0 / gpui-kit 0.10.0 pins) and the advisory database
+# reports `patched = []` for all of them, so there is no fixed version to
+# move to at this pin.
+#
+# Tracking: review every entry whenever the GPUI pins are raised
+# (gpui-kit, gpui-component, gpui-pre). Drop the entry when the upgrade
+# removes the crate.
+
+[advisories]
+ignore = [
+    # Tracking: re-check on the next GPUI pin bump. https://rustsec.org/advisories/RUSTSEC-2024-0384
+    "RUSTSEC-2024-0384", # instant 0.1.13: unmaintained via gpui-base/gpui-component; no patch; no vulnerability
+    # Tracking: re-check on the next GPUI pin bump. https://rustsec.org/advisories/RUSTSEC-2024-0436
+    "RUSTSEC-2024-0436", # paste 1.0.15: unmaintained proc-macro via gpui-component and rav1e; no patch; no vulnerability
+    # Tracking: re-check on the next GPUI pin bump. https://rustsec.org/advisories/RUSTSEC-2026-0192
+    "RUSTSEC-2026-0192", # ttf-parser 0.25.1: unmaintained via fontdb/cosmic-text/usvg under gpui-pre; no patch; no vulnerability
+    # Tracking: re-check on the next GPUI pin bump. https://rustsec.org/advisories/RUSTSEC-2026-0206
+    "RUSTSEC-2026-0206", # rustybuzz 0.20.1: unmaintained via usvg under gpui-pre/gpui-component; no patch; no vulnerability
+    # Tracking: re-check on the next GPUI pin bump. https://rustsec.org/advisories/RUSTSEC-2026-0370
+    "RUSTSEC-2026-0370", # zvariant 5.15.1: unmaintained via zbus/atspi/accesskit_unix and keyring's secret-service store; merged into zbus 6.0.0; no patch; no vulnerability
+    # Tracking: re-check on the next GPUI pin bump. https://rustsec.org/advisories/RUSTSEC-2026-0371
+    "RUSTSEC-2026-0371", # zbus_names 4.3.5: unmaintained via zbus/atspi/accesskit_unix and keyring's secret-service store; merged into zbus 6.0.0; no patch; no vulnerability
+    # Tracking: re-check on the next GPUI pin bump. https://rustsec.org/advisories/RUSTSEC-2026-0372
+    "RUSTSEC-2026-0372", # zvariant_derive 5.15.1: unmaintained proc-macro via zvariant; merged into zbus 6.0.0; no patch; no vulnerability
+    # Tracking: re-check on the next GPUI pin bump. https://rustsec.org/advisories/RUSTSEC-2026-0543
+    "RUSTSEC-2026-0543", # chrono 0.4.45: unmaintained via gpui-pre/gpui-base/gpui-component; no patch; no vulnerability
+    # Tracking: re-check on the next GPUI pin bump. https://rustsec.org/advisories/RUSTSEC-2025-0134
+    # rustls-pemfile 2.2.0 — unmaintained, `patched = []`, no vulnerability and
+    # no unsound advisory. Reachable ONLY through the wasm-only dependency of
+    # gpui-kit-assets: `cfg(target_family = "wasm")` gpui-pre-reqwest -> rustls-pemfile.
+    # It is not compiled for our Linux/Windows targets (absent from the host
+    # `cargo tree`), but it is present in Cargo.lock, so `cargo audit` reports it
+    # while `cargo deny` (target-filtered) does not. Ninth entry, added beyond
+    # the eight in deny.toml; see the commit message for the reason it stands alone.
+    "RUSTSEC-2025-0134",
+]
