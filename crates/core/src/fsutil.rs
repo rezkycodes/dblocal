@@ -129,8 +129,14 @@ pub fn output_retrying_text_file_busy(mut cmd: Command) -> io::Result<Output> {
     }
 }
 
-fn is_text_file_busy(err: &io::Error) -> bool {
+#[cfg(unix)]
+pub(crate) fn is_text_file_busy(err: &io::Error) -> bool {
     err.raw_os_error() == Some(26)
+}
+
+#[cfg(not(unix))]
+pub(crate) fn is_text_file_busy(_err: &io::Error) -> bool {
+    false
 }
 
 #[cfg(test)]
@@ -240,5 +246,19 @@ mod tests {
         fs::set_permissions(&target, fs::Permissions::from_mode(0o755)).expect("chmod");
         ensure_private_dir(&target).expect("tighten");
         assert_eq!(mode(&target), 0o700);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn is_text_file_busy_matches_etxtbsy_only_on_unix() {
+        assert!(is_text_file_busy(&io::Error::from_raw_os_error(26)));
+        assert!(!is_text_file_busy(&io::Error::from_raw_os_error(2)));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn is_text_file_busy_is_false_on_windows() {
+        assert!(!is_text_file_busy(&io::Error::from_raw_os_error(26)));
+        assert!(!is_text_file_busy(&io::Error::from_raw_os_error(2)));
     }
 }

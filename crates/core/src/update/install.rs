@@ -502,7 +502,9 @@ fn run_with_timeout(
     let mut child = loop {
         match cmd.stdout(Stdio::piped()).stderr(Stdio::piped()).spawn() {
             Ok(child) => break child,
-            Err(source) if source.raw_os_error() == Some(26) && Instant::now() < spawn_deadline => {
+            Err(source)
+                if crate::fsutil::is_text_file_busy(&source) && Instant::now() < spawn_deadline =>
+            {
                 std::thread::sleep(EXEC_BUSY_RETRY_DELAY);
             }
             Err(source) => {
