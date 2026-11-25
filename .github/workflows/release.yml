@@ -156,12 +156,19 @@ jobs:
           test -x "$bin" || { echo "Expected binary not found: $bin" >&2; exit 1; }
 
           out="dist/${TARGET}"
-          mkdir -p "$out/stage"
+          mkdir -p "$out/stage/share/applications" "$out/stage/share/icons/hicolor/scalable/apps"
           cp "$bin" "$out/stage/dblocal"
           chmod +x "$out/stage/dblocal"
+          cp packaging/linux/dev.dblocal.DBLocal.desktop "$out/stage/share/applications/dev.dblocal.DBLocal.desktop"
+          cp packaging/linux/dblocal.svg "$out/stage/share/icons/hicolor/scalable/apps/dblocal.svg"
+          for icon_size in 16 24 32 48 64 128 256 512; do
+            mkdir -p "$out/stage/share/icons/hicolor/${icon_size}x${icon_size}/apps"
+            cp "packaging/icons/png/dblocal-${icon_size}.png" \
+              "$out/stage/share/icons/hicolor/${icon_size}x${icon_size}/apps/dblocal.png"
+          done
 
           tarball="dblocal-${version}-${TARGET}.tar.gz"
-          tar -C "$out/stage" -czf "$out/${tarball}" dblocal
+          tar -C "$out/stage" -czf "$out/${tarball}" dblocal share
 
           appimage="dblocal-${version}-${TARGET}.AppImage"
           bash packaging/appimage/build-appimage.sh "$bin" "$out/${appimage}"

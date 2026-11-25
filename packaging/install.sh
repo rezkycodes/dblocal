@@ -387,6 +387,90 @@ path_warn() {
   warn "  export PATH=\"$bindir:\$PATH\""
 }
 
+install_desktop_and_icons() {
+  # Install user-local desktop entry and hicolor icons on Linux when the
+  # tarball ships a share/ tree. Never uses sudo; skips quietly for older
+  # tarballs that contain only the binary.
+  archive_path="$1"
+  extract_dir="$2"
+  installed_bin="$3"
+
+  [ "$os" = "linux" ] || return 0
+  if [ -n "${XDG_DATA_HOME:-}" ]; then
+    data_home="$XDG_DATA_HOME"
+  elif [ -n "${HOME:-}" ]; then
+    data_home="$HOME/.local/share"
+  else
+    return 0
+  fi
+
+  desktop_member="share/applications/dev.dblocal.DBLocal.desktop"
+  members="$(tar -tzf "$archive_path" 2>/dev/null || true)"
+  if ! printf '%s\n' "$members" | grep -Fx "$desktop_member" >/dev/null 2>&1; then
+    return 0
+  fi
+
+  # Extract only expected desktop and icon members; reject symlinks.
+  tar -xzf "$archive_path" -C "$extract_dir" -- "$desktop_member" 2>/dev/null || return 0
+  desktop_src="$extract_dir/$desktop_member"
+  if [ -L "$desktop_src" ] || [ ! -f "$desktop_src" ]; then
+    warn "skipping desktop entry (not a regular file)"
+    return 0
+  fi
+
+  # Resolve absolute path of installed binary for Exec= / TryExec=.
+  abs_dir="$(CDPATH='' cd -- "$(dirname "$installed_bin")" && pwd -P)"
+  abs_bin="$abs_dir/$(basename "$installed_bin")"
+
+  apps_dir="$data_home/applications"
+  mkdir -p "$apps_dir"
+  desktop_dest="$apps_dir/dev.dblocal.DBLocal.desktop"
+  desktop_tmp="${desktop_dest}.new.$$"
+  awk -v bin="$abs_bin" '
+    /^Exec=/    { print "Exec=" bin; next }
+    /^TryExec=/ { print "TryExec=" bin; next }
+    { print }
+  ' "$desktop_src" > "$desktop_tmp"
+  chmod 0644 "$desktop_tmp"
+  mv -f "$desktop_tmp" "$desktop_dest"
+
+  svg_member="share/icons/hicolor/scalable/apps/dblocal.svg"
+  if printf '%s\n' "$members" | grep -Fx "$svg_member" >/dev/null 2>&1; then
+    if tar -xzf "$archive_path" -C "$extract_dir" -- "$svg_member" 2>/dev/null; then
+      svg_src="$extract_dir/$svg_member"
+      if [ ! -L "$svg_src" ] && [ -f "$svg_src" ]; then
+        svg_dir="$data_home/icons/hicolor/scalable/apps"
+        mkdir -p "$svg_dir"
+        cp "$svg_src" "$svg_dir/dblocal.svg"
+        chmod 0644 "$svg_dir/dblocal.svg"
+      fi
+    fi
+  fi
+
+  for icon_size in 16 24 32 48 64 128 256 512; do
+    png_member="share/icons/hicolor/${icon_size}x${icon_size}/apps/dblocal.png"
+    if printf '%s\n' "$members" | grep -Fx "$png_member" >/dev/null 2>&1; then
+      if tar -xzf "$archive_path" -C "$extract_dir" -- "$png_member" 2>/dev/null; then
+        png_src="$extract_dir/$png_member"
+        if [ ! -L "$png_src" ] && [ -f "$png_src" ]; then
+          png_dir="$data_home/icons/hicolor/${icon_size}x${icon_size}/apps"
+          mkdir -p "$png_dir"
+          cp "$png_src" "$png_dir/dblocal.png"
+          chmod 0644 "$png_dir/dblocal.png"
+        fi
+      fi
+    fi
+  done
+
+  if have_cmd gtk-update-icon-cache; then
+    gtk-update-icon-cache -q -t -f "$data_home/icons/hicolor" 2>/dev/null || true
+  fi
+  if have_cmd update-desktop-database; then
+    update-desktop-database -q "$apps_dir" 2>/dev/null || true
+  fi
+  info "installed desktop entry and icons under $data_home"
+}
+
 # --- release resolution -------------------------------------------------------
 
 resolve_release_base() {
@@ -503,6 +587,7 @@ main() {
 
   info "installing to $dest_bin"
   install_file "$bin_src" "$dest_bin"
+  install_desktop_and_icons "$archive" "$tmpdir/extract" "$dest_bin"
 
   info "installed dblocal ($version_tag) to $dest_bin"
   path_warn "$dest_prefix"

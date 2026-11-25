@@ -604,6 +604,98 @@ kill "$d5_spid" >/dev/null 2>&1 || true
 wait "$d5_spid" >/dev/null 2>&1 || true
 if [ "$rc" -ne 0 ]; then pass "D5: checksum lookup is literal (regex-spoofed name rejected)"; else fail "D5: checksum lookup must not treat asset name as a regex"; fi
 
+# --- Tarball desktop entry and icon installation -----------------------------
+log "-- test: tarball with share/ installs desktop entry, icons, and rewrites Exec"
+icon_rel="$tmp_root/icon-release"
+mkdir -p "$icon_rel/stage/share/applications" "$icon_rel/stage/share/icons/hicolor/scalable/apps"
+printf '#!/bin/sh\necho "dblocal-icon-test"\n' > "$icon_rel/stage/dblocal"
+chmod +x "$icon_rel/stage/dblocal"
+cp "$repo_root/packaging/linux/dev.dblocal.DBLocal.desktop" "$icon_rel/stage/share/applications/dev.dblocal.DBLocal.desktop"
+cp "$repo_root/packaging/linux/dblocal.svg" "$icon_rel/stage/share/icons/hicolor/scalable/apps/dblocal.svg"
+for sz in 16 24 32 48 64 128 256 512; do
+  mkdir -p "$icon_rel/stage/share/icons/hicolor/${sz}x${sz}/apps"
+  cp "$repo_root/packaging/icons/png/dblocal-${sz}.png" \
+    "$icon_rel/stage/share/icons/hicolor/${sz}x${sz}/apps/dblocal.png"
+done
+tar -C "$icon_rel/stage" -czf "$icon_rel/dblocal-${VERSION}-linux-x86_64.tar.gz" dblocal share
+rm -rf "$icon_rel/stage"
+(
+  cd "$icon_rel"
+  printf '%s  %s\n' "$(sha256_file "dblocal-${VERSION}-linux-x86_64.tar.gz")" "dblocal-${VERSION}-linux-x86_64.tar.gz" > checksums.txt
+)
+icon_port="$(pick_free_port)"
+(
+  cd "$icon_rel" || exit 1
+  exec python3 -m http.server "$icon_port" --bind 127.0.0.1
+) </dev/null >/dev/null 2>&1 &
+icon_spid=$!
+for _ in $(seq 1 50); do curl -fsS "http://127.0.0.1:${icon_port}/checksums.txt" >/dev/null 2>&1 && break; sleep 0.1; done
+
+home_icon_dry="$tmp_root/home-icon-dry"
+prefix_icon_dry="$tmp_root/prefix-icon-dry"
+mkdir -p "$home_icon_dry"
+set +e
+out="$(env \
+  DBLOCAL_RELEASE_BASE_URL="http://127.0.0.1:${icon_port}" \
+  DBLOCAL_TEST_UNAME_S=Linux DBLOCAL_TEST_UNAME_M=x86_64 \
+  HOME="$home_icon_dry" PATH=/usr/bin:/bin \
+  sh "$installer" --prefix "$prefix_icon_dry" --version "$VERSION" --dry-run 2>&1)"
+rc=$?
+set -e
+assert_eq "$rc" "0" "tarball share/: dry-run exits 0"
+if [ -e "$prefix_icon_dry/dblocal" ] || [ -e "$home_icon_dry/.local/share/applications/dev.dblocal.DBLocal.desktop" ]; then
+  fail "tarball share/: dry-run must not write binary or desktop file"
+else
+  pass "tarball share/: dry-run writes nothing"
+fi
+
+home_icon="$tmp_root/home-icon"
+prefix_icon="$tmp_root/prefix-icon"
+mkdir -p "$home_icon"
+set +e
+out="$(env \
+  DBLOCAL_RELEASE_BASE_URL="http://127.0.0.1:${icon_port}" \
+  DBLOCAL_TEST_UNAME_S=Linux DBLOCAL_TEST_UNAME_M=x86_64 \
+  HOME="$home_icon" PATH=/usr/bin:/bin \
+  sh "$installer" --prefix "$prefix_icon" --version "$VERSION" 2>&1)"
+rc=$?
+set -e
+kill "$icon_spid" >/dev/null 2>&1 || true
+wait "$icon_spid" >/dev/null 2>&1 || true
+
+assert_eq "$rc" "0" "tarball share/: install exits 0"
+installed_desktop="$home_icon/.local/share/applications/dev.dblocal.DBLocal.desktop"
+if [ -f "$installed_desktop" ]; then
+  pass "tarball share/: desktop file installed"
+  desktop_content="$(cat "$installed_desktop")"
+  assert_contains "$desktop_content" "Exec=${prefix_icon}/dblocal" "tarball share/: Exec rewritten to absolute binary path"
+  assert_contains "$desktop_content" "TryExec=${prefix_icon}/dblocal" "tarball share/: TryExec rewritten to absolute binary path"
+else
+  fail "tarball share/: desktop file missing at $installed_desktop"
+fi
+if [ -f "$home_icon/.local/share/icons/hicolor/scalable/apps/dblocal.svg" ] \
+  && [ -f "$home_icon/.local/share/icons/hicolor/256x256/apps/dblocal.png" ]; then
+  pass "tarball share/: SVG and PNG icons installed"
+else
+  fail "tarball share/: expected SVG and 256px PNG icons under $home_icon/.local/share/icons/hicolor"
+fi
+
+# Upgrade from an old tarball without share/ still works cleanly.
+log "-- test: tarball without share/ (older release) installs cleanly"
+home_old="$tmp_root/home-old"
+prefix_old="$tmp_root/prefix-old"
+mkdir -p "$home_old"
+set +e
+out="$(run_installer Linux x86_64 "$home_old" "$prefix_old" --version "$VERSION" 2>&1)"
+rc=$?
+set -e
+assert_eq "$rc" "0" "tarball without share/: install exits 0"
+if [ -x "$prefix_old/dblocal" ] && [ ! -e "$home_old/.local/share/applications/dev.dblocal.DBLocal.desktop" ]; then
+  pass "tarball without share/: binary installed and share/ skipped quietly"
+else
+  fail "tarball without share/: unexpected state in $prefix_old or $home_old"
+fi
+
 # --- W3-E-fix1/fix2: packaging version/libc/recommends regression tests -------
 # Sourced so this harness stays under the 800-line file limit.
 # shellcheck source=packaging/test/packaging_regressions.sh
