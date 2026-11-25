@@ -702,6 +702,77 @@ else
   fail "tarball share/ (XDG_DATA_HOME): expected files under $xdg_data and not under $home_xdg/.local/share"
 fi
 
+# Icon theme cache handling: never create a user-level icon-theme.cache when
+# none existed; touch the theme directory; refresh only when cache already exists.
+log "-- test: tarball share/ icon-theme.cache handling (no cache vs existing cache)"
+ic_bin="$tmp_root/ic-fakebin"
+mkdir -p "$ic_bin"
+cat > "$ic_bin/gtk-update-icon-cache" <<'EOF'
+#!/bin/sh
+printf '%s\n' "$*" >> "$IC_CACHE_LOG"
+exit 0
+EOF
+chmod +x "$ic_bin/gtk-update-icon-cache"
+
+# (a) No cache beforehand: tool not called, no cache created, hicolor mtime updated.
+home_nocache="$tmp_root/home-nocache"
+xdg_nocache="$tmp_root/xdg-nocache"
+prefix_nocache="$tmp_root/prefix-nocache"
+ic_log_no="$tmp_root/ic-nocache.log"
+old_ref="$tmp_root/old-mtime-ref"
+mkdir -p "$home_nocache" "$xdg_nocache/icons/hicolor"
+touch -t 202001010000 "$old_ref" "$xdg_nocache/icons/hicolor"
+set +e
+out="$(env \
+  DBLOCAL_RELEASE_BASE_URL="http://127.0.0.1:${icon_port}" \
+  DBLOCAL_TEST_UNAME_S=Linux DBLOCAL_TEST_UNAME_M=x86_64 \
+  HOME="$home_nocache" XDG_DATA_HOME="$xdg_nocache" \
+  IC_CACHE_LOG="$ic_log_no" PATH="$ic_bin:/usr/bin:/bin" \
+  sh "$installer" --prefix "$prefix_nocache" --version "$VERSION" 2>&1)"
+rc=$?
+set -e
+assert_eq "$rc" "0" "icon-cache (no cache): install exits 0"
+if [ ! -s "$ic_log_no" ]; then
+  pass "icon-cache (no cache): gtk-update-icon-cache not called"
+else
+  fail "icon-cache (no cache): gtk-update-icon-cache should not be called (got: $(cat "$ic_log_no"))"
+fi
+if [ ! -e "$xdg_nocache/icons/hicolor/icon-theme.cache" ]; then
+  pass "icon-cache (no cache): no icon-theme.cache created"
+else
+  fail "icon-cache (no cache): icon-theme.cache must not be created"
+fi
+if [ "$xdg_nocache/icons/hicolor" -nt "$old_ref" ]; then
+  pass "icon-cache (no cache): hicolor directory mtime updated"
+else
+  fail "icon-cache (no cache): hicolor directory mtime was not updated"
+fi
+
+# (b) Existing cache: tool called once for that directory.
+home_hascache="$tmp_root/home-hascache"
+xdg_hascache="$tmp_root/xdg-hascache"
+prefix_hascache="$tmp_root/prefix-hascache"
+ic_log_yes="$tmp_root/ic-hascache.log"
+mkdir -p "$home_hascache" "$xdg_hascache/icons/hicolor"
+: > "$xdg_hascache/icons/hicolor/icon-theme.cache"
+set +e
+out="$(env \
+  DBLOCAL_RELEASE_BASE_URL="http://127.0.0.1:${icon_port}" \
+  DBLOCAL_TEST_UNAME_S=Linux DBLOCAL_TEST_UNAME_M=x86_64 \
+  HOME="$home_hascache" XDG_DATA_HOME="$xdg_hascache" \
+  IC_CACHE_LOG="$ic_log_yes" PATH="$ic_bin:/usr/bin:/bin" \
+  sh "$installer" --prefix "$prefix_hascache" --version "$VERSION" 2>&1)"
+rc=$?
+set -e
+assert_eq "$rc" "0" "icon-cache (existing cache): install exits 0"
+ic_calls="$( [ -f "$ic_log_yes" ] && wc -l < "$ic_log_yes" | tr -d '[:space:]' || echo 0 )"
+assert_eq "$ic_calls" "1" "icon-cache (existing cache): gtk-update-icon-cache called once"
+if [ -f "$ic_log_yes" ]; then
+  assert_contains "$(cat "$ic_log_yes")" "$xdg_hascache/icons/hicolor" "icon-cache (existing cache): called for hicolor dir"
+else
+  fail "icon-cache (existing cache): log missing"
+fi
+
 # Path with space: desktop/icon install skipped with warning, binary still installed.
 log "-- test: tarball share/ skips desktop install on path with space"
 home_space="$tmp_root/home-space"

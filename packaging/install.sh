@@ -469,7 +469,8 @@ install_desktop_and_icons() {
     fi
   done
 
-  if have_cmd gtk-update-icon-cache; then
+  touch "$data_home/icons/hicolor" 2>/dev/null || true
+  if [ -f "$data_home/icons/hicolor/icon-theme.cache" ] && have_cmd gtk-update-icon-cache; then
     gtk-update-icon-cache -q -t -f "$data_home/icons/hicolor" 2>/dev/null || true
   fi
   if have_cmd update-desktop-database; then
