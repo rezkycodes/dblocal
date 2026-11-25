@@ -129,10 +129,19 @@ pack_appimage() {
     *) arch="$(uname -m)" ;;
   esac
 
+  local -a extra_args=()
+  if [ -n "${APPIMAGE_RUNTIME_FILE:-}" ]; then
+    if [ ! -f "$APPIMAGE_RUNTIME_FILE" ]; then
+      printf 'error: APPIMAGE_RUNTIME_FILE not found: %s\n' "$APPIMAGE_RUNTIME_FILE" >&2
+      exit 1
+    fi
+    extra_args+=(--runtime-file "$APPIMAGE_RUNTIME_FILE")
+  fi
+
   if [ -f "$tool" ] && [ -x "$tool" ] && [ "${tool##*.}" = "AppImage" ]; then
-    ARCH="$arch" "$tool" --appimage-extract-and-run --no-appstream "$appdir" "$output"
+    ARCH="$arch" "$tool" --appimage-extract-and-run --no-appstream "${extra_args[@]}" "$appdir" "$output"
   else
-    ARCH="$arch" "$tool" --no-appstream "$appdir" "$output"
+    ARCH="$arch" "$tool" --no-appstream "${extra_args[@]}" "$appdir" "$output"
   fi
 }
 

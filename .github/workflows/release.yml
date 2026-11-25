@@ -26,11 +26,17 @@ jobs:
             rust_target: x86_64-unknown-linux-gnu
             deb_arch: amd64
             rpm_arch: x86_64
+            appimage_arch: x86_64
+            appimagetool_sha256: ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0
+            runtime_sha256: 2fca8b443c92510f1483a883f60061ad09b46b978b2631c807cd873a47ec260d
           - os: ubuntu-24.04-arm
             target: linux-aarch64
             rust_target: aarch64-unknown-linux-gnu
             deb_arch: arm64
             rpm_arch: aarch64
+            appimage_arch: aarch64
+            appimagetool_sha256: f0837e7448a0c1e4e650a93bb3e85802546e60654ef287576f46c71c126a9158
+            runtime_sha256: 00cbdfcf917cc6c0ff6d3347d59e0ca1f7f45a6df1a428a0d6d8a78664d87444
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -53,6 +59,36 @@ jobs:
       - name: Build release binary
         shell: bash
         run: cargo build --release -p dblocal-cli --target ${{ matrix.rust_target }}
+
+      - name: Install pinned appimagetool and type2 runtime
+        shell: bash
+        env:
+          APPIMAGE_ARCH: ${{ matrix.appimage_arch }}
+          APPIMAGETOOL_VERSION: "1.9.1"
+          APPIMAGETOOL_SHA256: ${{ matrix.appimagetool_sha256 }}
+          RUNTIME_VERSION: "20251108"
+          RUNTIME_SHA256: ${{ matrix.runtime_sha256 }}
+        run: |
+          set -euo pipefail
+          tool_dir="${RUNNER_TEMP}/appimagetool"
+          mkdir -p "$tool_dir"
+
+          tool_file="${tool_dir}/appimagetool-${APPIMAGE_ARCH}.AppImage"
+          runtime_file="${tool_dir}/runtime-${APPIMAGE_ARCH}"
+
+          curl -fsSL -o "$tool_file" \
+            "https://github.com/AppImage/appimagetool/releases/download/${APPIMAGETOOL_VERSION}/appimagetool-${APPIMAGE_ARCH}.AppImage"
+          curl -fsSL -o "$runtime_file" \
+            "https://github.com/AppImage/type2-runtime/releases/download/${RUNTIME_VERSION}/runtime-${APPIMAGE_ARCH}"
+
+          sha256sum -c <<EOF
+          ${APPIMAGETOOL_SHA256}  ${tool_file}
+          ${RUNTIME_SHA256}  ${runtime_file}
+          EOF
+
+          chmod +x "$tool_file"
+          echo "APPIMAGETOOL=${tool_file}" >> "$GITHUB_ENV"
+          echo "APPIMAGE_RUNTIME_FILE=${runtime_file}" >> "$GITHUB_ENV"
 
       - name: Package .tar.gz and .AppImage
         shell: bash
