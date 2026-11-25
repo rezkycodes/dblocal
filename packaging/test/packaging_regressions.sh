@@ -464,3 +464,59 @@ if grep -q 'Id="\*"' "$msi_wxs" && grep -q 'UpgradeCode="A3D5E2D1-7B4A-4D7E-9F3A
 else
   fail "MSI: dblocal.wxs missing Id=\"*\" or stable UpgradeCode"
 fi
+
+# --- App icon & desktop entry regression checks ------------------------------
+log "-- test: app icon assets and desktop entry"
+icon_svg="$repo_root/packaging/linux/dblocal.svg"
+icon_ico="$repo_root/packaging/icons/dblocal.ico"
+desktop_file="$repo_root/packaging/linux/dev.dblocal.DBLocal.desktop"
+
+if command -v xmllint >/dev/null 2>&1; then
+  if xmllint --noout "$icon_svg" 2>/dev/null; then
+    pass "icon: dblocal.svg is well-formed XML"
+  else
+    fail "icon: dblocal.svg failed xmllint"
+  fi
+fi
+
+if [ -f "$icon_ico" ]; then
+  pass "icon: packaging/icons/dblocal.ico exists"
+else
+  fail "icon: packaging/icons/dblocal.ico missing"
+fi
+
+for icon_size in 16 24 32 48 64 128 256 512; do
+  if [ -f "$repo_root/packaging/icons/png/dblocal-${icon_size}.png" ]; then
+    pass "icon: dblocal-${icon_size}.png exists"
+  else
+    fail "icon: dblocal-${icon_size}.png missing"
+  fi
+done
+
+if [ -f "$desktop_file" ]; then
+  pass "desktop: dev.dblocal.DBLocal.desktop exists"
+  if command -v desktop-file-validate >/dev/null 2>&1; then
+    if desktop-file-validate "$desktop_file" >/dev/null 2>&1; then
+      pass "desktop: dev.dblocal.DBLocal.desktop passes desktop-file-validate"
+    else
+      fail "desktop: dev.dblocal.DBLocal.desktop failed desktop-file-validate"
+    fi
+  fi
+  wm_class="$(sed -n 's/^StartupWMClass=//p' "$desktop_file" | head -n 1)"
+  gui_app_id="$(sed -n 's/.*app_id: Some("\([^"]*\)".*/\1/p' "$repo_root/crates/gui/src/app/bootstrap.rs" | head -n 1)"
+  assert_eq "$wm_class" "$gui_app_id" "desktop: StartupWMClass matches GUI app_id"
+else
+  fail "desktop: dev.dblocal.DBLocal.desktop missing"
+fi
+
+for builder in \
+  "$repo_root/packaging/deb/build-deb.sh" \
+  "$repo_root/packaging/rpm/build-rpm.sh" \
+  "$repo_root/packaging/rpm/dblocal.spec" \
+  "$repo_root/packaging/appimage/build-appimage.sh"; do
+  if grep -q 'dev.dblocal.DBLocal.desktop' "$builder" && grep -q 'dblocal-.*png\|hicolor/.*apps/dblocal\.png' "$builder"; then
+    pass "packaging: $(basename "$builder") references desktop file and PNG icons"
+  else
+    fail "packaging: $(basename "$builder") missing desktop file or PNG icon references"
+  fi
+done

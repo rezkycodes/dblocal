@@ -12,7 +12,7 @@ Terminal=false
 Categories=Development;Database;
 Keywords=database;postgres;postgresql;mysql;mariadb;valkey;redis;local;development;
 StartupNotify=true
-StartupWMClass=dblocal
+StartupWMClass=dev.dblocal.DBLocal
 # Local database servers only; DBLocal never runs as root and never binds
 # beyond 127.0.0.1 / ::1.
 X-GNOME-UsesNotifications=true

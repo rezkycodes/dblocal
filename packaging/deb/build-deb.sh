@@ -188,8 +188,13 @@ install -d -m 0755 \
   "$pkgroot/usr/share/doc/dblocal"
 
 install -m 0755 "$DBLOCAL_BIN" "$pkgroot/usr/bin/dblocal"
-install -m 0644 "$repo_root/packaging/linux/dblocal.desktop" "$pkgroot/usr/share/applications/dblocal.desktop"
+install -m 0644 "$repo_root/packaging/linux/dev.dblocal.DBLocal.desktop" "$pkgroot/usr/share/applications/dev.dblocal.DBLocal.desktop"
 install -m 0644 "$repo_root/packaging/linux/dblocal.svg" "$pkgroot/usr/share/icons/hicolor/scalable/apps/dblocal.svg"
+for icon_size in 16 24 32 48 64 128 256 512; do
+  install -d -m 0755 "$pkgroot/usr/share/icons/hicolor/${icon_size}x${icon_size}/apps"
+  install -m 0644 "$repo_root/packaging/icons/png/dblocal-${icon_size}.png" \
+    "$pkgroot/usr/share/icons/hicolor/${icon_size}x${icon_size}/apps/dblocal.png"
+done
 
 sed \
   -e "s/__VERSION__/$VERSION_PKG/g" \

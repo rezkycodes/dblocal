@@ -105,8 +105,11 @@ topdir="$workdir/rpmbuild"
 mkdir -p "$topdir"/{BUILD,BUILDROOT,RPMS,SOURCES,SPECS,SRPMS}
 
 cp "$DBLOCAL_BIN" "$topdir/SOURCES/dblocal"
-cp "$repo_root/packaging/linux/dblocal.desktop" "$topdir/SOURCES/dblocal.desktop"
+cp "$repo_root/packaging/linux/dev.dblocal.DBLocal.desktop" "$topdir/SOURCES/dev.dblocal.DBLocal.desktop"
 cp "$repo_root/packaging/linux/dblocal.svg" "$topdir/SOURCES/dblocal.svg"
+for icon_size in 16 24 32 48 64 128 256 512; do
+  cp "$repo_root/packaging/icons/png/dblocal-${icon_size}.png" "$topdir/SOURCES/dblocal-${icon_size}.png"
+done
 cp "$repo_root/COPYING" "$topdir/SOURCES/COPYING"
 if [ -f "$repo_root/docs/release/LICENSE-RING-AWSLC-NOTES.md" ]; then
   cp "$repo_root/docs/release/LICENSE-RING-AWSLC-NOTES.md" "$topdir/SOURCES/LICENSE-RING-AWSLC-NOTES.md"

@@ -89,10 +89,16 @@ assemble_appdir() {
   cp "$binary" "$appdir/usr/bin/dblocal"
   chmod 0755 "$appdir/usr/bin/dblocal"
 
-  cp "$repo_root/packaging/linux/dblocal.desktop" "$appdir/usr/share/applications/dblocal.desktop"
-  cp "$appdir/usr/share/applications/dblocal.desktop" "$appdir/dblocal.desktop"
+  cp "$repo_root/packaging/linux/dev.dblocal.DBLocal.desktop" "$appdir/usr/share/applications/dev.dblocal.DBLocal.desktop"
+  cp "$appdir/usr/share/applications/dev.dblocal.DBLocal.desktop" "$appdir/dev.dblocal.DBLocal.desktop"
   cp "$repo_root/packaging/linux/dblocal.svg" "$appdir/usr/share/icons/hicolor/scalable/apps/dblocal.svg"
-  cp "$appdir/usr/share/icons/hicolor/scalable/apps/dblocal.svg" "$appdir/dblocal.svg"
+  for icon_size in 16 24 32 48 64 128 256 512; do
+    mkdir -p "$appdir/usr/share/icons/hicolor/${icon_size}x${icon_size}/apps"
+    cp "$repo_root/packaging/icons/png/dblocal-${icon_size}.png" \
+      "$appdir/usr/share/icons/hicolor/${icon_size}x${icon_size}/apps/dblocal.png"
+  done
+  cp "$repo_root/packaging/icons/png/dblocal-256.png" "$appdir/dblocal.png"
+  cp "$repo_root/packaging/icons/png/dblocal-256.png" "$appdir/.DirIcon"
 
   # AppRun: resolve the payload directory even when the AppImage is mounted at a
   # path containing spaces, then hand off to the real binary with all arguments.
