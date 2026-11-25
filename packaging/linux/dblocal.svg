@@ -1,36 +1,20 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!-- DBLocal icon: original artwork, GPL-3.0-only like the rest of the project.
-     A terminal-free "local server" glyph: a stacked-disk database cylinder on a
-     rounded desktop tile, with a small status dot for the running instance. -->
+<!-- DBLocal icon: design generated with an AI image tool by the project owner
+     and redrawn as vector for the project; released under GPL-3.0-only like
+     the rest of the project. -->
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128" role="img" aria-label="DBLocal">
   <title>DBLocal</title>
-  <defs>
-    <linearGradient id="tile" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#2f3b52"/>
-      <stop offset="1" stop-color="#1d2534"/>
-    </linearGradient>
-    <linearGradient id="disk" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#7fd4c1"/>
-      <stop offset="1" stop-color="#3fae98"/>
-    </linearGradient>
-  </defs>
 
-  <!-- Application tile -->
-  <rect x="4" y="4" width="120" height="120" rx="26" ry="26" fill="url(#tile)"/>
-  <rect x="4" y="4" width="120" height="120" rx="26" ry="26" fill="none" stroke="#0e1219" stroke-opacity="0.55" stroke-width="2"/>
+  <!-- Rounded-square tile with transparent corners -->
+  <rect x="7" y="7" width="114" height="114" rx="27" ry="27" fill="#15253e"/>
 
-  <!-- Database cylinder: three stacked plates -->
-  <g>
-    <ellipse cx="64" cy="44" rx="30" ry="11" fill="#9fe8da"/>
-    <path d="M34 44v10c0 6 13.4 11 30 11s30-5 30-11V44c0 6-13.4 11-30 11S34 50 34 44z" fill="url(#disk)"/>
-    <ellipse cx="64" cy="62" rx="30" ry="11" fill="#9fe8da"/>
-    <path d="M34 62v10c0 6 13.4 11 30 11s30-5 30-11V62c0 6-13.4 11-30 11S34 68 34 62z" fill="url(#disk)"/>
-    <ellipse cx="64" cy="80" rx="30" ry="11" fill="#9fe8da"/>
-    <path d="M34 80v10c0 6 13.4 11 30 11s30-5 30-11V80c0 6-13.4 11-30 11S34 86 34 80z" fill="url(#disk)"/>
-  </g>
+  <!-- 3-band database cylinder -->
+  <ellipse cx="63.4" cy="37" rx="35.8" ry="13.5" fill="#7debde"/>
+  <path d="M27.6 41.4 A35.8 13.5 0 0 0 99.2 41.4 V57.1 A35.8 13.5 0 0 1 27.6 57.1 Z" fill="#12c4a4"/>
+  <path d="M27.6 61.5 A35.8 13.5 0 0 0 99.2 61.5 V76.3 A35.8 13.5 0 0 1 27.6 76.3 Z" fill="#12c4a4"/>
+  <path d="M27.6 80.7 A35.8 13.5 0 0 0 99.2 80.7 V94.8 A35.8 13.5 0 0 1 27.6 94.8 Z" fill="#12c4a4"/>
 
-  <!-- "Local" marker: a small filled circle at the bottom right, not colour-only
-       information because the window and tray always pair it with a text label. -->
-  <circle cx="93" cy="93" r="11" fill="#2f3b52" stroke="#9fe8da" stroke-width="2"/>
-  <circle cx="93" cy="93" r="5" fill="#7ee787"/>
+  <!-- Status dot with navy ring cut out of the cylinder -->
+  <circle cx="90.7" cy="93.9" r="16.7" fill="#15253e"/>
+  <circle cx="90.7" cy="93.9" r="12.35" fill="#7efb5f"/>
 </svg>
