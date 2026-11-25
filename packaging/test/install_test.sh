@@ -4,6 +4,7 @@
 # installer against it using DBLOCAL_RELEASE_BASE_URL, without touching the
 # network or the real GitHub API.
 set -euo pipefail
+unset XDG_DATA_HOME
 
 script_dir="$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)"
 repo_root="$(CDPATH='' cd -- "$script_dir/../.." && pwd)"
@@ -676,6 +677,29 @@ if [ -f "$home_icon/.local/share/icons/hicolor/scalable/apps/dblocal.svg" ] \
   pass "tarball share/: SVG and PNG icons installed"
 else
   fail "tarball share/: expected SVG and 256px PNG icons under $home_icon/.local/share/icons/hicolor"
+fi
+
+# Explicit XDG_DATA_HOME is honoured by install.sh.
+log "-- test: tarball share/ honours explicit XDG_DATA_HOME"
+home_xdg="$tmp_root/home-xdg"
+xdg_data="$tmp_root/xdg-data"
+prefix_xdg="$tmp_root/prefix-xdg"
+mkdir -p "$home_xdg" "$xdg_data"
+set +e
+out="$(env \
+  DBLOCAL_RELEASE_BASE_URL="http://127.0.0.1:${icon_port}" \
+  DBLOCAL_TEST_UNAME_S=Linux DBLOCAL_TEST_UNAME_M=x86_64 \
+  HOME="$home_xdg" XDG_DATA_HOME="$xdg_data" PATH=/usr/bin:/bin \
+  sh "$installer" --prefix "$prefix_xdg" --version "$VERSION" 2>&1)"
+rc=$?
+set -e
+assert_eq "$rc" "0" "tarball share/ (XDG_DATA_HOME): install exits 0"
+if [ -f "$xdg_data/applications/dev.dblocal.DBLocal.desktop" ] \
+  && [ -f "$xdg_data/icons/hicolor/scalable/apps/dblocal.svg" ] \
+  && [ ! -e "$home_xdg/.local/share/applications/dev.dblocal.DBLocal.desktop" ]; then
+  pass "tarball share/ (XDG_DATA_HOME): desktop file and icons installed under XDG_DATA_HOME"
+else
+  fail "tarball share/ (XDG_DATA_HOME): expected files under $xdg_data and not under $home_xdg/.local/share"
 fi
 
 # Path with space: desktop/icon install skipped with warning, binary still installed.
