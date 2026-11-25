@@ -36,6 +36,8 @@ for size in "${sizes[@]}"; do
   magick -background none -density 384 "$svg" \
     -resize "${size}x${size}!" \
     -colorspace sRGB \
+    -strip \
+    -define png:exclude-chunk=date,time \
     -define png:color-type=6 \
     "PNG32:${out}"
 done

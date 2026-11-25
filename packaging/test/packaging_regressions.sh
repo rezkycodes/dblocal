@@ -535,3 +535,23 @@ for builder in \
     fail "packaging: $(basename "$builder") missing desktop file or PNG icon references"
   fi
 done
+
+# Deterministic render.sh check (skipped if magick is not installed).
+if command -v magick >/dev/null 2>&1; then
+  render_tmp="$tmp_root/render-repro"
+  mkdir -p "$render_tmp/packaging/linux" "$render_tmp/packaging/icons"
+  cp "$repo_root/packaging/linux/dblocal.svg" "$render_tmp/packaging/linux/dblocal.svg"
+  cp "$repo_root/packaging/icons/render.sh" "$render_tmp/packaging/icons/render.sh"
+  bash "$render_tmp/packaging/icons/render.sh" >/dev/null
+  h1="$(cd "$render_tmp/packaging/icons" && sha256sum png/dblocal-*.png dblocal.ico)"
+  sleep 1
+  bash "$render_tmp/packaging/icons/render.sh" >/dev/null
+  h2="$(cd "$render_tmp/packaging/icons" && sha256sum png/dblocal-*.png dblocal.ico)"
+  if [ "$h1" = "$h2" ]; then
+    pass "icon: render.sh is byte-reproducible across runs"
+  else
+    fail "icon: render.sh output differed across runs"
+  fi
+else
+  log "SKIP: icon: render.sh determinism check (magick not installed)"
+fi
