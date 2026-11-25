@@ -4,7 +4,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 #[cfg(not(any(target_os = "linux", windows)))]
 use std::process::{Command, Stdio};
-#[cfg(not(windows))]
+#[cfg(any(not(windows), test))]
 use std::time::{Duration, Instant};
 
 #[cfg(not(windows))]
@@ -442,7 +442,7 @@ pub(crate) fn pid_alive(pid: u32) -> bool {
 /// This used to return `false` unconditionally, which made the MariaDB stop path
 /// believe every Windows server was already gone: `verify_pid_identity` reports
 /// `NoSuchProcess` for a live server and the grace loop never waits.
-#[cfg(windows)]
+#[cfg(all(windows, test))]
 pub(crate) fn pid_alive(pid: u32) -> bool {
     let Ok(mut system) = sysinfo::System::new() else {
         // Without a process table nothing can be proven; "not alive" makes the

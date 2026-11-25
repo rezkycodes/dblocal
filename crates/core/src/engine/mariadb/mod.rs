@@ -33,7 +33,9 @@ use crate::secret::SecretString;
 use crate::service::UriFormat;
 
 #[cfg(test)]
-use admin_shutdown::{admin_program, render_admin_defaults, shutdown_via_admin_with};
+use admin_shutdown::{admin_program, render_admin_defaults};
+#[cfg(all(test, unix))]
+use admin_shutdown::{shutdown_via_admin_with, shutdown_via_admin_with_timeout};
 #[cfg(all(test, target_os = "linux"))]
 pub(super) use identity::verify_pid_identity;
 #[cfg(test)]

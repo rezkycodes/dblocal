@@ -173,8 +173,8 @@ fn admin_shutdown_happy_path_passes_defaults_file_and_cleans_up() {
          echo \"MYSQL_PWD:${{MYSQL_PWD:-UNSET}}\" >> \"{}\"\n\
          for a in \"$@\"; do\n\
            case \"$a\" in\n\
-             --defaults-extra-file=*)\n\
-               f=\"${{a#--defaults-extra-file=}}\"\n\
+             --defaults-file=*)\n\
+               f=\"${{a#--defaults-file=}}\"\n\
                cat \"$f\" >> \"{}\"\n\
                ;;\n\
            esac\n\
@@ -209,8 +209,12 @@ fn admin_shutdown_happy_path_passes_defaults_file_and_cleans_up() {
     let captured = fs::read_to_string(&capture).expect("captured");
     let first_line = captured.lines().next().unwrap_or("");
     assert!(
-        first_line.starts_with("ARGS:--defaults-extra-file="),
-        "first arg must be --defaults-extra-file: {first_line}"
+        first_line.starts_with("ARGS:--defaults-file="),
+        "first arg must be --defaults-file: {first_line}"
+    );
+    assert!(
+        first_line.contains("--connect-timeout="),
+        "must pass --connect-timeout: {first_line}"
     );
     assert!(
         !first_line.contains("s3cr3t-pw-99"),
@@ -349,5 +353,62 @@ fn admin_shutdown_missing_credential_or_failed_client_returns_err_and_cleans_up(
     assert!(
         leftover.is_empty(),
         "temp defaults file leaked after failure: {leftover:?}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn admin_shutdown_kills_hanging_client_on_timeout_and_cleans_up() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let rt = tmp.path().join("rt");
+    let data = tmp.path().join("inst").join("data");
+    let run = tmp.path().join("inst").join("run");
+    let logs = tmp.path().join("inst").join("logs");
+    fs::create_dir_all(rt.join("bin")).expect("bin");
+    fs::create_dir_all(&data).expect("data");
+    fs::create_dir_all(&run).expect("run");
+    fs::create_dir_all(&logs).expect("logs");
+
+    let admin = rt.join("bin").join("mariadb-admin");
+    fs::write(&admin, "#!/bin/sh\nsleep 10\nexit 0\n").expect("write");
+    fs::set_permissions(&admin, fs::Permissions::from_mode(0o755)).expect("chmod");
+
+    let run_ctx = RunContext {
+        instance_name: "m-hang".into(),
+        runtime_dir: rt,
+        data_dir: data,
+        run_dir: run.clone(),
+        logs_dir: logs,
+        port: Port::new(43309).expect("port"),
+        superuser: "root".into(),
+        auth: AuthMode::None,
+        credential: None,
+    };
+
+    let started = Instant::now();
+    let err = shutdown_via_admin_with_timeout(
+        &run_ctx,
+        12345,
+        PidIdentity::Match,
+        &admin,
+        Duration::from_millis(200),
+    )
+    .expect_err("hanging client must time out");
+    assert!(
+        started.elapsed() < Duration::from_secs(3),
+        "timeout took too long: {:?}",
+        started.elapsed()
+    );
+    assert!(err.to_string().contains("timed out"), "{err}");
+
+    let leftover: Vec<_> = fs::read_dir(&run)
+        .expect("read run")
+        .filter_map(std::result::Result::ok)
+        .collect();
+    assert!(
+        leftover.is_empty(),
+        "temp defaults file leaked after timeout: {leftover:?}"
     );
 }

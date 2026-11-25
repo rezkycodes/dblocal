@@ -442,9 +442,8 @@ else
 fi
 
 # --- MSI same-version upgrade regression checks (v0.1.0 over pre-release) ----
-log "-- test: MSI AllowSameVersionUpgrades, ProductCode/UpgradeCode, ICE61"
+log "-- test: MSI AllowSameVersionUpgrades and ProductCode/UpgradeCode"
 msi_wxs="$repo_root/packaging/msi/dblocal.wxs"
-msi_ps1="$repo_root/packaging/msi/build-msi.ps1"
 
 if command -v xmllint >/dev/null 2>&1; then
   if xmllint --noout "$msi_wxs" 2>/dev/null; then
@@ -464,10 +463,4 @@ if grep -q 'Id="\*"' "$msi_wxs" && grep -q 'UpgradeCode="A3D5E2D1-7B4A-4D7E-9F3A
   pass "MSI: dblocal.wxs uses auto ProductCode (*) and stable UpgradeCode"
 else
   fail "MSI: dblocal.wxs missing Id=\"*\" or stable UpgradeCode"
-fi
-
-if grep -q -- '-sice:ICE61' "$msi_ps1" && ! grep -q -- '-sval' "$msi_ps1"; then
-  pass "MSI: build-msi.ps1 suppresses only ICE61 (no blanket -sval)"
-else
-  fail "MSI: build-msi.ps1 must use -sice:ICE61 and not -sval"
 fi

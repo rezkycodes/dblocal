@@ -215,10 +215,16 @@ costs ~0.5–0.7 MB of RSS, not the +12.8 MB an earlier draft claimed from compa
 methods. Release binaries: `dblocal` +1.52 MB, `measure` +1.51 MB. Full tables and method:
 `docs/spikes/gpui-kit/README.md` §2.
 
+- **Historical note (against the original 150 MB / < 1 % targets):**
+  - **CPU target met (mock `examples/measure`):** idle CPU 0.08–0.12 %, an order of magnitude under
+    the 1 % target (the 50 ms pump is gone; see the bridge above).
+  - **RSS target not met, and the floor is the cause:** an *empty* GPUI window is ~166–180 MB on
+    this host depending on session, ≥15 MB over the 150 MB target before any DBLocal widget exists.
+    App code cannot go below that without changing the renderer or toolkit; per OPEN-08 this was
+    reported with evidence rather than worked around.
 - **Active first-release targets (OPEN-08, resolved 2026-11-25):** **RSS < 220 MB** and **idle CPU
-  <= 1.5%** (measured ~194 MB RSS and ~1% idle CPU on Linux). The original 150 MB / < 1% targets
-  could not be met by app code because an *empty* GPUI window alone is ~166–180 MB on this host
-  (wgpu/Vulkan + gpui retained structures).
+  <= 1.5%** (the real-app verification in W2-B recorded in `docs/orchestration/PLAN.md` measured
+  ~194 MB RSS and ~1% idle CPU on Linux).
 
 ## Headless render evidence
 

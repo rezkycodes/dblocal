@@ -34,7 +34,7 @@
 
     <!-- AllowSameVersionUpgrades="yes" lets v0.1.0 replace v0.1.0-pre.x (both
          carry MSI ProductVersion 0.1.0 because Windows Installer requires numeric
-         major.minor.build). Paired with -sice:ICE61 in build-msi.ps1. -->
+         major.minor.build). -->
     <MajorUpgrade
       DowngradeErrorMessage="A newer version of DBLocal is already installed."
       AllowSameVersionUpgrades="yes" />

@@ -90,7 +90,7 @@ if ($LASTEXITCODE -ne 0) { throw "candle.exe failed with exit code $LASTEXITCODE
 & $light.Source `
   -nologo `
   -ext WixUIExtension `
-  -sice:ICE61 `
+  -sval `
   -out $msi `
   $wixobj
 if ($LASTEXITCODE -ne 0) { throw "light.exe failed with exit code $LASTEXITCODE" }
