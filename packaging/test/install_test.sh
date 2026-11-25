@@ -660,8 +660,6 @@ out="$(env \
   sh "$installer" --prefix "$prefix_icon" --version "$VERSION" 2>&1)"
 rc=$?
 set -e
-kill "$icon_spid" >/dev/null 2>&1 || true
-wait "$icon_spid" >/dev/null 2>&1 || true
 
 assert_eq "$rc" "0" "tarball share/: install exits 0"
 installed_desktop="$home_icon/.local/share/applications/dev.dblocal.DBLocal.desktop"
@@ -679,6 +677,76 @@ if [ -f "$home_icon/.local/share/icons/hicolor/scalable/apps/dblocal.svg" ] \
 else
   fail "tarball share/: expected SVG and 256px PNG icons under $home_icon/.local/share/icons/hicolor"
 fi
+
+# Path with space: desktop/icon install skipped with warning, binary still installed.
+log "-- test: tarball share/ skips desktop install on path with space"
+home_space="$tmp_root/home-space"
+prefix_space="$tmp_root/prefix with space"
+mkdir -p "$home_space"
+set +e
+out="$(env \
+  DBLOCAL_RELEASE_BASE_URL="http://127.0.0.1:${icon_port}" \
+  DBLOCAL_TEST_UNAME_S=Linux DBLOCAL_TEST_UNAME_M=x86_64 \
+  HOME="$home_space" PATH=/usr/bin:/bin \
+  sh "$installer" --prefix "$prefix_space" --version "$VERSION" 2>&1)"
+rc=$?
+set -e
+assert_eq "$rc" "0" "tarball share/ (space path): install exits 0"
+assert_contains "$out" "skipping desktop entry and icon install" "tarball share/ (space path): warns about skipped desktop install"
+if [ -x "$prefix_space/dblocal" ] && [ ! -e "$home_space/.local/share/applications/dev.dblocal.DBLocal.desktop" ]; then
+  pass "tarball share/ (space path): binary installed and desktop file skipped"
+else
+  fail "tarball share/ (space path): unexpected state"
+fi
+
+# Path with backslash: skipped cleanly without corrupting Exec, binary still installed.
+log "-- test: tarball share/ skips desktop install on path with backslash"
+home_bs="$tmp_root/home-bs"
+prefix_bs="$tmp_root/prefix\\nbs"
+mkdir -p "$home_bs"
+set +e
+out="$(env \
+  DBLOCAL_RELEASE_BASE_URL="http://127.0.0.1:${icon_port}" \
+  DBLOCAL_TEST_UNAME_S=Linux DBLOCAL_TEST_UNAME_M=x86_64 \
+  HOME="$home_bs" PATH=/usr/bin:/bin \
+  sh "$installer" --prefix "$prefix_bs" --version "$VERSION" 2>&1)"
+rc=$?
+set -e
+assert_eq "$rc" "0" "tarball share/ (backslash path): install exits 0"
+assert_contains "$out" "skipping desktop entry and icon install" "tarball share/ (backslash path): warns about skipped desktop install"
+if [ -x "$prefix_bs/dblocal" ] && [ ! -e "$home_bs/.local/share/applications/dev.dblocal.DBLocal.desktop" ]; then
+  pass "tarball share/ (backslash path): binary installed and desktop file skipped"
+else
+  fail "tarball share/ (backslash path): unexpected state"
+fi
+
+# Old v0.1.1 install.sh against the new tarball (with share/) still installs binary cleanly.
+log "-- test: v0.1.1 install.sh installs cleanly from new tarball with share/"
+if git -C "$repo_root" rev-parse --verify v0.1.1 >/dev/null 2>&1; then
+  v011_installer="$tmp_root/install-v011.sh"
+  git -C "$repo_root" show v0.1.1:packaging/install.sh > "$v011_installer"
+  chmod +x "$v011_installer"
+  home_v011="$tmp_root/home-v011"
+  prefix_v011="$tmp_root/prefix-v011"
+  mkdir -p "$home_v011"
+  set +e
+  out="$(env \
+    DBLOCAL_RELEASE_BASE_URL="http://127.0.0.1:${icon_port}" \
+    DBLOCAL_TEST_UNAME_S=Linux DBLOCAL_TEST_UNAME_M=x86_64 \
+    HOME="$home_v011" PATH=/usr/bin:/bin \
+    sh "$v011_installer" --prefix "$prefix_v011" --version "$VERSION" 2>&1)"
+  rc=$?
+  set -e
+  assert_eq "$rc" "0" "v0.1.1 install.sh: exits 0 on new tarball with share/"
+  if [ -x "$prefix_v011/dblocal" ]; then
+    pass "v0.1.1 install.sh: binary installed from new tarball"
+  else
+    fail "v0.1.1 install.sh: binary missing"
+  fi
+fi
+
+kill "$icon_spid" >/dev/null 2>&1 || true
+wait "$icon_spid" >/dev/null 2>&1 || true
 
 # Upgrade from an old tarball without share/ still works cleanly.
 log "-- test: tarball without share/ (older release) installs cleanly"

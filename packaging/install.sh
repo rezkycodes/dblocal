@@ -422,13 +422,20 @@ install_desktop_and_icons() {
   abs_dir="$(CDPATH='' cd -- "$(dirname "$installed_bin")" && pwd -P)"
   abs_bin="$abs_dir/$(basename "$installed_bin")"
 
+  case "$abs_bin" in
+    *[!A-Za-z0-9._/+@~-]*)
+      warn "skipping desktop entry and icon install: install path '$abs_bin' contains characters outside [A-Za-z0-9._/+@~-]"
+      return 0
+      ;;
+  esac
+
   apps_dir="$data_home/applications"
   mkdir -p "$apps_dir"
   desktop_dest="$apps_dir/dev.dblocal.DBLocal.desktop"
   desktop_tmp="${desktop_dest}.new.$$"
-  awk -v bin="$abs_bin" '
-    /^Exec=/    { print "Exec=" bin; next }
-    /^TryExec=/ { print "TryExec=" bin; next }
+  DBLOCAL_EXEC_BIN="$abs_bin" awk '
+    /^Exec=/    { print "Exec=" ENVIRON["DBLOCAL_EXEC_BIN"]; next }
+    /^TryExec=/ { print "TryExec=" ENVIRON["DBLOCAL_EXEC_BIN"]; next }
     { print }
   ' "$desktop_src" > "$desktop_tmp"
   chmod 0644 "$desktop_tmp"
