@@ -4,6 +4,8 @@
 //! probes readiness with a MariaDB/MySQL protocol greeting, shuts down via
 //! SIGTERM (graceful, bounded), and diagnoses start failures from real log text.
 
+#[cfg(any(windows, test))]
+mod admin_shutdown;
 mod identity;
 #[cfg(test)]
 mod tests;
@@ -30,6 +32,8 @@ use crate::model::{AuthMode, EngineKey, StartFailure};
 use crate::secret::SecretString;
 use crate::service::UriFormat;
 
+#[cfg(test)]
+use admin_shutdown::{admin_program, render_admin_defaults, shutdown_via_admin_with};
 #[cfg(all(test, target_os = "linux"))]
 pub(super) use identity::verify_pid_identity;
 #[cfg(test)]
@@ -98,7 +102,14 @@ impl EngineAdapter for MariaDbAdapter {
     }
 
     fn shutdown(&self, ctx: &RunContext) -> Result<()> {
-        identity::shutdown_by_sigterm(ctx)
+        #[cfg(windows)]
+        {
+            admin_shutdown::shutdown_by_admin(ctx)
+        }
+        #[cfg(not(windows))]
+        {
+            identity::shutdown_by_sigterm(ctx)
+        }
     }
 
     fn connection_uri(

@@ -2,21 +2,27 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", windows)))]
 use std::process::{Command, Stdio};
+#[cfg(not(windows))]
 use std::time::{Duration, Instant};
 
+#[cfg(not(windows))]
 use crate::consts;
 use crate::engine::RunContext;
 use crate::engine::uri::exe_name;
 use crate::error::{DblError, Result};
 
-use super::{config_path, pidfile_path};
+use super::config_path;
+#[cfg(not(windows))]
+use super::pidfile_path;
 
+#[cfg(not(windows))]
 pub(super) fn shutdown_by_sigterm(ctx: &RunContext) -> Result<()> {
     shutdown_by_sigterm_with_grace(ctx, Duration::from_secs(consts::STOP_GRACE_SECS))
 }
 
+#[cfg(not(windows))]
 pub(super) fn shutdown_by_sigterm_with_grace(ctx: &RunContext, grace: Duration) -> Result<()> {
     let pid_path = pidfile_path(&ctx.data_dir);
     let pid = read_pidfile(&pid_path)?;
@@ -25,6 +31,7 @@ pub(super) fn shutdown_by_sigterm_with_grace(ctx: &RunContext, grace: Duration) 
     shutdown_verified_pid(pid, verified, grace)
 }
 
+#[cfg(any(not(windows), test))]
 pub(crate) fn shutdown_verified_pid(
     pid: u32,
     identity: PidIdentity,
@@ -120,10 +127,54 @@ pub(crate) fn verify_pid_identity(pid: u32, expected: &ExpectedIdentity) -> PidI
     {
         verify_pid_identity_linux(pid, expected)
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(windows)]
+    {
+        verify_pid_identity_windows(pid, expected)
+    }
+    #[cfg(not(any(target_os = "linux", windows)))]
     {
         verify_pid_identity_fallback(pid, expected)
     }
+}
+
+#[cfg(windows)]
+fn verify_pid_identity_windows(pid: u32, expected: &ExpectedIdentity) -> PidIdentity {
+    let Ok(mut system) = sysinfo::System::new() else {
+        return PidIdentity::Unverifiable("cannot initialize process table".to_owned());
+    };
+    let target = sysinfo::Pid::from_u32(pid);
+    let kind = sysinfo::ProcessRefreshKind::nothing()
+        .with_exe(sysinfo::UpdateKind::Always)
+        .with_cmd(sysinfo::UpdateKind::Always);
+    system.refresh_processes_specifics(sysinfo::ProcessesToUpdate::Some(&[target]), true, kind);
+    let Some(process) = system.process(target) else {
+        return PidIdentity::NoSuchProcess;
+    };
+    if matches!(
+        process.status(),
+        sysinfo::ProcessStatus::Zombie | sysinfo::ProcessStatus::Dead
+    ) {
+        return PidIdentity::NoSuchProcess;
+    }
+    let Some(observed_exe) = process.exe() else {
+        return PidIdentity::Unverifiable("cannot read process executable path".to_owned());
+    };
+    if !same_executable(observed_exe, &expected.exe) {
+        return PidIdentity::NotOurs(format!(
+            "exe {} != {}",
+            observed_exe.display(),
+            expected.exe.display()
+        ));
+    }
+    let args: Vec<String> = process
+        .cmd()
+        .iter()
+        .map(|s| s.to_string_lossy().into_owned())
+        .collect();
+    if !cmdline_targets_instance(&args, expected) {
+        return PidIdentity::NotOurs("cmdline does not target this instance".to_owned());
+    }
+    PidIdentity::Match
 }
 
 #[cfg(target_os = "linux")]
@@ -161,7 +212,7 @@ fn verify_pid_identity_linux(pid: u32, expected: &ExpectedIdentity) -> PidIdenti
     PidIdentity::Match
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", windows)))]
 fn verify_pid_identity_fallback(pid: u32, expected: &ExpectedIdentity) -> PidIdentity {
     if !pid_alive(pid) {
         return PidIdentity::NoSuchProcess;
@@ -181,7 +232,7 @@ fn verify_pid_identity_fallback(pid: u32, expected: &ExpectedIdentity) -> PidIde
     verify_ps_command_output(cmd.trim(), expected)
 }
 
-#[cfg(any(test, not(target_os = "linux")))]
+#[cfg(any(test, not(any(target_os = "linux", windows))))]
 pub(crate) fn verify_ps_command_output(cmd: &str, expected: &ExpectedIdentity) -> PidIdentity {
     if cmd.is_empty() {
         return PidIdentity::NoSuchProcess;
@@ -198,7 +249,7 @@ pub(crate) fn verify_ps_command_output(cmd: &str, expected: &ExpectedIdentity) -
     PidIdentity::Match
 }
 
-#[cfg(any(test, not(target_os = "linux")))]
+#[cfg(any(test, not(any(target_os = "linux", windows))))]
 fn command_starts_with_executable<'a>(cmd: &'a str, expected_exe: &str) -> Option<&'a str> {
     let rest = cmd.strip_prefix(expected_exe)?;
     if rest.is_empty() || rest.starts_with(char::is_whitespace) {
@@ -207,7 +258,7 @@ fn command_starts_with_executable<'a>(cmd: &'a str, expected_exe: &str) -> Optio
     None
 }
 
-#[cfg(any(test, not(target_os = "linux")))]
+#[cfg(any(test, not(any(target_os = "linux", windows))))]
 fn ps_command_targets_instance(args_tail: &str, expected: &ExpectedIdentity) -> bool {
     let datadir = expected.data_dir.to_string_lossy();
     let conf = expected.config_path.to_string_lossy();
@@ -216,7 +267,7 @@ fn ps_command_targets_instance(args_tail: &str, expected: &ExpectedIdentity) -> 
     contains_arg_token(args_tail, &datadir_arg) || contains_arg_token(args_tail, &conf_arg)
 }
 
-#[cfg(any(test, not(target_os = "linux")))]
+#[cfg(any(test, not(any(target_os = "linux", windows))))]
 pub(crate) fn contains_arg_token(haystack: &str, token: &str) -> bool {
     let mut offset = 0;
     while let Some(pos) = haystack[offset..].find(token) {
@@ -239,7 +290,7 @@ pub(crate) fn contains_arg_token(haystack: &str, token: &str) -> bool {
 /// a non-test build, so they must not exist on other targets (clippy runs with
 /// `-D warnings`, and a dead `pub(crate)` item is an error there). Tests use them
 /// on every host to pin the parsers without `/proc`.
-#[cfg(any(target_os = "linux", test))]
+#[cfg(any(target_os = "linux", windows, test))]
 pub(crate) fn same_executable(observed: &Path, expected: &Path) -> bool {
     let observed = strip_deleted(observed);
     let expected = strip_deleted(expected);
@@ -248,7 +299,12 @@ pub(crate) fn same_executable(observed: &Path, expected: &Path) -> bool {
     }
     let obs_name = observed.file_name().and_then(|s| s.to_str()).unwrap_or("");
     let exp_name = expected.file_name().and_then(|s| s.to_str()).unwrap_or("");
-    if obs_name != exp_name || obs_name.is_empty() {
+    let name_matches = if cfg!(windows) {
+        obs_name.eq_ignore_ascii_case(exp_name)
+    } else {
+        obs_name == exp_name
+    };
+    if !name_matches || obs_name.is_empty() {
         return false;
     }
     // Canonicalize when possible; if either fails, fall back to name match only
@@ -259,7 +315,7 @@ pub(crate) fn same_executable(observed: &Path, expected: &Path) -> bool {
     }
 }
 
-#[cfg(any(target_os = "linux", test))]
+#[cfg(any(target_os = "linux", windows, test))]
 pub(crate) fn strip_deleted(path: &Path) -> std::borrow::Cow<'_, Path> {
     #[cfg(unix)]
     {
@@ -283,7 +339,7 @@ pub(crate) fn parse_cmdline(bytes: &[u8]) -> Vec<String> {
         .collect()
 }
 
-#[cfg(any(target_os = "linux", test))]
+#[cfg(any(target_os = "linux", windows, test))]
 pub(crate) fn cmdline_targets_instance(args: &[String], expected: &ExpectedIdentity) -> bool {
     let datadir = expected.data_dir.to_string_lossy();
     let conf = expected.config_path.to_string_lossy();
@@ -310,7 +366,7 @@ pub(crate) fn cmdline_targets_instance(args: &[String], expected: &ExpectedIdent
     saw_datadir || saw_conf
 }
 
-#[cfg(any(target_os = "linux", test))]
+#[cfg(any(target_os = "linux", windows, test))]
 pub(crate) fn path_arg_matches(arg: &str, expected: &str) -> bool {
     if arg == expected {
         return true;
@@ -355,7 +411,7 @@ fn send_term(pid: u32) -> Result<()> {
     }
 }
 
-#[cfg(not(unix))]
+#[cfg(all(not(unix), any(not(windows), test)))]
 fn send_term(pid: u32) -> Result<()> {
     let _ = pid;
     Err(DblError::Unsupported {
