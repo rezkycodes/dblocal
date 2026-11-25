@@ -480,6 +480,14 @@ else
   fail "MSI: build-msi.ps1 missing DblocalIconSource or icons/dblocal.ico"
 fi
 
+cli_build_rs="$repo_root/crates/cli/build.rs"
+if grep -q 'set("FileDescription", "DBLocal")' "$cli_build_rs" \
+  && grep -q 'set("ProductName", "DBLocal")' "$cli_build_rs"; then
+  pass "Windows: crates/cli/build.rs sets FileDescription and ProductName to DBLocal"
+else
+  fail "Windows: crates/cli/build.rs missing FileDescription or ProductName = DBLocal"
+fi
+
 # --- App icon & desktop entry regression checks ------------------------------
 log "-- test: app icon assets and desktop entry"
 icon_svg="$repo_root/packaging/linux/dblocal.svg"
