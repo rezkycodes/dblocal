@@ -51,6 +51,8 @@ deps=(
   curl
   ca-certificates
   binutils
+  file
+  pkg-config
   gettext-base
   elfutils
   libsqlite3-dev
