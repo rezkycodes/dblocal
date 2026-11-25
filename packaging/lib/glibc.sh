@@ -23,3 +23,22 @@ dblocal_glibc_floor() {
   fi
   printf '%s' "${max#GLIBC_}"
 }
+
+# dblocal_glibc_check_max <binary> <max_allowed>
+# Verifies that <binary>'s maximum required GLIBC symbol version is <= <max_allowed>.
+# Prints an informative status line to stderr and returns 0 on pass, 1 on failure.
+dblocal_glibc_check_max() {
+  local bin="$1" max_allowed="$2" floor highest
+  if [ -z "$bin" ] || [ -z "$max_allowed" ]; then
+    echo "error: usage: dblocal_glibc_check_max <binary> <max_allowed>" >&2
+    return 2
+  fi
+  floor="$(dblocal_glibc_floor "$bin")" || return 1
+  highest="$(printf '%s\n%s\n' "$floor" "$max_allowed" | sort -V | tail -n 1)"
+  if [ "$highest" != "$max_allowed" ]; then
+    echo "error: GLIBC floor regression on $bin: requires GLIBC_${floor} (max allowed: GLIBC_${max_allowed})" >&2
+    return 1
+  fi
+  echo "ok: GLIBC floor on $bin is GLIBC_${floor} (<= GLIBC_${max_allowed})" >&2
+  return 0
+}

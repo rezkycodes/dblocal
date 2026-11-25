@@ -79,6 +79,16 @@ jobs:
         shell: bash
         run: cargo build --release -p dblocal-cli --target ${{ matrix.rust_target }}
 
+      - name: Enforce GLIBC floor (<= 2.35)
+        shell: bash
+        env:
+          RUST_TARGET: ${{ matrix.rust_target }}
+        run: |
+          set -euo pipefail
+          # shellcheck source=packaging/lib/glibc.sh
+          source packaging/lib/glibc.sh
+          dblocal_glibc_check_max "target/${RUST_TARGET}/release/dblocal" 2.35
+
       - name: Install pinned appimagetool and type2 runtime
         shell: bash
         env:
