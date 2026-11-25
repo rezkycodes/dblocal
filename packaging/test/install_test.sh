@@ -773,6 +773,48 @@ else
   fail "icon-cache (existing cache): log missing"
 fi
 
+# (c) Tarball with desktop file but no icons, $XDG_DATA_HOME/icons exists without hicolor:
+# must NOT create a regular file named hicolor.
+log "-- test: tarball with desktop file but no icons does not create regular file 'hicolor'"
+noicons_rel="$tmp_root/noicons-release"
+mkdir -p "$noicons_rel/stage/share/applications"
+printf '#!/bin/sh\necho "dblocal-noicons"\n' > "$noicons_rel/stage/dblocal"
+chmod +x "$noicons_rel/stage/dblocal"
+cp "$repo_root/packaging/linux/dev.dblocal.DBLocal.desktop" "$noicons_rel/stage/share/applications/dev.dblocal.DBLocal.desktop"
+tar -C "$noicons_rel/stage" -czf "$noicons_rel/dblocal-${VERSION}-linux-x86_64.tar.gz" dblocal share
+rm -rf "$noicons_rel/stage"
+(
+  cd "$noicons_rel"
+  printf '%s  %s\n' "$(sha256_file "dblocal-${VERSION}-linux-x86_64.tar.gz")" "dblocal-${VERSION}-linux-x86_64.tar.gz" > checksums.txt
+)
+noicons_port="$(pick_free_port)"
+(
+  cd "$noicons_rel" || exit 1
+  exec python3 -m http.server "$noicons_port" --bind 127.0.0.1
+) </dev/null >/dev/null 2>&1 &
+noicons_spid=$!
+for _ in $(seq 1 50); do curl -fsS "http://127.0.0.1:${noicons_port}/checksums.txt" >/dev/null 2>&1 && break; sleep 0.1; done
+home_noicons="$tmp_root/home-noicons"
+xdg_noicons="$tmp_root/xdg-noicons"
+prefix_noicons="$tmp_root/prefix-noicons"
+mkdir -p "$home_noicons" "$xdg_noicons/icons"
+set +e
+out="$(env \
+  DBLOCAL_RELEASE_BASE_URL="http://127.0.0.1:${noicons_port}" \
+  DBLOCAL_TEST_UNAME_S=Linux DBLOCAL_TEST_UNAME_M=x86_64 \
+  HOME="$home_noicons" XDG_DATA_HOME="$xdg_noicons" PATH=/usr/bin:/bin \
+  sh "$installer" --prefix "$prefix_noicons" --version "$VERSION" 2>&1)"
+rc=$?
+set -e
+kill "$noicons_spid" >/dev/null 2>&1 || true
+wait "$noicons_spid" >/dev/null 2>&1 || true
+assert_eq "$rc" "0" "icon-cache (no icons in tarball): install exits 0"
+if [ ! -f "$xdg_noicons/icons/hicolor" ]; then
+  pass "icon-cache (no icons in tarball): no regular file named hicolor created"
+else
+  fail "icon-cache (no icons in tarball): regular file 'hicolor' was created"
+fi
+
 # Path with space: desktop/icon install skipped with warning, binary still installed.
 log "-- test: tarball share/ skips desktop install on path with space"
 home_space="$tmp_root/home-space"
