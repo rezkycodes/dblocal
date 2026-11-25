@@ -47,6 +47,8 @@
     <Property Id="ARPURLINFOABOUT" Value="https://github.com/rezkycodes/dblocal" />
     <Property Id="ARPCONTACT" Value="DBLocal Contributors" />
     <Property Id="ARPCOMMENTS" Value="User data in %USERPROFILE%\.dblocal is kept on uninstall." />
+    <Icon Id="DBLocalIcon.ico" SourceFile="$(var.DblocalIconSource)" />
+    <Property Id="ARPPRODUCTICON" Value="DBLocalIcon.ico" />
 
     <Feature Id="ProductFeature" Title="DBLocal" Level="1">
       <ComponentGroupRef Id="ProductComponents" />
@@ -93,6 +95,7 @@
           Name="DBLocal"
           Description="Manage local PostgreSQL, MySQL, MariaDB, and Valkey servers"
           Target="[INSTALLFOLDER]dblocal.exe"
+          Icon="DBLocalIcon.ico"
           WorkingDirectory="INSTALLFOLDER" />
         <RemoveFolder Id="RemoveApplicationProgramsFolder" On="uninstall" />
         <RegistryValue

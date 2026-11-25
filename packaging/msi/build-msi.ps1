@@ -25,6 +25,8 @@ if (-not (Test-Path $DblocalExe)) {
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $wxs = Join-Path $scriptDir "dblocal.wxs"
 if (-not (Test-Path $wxs)) { throw "Missing WiX source: $wxs" }
+$icon = Join-Path (Split-Path -Parent $scriptDir) "icons/dblocal.ico"
+if (-not (Test-Path $icon)) { throw "Missing icon file: $icon" }
 
 New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
 $objDir = Join-Path $OutDir "obj"
@@ -83,6 +85,7 @@ $msi = Join-Path $OutDir "dblocal-$rawVersion-windows-x86_64.msi"
   -arch x64 `
   "-dProductVersion=$msiVersion" `
   "-dDblocalExeSource=$DblocalExe" `
+  "-dDblocalIconSource=$icon" `
   -out $wixobj `
   $wxs
 if ($LASTEXITCODE -ne 0) { throw "candle.exe failed with exit code $LASTEXITCODE" }

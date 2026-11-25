@@ -465,6 +465,21 @@ else
   fail "MSI: dblocal.wxs missing Id=\"*\" or stable UpgradeCode"
 fi
 
+if grep -q '<Icon Id="DBLocalIcon\.ico"' "$msi_wxs" \
+  && grep -q 'Id="ARPPRODUCTICON" Value="DBLocalIcon\.ico"' "$msi_wxs" \
+  && grep -q 'Icon="DBLocalIcon\.ico"' "$msi_wxs"; then
+  pass "MSI: dblocal.wxs defines Icon, ARPPRODUCTICON, and Shortcut Icon"
+else
+  fail "MSI: dblocal.wxs missing Icon, ARPPRODUCTICON, or Shortcut Icon"
+fi
+
+if grep -q 'DblocalIconSource' "$repo_root/packaging/msi/build-msi.ps1" \
+  && grep -q 'icons/dblocal\.ico' "$repo_root/packaging/msi/build-msi.ps1"; then
+  pass "MSI: build-msi.ps1 passes DblocalIconSource for icons/dblocal.ico"
+else
+  fail "MSI: build-msi.ps1 missing DblocalIconSource or icons/dblocal.ico"
+fi
+
 # --- App icon & desktop entry regression checks ------------------------------
 log "-- test: app icon assets and desktop entry"
 icon_svg="$repo_root/packaging/linux/dblocal.svg"
