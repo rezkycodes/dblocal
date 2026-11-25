@@ -96,6 +96,7 @@ command -v dpkg-deb >/dev/null 2>&1 || { echo "error: required tool not found: d
 #   libxkbcommon.so.0                           -> libxkbcommon0 (>= 0.5.0)
 #   libxkbcommon-x11.so.0                       -> libxkbcommon-x11-0
 #   libz.so.1                                   -> zlib1g (>= 1:1.1.4)
+#   liblzma.so.5                                -> liblzma5
 #   libfreetype.so.6                            -> libfreetype6
 #
 # Recommends (F4): libvulkan1 for Vulkan, libegl1/libwayland-client0 for
@@ -148,6 +149,9 @@ derive_deb_depends() {
         ;;
       libz.so.1)
         pkg="zlib1g (>= 1:1.1.4)"
+        ;;
+      liblzma.so.5)
+        pkg="liblzma5"
         ;;
       libfreetype.so.6)
         pkg="libfreetype6"
