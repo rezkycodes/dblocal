@@ -18,6 +18,12 @@ jobs:
   build-linux:
     name: build (${{ matrix.target }})
     runs-on: ${{ matrix.os }}
+    container:
+      # Ubuntu 22.04 (jammy) multi-arch manifest list digest (amd64 + arm64).
+      # Keeps the Linux GLIBC floor <= 2.35 (Ubuntu 22.04+, Debian 12+, Fedora 41+)
+      # without depending on the deprecated ubuntu-22.04 runner images
+      # (actions/runner-images#14254: deprecated 2026-09-17, retired 2027-04-17).
+      image: ubuntu@sha256:b000e69a50ff940390233025e7a337fb8469b509e2334fa4d018ac30f3e18cdb
     strategy:
       fail-fast: false
       matrix:
@@ -42,17 +48,29 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      - name: Install Linux GPUI build dependencies
+        shell: bash
+        # Dependency list comes from Zed's script/linux at commit a19e1944
+        # (see scripts/install-linux-deps.sh header for the exact reference).
+        # Runs before rustup/rust-toolchain because the minimal ubuntu:22.04
+        # container does not preinstall curl, ca-certificates, or rustup.
+        run: bash scripts/install-linux-deps.sh
+
+      - name: Bootstrap rustup in container
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! command -v rustup >/dev/null 2>&1; then
+            curl --proto '=https' --tlsv1.2 -fsSL https://sh.rustup.rs \
+              | sh -s -- -y --default-toolchain none --profile minimal
+            echo "${HOME}/.cargo/bin" >> "$GITHUB_PATH"
+          fi
+
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # refs/heads/stable
         with:
           toolchain: stable
           targets: ${{ matrix.rust_target }}
-
-      - name: Install Linux GPUI build dependencies
-        shell: bash
-        # Dependency list comes from Zed's script/linux at commit a19e1944
-        # (see scripts/install-linux-deps.sh header for the exact reference).
-        run: bash scripts/install-linux-deps.sh
 
       - name: Rust cache
         uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3

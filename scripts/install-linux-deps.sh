@@ -5,12 +5,12 @@
 #   a19e19440d4102668830a9da579c3ee71d2fbf1a
 #   https://github.com/zed-industries/zed/blob/a19e19440d4102668830a9da579c3ee71d2fbf1a/script/linux
 # This script reproduces the Ubuntu/Debian `apt` branch of that file for Ubuntu
-# 24.04 (base dependency array plus libstdc++-14-dev, which Zed's script adds
-# when PRETTY_NAME matches `.+24\.(04|10)`).
+# 22.04 and 24.04 (base dependency array plus the matching libstdc++-N-dev).
 #
-# Scope: CI and developer machines that already have passwordless sudo, as
-# GitHub-hosted runners do. It does not implement Fedora/openSUSE/Arch/... — copy
-# the relevant branch from Zed's script/linux if you need those.
+# Scope: CI (including minimal Ubuntu containers running as root) and developer
+# machines that already have passwordless sudo, as GitHub-hosted runners do. It
+# does not implement Fedora/openSUSE/Arch/... — copy the relevant branch from
+# Zed's script/linux if you need those.
 #
 # Note: DBLocal itself never asks for sudo at runtime; this is a *build* helper.
 set -euo pipefail
@@ -49,6 +49,8 @@ deps=(
   jq
   git
   curl
+  ca-certificates
+  binutils
   gettext-base
   elfutils
   libsqlite3-dev
@@ -59,9 +61,16 @@ deps=(
   xdg-desktop-portal
 )
 
-# Zed adds a libstdc++-N-dev depending on the distro. This helper targets the
-# Ubuntu 24.04 runner used by CI.
-deps+=( libstdc++-14-dev )
+# Zed adds a libstdc++-N-dev depending on the distro. Match Ubuntu 22.04 vs 24.04+.
+ubuntu_ver=""
+if [ -r /etc/os-release ]; then
+  # shellcheck disable=SC1091
+  ubuntu_ver="$(. /etc/os-release && printf '%s' "${VERSION_ID:-}")"
+fi
+case "$ubuntu_ver" in
+  22.*) deps+=( libstdc++-12-dev ) ;;
+  *)    deps+=( libstdc++-14-dev ) ;;
+esac
 
 # `libvulkan1` (above) is only the loader: it enumerates ICD manifests and
 # loads the driver behind them. Without a driver package there is no manifest
@@ -74,7 +83,13 @@ deps+=( libstdc++-14-dev )
 # answers, which is exactly what the off-screen render tests need.
 deps+=( mesa-vulkan-drivers )
 
-sudo apt-get update
-sudo apt-get install -y --no-install-recommends "${deps[@]}"
+apt_prefix=()
+if [ "$(id -u)" -ne 0 ]; then
+  apt_prefix=(sudo)
+fi
+
+export DEBIAN_FRONTEND=noninteractive
+"${apt_prefix[@]}" apt-get update
+"${apt_prefix[@]}" apt-get install -y --no-install-recommends "${deps[@]}"
 
 printf 'install-linux-deps: done\n' >&2
