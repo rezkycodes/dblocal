@@ -116,6 +116,7 @@ impl Harness {
             os: Some(crate::platform::Os::Linux),
             arch: Some(crate::platform::Arch::X86_64),
             host_glibc: Some((2, 39)),
+            auto_start: Some(false),
             ..ServiceOptions::default()
         };
 
@@ -131,7 +132,16 @@ impl Harness {
             }
         }
 
+        // Wait for startup reconciliation on the fresh empty home before
+        // returning: otherwise a test that seeds a `Running` row immediately
+        // races `reconcile_on_startup`, which would see the identity-less row
+        // and mark it `Stopped` mid-test.
+        let reconcile_done = super::super::reconcile::on_reconcile_done(paths.root());
         let service = LocalService::new(paths.clone(), options).expect("service");
+        service.start_background();
+        reconcile_done
+            .recv_timeout(Duration::from_secs(30))
+            .expect("startup reconciliation on fresh harness");
         let events = Mutex::new(Vec::new());
 
         Self {
@@ -423,9 +433,17 @@ impl Harness {
             .expect("runtime dir");
         std::fs::create_dir_all(runtime_dir.join("bin")).expect("runtime bin");
 
+        // Wait for startup reconciliation on the fresh empty home before
+        // returning: otherwise a test that seeds a `Running` row immediately
+        // races `reconcile_on_startup`, which would see the identity-less row
+        // and mark it `Stopped` mid-test.
+        let reconcile_done = super::super::reconcile::on_reconcile_done(paths.root());
         let service = LocalService::new(paths.clone(), options).expect("service");
         let startup_receiver = service.subscribe();
         service.start_background();
+        reconcile_done
+            .recv_timeout(Duration::from_secs(30))
+            .expect("startup reconciliation on fresh harness");
         drop(startup_receiver);
         Harness {
             dir,
