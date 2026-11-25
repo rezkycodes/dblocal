@@ -10,7 +10,7 @@
 //! 2. `IDLE`   — the DBLocal shell on the mock service, no downloads running.
 //! 3. `AFTER_DOWNLOAD` — the same shell once a mock create/download finished.
 //!
-//! If the empty window alone is above the 150 MB target, the floor is the
+//! If the empty window alone is near the 220 MB target, the floor is the
 //! cost of GPUI + wgpu, and app code cannot go below it.
 
 #![allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
@@ -22,8 +22,8 @@ use std::time::{Duration, Instant};
 use dblocal_core::service::{DblService, mock::MockService};
 use gpui_kit::{App, Bounds, WindowBounds, WindowKind, WindowOptions, div, prelude::*, px, size};
 
-const TARGET_RSS_MB: f64 = 150.0;
-const TARGET_CPU_PCT: f64 = 1.0;
+const TARGET_RSS_MB: f64 = 220.0;
+const TARGET_CPU_PCT: f64 = 1.5;
 
 /// The floor view: an empty window with no DBLocal widgets.
 struct EmptyView;

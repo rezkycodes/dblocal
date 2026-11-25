@@ -57,7 +57,7 @@ Karena DBLocal **tidak punya telemetri** (D-05), tidak ada metrik yang mengandal
 | Sesi pertama berhasil, cepat | TTFRI (time-to-first-running-instance), PostgreSQL | p50 < 120 s @ 20 Mbps | E2E test di CI, bandwidth di-throttle |
 | Sesi pertama berhasil, engine besar | TTFRI MySQL (artefak 80 MB Linux x86_64 minimal, 168 MB macOS, 281 MB Windows; Linux aarch64 penuh 832 MB ≈ 333 s dikecualikan, lihat D-24) | p50 < 300 s @ 20 Mbps | E2E test di CI |
 | Terasa native, bukan web | Cold start app sampai window interaktif | p95 < 1,5 s | Benchmark CI (NVMe, runner standar) |
-| Lebih ringan dari Docker | RSS aplikasi saat idle (tanpa instance jalan) | < 150 MB | Benchmark CI |
+| Lebih ringan dari Docker | RSS aplikasi saat idle (tanpa instance jalan) | < 220 MB (OPEN-08, keputusan Rezky 2026-11-25) | Benchmark CI |
 | Mudah dipasang | Ukuran installer per platform | < 60 MB | Gate ukuran artefak di CI |
 | Jalan di semua target | Instalasi engine sukses di matrix OS | 100% (target rilis pertama: Linux x86_64/aarch64, Windows x86_64; macOS ditunda, D-26) | Job E2E per OS tiap rilis |
 | Start cepat | PostgreSQL stopped → menerima koneksi | p95 < 5 s | E2E |
@@ -515,7 +515,7 @@ stateDiagram-v2
 
   **F-DBU-02 — Kelola user & hak akses**
   - AC1: Given user membuat database user baru, Then ia dapat memilih database dan tingkat hak (read-only atau read-write), dan perintah GRANT yang sesuai dijalankan.
-  - AC2: Given user dibuat, Then password-nya ditampilkan sekali dan disimpan di keychain seperti kredensial superuser.
+  - AC2: Given user dibuat, Then password-nya ditampilkan sekali dan disimpan di keychain seperti kredensial superuser. *(Penyimpangan v1 diterima, keputusan Rezky 2026-11-25: untuk v1, password user database baru hanya ditampilkan sekali dan tidak disimpan di keychain.)*
   - Entities: Instance, CredentialRef
 
   **F-DBU-03 — Reset password superuser**
@@ -575,7 +575,7 @@ stateDiagram-v2
 - **Sub-features:**
 
   **F-CFG-01 — Form setting penting**
-  - AC1: Given instance PostgreSQL, When user membuka tab Config, Then form menampilkan subset bernilai tinggi (`port`, `max_connections`, `shared_buffers`, `work_mem`, `timezone`, metode autentikasi) beserta nilai saat ini dan nilai default.
+  - AC1: Given instance PostgreSQL, When user membuka tab Config, Then form menampilkan subset bernilai tinggi (`port`, `max_connections`, `shared_buffers`, `work_mem`, `timezone`, metode autentikasi) beserta nilai saat ini dan nilai default. *(Diterima untuk v1, keputusan Rezky 2026-11-25: metode autentikasi bersifat hanya-baca di tab Config.)*
   - AC2: Given user menyimpan perubahan, Then app memberi tahu bahwa restart diperlukan dan menawarkan melakukannya sekarang.
   - AC3: Given perubahan membuat engine gagal start, Then app menawarkan "Kembalikan konfigurasi sebelumnya" dari salinan yang disimpan sebelum perubahan.
 
@@ -793,7 +793,7 @@ Tech preference mode: **user** (Rust + GPUI dipilih user; sisanya AI dengan pers
 | Layer | Pilihan | Source | Alasan (kebutuhan yang dipenuhi) |
 |---|---|---|---|
 | Bahasa & core | Rust (edition 2024) | user | Satu binary tanpa runtime, startup cepat (< 1,5 s), kontrol penuh atas proses anak dan FFI OS — syarat untuk mengelola proses engine lintas-OS |
-| UI | GPUI (`gpui-pre` 0.3.x) + `gpui-component` 0.10.x, Apache-2.0 | user | Tampilan yang diinginkan (gaya Zed IDE, lihat D-23 dan `docs/design/UI-DIRECTION.md`), GPU-accelerated, tanpa Electron/webview → mendukung target RAM < 150 MB. Apache-2.0 kompatibel satu arah dengan GPL-3.0, jadi sah dipakai di dalam produk GPL. **Kode DBDelve tetap tidak disalin — keputusan rekayasa, bukan keterbatasan lisensi (lihat D-06).** |
+| UI | GPUI (`gpui-pre` 0.3.x) + `gpui-component` 0.10.x, Apache-2.0 | user | Tampilan yang diinginkan (gaya Zed IDE, lihat D-23 dan `docs/design/UI-DIRECTION.md`), GPU-accelerated, tanpa Electron/webview → mendukung target RAM < 220 MB (OPEN-08). Apache-2.0 kompatibel satu arah dengan GPL-3.0, jadi sah dipakai di dalam produk GPL. **Kode DBDelve tetap tidak disalin — keputusan rekayasa, bukan keterbatasan lisensi (lihat D-06).** |
 | State lokal | SQLite via `rusqlite` (bundled), mode WAL | ai | GUI dan CLI adalah dua proses; alokasi port dan transisi status butuh transaksi (F-CLI-02 AC3) |
 | HTTP | `reqwest` + `rustls` (tanpa OpenSSL sistem) | ai | Unduhan resumable (`Range`), dan TLS yang konsisten di 5 target tanpa dependensi sistem |
 | Arsip | `flate2`, `xz2`/`liblzma`, `zip` | ai | Format upstream: `.tar.gz`, `.tar.xz`, `.zip` |
@@ -921,7 +921,7 @@ dblocal/
 | Kategori | Requirement | Cara verifikasi |
 |---|---|---|
 | Performa | Cold start sampai jendela interaktif p95 < 1,5 s | Benchmark CI per OS, gate rilis |
-| Performa | RSS app idle < 150 MB; CPU idle < 1% | Benchmark CI |
+| Performa | RSS app idle < 220 MB; CPU idle <= 1,5% (OPEN-08, keputusan Rezky 2026-11-25) | Benchmark CI |
 | Performa | UI tetap responsif (tidak ada frame > 100 ms) selama unduhan besar (hingga 832 MB) berjalan | Uji manual terstruktur + profiling di CI |
 | Performa | Rekonsiliasi 20 instance < 2 s | Test integrasi |
 | Performa | PostgreSQL stopped → menerima koneksi p95 < 5 s; Valkey < 1 s | E2E per OS |
@@ -1050,7 +1050,7 @@ Konteks: user meminta tampilan seperti Zed IDE dengan rujukan contoh GPUI di rep
 **D-24 | Dukungan engine per platform mengikuti artefak upstream yang nyata; MySQL Linux x86_64 memakai tarball minimal; SHA-256 MySQL dihitung CI**
 Konteks: spike W0-B (2026-11-20, diverifikasi ulang oleh reviewer) memeriksa sumber upstream. Temuan: (a) tarball MySQL 8.4.11 untuk Linux berukuran 832 MB (794 MiB), bukan ±260 MB; Linux x86_64 memiliki varian `-minimal` 79,8 MB yang berisi `mysqld`, `mysql`, `mysqladmin`, `mysqldump`, dan `mysqld_safe` (isi arsip didaftar tanpa diekstrak); Linux aarch64 hanya tersedia penuh (822 MB); macOS 160-164 MiB dan hanya untuk `macos15`; Windows x64 zip 281 MB; tidak ada Windows arm64. (b) MySQL tidak menerbitkan SHA-256, hanya MD5 dan tanda tangan GPG `.asc`. (c) MariaDB 11.8.10 dan 11.4.14 hanya menerbitkan Linux x86_64 dan Windows x86_64. (d) Valkey hanya menerbitkan Linux (x86_64 dan `arm64`; token `aarch64` memberi 403). (e) PostgreSQL dari theseus-rs mencakup keenam kombinasi OS dan arsitektur.
 Keputusan: katalog hanya memuat kombinasi yang artefaknya benar-benar ada; kombinasi lain tampil sebagai "tidak tersedia di platform ini" (F-CAT-02 AC2), bukan error. Janji "empat engine" (D-14) berlaku per platform menurut matriks di `docs/spikes/engines/upstream-sources.md` bagian 5. Builder katalog menghitung sendiri SHA-256 MySQL dengan mengunduh sekali di CI dan memverifikasi tanda tangan GPG bila memungkinkan, lalu mem-pin hash itu di katalog; installer tetap wajib memverifikasi sebelum ekstraksi, hanya sumber kepercayaannya adalah katalog kita, bukan upstream. Valkey Linux memakai varian jammy secara default dengan preflight glibc dan soname (varian noble ditunda: pada 2026-11-20 `download.valkey.io` menyajikan dua objek berbeda untuk URL noble yang sama menurut header `Accept-Encoding` karena cache CloudFront basi, sehingga hash yang di-pin akan gagal saat cache kedaluwarsa); macOS dan Windows tetap lewat F-SPK-02. Konsekuensi: MariaDB tidak tersedia di macOS dan Linux aarch64 pada v1, kecuali kita membangunnya sendiri atau user memilih jalur lain.
-Status: diadopsi koordinator berdasarkan spike, menunggu konfirmasi user karena mengubah cakupan D-14.
+Status: Approved (keputusan Rezky 2026-11-25).
 
 **D-25 | Tampilan UI mengikuti prototipe milik user (GPUI Kit), bukan shell W1-G**
 Konteks: setelah D-23, user meminta UI memakai GPUI Kit (https://gpui-kit.com/docs/) dan menyerahkan prototipe lengkap `dblocal-gpui` (disalin ke `docs/design/prototype/dblocal-gpui/`, termasuk tiga tangkapan layar): title bar dengan breadcrumb dan status katalog, dock Instances berbentuk pohon per engine dengan filter dan bagian Runtimes, tab per instance dengan glyph status, header instance (Start/Stop, Restart, Open in…), sub-tab Overview, Logs, Databases, Config, dialog Instance baru dengan kartu engine, daftar versi berlencana "Terpasang"/"Unduh", validasi nama dan port, opsi tanpa password, serta status bar. Palet dasarnya `#15161d` turunan One Dark, sehingga searah dengan D-23. Prototipe memakai data contoh di memori dan crate payung `gpui-kit = "=0.10.0"`, yaitu tumpukan yang sama dengan `gpui-pre =0.3.12` + `gpui-component =0.10.0` yang sudah dipakai. Keputusan: tata letak, tema gelap, komponen, dan perilaku visual prototipe menjadi acuan UI; lapisan data, bridge event, state, `strings.rs`, dan tes W1-G dipertahankan dan view-nya diganti. Isi prototipe yang belum punya backend (tab Databases = Phase 2, tab Config = Phase 3, Open in… = Phase 2) tampil sebagai keadaan "belum tersedia" yang jujur pada mode produksi dan tidak pernah menampilkan data karangan; data contoh prototipe hanya hidup di mock/demo. Fitur W1-G yang tidak ada di prototipe (command palette, hapus instance, toast, banner offline, progres unduhan) tetap ada dengan gaya prototipe. Tema terang dibuat dalam bahasa visual yang sama. Semua warna teks wajib lolos kontras 4,5:1 (F-PLH-02). Konsekuensi: crate payung `gpui-kit` menarik `x11rb` dan `xkbcommon`, sehingga membangunnya di Linux membutuhkan `libxkbcommon-x11-devel` (tidak ada di mesin pengembangan ini); keputusan memakai crate payung atau dependensi langsung ditentukan oleh hasil W2-D. Status: Approved (permintaan langsung user).
@@ -1073,7 +1073,7 @@ Konsekuensi: Definition of Done Phase 1 (§11) tidak lagi menuntut lima target O
 - **[OPEN-05]** Apakah runner `linux-aarch64` tersedia dan stabil untuk repo ini, atau build arm64 perlu cross-compilation/QEMU?
 - **[OPEN-06]** Apakah nama "DBLocal" bebas konflik di crates.io, Homebrew cask, winget, dan sebagai domain? (D-22.)
 - **[OPEN-07]** Endpoint unduhan MySQL mana yang stabil untuk otomatisasi, dan apakah ketentuan penggunaannya mengizinkan pengunduhan terprogram oleh aplikasi klien? Bila bermasalah, MariaDB menjadi jalur utama keluarga MySQL. Sebagian terjawab oleh spike W0-B: `dev.mysql.com/get/...` dan `cdn.mysql.com` dapat diunduh tanpa penerimaan syarat di browser, tetapi MySQL tidak menerbitkan SHA-256 (D-24). Ketentuan penggunaan Oracle untuk unduhan terprogram oleh aplikasi klien belum ditinjau secara hukum dan tetap terbuka.
-- **[OPEN-08]** Target idle RSS < 150 MB dan CPU < 1% belum tercapai oleh shell GPUI: spike W0-C mengukur RSS 176 MB dan CPU sekitar 3,2% dengan pump event 50 ms. Penyebabnya diduga baseline wgpu/Vulkan ditambah polling timer. → W1-G wajib (a) mengganti polling dengan wake berbasis event, (b) mengukur baseline jendela GPUI kosong supaya lantai biayanya diketahui, dan (c) melaporkan angka akhir. Target NFR tidak diubah tanpa bukti dan persetujuan user.
+- **[OPEN-08]** Target idle RSS < 150 MB dan CPU < 1% belum tercapai oleh shell GPUI: spike W0-C mengukur RSS 176 MB dan CPU sekitar 3,2% dengan pump event 50 ms. Penyebabnya diduga baseline wgpu/Vulkan ditambah polling timer. → W1-G mengganti polling dengan wake berbasis event dan mengukur lantai jendela GPUI kosong. **Diselesaikan (keputusan Rezky 2026-11-25):** batas rilis pertama ditetapkan menjadi **RSS < 220 MB** dan **CPU idle <= 1,5%** (terukur sekitar 194 MB dan 1% di Linux).
 
 ### Assumptions — dipegang sampai terbukti sebaliknya
 
