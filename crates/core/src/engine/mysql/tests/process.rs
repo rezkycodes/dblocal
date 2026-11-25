@@ -9,70 +9,146 @@ fn cleanup_init_file_removes_one_shot_sql() {
     cleanup_init_file(&p);
     assert!(!p.exists(), "init file must be removed");
 }
+#[cfg(unix)]
 #[test]
-fn shutdown_command_uses_mysql_pwd_env_not_argv_password_mode() {
-    let ctx = run_ctx(42345, AuthMode::Password, Some(SECRET));
-    let cmd = shutdown_command(&ctx);
-    // The bundled binary is `mysqladmin` on unix and `mysqladmin.exe` on
-    // Windows (via `exe_name`), so compare the file stem rather than the raw
-    // string: `ends_with("mysqladmin")` is false for the `.exe` spelling.
-    let program = Path::new(cmd.get_program());
-    assert_eq!(
-        program.file_stem().and_then(|s| s.to_str()),
-        Some("mysqladmin"),
-        "shutdown must run the bundled mysqladmin: {}",
-        program.display()
-    );
-    assert_eq!(
-        program.extension().and_then(|s| s.to_str()) == Some("exe"),
-        cfg!(windows)
-    );
-    assert_no_secret_in_command(&cmd, SECRET);
-    let args: Vec<String> = cmd
-        .get_args()
-        .map(|a| a.to_string_lossy().into_owned())
-        .collect();
-    assert!(args.iter().any(|a| a == "shutdown"));
-    assert!(args.iter().any(|a| a == "--protocol=TCP"));
-    let mut saw_mysql_pwd = false;
-    for (k, v) in cmd.get_envs() {
-        if k.to_string_lossy() == "MYSQL_PWD" {
-            let v = v.expect("MYSQL_PWD value").to_string_lossy();
-            assert_eq!(v, SECRET);
-            saw_mysql_pwd = true;
-        }
-    }
-    assert!(saw_mysql_pwd, "MYSQL_PWD must be set for password auth");
-}
+fn shutdown_happy_path_passes_defaults_file_and_cleans_up() {
+    let dir = tempfile::tempdir().expect("tmp");
+    let runtime = dir.path().join("rt");
+    let data = dir.path().join("inst/data");
+    let run = dir.path().join("inst/run");
+    let logs = dir.path().join("inst/logs");
+    fs::create_dir_all(&data).expect("data");
+    fs::create_dir_all(&run).expect("run");
+    fs::create_dir_all(&logs).expect("logs");
 
-#[test]
-fn shutdown_command_omits_mysql_pwd_for_no_password_mode() {
-    let ctx = run_ctx(42345, AuthMode::None, None);
-    let cmd = shutdown_command(&ctx);
-    let has_mysql_pwd = cmd
-        .get_envs()
-        .any(|(k, _)| k.to_string_lossy() == "MYSQL_PWD");
+    let capture = dir.path().join("captured.txt");
+    let script = format!(
+        "#!/bin/sh\n\
+         echo \"ARGS:$*\" > \"{}\"\n\
+         echo \"MYSQL_PWD:${{MYSQL_PWD:-UNSET}}\" >> \"{}\"\n\
+         echo \"MYSQL_TCP_PORT:${{MYSQL_TCP_PORT:-UNSET}}\" >> \"{}\"\n\
+         for a in \"$@\"; do\n\
+           case \"$a\" in\n\
+             --defaults-file=*)\n\
+               f=\"${{a#--defaults-file=}}\"\n\
+               cat \"$f\" >> \"{}\"\n\
+               ;;\n\
+           esac\n\
+         done\n\
+         exit 0\n",
+        capture.display(),
+        capture.display(),
+        capture.display(),
+        capture.display(),
+    );
+    let _admin = write_fake_bin(&runtime, "mysqladmin", &script);
+
+    let ctx = RunContext {
+        instance_name: "m1".into(),
+        runtime_dir: runtime,
+        data_dir: data,
+        logs_dir: logs,
+        run_dir: run.clone(),
+        port: Port::new(42345).expect("port"),
+        superuser: "root".into(),
+        auth: AuthMode::Password,
+        credential: Some(Credential::new("root", SecretString::from(SECRET))),
+    };
+
+    MysqlAdapter
+        .shutdown(&ctx)
+        .expect("mysqladmin shutdown should succeed");
+
+    let captured = fs::read_to_string(&capture).expect("captured");
+    let first_line = captured.lines().next().unwrap_or("");
     assert!(
-        !has_mysql_pwd,
-        "MYSQL_PWD must not be set for AuthMode::None"
+        first_line.starts_with("ARGS:--defaults-file="),
+        "first arg must be --defaults-file: {first_line}"
     );
+    assert!(
+        first_line.contains("--connect-timeout="),
+        "must pass --connect-timeout: {first_line}"
+    );
+    assert!(
+        first_line.contains("-h 127.0.0.1 -P 42345 --protocol=TCP shutdown"),
+        "unexpected args: {first_line}"
+    );
+    assert!(
+        !first_line.contains(SECRET),
+        "password must not appear in argv: {first_line}"
+    );
+    assert!(
+        captured.contains("MYSQL_PWD:UNSET"),
+        "MYSQL_PWD must not be set: {captured}"
+    );
+    assert!(
+        captured.contains("MYSQL_TCP_PORT:UNSET"),
+        "MYSQL_TCP_PORT must not be set: {captured}"
+    );
+    assert!(
+        captured.contains(&format!("password=\"{SECRET}\"")),
+        "defaults file must carry password: {captured}"
+    );
+    let leftover: Vec<_> = fs::read_dir(&run)
+        .expect("read run")
+        .filter_map(std::result::Result::ok)
+        .collect();
+    assert!(leftover.is_empty(), "temp files leaked: {leftover:?}");
 }
 
+#[cfg(unix)]
 #[test]
-fn bootstrap_shutdown_command_has_no_password_in_argv() {
-    let cmd = bootstrap_shutdown_command(
-        Path::new("/opt/mysql"),
-        42345,
-        "root",
-        AuthMode::Password,
-        Some(&SecretString::from(SECRET)),
+fn shutdown_missing_credential_or_failed_client_returns_err_and_cleans_up() {
+    let dir = tempfile::tempdir().expect("tmp");
+    let runtime = dir.path().join("rt");
+    let data = dir.path().join("inst/data");
+    let run = dir.path().join("inst/run");
+    let logs = dir.path().join("inst/logs");
+    fs::create_dir_all(&data).expect("data");
+    fs::create_dir_all(&run).expect("run");
+    fs::create_dir_all(&logs).expect("logs");
+
+    let _admin = write_fake_bin(
+        &runtime,
+        "mysqladmin",
+        &format!("#!/bin/sh\necho 'Access denied {SECRET}' >&2\nexit 1\n"),
     );
-    assert_no_secret_in_command(&cmd, SECRET);
-    let has_mysql_pwd = cmd.get_envs().any(|(k, v)| {
-        k.to_string_lossy() == "MYSQL_PWD"
-            && v.map(|v| v.to_string_lossy() == SECRET).unwrap_or(false)
-    });
-    assert!(has_mysql_pwd);
+
+    let no_cred_ctx = RunContext {
+        instance_name: "m2".into(),
+        runtime_dir: runtime,
+        data_dir: data,
+        logs_dir: logs,
+        run_dir: run.clone(),
+        port: Port::new(42346).expect("port"),
+        superuser: "root".into(),
+        auth: AuthMode::Password,
+        credential: None,
+    };
+    let err = MysqlAdapter
+        .shutdown(&no_cred_ctx)
+        .expect_err("missing credential must fail");
+    assert!(err.to_string().contains("credential"), "{err}");
+
+    let fail_ctx = RunContext {
+        credential: Some(Credential::new("root", SecretString::from(SECRET))),
+        ..no_cred_ctx
+    };
+    let err = MysqlAdapter
+        .shutdown(&fail_ctx)
+        .expect_err("non-zero mysqladmin exit must fail");
+    let msg = err.to_string();
+    assert!(msg.contains("Access denied"), "{msg}");
+    assert!(!msg.contains(SECRET), "secret leaked in error: {msg}");
+
+    let leftover: Vec<_> = fs::read_dir(&run)
+        .expect("read run")
+        .filter_map(std::result::Result::ok)
+        .collect();
+    assert!(
+        leftover.is_empty(),
+        "temp files leaked after failure: {leftover:?}"
+    );
 }
 
 #[test]
@@ -287,12 +363,16 @@ fn read_log_tail_bounds_and_missing_file() {
 fn shutdown_bootstrap_reports_spawn_and_exit_failure() {
     let dir = tempfile::tempdir().expect("tmp");
     let missing = dir.path().join("rt");
+    let run_dir = dir.path().join("run");
     fs::create_dir_all(&missing).expect("rt");
-    let err = retry_etxtbsy(|| shutdown_bootstrap(&missing, 42200, "root", AuthMode::None, None))
-        .unwrap_err();
+    fs::create_dir_all(&run_dir).expect("run");
+    let err = retry_etxtbsy(|| {
+        shutdown_bootstrap(&missing, &run_dir, 42200, "root", AuthMode::None, None)
+    })
+    .unwrap_err();
     assert!(
         err.to_string()
-            .contains("failed to shutdown bootstrap mysqld"),
+            .contains("failed to execute mysqladmin shutdown"),
         "{err}"
     );
 
@@ -301,10 +381,12 @@ fn shutdown_bootstrap_reports_spawn_and_exit_failure() {
         "mysqladmin",
         "#!/bin/sh\necho 'boot shutdown bad' >&2\nexit 5\n",
     );
-    let err = retry_etxtbsy(|| shutdown_bootstrap(&missing, 42201, "root", AuthMode::None, None))
-        .unwrap_err();
+    let err = retry_etxtbsy(|| {
+        shutdown_bootstrap(&missing, &run_dir, 42201, "root", AuthMode::None, None)
+    })
+    .unwrap_err();
     let msg = err.to_string();
-    assert!(msg.contains("bootstrap shutdown failed"), "{msg}");
+    assert!(msg.contains("mysqladmin shutdown failed"), "{msg}");
     assert!(msg.contains("boot shutdown bad"), "{msg}");
     assert!(msg.contains("code Some(5)"), "{msg}");
 }
@@ -381,4 +463,60 @@ fn bootstrap_credentials_reports_unwritable_init_file_and_early_exit() {
     let msg = err.to_string();
     assert!(msg.contains("mysqld bootstrap exited early"), "{msg}");
     assert!(msg.contains("bootstrap early"), "{msg}");
+}
+
+#[cfg(unix)]
+#[test]
+fn shutdown_kills_hanging_client_on_timeout_and_cleans_up() {
+    let dir = tempfile::tempdir().expect("tmp");
+    let runtime = dir.path().join("rt");
+    let data = dir.path().join("inst/data");
+    let run = dir.path().join("inst/run");
+    let logs = dir.path().join("inst/logs");
+    fs::create_dir_all(&data).expect("data");
+    fs::create_dir_all(&run).expect("run");
+    fs::create_dir_all(&logs).expect("logs");
+    let _admin = write_fake_bin(&runtime, "mysqladmin", "#!/bin/sh\nsleep 10\nexit 0\n");
+
+    let ctx = RunContext {
+        instance_name: "m-hang".into(),
+        runtime_dir: runtime,
+        data_dir: data,
+        logs_dir: logs,
+        run_dir: run.clone(),
+        port: Port::new(43319).expect("port"),
+        superuser: "root".into(),
+        auth: AuthMode::None,
+        credential: None,
+    };
+
+    let (tx, rx) = std::sync::mpsc::channel();
+    let ctx_thread = ctx.clone();
+    let started = std::time::Instant::now();
+    std::thread::spawn(move || {
+        let _ = tx.send(shutdown_with_timeout(
+            &ctx_thread,
+            Duration::from_millis(200),
+        ));
+    });
+
+    let result = rx
+        .recv_timeout(Duration::from_secs(3))
+        .expect("mysqladmin shutdown hung past test bound");
+    assert!(
+        started.elapsed() < Duration::from_secs(3),
+        "timeout took too long: {:?}",
+        started.elapsed()
+    );
+    let err = result.expect_err("hanging client must time out");
+    assert!(err.to_string().contains("timed out"), "{err}");
+
+    let leftover: Vec<_> = fs::read_dir(&run)
+        .expect("read run")
+        .filter_map(std::result::Result::ok)
+        .collect();
+    assert!(
+        leftover.is_empty(),
+        "temp defaults file leaked after timeout: {leftover:?}"
+    );
 }

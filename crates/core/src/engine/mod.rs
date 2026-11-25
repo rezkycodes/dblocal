@@ -4,6 +4,7 @@
 //! engines only through this trait, so adding a new engine never changes
 //! orchestration code.
 
+pub(crate) mod admin_shutdown;
 pub mod glibc;
 pub mod mariadb;
 mod mysql;

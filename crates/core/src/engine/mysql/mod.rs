@@ -103,23 +103,7 @@ impl EngineAdapter for MysqlAdapter {
     }
 
     fn shutdown(&self, ctx: &RunContext) -> Result<()> {
-        let out = shutdown_command(ctx)
-            .output()
-            .map_err(|e| DblError::Engine {
-                reason: format!("failed to execute mysqladmin shutdown: {e}"),
-            })?;
-        let result = if out.status.success() {
-            Ok(())
-        } else {
-            let tail = combined_output(out.stdout, out.stderr);
-            Err(DblError::Engine {
-                reason: format!(
-                    "mysqladmin shutdown failed (code {:?}): {}",
-                    out.status.code(),
-                    tail.trim_end()
-                ),
-            })
-        };
+        let result = shutdown_with_timeout(ctx, Duration::from_secs(consts::STOP_GRACE_SECS));
         cleanup_fallback_socket_from_my_cnf(&my_cnf_path(&ctx.run_dir), ctx.port.get());
         result
     }
@@ -278,6 +262,7 @@ fn bootstrap_credentials(ctx: &InitContext, run_dir: &Path, logs_dir: &Path) -> 
     }
     let shutdown_res = shutdown_bootstrap(
         &ctx.runtime_dir,
+        run_dir,
         ctx.port.get(),
         &ctx.superuser,
         ctx.auth,
@@ -339,81 +324,47 @@ pub(super) fn bootstrap_mysqld_command_for(
     cmd
 }
 
+pub(super) fn shutdown_with_timeout(ctx: &RunContext, timeout: Duration) -> Result<()> {
+    let admin_bin = ctx.runtime_dir.join("bin").join(exe_name("mysqladmin"));
+    let req = crate::engine::admin_shutdown::AdminShutdownRequest {
+        engine_label: "mysql",
+        tool_label: "mysqladmin",
+        file_prefix: "mysql",
+        instance_name: &ctx.instance_name,
+        admin_bin: &admin_bin,
+        run_dir: &ctx.run_dir,
+        port: ctx.port.get(),
+        superuser: &ctx.superuser,
+        auth: ctx.auth,
+        password: ctx.credential.as_ref().map(|c| &c.password),
+        timeout,
+    };
+    crate::engine::admin_shutdown::run_admin_shutdown(&req)
+}
+
 fn shutdown_bootstrap(
     runtime_dir: &Path,
+    run_dir: &Path,
     port: u16,
     superuser: &str,
     auth: AuthMode,
     password: Option<&SecretString>,
 ) -> Result<()> {
-    let out = bootstrap_shutdown_command(runtime_dir, port, superuser, auth, password)
-        .output()
-        .map_err(|e| DblError::Engine {
-            reason: format!("failed to shutdown bootstrap mysqld: {e}"),
-        })?;
-    if out.status.success() {
-        return Ok(());
-    }
-    let tail = combined_output(out.stdout, out.stderr);
-    Err(DblError::Engine {
-        reason: format!(
-            "bootstrap shutdown failed (code {:?}): {}",
-            out.status.code(),
-            tail.trim_end()
-        ),
-    })
-}
-
-pub(super) fn shutdown_command(ctx: &RunContext) -> Command {
-    mysqladmin_command(
-        &ctx.runtime_dir,
-        ctx.port.get(),
-        &ctx.superuser,
-        ctx.auth,
-        ctx.credential.as_ref().map(|c| &c.password),
-        "shutdown",
-    )
-}
-
-pub(super) fn bootstrap_shutdown_command(
-    runtime_dir: &Path,
-    port: u16,
-    superuser: &str,
-    auth: AuthMode,
-    password: Option<&SecretString>,
-) -> Command {
-    mysqladmin_command(runtime_dir, port, superuser, auth, password, "shutdown")
-}
-
-fn mysqladmin_command(
-    runtime_dir: &Path,
-    port: u16,
-    superuser: &str,
-    auth: AuthMode,
-    password: Option<&SecretString>,
-    subcommand: &str,
-) -> Command {
-    let mysqladmin = runtime_dir.join("bin").join(exe_name("mysqladmin"));
-    let mut cmd = Command::new(mysqladmin);
-    cmd.arg("--no-defaults")
-        .arg("-h")
-        .arg(BIND)
-        .arg("-P")
-        .arg(port.to_string())
-        .arg("-u")
-        .arg(superuser)
-        .arg("--protocol=TCP")
-        .arg(subcommand);
-    cmd.stdin(Stdio::null());
-    cmd.stdout(Stdio::piped());
-    cmd.stderr(Stdio::piped());
-    if auth == AuthMode::Password
-        && let Some(pw) = password
-    {
-        cmd.env("MYSQL_PWD", pw.expose());
-    }
-    strip_password_env_keep_mysql_pwd(&mut cmd);
-    cmd
+    let admin_bin = runtime_dir.join("bin").join(exe_name("mysqladmin"));
+    let req = crate::engine::admin_shutdown::AdminShutdownRequest {
+        engine_label: "mysql",
+        tool_label: "mysqladmin",
+        file_prefix: "mysql-bootstrap",
+        instance_name: "bootstrap",
+        admin_bin: &admin_bin,
+        run_dir,
+        port,
+        superuser,
+        auth,
+        password,
+        timeout: Duration::from_secs(consts::STOP_GRACE_SECS),
+    };
+    crate::engine::admin_shutdown::run_admin_shutdown(&req)
 }
 
 pub(super) fn render_init_sql(ctx: &InitContext) -> Result<SecretString> {
@@ -629,10 +580,6 @@ fn write_private_config_atomic(path: &Path, contents: &str) -> Result<()> {
 
 fn strip_password_env(cmd: &mut Command) {
     cmd.env_remove("MYSQL_PWD");
-    cmd.env_remove("MYSQL_TCP_PORT");
-}
-
-fn strip_password_env_keep_mysql_pwd(cmd: &mut Command) {
     cmd.env_remove("MYSQL_TCP_PORT");
 }
 
