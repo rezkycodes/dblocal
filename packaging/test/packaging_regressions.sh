@@ -195,12 +195,22 @@ f3_fake="$tmp_root/f3fake"
 mkdir -p "$f3_fake/bin"
 cat > "$f3_fake/bin/readelf" <<'FAKE'
 #!/bin/sh
-cat <<'SYM'
+case "$1" in
+  -d)
+    cat <<'DYN'
+ 0x0000000000000001 (NEEDED)             Shared library: [libc.so.6]
+ 0x0000000000000001 (NEEDED)             Shared library: [libxcb.so.1]
+DYN
+    ;;
+  *)
+    cat <<'SYM'
 Version needs section '.gnu.version_r' contains 2 entries:
   0x0000: Version: 1  File: libc.so.6  Cnt: 2
   0x0010:   Name: GLIBC_2.2.5  Flags: none  Version: 2
   0x0020:   Name: GLIBC_2.99    Flags: none  Version: 3
 SYM
+    ;;
+esac
 FAKE
 chmod +x "$f3_fake/bin/readelf"
 # Provide dpkg-deb passthrough by symlinking real one; we need a minimal fake binary file.
@@ -288,3 +298,105 @@ if grep -q 'Recommends:[[:space:]]*libwayland-client' "$repo_root/packaging/rpm/
 else
   fail "F4: rpm spec missing dlopen runtime Recommends"
 fi
+
+# --- GLIBC <= 2.35 gate and DT_NEEDED-derived .deb Depends ------------------
+log "-- test: GLIBC anti-regression gate (dblocal_glibc_check_max)"
+glibc_sh="$repo_root/packaging/lib/glibc.sh"
+g_gate="$tmp_root/glibc-gate"
+mkdir -p "$g_gate/bin"
+printf 'fake' > "$g_gate/fakebin"
+chmod +x "$g_gate/fakebin"
+
+printf '#!/bin/sh\necho "  Name: GLIBC_2.39"\n' > "$g_gate/bin/readelf"
+chmod +x "$g_gate/bin/readelf"
+set +e
+out="$(PATH="$g_gate/bin:$PATH" bash -c "source '$glibc_sh'; dblocal_glibc_check_max '$g_gate/fakebin' 2.35" 2>&1)"
+rc=$?
+set -e
+if [ "$rc" -ne 0 ]; then pass "GLIBC gate: rejects 2.39 (> 2.35)"; else fail "GLIBC gate: must reject 2.39 (rc=$rc out=$out)"; fi
+assert_contains "$out" "GLIBC_2.39" "GLIBC gate: error names offending version"
+
+printf '#!/bin/sh\necho "  Name: GLIBC_2.35"\n' > "$g_gate/bin/readelf"
+chmod +x "$g_gate/bin/readelf"
+set +e
+out="$(PATH="$g_gate/bin:$PATH" bash -c "source '$glibc_sh'; dblocal_glibc_check_max '$g_gate/fakebin' 2.35" 2>&1)"
+rc=$?
+set -e
+assert_eq "$rc" "0" "GLIBC gate: accepts 2.35 (<= 2.35)"
+
+log "-- test: .deb Depends derived from DT_NEEDED"
+dt_dir="$tmp_root/dt-needed"
+mkdir -p "$dt_dir/bin-arm64" "$dt_dir/bin-amd64" "$dt_dir/bin-unknown"
+printf 'fake' > "$dt_dir/fakebin"
+chmod +x "$dt_dir/fakebin"
+
+cat > "$dt_dir/bin-arm64/readelf" <<'FAKE'
+#!/bin/sh
+if [ "$1" = "-d" ]; then
+  cat <<'DYN'
+ 0x0000000000000001 (NEEDED)             Shared library: [libxcb.so.1]
+ 0x0000000000000001 (NEEDED)             Shared library: [libfreetype.so.6]
+ 0x0000000000000001 (NEEDED)             Shared library: [libc.so.6]
+ 0x0000000000000001 (NEEDED)             Shared library: [ld-linux-aarch64.so.1]
+DYN
+else
+  echo "  Name: GLIBC_2.35"
+fi
+FAKE
+chmod +x "$dt_dir/bin-arm64/readelf"
+
+cat > "$dt_dir/bin-amd64/readelf" <<'FAKE'
+#!/bin/sh
+if [ "$1" = "-d" ]; then
+  cat <<'DYN'
+ 0x0000000000000001 (NEEDED)             Shared library: [libxcb.so.1]
+ 0x0000000000000001 (NEEDED)             Shared library: [libc.so.6]
+ 0x0000000000000001 (NEEDED)             Shared library: [ld-linux-x86-64.so.2]
+DYN
+else
+  echo "  Name: GLIBC_2.35"
+fi
+FAKE
+chmod +x "$dt_dir/bin-amd64/readelf"
+
+cat > "$dt_dir/bin-unknown/readelf" <<'FAKE'
+#!/bin/sh
+if [ "$1" = "-d" ]; then
+  cat <<'DYN'
+ 0x0000000000000001 (NEEDED)             Shared library: [libc.so.6]
+ 0x0000000000000001 (NEEDED)             Shared library: [libmystery.so.9]
+DYN
+else
+  echo "  Name: GLIBC_2.35"
+fi
+FAKE
+chmod +x "$dt_dir/bin-unknown/readelf"
+
+if command -v dpkg-deb >/dev/null 2>&1; then
+  set +e
+  out="$(PATH="$dt_dir/bin-arm64:$PATH" DBLOCAL_BIN="$dt_dir/fakebin" bash "$repo_root/packaging/deb/build-deb.sh" --version 0.2.0 --arch arm64 --output "$dt_dir/out-arm64" 2>&1)"
+  rc=$?
+  set -e
+  assert_eq "$rc" "0" "DT_NEEDED: arm64 build-deb succeeds"
+  deps_arm64="$(dpkg-deb -f "$dt_dir/out-arm64/dblocal_0.2.0_arm64.deb" Depends)"
+  assert_contains "$deps_arm64" "libfreetype6" "DT_NEEDED: arm64 Depends includes libfreetype6"
+  assert_contains "$deps_arm64" "libc6 (>= 2.35)" "DT_NEEDED: arm64 Depends includes libc6 (>= 2.35)"
+
+  set +e
+  out="$(PATH="$dt_dir/bin-amd64:$PATH" DBLOCAL_BIN="$dt_dir/fakebin" bash "$repo_root/packaging/deb/build-deb.sh" --version 0.2.0 --arch amd64 --output "$dt_dir/out-amd64" 2>&1)"
+  rc=$?
+  set -e
+  assert_eq "$rc" "0" "DT_NEEDED: amd64 build-deb succeeds"
+  deps_amd64="$(dpkg-deb -f "$dt_dir/out-amd64/dblocal_0.2.0_amd64.deb" Depends)"
+  case "$deps_amd64" in
+    *libfreetype6*) fail "DT_NEEDED: amd64 Depends must not include libfreetype6 (got: $deps_amd64)" ;;
+    *) pass "DT_NEEDED: amd64 Depends omits libfreetype6" ;;
+  esac
+fi
+
+set +e
+out="$(PATH="$dt_dir/bin-unknown:$PATH" DBLOCAL_BIN="$dt_dir/fakebin" bash "$repo_root/packaging/deb/build-deb.sh" --version 0.2.0 --arch amd64 --output "$dt_dir/out-unknown" 2>&1)"
+rc=$?
+set -e
+if [ "$rc" -ne 0 ]; then pass "DT_NEEDED: unmapped soname fails hard"; else fail "DT_NEEDED: unmapped soname must fail (rc=$rc out=$out)"; fi
+assert_contains "$out" "unmapped DT_NEEDED soname 'libmystery.so.9'" "DT_NEEDED: error names unmapped soname"

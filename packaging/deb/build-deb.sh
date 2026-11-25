@@ -83,35 +83,92 @@ fi
 
 command -v dpkg-deb >/dev/null 2>&1 || { echo "error: required tool not found: dpkg-deb" >&2; exit 1; }
 
-# Depends are derived from the real binary's DT_NEEDED entries.
+# Depends are derived from the real binary's DT_NEEDED entries via readelf -d.
 # F3: compute libc floor from the binary at build time; never hardcode.
-# DT_NEEDED (readelf -d): libc.so.6 libgcc_s.so.1 libm.so.6 libxcb.so.1
-# libxkbcommon.so.0 libxkbcommon-x11.so.0 libz.so.1 ld-linux-x86-64.so.2
+# Every soname must appear in the mapping table below; an unmapped soname is a
+# hard error so new dynamic dependencies are never silently dropped.
 #
-# Debian package mapping (amd64/arm64):
-#   libc.so.6, libm.so.6, ld-linux         -> libc6 (>= <computed GLIBC max>)
-#   libgcc_s.so.1                           -> libgcc-s1 (>= 4.2)
-#   libxcb.so.1                             -> libxcb1
-#   libxkbcommon.so.0                       -> libxkbcommon0 (>= 0.5.0)
-#   libxkbcommon-x11.so.0                   -> libxkbcommon-x11-0
-#   libz.so.1                               -> zlib1g (>= 1:1.1.4)
+# Debian/Ubuntu package mapping (verified on Ubuntu 22.04 and Debian 12):
+#   libc.so.6, libm.so.6, libdl.so.2, libpthread.so.0, librt.so.1,
+#   ld-linux-x86-64.so.2, ld-linux-aarch64.so.1 -> libc6 (>= <computed GLIBC max>)
+#   libgcc_s.so.1                               -> libgcc-s1 (>= 4.2)
+#   libxcb.so.1                                 -> libxcb1
+#   libxkbcommon.so.0                           -> libxkbcommon0 (>= 0.5.0)
+#   libxkbcommon-x11.so.0                       -> libxkbcommon-x11-0
+#   libz.so.1                                   -> zlib1g (>= 1:1.1.4)
+#   libfreetype.so.6                            -> libfreetype6
 #
 # Recommends (F4): libvulkan1 for Vulkan, libegl1/libwayland-client0 for
 # EGL/Wayland paths loaded by dlopen in the GPUI stack. Not hard Depends:
 # GPUI can fall back to X11/xcb; missing optional backends should not block
 # install on minimal/headless systems.
-GLIBC_FLOOR="$(dblocal_glibc_floor "$DBLOCAL_BIN")"
-echo "info: computed libc floor from $DBLOCAL_BIN: GLIBC_${GLIBC_FLOOR} -> Depends libc6 (>= ${GLIBC_FLOOR})" >&2
-
 case "$ARCH" in
-  amd64|arm64)
-    DEPENDS="libc6 (>= ${GLIBC_FLOOR}), libgcc-s1 (>= 4.2), libxcb1, libxkbcommon0 (>= 0.5.0), libxkbcommon-x11-0, zlib1g (>= 1:1.1.4)"
-    ;;
+  amd64|arm64) ;;
   *)
     echo "error: unsupported deb arch '$ARCH'; add dependency mapping before building" >&2
     exit 1
     ;;
 esac
+
+GLIBC_FLOOR="$(dblocal_glibc_floor "$DBLOCAL_BIN")"
+echo "info: computed libc floor from $DBLOCAL_BIN: GLIBC_${GLIBC_FLOOR} -> Depends libc6 (>= ${GLIBC_FLOOR})" >&2
+
+derive_deb_depends() {
+  local bin="$1" glibc_floor="$2"
+  local -a sonames=()
+  local line
+  while IFS= read -r line; do
+    [ -n "$line" ] && sonames+=("$line")
+  done < <(readelf -d "$bin" 2>/dev/null | sed -n 's/.*(NEEDED).*Shared library: \[\([^]]*\)\].*/\1/p')
+
+  if [ "${#sonames[@]}" -eq 0 ]; then
+    echo "error: could not determine DT_NEEDED libraries from $bin (readelf -d produced no NEEDED entries)" >&2
+    return 1
+  fi
+
+  local -A seen=()
+  local -a pkgs=()
+  local soname pkg
+  for soname in "${sonames[@]}"; do
+    case "$soname" in
+      libc.so.6|libm.so.6|libdl.so.2|libpthread.so.0|librt.so.1|ld-linux-x86-64.so.2|ld-linux-aarch64.so.1)
+        pkg="libc6 (>= ${glibc_floor})"
+        ;;
+      libgcc_s.so.1)
+        pkg="libgcc-s1 (>= 4.2)"
+        ;;
+      libxcb.so.1)
+        pkg="libxcb1"
+        ;;
+      libxkbcommon.so.0)
+        pkg="libxkbcommon0 (>= 0.5.0)"
+        ;;
+      libxkbcommon-x11.so.0)
+        pkg="libxkbcommon-x11-0"
+        ;;
+      libz.so.1)
+        pkg="zlib1g (>= 1:1.1.4)"
+        ;;
+      libfreetype.so.6)
+        pkg="libfreetype6"
+        ;;
+      *)
+        echo "error: unmapped DT_NEEDED soname '${soname}' in ${bin}; add it to the Debian dependency table in packaging/deb/build-deb.sh" >&2
+        return 1
+        ;;
+    esac
+    if [ -z "${seen[$pkg]+x}" ]; then
+      seen[$pkg]=1
+      pkgs+=("$pkg")
+    fi
+  done
+
+  local joined=""
+  printf -v joined '%s, ' "${pkgs[@]}"
+  printf '%s' "${joined%, }"
+}
+
+DEPENDS="$(derive_deb_depends "$DBLOCAL_BIN" "$GLIBC_FLOOR")"
 RECOMMENDS="libvulkan1, libwayland-client0, libegl1"
 
 workdir="$(mktemp -d)"
