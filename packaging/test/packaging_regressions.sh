@@ -400,3 +400,43 @@ rc=$?
 set -e
 if [ "$rc" -ne 0 ]; then pass "DT_NEEDED: unmapped soname fails hard"; else fail "DT_NEEDED: unmapped soname must fail (rc=$rc out=$out)"; fi
 assert_contains "$out" "unmapped DT_NEEDED soname 'libmystery.so.9'" "DT_NEEDED: error names unmapped soname"
+
+# --- Release asset filename normalization and [A-Za-z0-9._-] gate -----------
+log "-- test: release asset filename gate and tilde normalization"
+asset_sh="$repo_root/packaging/lib/asset_name.sh"
+an_dir="$tmp_root/asset-names"
+mkdir -p "$an_dir"
+
+# RED: tilde filename rejected by gate before normalization
+set +e
+out="$(bash -c "source '$asset_sh'; dblocal_asset_check_name 'dblocal_0.1.0~pre.2_amd64.deb'" 2>&1)"
+rc=$?
+set -e
+if [ "$rc" -ne 0 ]; then pass "asset gate (RED): rejects tilde filename"; else fail "asset gate (RED): must reject tilde filename (rc=$rc out=$out)"; fi
+assert_contains "$out" "outside [A-Za-z0-9._-]" "asset gate (RED): error explains allowed character set"
+
+# GREEN: normalize_dir rewrites '~' -> '.', passes gate, and checksums.txt matches
+printf 'deb-payload' > "$an_dir/dblocal_0.1.0~pre.2_amd64.deb"
+printf 'rpm-payload' > "$an_dir/dblocal-0.1.0~pre.2-1.x86_64.rpm"
+set +e
+out="$(bash -c "source '$asset_sh'; dblocal_asset_normalize_dir '$an_dir'" 2>&1)"
+rc=$?
+set -e
+assert_eq "$rc" "0" "asset normalize (GREEN): normalizes tilde filenames"
+if [ -f "$an_dir/dblocal_0.1.0.pre.2_amd64.deb" ] && [ -f "$an_dir/dblocal-0.1.0.pre.2-1.x86_64.rpm" ] \
+  && [ ! -e "$an_dir/dblocal_0.1.0~pre.2_amd64.deb" ] && [ ! -e "$an_dir/dblocal-0.1.0~pre.2-1.x86_64.rpm" ]; then
+  pass "asset normalize (GREEN): files renamed with '.' instead of '~'"
+else
+  fail "asset normalize (GREEN): expected normalized filenames in $an_dir"
+fi
+
+# Verify checksums.txt generated from normalized dir verifies cleanly with sha256sum -c
+if (
+  cd "$an_dir"
+  sha256sum dblocal_0.1.0.pre.2_amd64.deb dblocal-0.1.0.pre.2-1.x86_64.rpm > checksums.txt
+  sha256sum -c checksums.txt >/dev/null
+); then
+  pass "asset normalize (GREEN): checksums.txt verifies normalized filenames"
+else
+  fail "asset normalize (GREEN): checksums.txt verification failed"
+fi

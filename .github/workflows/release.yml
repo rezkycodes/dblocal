@@ -258,6 +258,17 @@ jobs:
             --arch "${{ matrix.arch }}" \
             --output "dist/pkg"
 
+      - name: Normalize package filenames for GitHub Releases
+        shell: bash
+        run: |
+          set -euo pipefail
+          # shellcheck source=packaging/lib/asset_name.sh
+          source packaging/lib/asset_name.sh
+          # GitHub Releases rewrites '~' -> '.' on upload; normalize the outer
+          # filename here while keeping '~' intact inside .deb/.rpm metadata.
+          dblocal_asset_normalize_dir dist/pkg
+          ls -lh dist/pkg
+
       - name: Upload package artifact
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -609,6 +620,21 @@ jobs:
             fi
           done
           if [ "$failed" -ne 0 ]; then
+            exit 1
+          fi
+
+          # Asset filename gate: GitHub Releases rewrites characters outside
+          # [A-Za-z0-9._-] (notably '~' -> '.'), which would break checksums.txt.
+          name_failed=0
+          for f in ./*; do
+            [ -f "$f" ] || continue
+            base="${f#./}"
+            if [[ ! "$base" =~ ^[A-Za-z0-9._-]+$ ]]; then
+              echo "::error file=$base::Artifact filename contains characters outside [A-Za-z0-9._-]: $base"
+              name_failed=1
+            fi
+          done
+          if [ "$name_failed" -ne 0 ]; then
             exit 1
           fi
 
