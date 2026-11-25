@@ -252,7 +252,7 @@ fn spawn_retrying_etxtbsy(cmd: &mut Command) -> std::io::Result<std::process::Ch
     loop {
         match cmd.spawn() {
             Ok(child) => return Ok(child),
-            Err(e) if e.raw_os_error() == Some(26) && Instant::now() < deadline => {
+            Err(e) if crate::fsutil::is_text_file_busy(&e) && Instant::now() < deadline => {
                 std::thread::sleep(Duration::from_millis(20));
             }
             Err(e) => return Err(e),
