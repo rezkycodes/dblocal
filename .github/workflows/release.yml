@@ -36,6 +36,8 @@ jobs:
             appimage_arch: x86_64
             appimagetool_sha256: ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0
             runtime_sha256: 2fca8b443c92510f1483a883f60061ad09b46b978b2631c807cd873a47ec260d
+            # Official SHA-256 from https://static.rust-lang.org/rustup/archive/1.29.3/x86_64-unknown-linux-gnu/rustup-init.sha256
+            rustup_init_sha256: b1c8cb14e30889e7e2999e6b69e62d9e9b9ffc0f4df8180564d306d9680e6c55
           - os: ubuntu-24.04-arm
             target: linux-aarch64
             rust_target: aarch64-unknown-linux-gnu
@@ -44,6 +46,8 @@ jobs:
             appimage_arch: aarch64
             appimagetool_sha256: f0837e7448a0c1e4e650a93bb3e85802546e60654ef287576f46c71c126a9158
             runtime_sha256: 00cbdfcf917cc6c0ff6d3347d59e0ca1f7f45a6df1a428a0d6d8a78664d87444
+            # Official SHA-256 from https://static.rust-lang.org/rustup/archive/1.29.3/aarch64-unknown-linux-gnu/rustup-init.sha256
+            rustup_init_sha256: 9f608c142e0e38a78957d0661ba1dfaf0b6fb37184cfaa4b9a0aa57af6184282
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -56,13 +60,24 @@ jobs:
         # container does not preinstall curl, ca-certificates, or rustup.
         run: bash scripts/install-linux-deps.sh
 
-      - name: Bootstrap rustup in container
+      - name: Bootstrap pinned rustup-init in container
         shell: bash
+        env:
+          RUSTUP_VERSION: "1.29.3"
+          RUST_TARGET: ${{ matrix.rust_target }}
+          RUSTUP_INIT_SHA256: ${{ matrix.rustup_init_sha256 }}
         run: |
           set -euo pipefail
           if ! command -v rustup >/dev/null 2>&1; then
-            curl --proto '=https' --tlsv1.2 -fsSL https://sh.rustup.rs \
-              | sh -s -- -y --default-toolchain none --profile minimal
+            rustup_init="${RUNNER_TEMP}/rustup-init"
+            curl --proto '=https' --tlsv1.2 -fsSL -o "$rustup_init" \
+              "https://static.rust-lang.org/rustup/archive/${RUSTUP_VERSION}/${RUST_TARGET}/rustup-init"
+            sha256sum -c <<EOF
+          ${RUSTUP_INIT_SHA256}  ${rustup_init}
+          EOF
+            chmod +x "$rustup_init"
+            "$rustup_init" -y --default-toolchain none --profile minimal --no-modify-path
+            rm -f "$rustup_init"
             echo "${HOME}/.cargo/bin" >> "$GITHUB_PATH"
           fi
 
