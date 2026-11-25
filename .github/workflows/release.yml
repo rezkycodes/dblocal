@@ -514,7 +514,8 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          $version = "${{ env.RELEASE_VERSION }}"
+          $version = $env:RELEASE_VERSION
+          if (-not $version) { throw "RELEASE_VERSION is not set" }
           $exe = "dist/bin/windows-x86_64/dblocal.exe"
           if (-not (Test-Path $exe)) { throw "Expected binary not found: $exe" }
           ./packaging/msi/build-msi.ps1 -Version $version -DblocalExe $exe -OutDir dist/msi
