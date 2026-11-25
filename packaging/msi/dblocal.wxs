@@ -32,8 +32,12 @@
       Description="DBLocal - local database server manager"
       Comments="Installs DBLocal. User data in %USERPROFILE%\.dblocal is kept on uninstall." />
 
+    <!-- AllowSameVersionUpgrades="yes" lets v0.1.0 replace v0.1.0-pre.x (both
+         carry MSI ProductVersion 0.1.0 because Windows Installer requires numeric
+         major.minor.build). Paired with -sice:ICE61 in build-msi.ps1. -->
     <MajorUpgrade
-      DowngradeErrorMessage="A newer version of DBLocal is already installed." />
+      DowngradeErrorMessage="A newer version of DBLocal is already installed."
+      AllowSameVersionUpgrades="yes" />
     <MediaTemplate EmbedCab="yes" />
 
     <!-- Per-user default. Override for per-machine: ALLUSERS=1 MSIINSTALLPERUSER="" -->

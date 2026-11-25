@@ -93,6 +93,9 @@ DBLOCAL_BIN=$HOME/.cache/dblocal-target-gui/release/dblocal \
 xmllint --noout packaging/msi/dblocal.wxs
 
 # MSI build (Windows CI / Windows machine with WiX v3)
+# Uses AllowSameVersionUpgrades="yes" (with -sice:ICE61) so v0.1.0 replaces
+# v0.1.0-pre.x in place (both carry numeric ProductVersion 0.1.0) while keeping
+# %USERPROFILE%\.dblocal intact.
 pwsh packaging/msi/build-msi.ps1 -Version v0.1.0 -DblocalExe .\dblocal.exe -OutDir dist\msi
 ```
 
