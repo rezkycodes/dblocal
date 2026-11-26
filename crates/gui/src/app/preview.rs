@@ -491,6 +491,20 @@ impl Workspace {
         workspace
     }
 
+    /// Preview of a long previous-run failure containing a long Windows path,
+    /// to verify that the message wraps inside the dialog padding.
+    pub fn preview_update_previous_failure_long(
+        service: Arc<dyn DblService>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let mut workspace = Self::preview(service, window, cx);
+        workspace.update.record_previous_failure(
+            "Could not replace C:\\Users\\Administrator\\AppData\\Local\\Programs\\DBLocal\\staging\\dblocal-0.9.0-windows-x86_64\\dblocal.exe: access is denied because another process holds the file open.",
+        );
+        workspace
+    }
+
     /// Preview of a release build with no signing key: self-update is refused
     /// even on a per-user install, and the reason names the missing key.
     pub fn preview_update_no_signing_key(

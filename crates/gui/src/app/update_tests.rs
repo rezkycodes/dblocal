@@ -593,3 +593,136 @@ fn no_signing_key_status() -> UpdateStatus {
         ),
     }
 }
+
+/// Starting a new attempt after a previous-run failure clears the old warning
+/// immediately, both when the new attempt runs and when `start_update` fails.
+#[gpui_kit::test]
+fn retry_clears_previous_failure_warning(cx: &mut TestAppContext) {
+    let (view, service, cx) = fixture(cx);
+    service.set(|script| {
+        script.check_due = Ok(Some(status(Some(available(true)), portable())));
+        script.start_update = Ok(OperationId::new("op-fresh"));
+    });
+    view.update(cx, |this, _| {
+        this.update
+            .record_previous_failure("The previous DBLocal process did not exit.");
+    });
+    view.update(cx, |this, cx| this.check_update_bg(cx));
+    settle(cx);
+
+    view.update(cx, |this, cx| this.retry_update(cx));
+    settle(cx);
+    assert!(
+        view.read_with(cx, |this, _| this
+            .update_state()
+            .previous_failure()
+            .is_none()),
+        "the old failure line must be cleared once a new attempt starts"
+    );
+    assert!(view.read_with(cx, |this, _| this.update_state().running()));
+}
+
+/// A startup up-to-date check must not close a pending previous-failure note.
+#[gpui_kit::test]
+fn startup_up_to_date_check_preserves_previous_failure_dialog(cx: &mut TestAppContext) {
+    let (view, service, cx) = fixture(cx);
+    service.set(|script| {
+        script.pending_failure = Some("The previous helper could not replace the file.".to_owned());
+        script.check_due = Ok(Some(status(None, portable())));
+    });
+    view.update(cx, |this, cx| this.read_pending_update_failure(cx));
+    settle(cx);
+    assert!(view.read_with(cx, |this, _| this.update_state().dialog_visible()));
+
+    view.update(cx, |this, cx| this.check_update_bg(cx));
+    settle(cx);
+    assert!(
+        view.read_with(cx, |this, _| this.update_state().dialog_visible()),
+        "an up-to-date startup check must not dismiss the previous-failure note"
+    );
+    assert!(
+        view.read_with(cx, |this, _| this
+            .update_state()
+            .previous_failure()
+            .is_some()),
+        "the previous-failure text must remain until the user closes it"
+    );
+}
+
+/// "Try again" on a previous-failure note with no known release keeps the
+/// dialog visible while checking and shows the outcome (up to date or error),
+/// then restores focus cleanly on close.
+#[gpui_kit::test]
+fn retry_from_previous_failure_without_release_shows_outcome_in_dialog(cx: &mut TestAppContext) {
+    let (view, service, cx) = fixture(cx);
+    service.set(|script| {
+        script.pending_failure = Some("The previous helper aborted.".to_owned());
+        script.update = Ok(status(None, portable()));
+    });
+    view.update(cx, |this, cx| this.read_pending_update_failure(cx));
+    settle(cx);
+
+    view.update(cx, |this, cx| this.retry_update(cx));
+    // Immediately after pressing "Try again", the dialog stays open showing
+    // that a check is in progress instead of vanishing into Hidden.
+    let (visible_while_checking, headline_while_checking) = view.read_with(cx, |this, _| {
+        let state = this.update_state();
+        (state.dialog_visible(), state.headline())
+    });
+    assert!(
+        visible_while_checking,
+        "dialog must stay visible while re-checking"
+    );
+    assert_eq!(
+        headline_while_checking,
+        dblocal_core::strings::UI_SETTINGS_CHECKING
+    );
+
+    settle(cx);
+    let (visible_after, headline_after) = view.read_with(cx, |this, _| {
+        let state = this.update_state();
+        (state.dialog_visible(), state.headline())
+    });
+    assert!(
+        visible_after,
+        "dialog must stay visible with the up-to-date answer"
+    );
+    assert_eq!(
+        headline_after,
+        dblocal_core::strings::UI_SETTINGS_UP_TO_DATE
+    );
+
+    // Closing restores focus and resets the dialog.
+    view.update(cx, |this, cx| this.close_update_dialog(cx));
+    settle(cx);
+    assert!(!view.read_with(cx, |this, _| this.update_state().dialog_visible()));
+
+    // Now test the check-error outcome: dialog stays visible with the error
+    // and offers another retry.
+    service.set(|script| {
+        script.update = Err(dblocal_core::service::UserFacingError::new(
+            "DBL-8002",
+            "Could not reach GitHub.",
+        ));
+    });
+    view.update(cx, |this, _| {
+        this.update
+            .record_previous_failure("The previous helper aborted.");
+    });
+    view.update(cx, |this, cx| this.retry_update(cx));
+    settle(cx);
+    let (visible_err, phase_err, can_retry_err) = view.read_with(cx, |this, _| {
+        let state = this.update_state();
+        (
+            state.dialog_visible(),
+            state.phase.clone(),
+            state.can_retry(),
+        )
+    });
+    assert!(visible_err, "dialog must stay visible with the check error");
+    assert!(matches!(
+        phase_err,
+        UpdatePhase::Failed { ref code, .. } if code == "DBL-8002"
+    ));
+    assert!(can_retry_err, "a failed check must still offer Try again");
+}

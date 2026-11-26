@@ -62,7 +62,7 @@ pub(super) fn render(
     let theme = cx.theme().clone();
     let state = workspace.update_state();
 
-    let mut body = v_flex().id("update-body").gap_3();
+    let mut body = v_flex().id("update-body").w_full().min_w_0().gap_3();
     body = body.child(
         Label::new(state.headline())
             .id(SharedString::from("update-headline"))
@@ -168,7 +168,7 @@ pub(super) fn render(
                         })),
                 ),
         )
-        .child(v_flex().gap_4().p(px(20.)).child(body));
+        .child(v_flex().w_full().min_w_0().gap_4().p(px(20.)).child(body));
 
     overlay(
         "update-overlay",
@@ -202,28 +202,23 @@ fn actions(workspace: &Workspace, theme: &Theme, cx: &mut Context<Workspace>) ->
         );
     }
 
-    // The release page is the only action a managed install or a previous
-    // run's failure can offer, so it is always drawn for those, with no newer
-    // release needed to name a URL (the releases page is the fallback).
-    // Never during a live download: the release page would compete with the
-    // one action that matters there.
-    let offer_release_page = !running
-        && (state.release_url().is_some()
-            || matches!(
-                state.phase,
-                UpdatePhase::CannotSelfUpdate | UpdatePhase::Failed { .. }
-            )
-            || state.previous_failure().is_some());
-    if offer_release_page {
-        row = row.child(
-            Button::new("update-release-page")
-                .secondary()
-                .small()
-                .label(strings::UI_UPDATE_RELEASE_PAGE)
-                .on_click(cx.listener(|this, _, _, cx| {
-                    this.open_update_release_page(cx);
-                })),
-        );
+    // The release page is the only action a managed install or a build without
+    // a signing key can offer, so it becomes the primary button there; whenever
+    // a retry or restart is also present it stays secondary (one primary per
+    // dialog). Never during a live download.
+    if state.offer_release_page() {
+        let mut button = Button::new("update-release-page")
+            .small()
+            .label(strings::UI_UPDATE_RELEASE_PAGE)
+            .on_click(cx.listener(|this, _, _, cx| {
+                this.open_update_release_page(cx);
+            }));
+        button = if state.release_page_is_primary() {
+            button.primary()
+        } else {
+            button.secondary()
+        };
+        row = row.child(button);
     }
 
     if state.can_restart() {
@@ -266,12 +261,21 @@ fn actions(workspace: &Workspace, theme: &Theme, cx: &mut Context<Workspace>) ->
 fn previous_failure_line(message: &str, theme: &Theme) -> AnyElement {
     h_flex()
         .id("update-previous-failure")
+        .w_full()
+        .min_w_0()
         .gap_2()
         .items_start()
-        .child(icon(IconName::TriangleAlert, 14.0, theme.warning))
+        .child(div().flex_shrink_0().pt(px(2.)).child(icon(
+            IconName::TriangleAlert,
+            14.0,
+            theme.warning,
+        )))
         .child(
             Label::new(message.to_owned())
                 .id(SharedString::from("update-previous-failure-body"))
+                .flex_1()
+                .min_w_0()
+                .whitespace_normal()
                 .text_xs()
                 .text_color(theme.foreground),
         )
@@ -282,12 +286,21 @@ fn previous_failure_line(message: &str, theme: &Theme) -> AnyElement {
 fn error_line(code: &str, message: &str, theme: &Theme) -> AnyElement {
     h_flex()
         .id(SharedString::from(format!("update-error-{code}")))
+        .w_full()
+        .min_w_0()
         .gap_2()
         .items_start()
-        .child(icon(IconName::TriangleAlert, 14.0, theme.danger))
+        .child(div().flex_shrink_0().pt(px(2.)).child(icon(
+            IconName::TriangleAlert,
+            14.0,
+            theme.danger,
+        )))
         .child(
             Label::new(format!("{code} — {message}"))
                 .id(SharedString::from(format!("update-error-text-{code}")))
+                .flex_1()
+                .min_w_0()
+                .whitespace_normal()
                 .text_xs()
                 .text_color(theme.danger),
         )

@@ -17,6 +17,11 @@ pub enum UpdatePhase {
     /// No newer release, or no check has found one: no icon, no dialog.
     #[default]
     Hidden,
+    /// A manual check triggered from the dialog (e.g. "Try again" after a
+    /// previous-run failure with no known release) is in flight.
+    Checking,
+    /// A manual check triggered from the dialog found no newer release.
+    UpToDate,
     /// A newer release exists and this install may replace itself.
     Available,
     /// A newer release exists but this install cannot replace itself (deb, rpm,
@@ -120,9 +125,15 @@ impl UpdateState {
             .or_else(|| status.package_manager_hint.clone());
         match &status.available {
             None => {
-                self.phase = UpdatePhase::Hidden;
                 self.operation = None;
-                self.dialog_open = false;
+                if self.phase == UpdatePhase::Checking && self.dialog_open {
+                    self.phase = UpdatePhase::UpToDate;
+                } else {
+                    self.phase = UpdatePhase::Hidden;
+                    if self.previous_failure.is_none() {
+                        self.dialog_open = false;
+                    }
+                }
             }
             Some(_) if self.phase.is_running() => {}
             Some(view) if view.can_self_update => {
@@ -150,12 +161,14 @@ impl UpdateState {
     ///
     /// Reads the check's own flags (`AvailableUpdateView::can_self_update`),
     /// never the install kind alone: a release build with no signing key keeps
-    /// a writable per-user install but still refuses to update.
+    /// a writable per-user install but still refuses to update. Stopped phases
+    /// (`Failed`, `Cancelled`) still offer the action so Settings does not
+    /// lose its button after an interrupted attempt.
     pub fn can_self_update(&self) -> bool {
         self.available
             .as_ref()
             .is_some_and(|view| view.can_self_update)
-            && self.phase == UpdatePhase::Available
+            && (self.phase == UpdatePhase::Available || self.phase.is_stopped())
     }
 
     /// Whether an update is running; the title-bar button then shows the
@@ -245,6 +258,16 @@ impl UpdateState {
         self.previous_failure = None;
     }
 
+    /// Closes the update dialog, dismissing any one-time previous-failure note
+    /// and resetting transient check-only phases when no release is known.
+    pub fn dismiss_dialog(&mut self) {
+        self.dialog_open = false;
+        self.previous_failure = None;
+        if self.available.is_none() {
+            self.phase = UpdatePhase::Hidden;
+        }
+    }
+
     /// The previous-failure sentence, when one is on screen.
     pub fn previous_failure(&self) -> Option<&str> {
         self.previous_failure.as_deref()
@@ -268,6 +291,8 @@ impl UpdateState {
         let version = self.available_version().unwrap_or_default();
         match &self.phase {
             UpdatePhase::Hidden => String::new(),
+            UpdatePhase::Checking => strings::UI_SETTINGS_CHECKING.to_owned(),
+            UpdatePhase::UpToDate => strings::UI_SETTINGS_UP_TO_DATE.to_owned(),
             UpdatePhase::Available => strings::settings_available(version),
             UpdatePhase::CannotSelfUpdate => strings::UI_UPDATE_CANNOT.to_owned(),
             UpdatePhase::Downloading { .. } => strings::update_downloading(version),
@@ -317,6 +342,29 @@ impl UpdateState {
         matches!(self.phase, UpdatePhase::Ready { .. })
     }
 
+    /// Whether the dialog offers "Open release page".
+    ///
+    /// Never during a live download: the release page would compete with the
+    /// one action that matters there.
+    pub fn offer_release_page(&self) -> bool {
+        !self.running()
+            && (self.release_url().is_some()
+                || matches!(
+                    self.phase,
+                    UpdatePhase::CannotSelfUpdate | UpdatePhase::Failed { .. }
+                )
+                || self.previous_failure.is_some())
+    }
+
+    /// Whether "Open release page" is the dialog's single primary action.
+    ///
+    /// True when no retry or restart is offered (managed installs and builds
+    /// without a signing key); stays secondary whenever another primary action
+    /// is present so the dialog never has two primary buttons.
+    pub fn release_page_is_primary(&self) -> bool {
+        self.offer_release_page() && !self.can_restart() && !self.can_retry()
+    }
+
     /// Folds one progress event for `id`.
     ///
     /// An event for an operation this state does not own is ignored, so a stale
@@ -330,6 +378,7 @@ impl UpdateState {
                 received_bytes,
                 total_bytes,
             } => {
+                self.previous_failure = None;
                 self.phase = UpdatePhase::Downloading {
                     received: *received_bytes,
                     total: *total_bytes,
@@ -337,14 +386,17 @@ impl UpdateState {
                 self.dialog_open = true;
             }
             UpdateProgress::Verifying => {
+                self.previous_failure = None;
                 self.phase = UpdatePhase::Verifying;
                 self.dialog_open = true;
             }
             UpdateProgress::Installing => {
+                self.previous_failure = None;
                 self.phase = UpdatePhase::Installing;
                 self.dialog_open = true;
             }
             UpdateProgress::ReadyToRestart { version, .. } => {
+                self.previous_failure = None;
                 self.operation = None;
                 self.phase = UpdatePhase::Ready {
                     version: version.clone(),
@@ -352,11 +404,13 @@ impl UpdateState {
                 self.dialog_open = true;
             }
             UpdateProgress::Cancelled => {
+                self.previous_failure = None;
                 self.operation = None;
                 self.phase = UpdatePhase::Cancelled;
                 self.dialog_open = true;
             }
             UpdateProgress::Failed { code, message } => {
+                self.previous_failure = None;
                 self.operation = None;
                 self.phase = UpdatePhase::Failed {
                     code: code.clone(),
@@ -373,6 +427,7 @@ impl UpdateState {
     /// Starts a fresh attempt: remembers the operation before any event lands.
     pub fn begin_operation(&mut self, id: OperationId) {
         self.restart_error = None;
+        self.previous_failure = None;
         self.operation = Some(id);
         self.phase = UpdatePhase::Downloading {
             received: 0,
@@ -660,5 +715,149 @@ mod tests {
         );
         state.apply_check(Some(&status(Some(view(true)), portable())));
         assert_eq!(state.percent(), Some(10));
+    }
+
+    /// Starting a new attempt clears any persisted previous-run failure so the
+    /// old warning never lingers beside a live download or ready state.
+    #[test]
+    fn begin_operation_clears_previous_failure() {
+        let mut state = UpdateState::default();
+        state.record_previous_failure("The previous DBLocal process did not exit.");
+        state.apply_check(Some(&status(Some(view(true)), portable())));
+        state.begin_operation(OperationId::new("op-retry"));
+        assert!(
+            state.previous_failure().is_none(),
+            "a fresh attempt must clear the stale previous-failure note"
+        );
+    }
+
+    /// A startup check that finds no newer release must not close a pending
+    /// previous-failure note before the user has read and closed it.
+    #[test]
+    fn up_to_date_check_keeps_previous_failure_dialog_open() {
+        let mut state = UpdateState::default();
+        state.record_previous_failure("The previous DBLocal process did not exit.");
+        assert!(state.dialog_visible());
+        state.apply_check(Some(&status(None, portable())));
+        assert!(
+            state.dialog_visible(),
+            "startup check with no release must not dismiss the previous-failure note"
+        );
+        assert!(state.previous_failure().is_some());
+    }
+
+    /// Settings keeps offering self-update after a failed or cancelled attempt,
+    /// while hiding it for managed installs, missing signing keys, running or ready.
+    #[test]
+    fn can_self_update_includes_stopped_phases_only_for_updatable_installs() {
+        let mut state = UpdateState::default();
+        state.apply_check(Some(&status(Some(view(true)), portable())));
+        assert!(state.can_self_update(), "available");
+
+        let op = OperationId::new("op");
+        state.begin_operation(op.clone());
+        assert!(!state.can_self_update(), "downloading");
+        state.apply_progress(&op, &UpdateProgress::Verifying);
+        assert!(!state.can_self_update(), "verifying");
+        state.apply_progress(&op, &UpdateProgress::Installing);
+        assert!(!state.can_self_update(), "installing");
+
+        state.apply_progress(
+            &op,
+            &UpdateProgress::Failed {
+                code: "DBL-8003".to_owned(),
+                message: "network error".to_owned(),
+            },
+        );
+        assert!(
+            state.can_self_update(),
+            "failed attempt must still offer self-update in Settings"
+        );
+
+        let op2 = OperationId::new("op-2");
+        state.begin_operation(op2.clone());
+        state.apply_progress(&op2, &UpdateProgress::Cancelled);
+        assert!(
+            state.can_self_update(),
+            "cancelled attempt must still offer self-update in Settings"
+        );
+
+        let op3 = OperationId::new("op-3");
+        state.begin_operation(op3.clone());
+        state.apply_progress(
+            &op3,
+            &UpdateProgress::ReadyToRestart {
+                version: "0.9.0".to_owned(),
+                restart_target: "/opt/dblocal/dblocal".into(),
+            },
+        );
+        assert!(!state.can_self_update(), "ready to restart");
+
+        let mut managed = UpdateState::default();
+        managed.apply_check(Some(&status(Some(view(false)), distro())));
+        assert!(!managed.can_self_update(), "managed install");
+
+        let mut no_key = UpdateState::default();
+        no_key.apply_check(Some(&status(Some(view(false)), portable())));
+        assert!(!no_key.can_self_update(), "no signing key");
+    }
+
+    /// "Open release page" is primary only when it is the sole action (managed
+    /// install or missing signing key), and secondary whenever retry or restart
+    /// is present.
+    #[test]
+    fn release_page_is_primary_only_when_it_is_the_only_action() {
+        let mut managed = UpdateState::default();
+        managed.apply_check(Some(&status(Some(view(false)), distro())));
+        assert!(managed.release_page_is_primary(), "managed install");
+
+        let mut no_key = UpdateState::default();
+        no_key.apply_check(Some(&status(Some(view(false)), portable())));
+        assert!(no_key.release_page_is_primary(), "no signing key");
+
+        let mut avail = UpdateState::default();
+        avail.apply_check(Some(&status(Some(view(true)), portable())));
+        assert!(
+            !avail.release_page_is_primary(),
+            "secondary alongside Try again (Available)"
+        );
+
+        let op = OperationId::new("op");
+        avail.begin_operation(op.clone());
+        assert!(!avail.offer_release_page(), "hidden while downloading");
+        assert!(!avail.release_page_is_primary());
+
+        avail.apply_progress(
+            &op,
+            &UpdateProgress::Failed {
+                code: "DBL-8003".to_owned(),
+                message: "boom".to_owned(),
+            },
+        );
+        assert!(
+            !avail.release_page_is_primary(),
+            "secondary alongside Try again (Failed)"
+        );
+
+        let op2 = OperationId::new("op-2");
+        avail.begin_operation(op2.clone());
+        avail.apply_progress(
+            &op2,
+            &UpdateProgress::ReadyToRestart {
+                version: "0.9.0".to_owned(),
+                restart_target: "/opt/dblocal/dblocal".into(),
+            },
+        );
+        assert!(
+            !avail.release_page_is_primary(),
+            "secondary alongside Restart now (Ready)"
+        );
+
+        let mut prev = UpdateState::default();
+        prev.record_previous_failure("helper aborted");
+        assert!(
+            !prev.release_page_is_primary(),
+            "secondary alongside Try again (previous failure)"
+        );
     }
 }

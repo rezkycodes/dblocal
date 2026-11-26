@@ -55,17 +55,34 @@ impl Workspace {
             let result = service.check_update_if_due();
             move |this: &mut Workspace, cx: &mut Context<Workspace>| {
                 this.update_check_in_flight = false;
+                let was_visible = this.update.dialog_visible();
                 match result {
-                    Ok(status) => this.update.apply_check(status.as_ref()),
+                    Ok(Some(status)) => this.update.apply_check(Some(&status)),
+                    Ok(None) => {
+                        if this.update.phase == UpdatePhase::Checking {
+                            this.check_update_now(cx);
+                            return;
+                        }
+                    }
                     Err(err) => {
                         // A quiet check must not pop up; a real failure is logged
-                        // and the icon simply stays as it was.
+                        // and the icon simply stays as it was, unless the user is
+                        // actively waiting on a check in the dialog.
                         tracing::debug!(
                             code = %err.code,
                             message = %err.message,
                             "background update check failed"
                         );
+                        if this.update.phase == UpdatePhase::Checking {
+                            this.update.phase = UpdatePhase::Failed {
+                                code: err.code,
+                                message: err.message,
+                            };
+                        }
                     }
+                }
+                if was_visible && !this.update.dialog_visible() {
+                    this.restore_dialog_focus_after_close();
                 }
                 cx.notify();
             }
@@ -86,9 +103,21 @@ impl Workspace {
             move |this: &mut Workspace, cx: &mut Context<Workspace>| {
                 this.update_check_in_flight = false;
                 this.update.checking = false;
+                let was_visible = this.update.dialog_visible();
                 match result {
                     Ok(status) => this.update.apply_check(Some(&status)),
-                    Err(err) => this.update.check_error = Some(err),
+                    Err(err) => {
+                        this.update.check_error = Some(err.clone());
+                        if this.update.phase == UpdatePhase::Checking {
+                            this.update.phase = UpdatePhase::Failed {
+                                code: err.code,
+                                message: err.message,
+                            };
+                        }
+                    }
+                }
+                if was_visible && !this.update.dialog_visible() {
+                    this.restore_dialog_focus_after_close();
                 }
                 cx.notify();
             }
@@ -122,6 +151,7 @@ impl Workspace {
             return;
         }
         self.update.check_error = None;
+        self.update.dismiss_previous_failure();
         if !self
             .update
             .available
@@ -178,11 +208,15 @@ impl Workspace {
             return;
         }
         // A previous run's failure has no release attached: checking again is
-        // what a retry can honestly do, and it either finds a release to start
-        // or reports that the app is current.
+        // what a retry can honestly do, keeping the dialog visible through the
+        // check so the user always sees an outcome (checking, up to date, a
+        // newer release, or the check error).
         if self.update.available.is_none() {
             self.update.dismiss_previous_failure();
+            self.update.phase = UpdatePhase::Checking;
+            self.update.dialog_open = true;
             self.check_update_now(cx);
+            cx.notify();
             return;
         }
         // A retry is a fresh attempt at the same release; the service re-checks
@@ -265,8 +299,7 @@ impl Workspace {
     /// Closing a previous-run failure is what dismisses it: it is a one-time
     /// note, not a permanent banner.
     pub(crate) fn close_update_dialog(&mut self, cx: &mut Context<Self>) {
-        self.update.dialog_open = false;
-        self.update.dismiss_previous_failure();
+        self.update.dismiss_dialog();
         self.restore_dialog_focus_after_close();
         cx.notify();
     }
