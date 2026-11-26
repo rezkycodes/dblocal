@@ -149,7 +149,7 @@ fn run_with_service_mode(
     mode: LaunchMode,
 ) -> dblocal_core::Result<()> {
     gpui_kit::platform::application()
-        .with_assets(gpui_kit::assets::AllAssets)
+        .with_assets(crate::assets::DblocalAssets)
         .run(move |cx: &mut App| {
             gpui_kit::init(cx);
             crate::theme::init(cx);

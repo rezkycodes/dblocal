@@ -67,6 +67,7 @@ pub(super) fn render(
             v_flex()
                 .gap_2()
                 .child(section_label(strings::UI_FIELD_ENGINE).text_color(theme.muted_foreground))
+                .child(render_category_tabs(&form, &theme, window, cx))
                 .child(render_engine_cards(&entries, &form, &theme, window, cx)),
         )
         .child(
@@ -85,7 +86,7 @@ pub(super) fn render(
                 )),
         )
         .child(render_fields(workspace, &form, &theme, cx))
-        .child(render_no_password(&form, &theme, cx));
+        .child(render_engine_options(&form, &theme, cx));
 
     let footer = render_footer(&form, installed, &theme, cx);
     overlay(
@@ -126,7 +127,68 @@ pub(super) fn render(
     )
 }
 
-/// The engine cards: monogram, name, canonical port, and the disabled reason.
+/// Category tabs: Database, Cache & Queue, Storage.
+///
+/// Every tab is always selectable; on a platform where all engines in a
+/// category are unavailable (e.g. Cache & Queue on Windows), the tab still
+/// opens and shows those engines greyed with their reason, never empty or hidden.
+fn render_category_tabs(
+    form: &super::CreateForm,
+    theme: &Theme,
+    window: &mut Window,
+    cx: &mut Context<Workspace>,
+) -> impl IntoElement {
+    let tabs = format::EngineCategory::ALL.into_iter().map(|category| {
+        let active = form.category == category;
+        let focus = form
+            .category_focus
+            .iter()
+            .find(|(cat, _)| *cat == category)
+            .map(|(_, handle)| handle.clone());
+        let tab = div()
+            .id(SharedString::from(format!("category-tab-{}", category.slug())))
+            .px(px(12.))
+            .py(px(6.))
+            .rounded(px(6.))
+            .border_1()
+            .cursor_pointer()
+            .border_color(if active { theme.primary } else { theme.border })
+            .bg(if active {
+                crate::theme::tokens::tint(theme.primary, 0.12)
+            } else {
+                theme.background
+            })
+            .hover(|s| s.border_color(theme.primary))
+            .on_click(cx.listener(move |this, _, window, cx| {
+                this.choose_category_action(category, window, cx);
+            }))
+            .child(
+                Label::new(category.label())
+                    .id(SharedString::from(format!(
+                        "category-label-{}",
+                        category.slug()
+                    )))
+                    .text_xs()
+                    .font_weight(if active {
+                        gpui_kit::FontWeight::SEMIBOLD
+                    } else {
+                        gpui_kit::FontWeight::MEDIUM
+                    })
+                    .text_color(if active {
+                        theme.foreground
+                    } else {
+                        theme.muted_foreground
+                    }),
+            );
+        match focus {
+            Some(focus) => super::components::apply_focus_ring(tab, &focus, window, cx),
+            None => tab,
+        }
+    });
+    h_flex().gap_2().children(tabs)
+}
+
+/// The engine cards for the active category tab: icon, name, canonical port, and the disabled reason.
 fn render_engine_cards(
     entries: &[EngineEntry],
     form: &super::CreateForm,
@@ -134,7 +196,7 @@ fn render_engine_cards(
     window: &mut Window,
     cx: &mut Context<Workspace>,
 ) -> impl IntoElement {
-    let cards = crate::format::create_engine_cards(entries);
+    let cards = crate::format::category_engine_cards(entries, form.category);
     // One focus handle per engine card, taken from the form so the keyboard
     // tests focus the exact same control the view draws (`F-PLH-01` AC1).
     let cards = cards.into_iter().map(|entry| {
@@ -387,7 +449,22 @@ fn render_fields(
     cx: &mut Context<Workspace>,
 ) -> impl IntoElement {
     let _ = cx;
-    let superuser = form.engine.default_superuser();
+    let is_rustfs = form.engine == dblocal_core::model::EngineKey::Rustfs;
+    let superuser_label = if is_rustfs {
+        "Access key"
+    } else {
+        strings::UI_OVERVIEW_SUPERUSER
+    };
+    let superuser = if is_rustfs {
+        "Auto-generated"
+    } else {
+        form.engine.default_superuser()
+    };
+    let superuser_hint = if is_rustfs {
+        "Random per-instance key"
+    } else {
+        strings::UI_CREATE_SUPERUSER_HINT
+    };
     h_flex()
         .gap_3()
         .items_start()
@@ -420,7 +497,7 @@ fn render_fields(
                 .w(px(140.))
                 .gap_1p5()
                 .child(
-                    Label::new(strings::UI_OVERVIEW_SUPERUSER)
+                    Label::new(superuser_label)
                         .font_weight(gpui_kit::FontWeight::MEDIUM),
                 )
                 .child(
@@ -437,12 +514,55 @@ fn render_fields(
                         .child(Label::new(superuser.to_owned())),
                 )
                 .child(
-                    Label::new(strings::UI_CREATE_SUPERUSER_HINT)
+                    Label::new(superuser_hint)
                         .text_xs()
                         .text_color(theme.muted_foreground),
                 ),
         )
         .when_some(workspace.create_form(), |this, _| this)
+}
+
+/// Engine-specific create options: RustFS offers the optional web console
+/// checkbox (OFF by default); other engines offer the no-password option.
+fn render_engine_options(
+    form: &super::CreateForm,
+    theme: &Theme,
+    cx: &mut Context<Workspace>,
+) -> AnyElement {
+    if form.engine == dblocal_core::model::EngineKey::Rustfs {
+        let enabled = form.console_enabled;
+        v_flex()
+            .gap_1()
+            .p(px(12.))
+            .rounded(px(8.))
+            .border_1()
+            .border_color(if enabled { theme.primary } else { theme.border })
+            .bg(if enabled {
+                crate::theme::tokens::tint(theme.primary, 0.08)
+            } else {
+                theme.background
+            })
+            .child(
+                gpui_kit::component::checkbox::Checkbox::new("rustfs-console")
+                    .label("Enable web console")
+                    .checked(enabled)
+                    .on_click(cx.listener(|this, checked: &bool, _, cx| {
+                        this.set_console_enabled_action(*checked);
+                        cx.notify();
+                    })),
+            )
+            .child(
+                Label::new(
+                    "Starts the RustFS web console on a second loopback port (default 9001 when free). Off by default.",
+                )
+                .text_xs()
+                .text_color(theme.muted_foreground)
+                .pl(px(24.)),
+            )
+            .into_any_element()
+    } else {
+        render_no_password(form, theme, cx).into_any_element()
+    }
 }
 
 /// The no-password option and its warning border (`F-CRD-03` AC1).

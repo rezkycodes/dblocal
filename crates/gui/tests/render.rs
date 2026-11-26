@@ -29,10 +29,10 @@ use gpui_kit::{
 struct GuiAssets;
 impl AssetSource for GuiAssets {
     fn load(&self, path: &str) -> gpui_kit::Result<Option<std::borrow::Cow<'static, [u8]>>> {
-        gpui_kit::assets::AllAssets.load(path)
+        dblocal_gui::assets::DblocalAssets.load(path)
     }
     fn list(&self, path: &str) -> gpui_kit::Result<Vec<SharedString>> {
-        gpui_kit::assets::AllAssets.list(path)
+        dblocal_gui::assets::DblocalAssets.list(path)
     }
 }
 

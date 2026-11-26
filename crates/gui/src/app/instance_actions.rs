@@ -364,6 +364,10 @@ impl Workspace {
         name_input.update(cx, |state, cx| state.set_value(name, window, cx));
         // One focus handle per engine card and per version row, plus the footer
         // buttons, built here so the view and the keyboard tests share them.
+        let category_focus = crate::format::EngineCategory::ALL
+            .into_iter()
+            .map(|cat| (cat, cx.focus_handle()))
+            .collect();
         let engine_focus = self
             .catalog
             .engines
@@ -372,9 +376,12 @@ impl Workspace {
             .collect();
         let version_focus = self.version_focus_for(engine, true, cx);
         self.create = Some(CreateForm {
+            category: crate::format::EngineCategory::for_engine(engine),
+            category_focus,
             engine,
             version,
             auth: AuthMode::Password,
+            console_enabled: false,
             suggested_port: None,
             name_input: Some(name_input.clone()),
             port_input: Some(port_input.clone()),
@@ -445,6 +452,41 @@ impl Workspace {
         (version, None)
     }
 
+    pub(crate) fn choose_category(
+        &mut self,
+        category: crate::format::EngineCategory,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let current_engine = self.create.as_ref().map(|form| form.engine);
+        if let Some(form) = self.create.as_mut() {
+            form.category = category;
+        }
+        let already_in_category = current_engine
+            .is_some_and(|engine| category.engines().contains(&engine));
+        if !already_in_category {
+            // Prefer the first available engine in the category; if none are
+            // available on this platform (e.g. Cache & Queue on Windows), still
+            // select the first engine so its greyed card + reason are shown.
+            let target = category
+                .engines()
+                .iter()
+                .copied()
+                .find(|engine| {
+                    self.catalog
+                        .engines
+                        .iter()
+                        .any(|entry| entry.engine == *engine && entry.available)
+                })
+                .or_else(|| category.engines().first().copied());
+            if let Some(engine) = target {
+                self.choose_engine(engine, window, cx);
+                return;
+            }
+        }
+        cx.notify();
+    }
+
     pub(crate) fn choose_engine(
         &mut self,
         engine: EngineKey,
@@ -457,8 +499,12 @@ impl Workspace {
         // focus handles too (`F-PLH-01` AC1).
         let version_focus = self.version_focus_for(engine, latest_only, cx);
         if let Some(form) = self.create.as_mut() {
+            form.category = crate::format::EngineCategory::for_engine(engine);
             form.engine = engine;
             form.version = version.clone();
+            if engine == EngineKey::Rustfs {
+                form.auth = AuthMode::Password;
+            }
             form.suggested_port = None;
             form.version_focus = version_focus;
         }
@@ -582,6 +628,12 @@ impl Workspace {
         }
     }
 
+    pub(crate) fn set_console_enabled(&mut self, enabled: bool) {
+        if let Some(form) = self.create.as_mut() {
+            form.console_enabled = enabled;
+        }
+    }
+
     pub(crate) fn cancel_create(&mut self) {
         self.create = None;
         // Give focus back to whatever opened the dialog (`F-PLH-01` AC1);
@@ -608,6 +660,7 @@ impl Workspace {
                 .as_ref()
                 .map(|input| input.read(cx).value().to_string())
                 .unwrap_or_default(),
+            console_enabled: form.console_enabled,
         };
         let service = self.service.clone();
         let instances = self.state.instances.clone();

@@ -324,8 +324,58 @@ impl Workspace {
                     )
                     // The second "Open in…" entry point the task names, beside
                     // the header's one (`F-OPN-01..02`); its slot keeps the ids
-                    // distinct from the header menu's.
-                    .child(self.render_open_in(view, "connection", theme, cx)),
+                    // distinct from the header menu's. RustFS is an S3 server
+                    // and has no SQL/Redis client here.
+                    .when(
+                        view.engine != dblocal_core::model::EngineKey::Rustfs,
+                        |this| this.child(self.render_open_in(view, "connection", theme, cx)),
+                    ),
+            )
+            .when_some(
+                (view.engine == dblocal_core::model::EngineKey::Rustfs)
+                    .then_some(view.extra_port)
+                    .flatten(),
+                |this, console_port| {
+                    let cp = console_port.get();
+                    let console_url = format!("http://127.0.0.1:{cp}");
+                    this.child(
+                        h_flex()
+                            .gap_2()
+                            .items_center()
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w(px(280.))
+                                    .h(px(36.))
+                                    .px(px(12.))
+                                    .flex()
+                                    .items_center()
+                                    .gap_2()
+                                    .rounded(px(6.))
+                                    .border_1()
+                                    .border_color(theme.border)
+                                    .bg(theme.background)
+                                    .child(
+                                        Label::new("Console")
+                                            .text_xs()
+                                            .text_color(theme.muted_foreground),
+                                    )
+                                    .child(
+                                        Label::new(console_url)
+                                            .font_family(theme.mono_font_family.clone())
+                                            .truncate(),
+                                    ),
+                            )
+                            .child(
+                                Button::new("open-rustfs-console")
+                                    .icon(IconName::ExternalLink)
+                                    .label("Open console")
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.open_console_url_action(cp, cx);
+                                    })),
+                            ),
+                    )
+                },
             )
             .child(env_block)
             .when(view.status == InstanceStatus::Stopped, |this| {

@@ -242,7 +242,7 @@ impl DblService for MockService {
             } else {
                 InstanceStatus::Initializing
             };
-            let mut spec = spec;
+            let mut spec = spec.clone();
             if spec.engine() == EngineKey::Rustfs
                 && (spec.console_enabled() || spec.extra_port().is_some())
                 && spec.extra_port().is_none()

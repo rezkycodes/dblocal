@@ -324,6 +324,15 @@ impl Workspace {
         self.close_modals();
     }
 
+    pub(crate) fn choose_category_action(
+        &mut self,
+        category: crate::format::EngineCategory,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.choose_category(category, window, cx);
+    }
+
     pub(crate) fn choose_engine_action(
         &mut self,
         engine: EngineKey,
@@ -331,6 +340,31 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         self.choose_engine(engine, window, cx);
+    }
+
+    pub(crate) fn set_console_enabled_action(&mut self, enabled: bool) {
+        self.set_console_enabled(enabled);
+    }
+
+    pub(crate) fn open_console_url_action(&mut self, port: u16, cx: &mut Context<Self>) {
+        let url = format!("http://127.0.0.1:{port}");
+        let program = match dblocal_core::platform::Os::current() {
+            dblocal_core::platform::Os::Macos => "open",
+            dblocal_core::platform::Os::Windows => "rundll32.exe",
+            _ => "xdg-open",
+        };
+        let mut cmd = std::process::Command::new(program);
+        if dblocal_core::platform::Os::current() == dblocal_core::platform::Os::Windows {
+            cmd.arg("url.dll,FileProtocolHandler");
+        }
+        cmd.arg(&url);
+        if let Err(err) = cmd.spawn() {
+            tracing::warn!(%err, %url, "could not open RustFS console URL");
+            self.set_toast(SharedString::from(format!(
+                "Could not open browser for {url}"
+            )));
+            cx.notify();
+        }
     }
 
     pub(crate) fn choose_version_action(

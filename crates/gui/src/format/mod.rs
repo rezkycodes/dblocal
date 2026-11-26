@@ -95,7 +95,7 @@ pub fn can_delete(status: InstanceStatus) -> bool {
     matches!(status, InstanceStatus::Stopped | InstanceStatus::Failed)
 }
 
-/// Two-letter monogram the engine badge draws (`PG`, `MY`, `MA`, `VK`, `RD`).
+/// Two-letter monogram the engine badge draws (`PG`, `MY`, `MA`, `VK`, `RD`, `RF`).
 pub fn engine_monogram(engine: EngineKey) -> &'static str {
     match engine {
         EngineKey::Postgresql => "PG",
@@ -103,6 +103,7 @@ pub fn engine_monogram(engine: EngineKey) -> &'static str {
         EngineKey::Mariadb => "MA",
         EngineKey::Valkey => "VK",
         EngineKey::Redis => "RD",
+        EngineKey::Rustfs => "RF",
         _ => "??",
     }
 }
@@ -523,6 +524,8 @@ pub fn delete_needs_stop(status: InstanceStatus) -> bool {
 /// One runtime row in the dock: what the row shows and how it is worded.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RuntimeRow {
+    /// Engine this runtime belongs to (for its service icon).
+    pub engine: EngineKey,
     /// `PostgreSQL 17.4`, as the row prints it.
     pub title: String,
     /// How many instances share this runtime.
@@ -546,6 +549,7 @@ pub fn runtime_row(runtime: &Runtime, instances: &[InstanceView]) -> RuntimeRow 
         format!("{users} {}", strings::UI_RUNTIME_INSTANCE_COUNT)
     };
     RuntimeRow {
+        engine: runtime.engine(),
         title: format!("{} {}", runtime.engine().display_name(), runtime.version()),
         users,
         unused,
@@ -665,6 +669,7 @@ pub fn suggested_name(engine: EngineKey, version: &str) -> String {
         EngineKey::Mariadb => "mariadb",
         EngineKey::Valkey => "valkey",
         EngineKey::Redis => "redis",
+        EngineKey::Rustfs => "rustfs",
         _ => "instance",
     };
     let major = version.split('.').next().unwrap_or(version);

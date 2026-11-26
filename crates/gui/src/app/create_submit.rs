@@ -20,12 +20,18 @@ use gpui_kit::{Entity, FocusHandle};
 /// What the create dialog currently has selected.
 #[derive(Clone)]
 pub struct CreateForm {
+    /// Active category tab (`Database`, `Cache & Queue`, `Storage`).
+    pub category: format::EngineCategory,
+    /// Per-category-tab keyboard focus handles, in display order.
+    pub category_focus: Vec<(format::EngineCategory, FocusHandle)>,
     /// Engine chosen.
     pub engine: EngineKey,
     /// Version tag chosen (must exist in the catalog entry).
     pub version: String,
     /// Auth mode.
     pub auth: AuthMode,
+    /// Whether the optional web console is enabled (RustFS; OFF by default).
+    pub console_enabled: bool,
     /// Suggested port for the engine, refreshed on open.
     pub suggested_port: Option<Port>,
     /// Name field state. `None` only in headless tests, which drive
@@ -72,6 +78,8 @@ pub struct CreateDraft {
     pub name: String,
     /// Text in the port field; empty means "let the service allocate".
     pub port_text: String,
+    /// Whether the optional web console is enabled (RustFS; OFF by default).
+    pub console_enabled: bool,
 }
 
 /// Why a create submission was rejected.
@@ -161,8 +169,9 @@ fn parse_port(text: &str) -> Result<Option<Port>, SubmitError> {
 fn build_spec(draft: &CreateDraft, port: Option<Port>) -> Result<InstanceSpec, SubmitError> {
     let name =
         dblocal_core::model::InstanceName::new(draft.name.clone()).map_err(SubmitError::Service)?;
-    InstanceSpec::new(name, draft.engine, draft.version.clone(), port, draft.auth)
-        .map_err(SubmitError::Service)
+    let spec = InstanceSpec::new(name, draft.engine, draft.version.clone(), port, draft.auth)
+        .map_err(SubmitError::Service)?;
+    Ok(spec.with_console_enabled(draft.console_enabled))
 }
 
 #[cfg(test)]
@@ -184,6 +193,7 @@ mod tests {
             auth: AuthMode::Password,
             name: name.to_owned(),
             port_text: String::new(),
+            console_enabled: false,
         }
     }
 

@@ -9,19 +9,88 @@ use dblocal_core::strings;
 
 use super::*;
 
-/// The engine order the create dialog draws (PostgreSQL, Valkey, Redis, MySQL,
-/// MariaDB). The catalog and the dock keep the domain order.
-pub const CREATE_ENGINE_ORDER: [EngineKey; 5] = [
+/// Category tabs shown in the New instance dialog.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum EngineCategory {
+    /// Relational databases: PostgreSQL, MySQL, MariaDB.
+    Database,
+    /// In-memory caches and queues: Valkey, Redis.
+    CacheAndQueue,
+    /// S3-compatible object storage: RustFS.
+    Storage,
+}
+
+impl EngineCategory {
+    /// Category tabs in display order.
+    pub const ALL: [Self; 3] = [Self::Database, Self::CacheAndQueue, Self::Storage];
+
+    /// Display label on the tab button.
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Database => "Database",
+            Self::CacheAndQueue => "Cache & Queue",
+            Self::Storage => "Storage",
+        }
+    }
+
+    /// Stable element ID slug for the tab button.
+    pub const fn slug(self) -> &'static str {
+        match self {
+            Self::Database => "database",
+            Self::CacheAndQueue => "cache-queue",
+            Self::Storage => "storage",
+        }
+    }
+
+    /// Engines shown under this category tab, in display order.
+    pub const fn engines(self) -> &'static [EngineKey] {
+        match self {
+            Self::Database => &[EngineKey::Postgresql, EngineKey::Mysql, EngineKey::Mariadb],
+            Self::CacheAndQueue => &[EngineKey::Valkey, EngineKey::Redis],
+            Self::Storage => &[EngineKey::Rustfs],
+        }
+    }
+
+    /// Category tab an engine belongs to.
+    pub const fn for_engine(engine: EngineKey) -> Self {
+        match engine {
+            EngineKey::Postgresql | EngineKey::Mysql | EngineKey::Mariadb => Self::Database,
+            EngineKey::Valkey | EngineKey::Redis => Self::CacheAndQueue,
+            EngineKey::Rustfs => Self::Storage,
+            _ => Self::Database,
+        }
+    }
+}
+
+/// The engine order the create dialog draws. The catalog and the dock keep the domain order.
+pub const CREATE_ENGINE_ORDER: [EngineKey; 6] = [
     EngineKey::Postgresql,
     EngineKey::Valkey,
     EngineKey::Redis,
     EngineKey::Mysql,
     EngineKey::Mariadb,
+    EngineKey::Rustfs,
 ];
 
 /// Reorders catalog entries into the create dialog's card order.
 pub fn create_engine_cards(entries: &[EngineEntry]) -> Vec<&EngineEntry> {
     CREATE_ENGINE_ORDER
+        .iter()
+        .filter_map(|engine| entries.iter().find(|entry| entry.engine == *engine))
+        .collect()
+}
+
+/// Returns catalog entries belonging to `category`, preserving category display order.
+///
+/// Always returns the engines in the category even when all of them are
+/// unavailable on this platform (for example Cache & Queue on Windows), so the
+/// tab shows greyed cards with their unavailable reason and is never empty.
+pub fn category_engine_cards(
+    entries: &[EngineEntry],
+    category: EngineCategory,
+) -> Vec<&EngineEntry> {
+    category
+        .engines()
         .iter()
         .filter_map(|engine| entries.iter().find(|entry| entry.engine == *engine))
         .collect()
@@ -84,3 +153,62 @@ pub fn dock_row_accessible(view: &InstanceView) -> String {
 
 /// Height of one dock instance row in logical pixels, from the prototype.
 pub const DOCK_ROW_HEIGHT: f32 = 30.0;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use dblocal_core::service::EngineEntry;
+
+    fn entry(engine: EngineKey, available: bool) -> EngineEntry {
+        EngineEntry {
+            engine,
+            available,
+            unavailable_reason: (!available)
+                .then(|| strings::CATALOG_ENGINE_UNAVAILABLE_PLATFORM.to_owned()),
+            versions: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn category_tabs_cover_all_engines_and_keep_all_unavailable_tab_non_empty() {
+        // Simulate Windows: Valkey and Redis both unavailable in Cache & Queue,
+        // while RustFS is available in Storage.
+        let entries = vec![
+            entry(EngineKey::Postgresql, true),
+            entry(EngineKey::Mysql, true),
+            entry(EngineKey::Mariadb, true),
+            entry(EngineKey::Valkey, false),
+            entry(EngineKey::Redis, false),
+            entry(EngineKey::Rustfs, true),
+        ];
+
+        let db: Vec<EngineKey> = category_engine_cards(&entries, EngineCategory::Database)
+            .into_iter()
+            .map(|e| e.engine)
+            .collect();
+        assert_eq!(
+            db,
+            vec![EngineKey::Postgresql, EngineKey::Mysql, EngineKey::Mariadb]
+        );
+
+        let cache = category_engine_cards(&entries, EngineCategory::CacheAndQueue);
+        assert_eq!(cache.len(), 2, "Cache & Queue tab must never be empty on Windows");
+        assert!(cache.iter().all(|e| !e.available && e.unavailable_reason.is_some()));
+
+        let storage: Vec<EngineKey> = category_engine_cards(&entries, EngineCategory::Storage)
+            .into_iter()
+            .map(|e| e.engine)
+            .collect();
+        assert_eq!(storage, vec![EngineKey::Rustfs]);
+    }
+
+    #[test]
+    fn aws_secret_access_key_is_masked_in_dotenv() {
+        let block = "AWS_ENDPOINT_URL=http://127.0.0.1:9000\nAWS_ACCESS_KEY_ID=DBLTEST1234567890123\nAWS_SECRET_ACCESS_KEY=top-secret-24-char-value\n";
+        let masked = super::mask_dotenv(block);
+        assert!(masked.contains("AWS_ENDPOINT_URL=http://127.0.0.1:9000"));
+        assert!(masked.contains("AWS_ACCESS_KEY_ID=DBLTEST1234567890123"));
+        assert!(!masked.contains("top-secret-24-char-value"));
+        assert!(masked.contains(&format!("AWS_SECRET_ACCESS_KEY={SECRET_MASK}")));
+    }
+}

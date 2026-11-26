@@ -38,6 +38,7 @@ pub fn engine_colour(engine: EngineKey, theme: &Theme) -> Hsla {
         EngineKey::Mariadb => theme.info,
         EngineKey::Valkey => theme.danger,
         EngineKey::Redis => theme.danger,
+        EngineKey::Rustfs => theme.info,
         _ => theme.muted_foreground,
     }
 }
@@ -85,12 +86,27 @@ pub fn status_glyph(status: InstanceStatus, size: f32, theme: &Theme) -> Div {
     }
 }
 
-/// Monogram badge for an engine (`PG`, `MY`, `MA`, `VK`).
+/// Service icon badge for an engine: paints the tinted Simple Icons SVG for
+/// PostgreSQL, MySQL, MariaDB, Redis and RustFS, and keeps the `VK` monogram
+/// badge for Valkey.
 ///
 /// A11y: a page can show two badges of one engine (the dock row and the
 /// instance header), each as its own subtree, so the label id depends on the
 /// size — the only thing telling those badges apart — to stay unique.
 pub fn engine_badge(engine: EngineKey, size: f32, theme: &Theme) -> Div {
+    let is_dark = theme.background.l < 0.5;
+    if let Some(svg_path) = crate::assets::service_icon_path(engine) {
+        let brand = crate::assets::service_brand_colour(engine, is_dark);
+        return div()
+            .flex()
+            .flex_none()
+            .items_center()
+            .justify_center()
+            .size(px(size))
+            .rounded(px(size * 0.2))
+            .bg(tokens::tint(brand, 0.16))
+            .child(svg().path(svg_path).size(px(size * 0.64)).text_color(brand));
+    }
     let colour = engine_colour(engine, theme);
     div()
         .flex()
@@ -110,6 +126,26 @@ pub fn engine_badge(engine: EngineKey, size: f32, theme: &Theme) -> Div {
                 .text_size(px((size * 0.42).max(9.0)))
                 .font_weight(gpui_kit::FontWeight::SEMIBOLD),
         )
+}
+
+/// Compact inline service icon for sidebar instance rows and the RUNTIMES list.
+///
+/// Renders the tinted Simple Icons SVG directly when available, or a compact
+/// `VK` monogram badge for Valkey.
+pub fn engine_icon(engine: EngineKey, size: f32, theme: &Theme) -> Div {
+    let is_dark = theme.background.l < 0.5;
+    if let Some(svg_path) = crate::assets::service_icon_path(engine) {
+        let brand = crate::assets::service_brand_colour(engine, is_dark);
+        div()
+            .flex_none()
+            .flex()
+            .items_center()
+            .justify_center()
+            .size(px(size))
+            .child(svg().path(svg_path).size(px(size)).text_color(brand))
+    } else {
+        engine_badge(engine, size, theme)
+    }
 }
 
 /// A status chip: the glyph plus the status word.

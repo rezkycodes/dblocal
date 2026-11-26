@@ -109,3 +109,35 @@ fn renders_create_dialog_with_redis_in_both_themes() {
         "create-redis light frame is not lighter than dark"
     );
 }
+
+#[test]
+fn renders_v020_tabs_icons_and_rustfs_in_both_themes() {
+    let cases: [(&str, Build); 4] = [
+        ("v020-create-database", Workspace::preview_create),
+        ("v020-create-cache-queue", Workspace::preview_create_redis),
+        ("v020-create-storage", Workspace::preview_create_storage),
+        ("v020-rustfs-overview-sidebar", Workspace::preview_rustfs_overview),
+    ];
+    for (name, build) in cases {
+        let dark = render(true, &format!("{name}-dark.png"), build);
+        let light = render(false, &format!("{name}-light.png"), build);
+        eprintln!(
+            "V020 {name}: dark_colours={} light_colours={}",
+            dark.colours, light.colours
+        );
+        assert!(
+            dark.colours > 24,
+            "{name}: dark render too flat ({} colours)",
+            dark.colours
+        );
+        assert!(
+            light.colours > 24,
+            "{name}: light render too flat ({} colours)",
+            light.colours
+        );
+        assert!(
+            light.mean_luminance() > dark.mean_luminance(),
+            "{name}: light frame is not lighter than dark"
+        );
+    }
+}

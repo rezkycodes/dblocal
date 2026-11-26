@@ -622,7 +622,7 @@ impl Workspace {
         workspace
     }
 
-    /// Preview of the create modal with Redis selected (Linux, 7.4.12).
+    /// Preview of the create modal with Redis selected (Cache & Queue tab).
     pub fn preview_create_redis(
         service: Arc<dyn DblService>,
         window: &mut Window,
@@ -630,6 +630,66 @@ impl Workspace {
     ) -> Self {
         let mut workspace = Self::preview_create(service, window, cx);
         workspace.choose_engine_action(dblocal_core::model::EngineKey::Redis, window, cx);
+        workspace
+    }
+
+    /// Preview of the create modal on the Storage tab (RustFS with console checkbox).
+    pub fn preview_create_storage(
+        service: Arc<dyn DblService>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let mut workspace = Self::preview_create(service, window, cx);
+        workspace.choose_category_action(crate::format::EngineCategory::Storage, window, cx);
+        workspace.set_console_enabled_action(true);
+        workspace
+    }
+
+    /// Preview of a running RustFS instance overview with console enabled,
+    /// plus sidebar icons and RUNTIMES list.
+    pub fn preview_rustfs_overview(
+        service: Arc<dyn DblService>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let mut workspace = Self::preview(service, window, cx);
+        let spec = dblocal_core::model::InstanceSpec::new(
+            dblocal_core::model::InstanceName::new("s3-local").expect("name"),
+            dblocal_core::model::EngineKey::Rustfs,
+            "1.0.7",
+            Some(dblocal_core::model::Port::new(9000).expect("port")),
+            dblocal_core::model::AuthMode::Password,
+        )
+        .expect("spec")
+        .with_extra_port(Some(dblocal_core::model::Port::new(9001).expect("console")));
+        let inst = dblocal_core::model::Instance::new(
+            &spec,
+            dblocal_core::model::InstanceId::new(),
+            dblocal_core::model::InstanceStatus::Running,
+            std::time::SystemTime::UNIX_EPOCH,
+        )
+        .with_superuser("DBLPREVIEWACCESSKEY1");
+        let id = inst.id().clone();
+        let mut view = dblocal_core::service::InstanceView::from_instance(&inst);
+        view = view.with_credential_backend(dblocal_core::model::CredentialBackend::Keychain);
+        workspace.state.instances.push(view);
+        workspace.runtimes.push(dblocal_core::model::Runtime::new(
+            "rustfs-1.0.7-linux-x86_64",
+            dblocal_core::model::EngineKey::Rustfs,
+            "1.0.7",
+            dblocal_core::platform::Arch::X86_64,
+            std::path::PathBuf::from("/runtimes/rustfs/1.0.7"),
+            112_388_130,
+            std::time::SystemTime::UNIX_EPOCH,
+            dblocal_core::model::RuntimeState::Installed,
+        ));
+        let endpoint = dblocal_core::secret::SecretString::new("http://127.0.0.1:9000");
+        let dotenv = dblocal_core::secret::SecretString::new(
+            "AWS_ENDPOINT_URL=http://127.0.0.1:9000\nAWS_ACCESS_KEY_ID=DBLPREVIEWACCESSKEY1\nAWS_SECRET_ACCESS_KEY=preview-secret-key-24-chars\nRUSTFS_CONSOLE_URL=http://127.0.0.1:9001\n",
+        );
+        workspace.state.set_uri(&id, &endpoint);
+        workspace.dotenv_cache.insert(id.clone(), dotenv);
+        workspace.tabs.open_or_select(id);
         workspace
     }
 

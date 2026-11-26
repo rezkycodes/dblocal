@@ -5,6 +5,7 @@
 //! mock stays behind the `demo` feature for previews and tests.
 
 pub mod app;
+pub mod assets;
 pub mod contrast;
 pub mod format;
 pub mod logs;

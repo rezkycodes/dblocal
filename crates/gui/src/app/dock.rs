@@ -16,7 +16,7 @@ use gpui_kit::{Context, Div, IntoElement, ParentElement, SharedString, Styled, W
 use crate::format::{self, StatusGlyph};
 
 use super::Workspace;
-use super::components::{engine_badge, icon, section_label, status_glyph};
+use super::components::{engine_badge, engine_icon, icon, section_label, status_glyph};
 
 /// Width of the dock in logical pixels; the render tests sample this region.
 pub const DOCK_WIDTH: f32 = 272.0;
@@ -217,6 +217,7 @@ impl Workspace {
                 this.open_tab(id.clone(), cx);
             }))
             .child(status_glyph(view.status, 9.0, theme))
+            .child(engine_icon(view.engine, 14.0, theme))
             .child(div().flex_1().min_w_0().truncate().child(view.name.clone()))
             .child(
                 div()
@@ -266,7 +267,7 @@ impl Workspace {
                     .h(px(26.))
                     .px(px(10.))
                     .gap_2()
-                    .child(icon(IconName::Package, 14.0, theme.muted_foreground))
+                    .child(engine_icon(row.engine, 14.0, theme))
                     .child(
                         Label::new(row.title.clone())
                             .id(SharedString::from(format!("runtime-title-{index}")))

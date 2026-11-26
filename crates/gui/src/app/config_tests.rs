@@ -145,6 +145,11 @@ fn the_tab_renders_every_engine_from_the_view(cx: &mut TestAppContext) {
             data: Loadable::Ready(view),
             ..Default::default()
         };
+        if engine == EngineKey::Rustfs {
+            // RustFS is configured via environment variables and CLI flags, not a config file.
+            assert!(config.editable().is_empty());
+            continue;
+        }
         assert!(
             !config.editable().is_empty(),
             "{engine:?} must expose at least one editable row"

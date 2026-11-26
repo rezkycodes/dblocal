@@ -158,7 +158,8 @@ fn mask_env_line(line: &str, known_secret: Option<&str>) -> String {
 
 /// Keys whose whole value is a secret.
 fn is_password_key(key: &str) -> bool {
-    key.to_ascii_uppercase().ends_with("PASSWORD")
+    let upper = key.to_ascii_uppercase();
+    upper.ends_with("PASSWORD") || upper.contains("SECRET")
 }
 
 /// Masks a URI, replacing any known secret as well as the userinfo password.
