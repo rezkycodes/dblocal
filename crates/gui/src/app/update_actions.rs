@@ -394,7 +394,11 @@ fn release_page_program() -> std::path::PathBuf {
 
 /// The argv that opens `url`, one URL per element (never a shell string).
 fn release_page_args(url: &str) -> Vec<String> {
-    match dblocal_core::platform::Os::current() {
+    release_page_args_for(dblocal_core::platform::Os::current(), url)
+}
+
+fn release_page_args_for(os: dblocal_core::platform::Os, url: &str) -> Vec<String> {
+    match os {
         dblocal_core::platform::Os::Windows => {
             vec!["url.dll,FileProtocolHandler".to_owned(), url.to_owned()]
         }
@@ -412,7 +416,13 @@ mod tests {
     #[test]
     fn the_release_page_argv_keeps_the_url_whole() {
         let url = "https://github.com/rezkycodes/dblocal/releases/tag/v0.9.0";
-        assert_eq!(release_page_args(url), vec![url.to_owned()]);
-        let _ = Os::current();
+        assert_eq!(release_page_args_for(Os::Linux, url), vec![url.to_owned()]);
+        assert_eq!(release_page_args_for(Os::Macos, url), vec![url.to_owned()]);
+        assert_eq!(
+            release_page_args_for(Os::Windows, url),
+            vec!["url.dll,FileProtocolHandler".to_owned(), url.to_owned()]
+        );
+        let expected_current = release_page_args_for(Os::current(), url);
+        assert_eq!(release_page_args(url), expected_current);
     }
 }

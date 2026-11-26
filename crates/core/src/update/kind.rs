@@ -128,8 +128,8 @@ impl InstallKind {
 
 /// Returns true when a Windows MSI path is a per-user install under `%LOCALAPPDATA%\DBLocal`.
 pub fn is_per_user_windows_msi(exe_path: &Path) -> bool {
-    let lower = path_to_lower(exe_path);
-    lower.contains("\\appdata\\local\\dblocal\\") || lower.contains("/appdata/local/dblocal/")
+    let lower = path_to_lower(exe_path).replace('\\', "/");
+    lower.contains("/appdata/local/dblocal/")
 }
 
 /// User-facing hint for package-manager-managed installs.

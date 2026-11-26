@@ -1072,7 +1072,7 @@ fn advisory_lock_ignores_empty_or_garbled_lockfile_and_releases_on_drop() {
 #[test]
 fn windows_msi_helper_runs_from_staging_copy_not_install_target_and_cleans_up_later() {
     let tmp = tempdir().unwrap();
-    let install_dir = tmp.path().join("AppData/Local/DBLocal");
+    let install_dir = tmp.path().join("AppData").join("Local").join("DBLocal");
     std::fs::create_dir_all(&install_dir).unwrap();
     let target_exe = install_dir.join("dblocal.exe");
     std::fs::write(&target_exe, b"MZ-installed-exe").unwrap();

@@ -417,3 +417,16 @@ fn detect_from_env_with_none() {
     let kind = detect_from_env_with(Path::new("/tmp/dblocal"), |_| None);
     assert!(kind.is_none());
 }
+
+#[test]
+fn is_per_user_windows_msi_handles_mixed_separators() {
+    assert!(is_per_user_windows_msi(Path::new(
+        r"C:\Users\runneradmin\AppData\Local\Temp\.tmp123\AppData/Local/DBLocal\dblocal.exe"
+    )));
+    assert!(is_per_user_windows_msi(Path::new(
+        r"C:\Users\alice\AppData\Local\DBLocal\dblocal.exe"
+    )));
+    assert!(!is_per_user_windows_msi(Path::new(
+        r"C:\Program Files\DBLocal\dblocal.exe"
+    )));
+}
