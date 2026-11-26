@@ -39,13 +39,17 @@ pub(crate) fn test_catalog() -> Vec<EngineEntry> {
         versions: vec![
             VersionEntry {
                 version: "17.4".to_owned(),
+                line: "17".to_owned(),
                 eol: false,
+                status: None,
                 installed: true,
                 size_bytes: 0,
             },
             VersionEntry {
                 version: "16.6".to_owned(),
+                line: "16".to_owned(),
                 eol: false,
+                status: None,
                 installed: false,
                 size_bytes: 1024,
             },

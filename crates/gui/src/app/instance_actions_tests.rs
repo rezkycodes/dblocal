@@ -433,6 +433,39 @@ fn purge_with_the_right_name_deletes_and_closes(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn latest_only_checkbox_defaults_on_and_toggles_the_filter(cx: &mut TestAppContext) {
+    use dblocal_core::catalog::VersionFilter;
+    let (view, _service, cx) = fixture(cx);
+    view.update_in(cx, |this, window, cx| this.open_create_dialog(window, cx));
+    cx.run_until_parked();
+
+    // The Herd-style checkbox starts checked: one row per line.
+    let (latest_only, filter) = view.read_with(cx, |this, _| {
+        let form = this.create_form().expect("form open");
+        (form.latest_only, form.version_filter())
+    });
+    assert!(latest_only, "the checkbox must start checked");
+    assert_eq!(filter, VersionFilter::LatestOnly);
+
+    // Unchecking switches to the "all patches" list and rebuilds the row focus
+    // handles for the versions that are now visible.
+    view.update_in(cx, |this, window, cx| {
+        this.set_latest_only(false, window, cx);
+    });
+    let (latest_only, filter, rows) = view.read_with(cx, |this, _| {
+        let form = this.create_form().expect("form open");
+        (
+            form.latest_only,
+            form.version_filter(),
+            form.version_focus.len(),
+        )
+    });
+    assert!(!latest_only);
+    assert_eq!(filter, VersionFilter::All);
+    assert_eq!(rows, 2, "the fixture has two PostgreSQL versions");
+}
+
+#[gpui_kit::test]
 fn choose_version_updates_the_form_and_the_suggested_name(cx: &mut TestAppContext) {
     let (view, _service, cx) = fixture(cx);
     view.update_in(cx, |this, window, cx| {

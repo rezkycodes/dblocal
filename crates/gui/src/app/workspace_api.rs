@@ -346,6 +346,15 @@ impl Workspace {
         self.choose_auth(auth);
     }
 
+    pub(crate) fn set_latest_only_action(
+        &mut self,
+        latest_only: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.set_latest_only(latest_only, window, cx);
+    }
+
     /// Next free port for an instance's engine, falling back to its port + 1.
     /// Uses cached suggestion; never calls the service on the render path.
     pub(crate) fn instance_port_proposal(&self, id: &InstanceId) -> u16 {

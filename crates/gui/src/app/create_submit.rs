@@ -6,6 +6,7 @@
 //! the strings here, which is what makes the whole path testable without a
 //! window.
 
+use dblocal_core::catalog::VersionFilter;
 use dblocal_core::model::{AuthMode, EngineKey, InstanceSpec, Port};
 use dblocal_core::service::DblService;
 use dblocal_core::strings;
@@ -39,10 +40,23 @@ pub struct CreateForm {
     /// Per-version-row keyboard focus handles, for the currently selected
     /// engine's versions, in list order.
     pub version_focus: Vec<(String, FocusHandle)>,
+    /// The "Only show latest versions" checkbox, checked by default.
+    pub latest_only: bool,
     /// The footer "Create" button's focus handle.
     pub submit_focus: FocusHandle,
     /// The footer "Cancel" button's focus handle.
     pub cancel_focus: FocusHandle,
+}
+
+impl CreateForm {
+    /// The picker filter the "Hanya versi terbaru" checkbox currently chooses.
+    pub fn version_filter(&self) -> VersionFilter {
+        if self.latest_only {
+            VersionFilter::LatestOnly
+        } else {
+            VersionFilter::All
+        }
+    }
 }
 
 /// The values the form has, independent of any GPUI entity.

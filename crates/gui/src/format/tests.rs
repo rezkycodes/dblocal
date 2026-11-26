@@ -634,13 +634,17 @@ fn default_version_prefers_the_newest_supported_entry() {
         versions: vec![
             VersionEntry {
                 version: "17.4".to_owned(),
+                line: "17".to_owned(),
                 eol: false,
+                status: None,
                 installed: true,
                 size_bytes: 1,
             },
             VersionEntry {
                 version: "15.10".to_owned(),
+                line: "15".to_owned(),
                 eol: true,
+                status: None,
                 installed: false,
                 size_bytes: 1,
             },
@@ -658,7 +662,9 @@ fn default_version_prefers_the_newest_supported_entry() {
         unavailable_reason: None,
         versions: vec![VersionEntry {
             version: "8.0.40".to_owned(),
+            line: "8.0".to_owned(),
             eol: true,
+            status: None,
             installed: false,
             size_bytes: 1,
         }],
@@ -673,6 +679,76 @@ fn default_version_prefers_the_newest_supported_entry() {
 #[test]
 fn platform_label_joins_os_and_arch() {
     assert_eq!(platform_label("linux", "x86_64"), "linux x86_64");
+}
+
+fn picker_entry(rows: &[(&str, &str, bool, Option<VersionStatus>, bool)]) -> EngineEntry {
+    use dblocal_core::service::VersionEntry;
+    EngineEntry {
+        engine: EngineKey::Postgresql,
+        available: true,
+        unavailable_reason: None,
+        versions: rows
+            .iter()
+            .map(|(version, line, eol, status, installed)| VersionEntry {
+                version: (*version).to_owned(),
+                line: (*line).to_owned(),
+                eol: *eol,
+                status: *status,
+                installed: *installed,
+                size_bytes: 1,
+            })
+            .collect(),
+    }
+}
+
+#[test]
+fn picker_versions_honours_the_latest_only_toggle() {
+    use dblocal_core::catalog::VersionFilter;
+    let entry = picker_entry(&[
+        ("19.0.0", "19", false, None, false),
+        ("18.7.0", "18", false, Some(VersionStatus::Lts), false),
+        ("18.6.0", "18", false, Some(VersionStatus::Lts), false),
+        ("14.25.0", "14", true, None, false),
+    ]);
+    let latest = picker_versions(&entry, VersionFilter::LatestOnly);
+    let tags: Vec<&str> = latest.iter().map(|v| v.version.as_str()).collect();
+    assert_eq!(tags, ["19.0.0", "18.7.0", "14.25.0"]);
+    let all = picker_versions(&entry, VersionFilter::All);
+    assert_eq!(all.len(), 4);
+}
+
+#[test]
+fn version_status_badges_read_status_then_eol() {
+    use dblocal_core::service::VersionEntry;
+    let version = |status, eol| VersionEntry {
+        version: "8.0.46".to_owned(),
+        line: "8.0".to_owned(),
+        eol,
+        status,
+        installed: false,
+        size_bytes: 1,
+    };
+    assert_eq!(
+        version_status_badges(&version(Some(VersionStatus::Lts), false)),
+        vec![strings::UI_VERSION_LTS]
+    );
+    assert_eq!(
+        version_status_badges(&version(Some(VersionStatus::Lts), true)),
+        vec![strings::UI_VERSION_LTS, strings::UI_VERSION_EOL]
+    );
+    assert_eq!(
+        version_status_badges(&version(Some(VersionStatus::Innovation), false)),
+        vec![strings::UI_VERSION_INNOVATION]
+    );
+    assert_eq!(
+        version_status_badges(&version(Some(VersionStatus::Rolling), false)),
+        vec![strings::UI_VERSION_ROLLING]
+    );
+    assert_eq!(
+        version_status_badges(&version(None, true)),
+        vec![strings::UI_VERSION_EOL]
+    );
+    assert!(version_status_badges(&version(None, false)).is_empty());
 }
 
 // --- review round 1 regression guards ----------------------------------------
@@ -714,7 +790,9 @@ fn create_dialog_engine_order_matches_the_prototype() {
             unavailable_reason: None,
             versions: vec![VersionEntry {
                 version: "8.4.4".to_owned(),
+                line: "8.4".to_owned(),
                 eol: false,
+                status: None,
                 installed: true,
                 size_bytes: 1,
             }],
@@ -725,7 +803,9 @@ fn create_dialog_engine_order_matches_the_prototype() {
             unavailable_reason: None,
             versions: vec![VersionEntry {
                 version: "17.4".to_owned(),
+                line: "17".to_owned(),
                 eol: false,
+                status: None,
                 installed: true,
                 size_bytes: 1,
             }],
@@ -736,7 +816,9 @@ fn create_dialog_engine_order_matches_the_prototype() {
             unavailable_reason: None,
             versions: vec![VersionEntry {
                 version: "11.4.2".to_owned(),
+                line: "11.4".to_owned(),
                 eol: false,
+                status: None,
                 installed: true,
                 size_bytes: 1,
             }],
@@ -747,7 +829,9 @@ fn create_dialog_engine_order_matches_the_prototype() {
             unavailable_reason: None,
             versions: vec![VersionEntry {
                 version: "8.1.0".to_owned(),
+                line: "8.1".to_owned(),
                 eol: false,
+                status: None,
                 installed: true,
                 size_bytes: 1,
             }],

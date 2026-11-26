@@ -202,7 +202,8 @@ fn render_engine_cards(
     h_flex().gap_2p5().flex_wrap().children(cards)
 }
 
-/// The version list with the installed / download badges.
+/// The version list with the "Hanya versi terbaru" toggle, status badges and
+/// the installed / download badges.
 fn render_versions(
     entry: Option<&EngineEntry>,
     form: &super::CreateForm,
@@ -211,11 +212,20 @@ fn render_versions(
     cx: &mut Context<Workspace>,
 ) -> impl IntoElement {
     let theme = theme.clone();
+    let toggle = latest_only_toggle(form.latest_only, &theme, cx);
     let mut list = v_flex()
         .rounded(px(8.))
         .border_1()
         .border_color(theme.border)
-        .overflow_hidden();
+        .overflow_hidden()
+        .child(
+            div()
+                .px(px(14.))
+                .py(px(8.))
+                .border_b_1()
+                .border_color(theme.table_row_border)
+                .child(toggle),
+        );
     let Some(entry) = entry else {
         return list.child(
             Label::new(strings::CATALOG_ENGINE_UNAVAILABLE_PLATFORM)
@@ -225,7 +235,8 @@ fn render_versions(
         );
     };
     let unavailable = format::version_unavailable_reason(entry).map(str::to_owned);
-    for (index, version) in entry.versions.iter().enumerate() {
+    let rows = format::picker_versions(entry, form.version_filter());
+    for version in &rows {
         let focus = form
             .version_focus
             .iter()
@@ -234,7 +245,7 @@ fn render_versions(
         let selected = version.version == form.version;
         let tag = version.version.clone();
         let version_unavailable = unavailable.is_some();
-        let badge = if version_unavailable {
+        let download = if version_unavailable {
             None
         } else if version.installed {
             Some((strings::UI_VERSION_INSTALLED.to_owned(), theme.success))
@@ -244,7 +255,7 @@ fn render_versions(
                 theme.muted_foreground,
             ))
         };
-        let row = h_flex()
+        let mut row = h_flex()
             .id(SharedString::from(format!("version-{tag}")))
             .h(px(42.))
             .px(px(14.))
@@ -262,16 +273,34 @@ fn render_versions(
                 if !version_unavailable {
                     this.choose_version_action(tag.clone(), window, cx);
                 }
-                let _ = index;
             }))
             .child(radio_marker(selected, version_unavailable, &theme))
             .child(
                 Label::new(version.version.clone())
                     .w(px(90.))
                     .font_weight(gpui_kit::FontWeight::MEDIUM),
-            )
+            );
+        // Status first (LTS / Innovation / Rolling), then EOL, so the support
+        // level reads before the warning without duplicating EOL when status is
+        // None.
+        for text in format::version_status_badges(version) {
+            let colour = if text == strings::UI_VERSION_EOL {
+                theme.danger
+            } else {
+                status_badge_colour(version, &theme)
+            };
+            row = row.child(
+                Label::new(text)
+                    .px_2()
+                    .rounded_full()
+                    .bg(theme.muted)
+                    .text_xs()
+                    .text_color(colour),
+            );
+        }
+        row = row
             .child(div().flex_1())
-            .when_some(badge, |this, (text, colour)| {
+            .when_some(download, |this, (text, colour)| {
                 this.child(
                     Label::new(text)
                         .px_2()
@@ -280,14 +309,14 @@ fn render_versions(
                         .text_xs()
                         .text_color(colour),
                 )
-            })
-            .when_some(unavailable.clone(), |this, reason| {
-                this.child(
-                    Label::new(reason)
-                        .text_xs()
-                        .text_color(theme.muted_foreground),
-                )
             });
+        row = row.when_some(unavailable.clone(), |this, reason| {
+            this.child(
+                Label::new(reason)
+                    .text_xs()
+                    .text_color(theme.muted_foreground),
+            )
+        });
         list = list.child(match (version_unavailable, focus) {
             (false, Some(focus)) => {
                 super::components::apply_inset_focus_ring(row, &focus, window, cx)
@@ -296,6 +325,35 @@ fn render_versions(
         });
     }
     list
+}
+
+/// The "Hanya versi terbaru" checkbox row shown above the version list.
+fn latest_only_toggle(
+    checked: bool,
+    theme: &Theme,
+    cx: &mut Context<Workspace>,
+) -> impl IntoElement {
+    gpui_kit::component::checkbox::Checkbox::new("latest-only")
+        .label(strings::UI_CREATE_LATEST_ONLY)
+        .checked(checked)
+        .on_click(cx.listener(|this, checked: &bool, window, cx| {
+            this.set_latest_only_action(*checked, window, cx);
+        }))
+        .text_color(theme.muted_foreground)
+}
+
+/// The colour of a row's support-status badge.
+fn status_badge_colour(
+    version: &dblocal_core::service::VersionEntry,
+    theme: &Theme,
+) -> gpui_kit::Hsla {
+    use dblocal_core::model::VersionStatus;
+    match version.status {
+        Some(VersionStatus::Lts) => theme.primary,
+        Some(VersionStatus::Innovation) => theme.info,
+        Some(VersionStatus::Rolling) => theme.success,
+        _ => theme.muted_foreground,
+    }
 }
 
 /// The small radio dot on each version row.

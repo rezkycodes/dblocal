@@ -370,7 +370,7 @@ impl Workspace {
             .iter()
             .map(|entry| (entry.engine, cx.focus_handle()))
             .collect();
-        let version_focus = self.version_focus_for(engine, cx);
+        let version_focus = self.version_focus_for(engine, true, cx);
         self.create = Some(CreateForm {
             engine,
             version,
@@ -380,6 +380,7 @@ impl Workspace {
             port_input: Some(port_input.clone()),
             engine_focus,
             version_focus,
+            latest_only: true,
             submit_focus: cx.focus_handle(),
             cancel_focus: cx.focus_handle(),
         });
@@ -403,24 +404,30 @@ impl Workspace {
         cx.notify();
     }
 
-    /// The version-row focus handles for `engine`, in catalog order.
+    /// The version-row focus handles for `engine`, in picker order.
     ///
-    /// Rebuilt whenever the selected engine changes, because each engine has its
-    /// own version list (`F-PLH-01` AC1: Tab reaches every version row).
+    /// Rebuilt whenever the selected engine or the "Hanya versi terbaru"
+    /// checkbox changes, because each engine has its own version list and the
+    /// filter changes which rows exist (`F-PLH-01` AC1: Tab reaches every row).
     fn version_focus_for(
         &self,
         engine: EngineKey,
+        latest_only: bool,
         cx: &mut Context<Self>,
     ) -> Vec<(String, gpui_kit::FocusHandle)> {
+        let filter = if latest_only {
+            dblocal_core::catalog::VersionFilter::LatestOnly
+        } else {
+            dblocal_core::catalog::VersionFilter::All
+        };
         self.catalog
             .engines
             .iter()
             .find(|entry| entry.engine == engine)
             .map(|entry| {
-                entry
-                    .versions
-                    .iter()
-                    .map(|version| (version.version.clone(), cx.focus_handle()))
+                crate::format::picker_versions(entry, filter)
+                    .into_iter()
+                    .map(|version| (version.version, cx.focus_handle()))
                     .collect()
             })
             .unwrap_or_default()
@@ -445,9 +452,10 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         let (version, _) = self.default_engine_version(engine);
+        let latest_only = self.create.as_ref().is_none_or(|form| form.latest_only);
         // The version rows belong to the newly chosen engine, so rebuild their
         // focus handles too (`F-PLH-01` AC1).
-        let version_focus = self.version_focus_for(engine, cx);
+        let version_focus = self.version_focus_for(engine, latest_only, cx);
         if let Some(form) = self.create.as_mut() {
             form.engine = engine;
             form.version = version.clone();
@@ -507,6 +515,65 @@ impl Workspace {
         if let Some(input) = port_input.filter(|_| !port.is_empty()) {
             input.update(cx, |state, cx| state.set_value(port.to_owned(), window, cx));
         }
+    }
+
+    /// Toggles the "Hanya versi terbaru" checkbox and keeps the selection valid.
+    ///
+    /// Turning the filter on can hide the row the user had chosen (an older
+    /// patch of a line). If that happens the newest visible version on the same
+    /// engine is selected instead, so the dialog never holds a version it no
+    /// longer lists.
+    pub(crate) fn set_latest_only(
+        &mut self,
+        latest_only: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let engine = match self.create.as_mut() {
+            Some(form) => {
+                form.latest_only = latest_only;
+                form.engine
+            }
+            None => return,
+        };
+        let filter = if latest_only {
+            dblocal_core::catalog::VersionFilter::LatestOnly
+        } else {
+            dblocal_core::catalog::VersionFilter::All
+        };
+        let visible: Vec<String> = self
+            .catalog
+            .engines
+            .iter()
+            .find(|entry| entry.engine == engine)
+            .map(|entry| {
+                crate::format::picker_versions(entry, filter)
+                    .into_iter()
+                    .map(|version| version.version)
+                    .collect()
+            })
+            .unwrap_or_default();
+        let version_focus = self.version_focus_for(engine, latest_only, cx);
+        let still_visible = self
+            .create
+            .as_ref()
+            .is_some_and(|form| visible.contains(&form.version));
+        let replacement = if still_visible {
+            None
+        } else {
+            visible.first().cloned()
+        };
+        if let Some(form) = self.create.as_mut() {
+            form.version_focus = version_focus;
+            if let Some(version) = &replacement {
+                form.version = version.clone();
+            }
+        }
+        if let Some(version) = replacement {
+            let name = crate::format::suggested_name(engine, &version);
+            self.set_create_field_texts(&name, "", window, cx);
+        }
+        cx.notify();
     }
 
     pub(crate) fn choose_auth(&mut self, auth: AuthMode) {

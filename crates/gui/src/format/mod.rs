@@ -5,10 +5,11 @@
 //! equivalent that derives the same decisions from the frozen service's read
 //! models (`InstanceView`, `CatalogView`, `Runtime`).
 
+use dblocal_core::catalog::{VersionFilter, filter_versions};
 use dblocal_core::model::{
-    AuthMode, CatalogStatus, CredentialBackend, EngineKey, InstanceStatus, Runtime,
+    AuthMode, CatalogStatus, CredentialBackend, EngineKey, InstanceStatus, Runtime, VersionStatus,
 };
-use dblocal_core::service::{CatalogView, EngineEntry, InstanceView};
+use dblocal_core::service::{CatalogView, EngineEntry, InstanceView, VersionEntry};
 use dblocal_core::strings;
 
 mod palette;
@@ -675,6 +676,33 @@ pub fn next_free_port(instances: &[InstanceView], engine: EngineKey) -> u16 {
         port = port.saturating_add(1);
     }
     port
+}
+
+/// The version rows the create dialog shows for one engine and filter.
+///
+/// A thin wrapper over the core filter so the view and the tests share one
+/// decision; an unavailable engine has an empty list already.
+pub fn picker_versions(entry: &EngineEntry, filter: VersionFilter) -> Vec<VersionEntry> {
+    filter_versions(&entry.versions, filter)
+}
+
+/// The badges a version row shows, in reading order.
+///
+/// The support status (`LTS`, `Innovation`, `Rolling`) comes from the catalog;
+/// `EOL` is rendered from the separate `eol` flag so a line can be, for example,
+/// an EOL LTS. Installed is a separate badge drawn by the row itself.
+pub fn version_status_badges(version: &VersionEntry) -> Vec<&'static str> {
+    let mut badges = Vec::with_capacity(2);
+    match version.status {
+        Some(VersionStatus::Lts) => badges.push(strings::UI_VERSION_LTS),
+        Some(VersionStatus::Innovation) => badges.push(strings::UI_VERSION_INNOVATION),
+        Some(VersionStatus::Rolling) => badges.push(strings::UI_VERSION_ROLLING),
+        _ => {}
+    }
+    if version.eol {
+        badges.push(strings::UI_VERSION_EOL);
+    }
+    badges
 }
 
 /// The version a freshly opened create dialog should select for an engine.
