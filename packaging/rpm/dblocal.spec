@@ -51,8 +51,9 @@ Recommends:     mesa-libEGL
 
 %description
 DBLocal installs and runs local PostgreSQL, MySQL, MariaDB, and Valkey
-servers side by side with no containers and no sudo. It keeps engine data
-under ~/.dblocal and never exposes database ports beyond localhost.
+servers side by side with no containers and no sudo. It also runs Redis and
+RustFS object storage. It keeps engine data under ~/.dblocal and never
+exposes database ports beyond localhost.
 
 %prep
 # No source extraction: package is assembled from prebuilt inputs.

@@ -32,9 +32,9 @@ pub const EXIT_ENGINE_FAILED: u8 = 4;
     name = "dblocal",
     version,
     about = "DBLocal — local database servers without containers",
-    long_about = "DBLocal manages PostgreSQL, MySQL, MariaDB and Valkey servers \n\
-                  on your local machine. Without arguments the GUI opens; with a \n\
-                  subcommand it runs in CLI mode.",
+    long_about = "DBLocal manages PostgreSQL, MySQL, MariaDB and Valkey servers, plus \n\
+                  Redis (Linux only) and RustFS object storage, on your local machine. \n\
+                  Without arguments the GUI opens; with a subcommand it runs in CLI mode.",
     after_help = "Without arguments, the DBLocal window opens."
 )]
 pub struct Cli {
