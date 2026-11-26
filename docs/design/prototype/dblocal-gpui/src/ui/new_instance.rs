@@ -1,4 +1,4 @@
-//! Dialog "Instance baru" (F-INS-01, F-CAT-02, F-PRT-01, F-CRD-03).
+//! The "New instance" dialog (F-INS-01, F-CAT-02, F-PRT-01, F-CRD-03).
 
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::checkbox::Checkbox;
@@ -99,25 +99,25 @@ impl NewInstanceForm {
             && name.chars().next().is_some_and(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
             && name.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-');
         if !valid_name {
-            self.error = Some("Nama: huruf kecil, angka, tanda hubung (2–31 karakter).".into());
+            self.error = Some("Name: lowercase letters, digits, hyphens (2–31 characters).".into());
             cx.notify();
             return;
         }
         let port: u16 = match self.port.read(cx).value().trim().parse() {
             Ok(p) if p >= 1024 => p,
             Ok(_) => {
-                self.error = Some("Port < 1024 butuh privilese; DBLocal tidak pernah meminta sudo.".into());
+                self.error = Some("Ports below 1024 need privileges; DBLocal never asks for sudo.".into());
                 cx.notify();
                 return;
             }
             Err(_) => {
-                self.error = Some("Port harus berupa angka.".into());
+                self.error = Some("The port must be a number.".into());
                 cx.notify();
                 return;
             }
         };
         if self.taken_ports.iter().any(|(_, p)| *p == port) {
-            self.error = Some(format!("Port {port} sudah dialokasikan instance DBLocal lain.").into());
+            self.error = Some(format!("Port {port} is already allocated to another DBLocal instance.").into());
             cx.notify();
             return;
         }
@@ -166,7 +166,7 @@ impl Render for NewInstanceForm {
                     div()
                         .text_xs()
                         .text_color(tokens::text_muted())
-                        .child(format!("Port kanonik {}", engine.canonical_port())),
+                        .child(format!("Canonical port {}", engine.canonical_port())),
                 )
         });
 
@@ -201,16 +201,16 @@ impl Render for NewInstanceForm {
                         .px_2()
                         .rounded_full()
                         .text_xs()
-                        .when(*installed, |s| s.bg(tokens::tint(tokens::ok(), 0.14)).text_color(tokens::ok()).child("Terpasang"))
-                        .when(!*installed, |s| s.bg(tokens::bg_elevated()).text_color(tokens::text_muted()).child("Unduh")),
+                        .when(*installed, |s| s.bg(tokens::tint(tokens::ok(), 0.14)).text_color(tokens::ok()).child("Installed"))
+                        .when(!*installed, |s| s.bg(tokens::bg_elevated()).text_color(tokens::text_muted()).child("Download")),
                 )
         });
 
         let (_, _, installed) = self.engine.catalog()[self.version_ix];
         let summary = if installed {
-            "Runtime sudah terpasang — siap dalam < 10 detik"
+            "Runtime already installed — ready in under 10 seconds"
         } else {
-            "Akan mengunduh runtime lalu verifikasi SHA-256"
+            "Will download the runtime, then verify SHA-256"
         };
 
         v_flex()
@@ -219,13 +219,13 @@ impl Render for NewInstanceForm {
             .child(
                 div()
                     .text_color(tokens::text_muted())
-                    .child("Runtime diunduh dari upstream dan diverifikasi SHA-256 sebelum dipasang."),
+                    .child("The runtime is downloaded from upstream and verified with SHA-256 before it is installed."),
             )
             .child(v_flex().gap_2().child(section_label("Engine")).child(h_flex().gap_2p5().children(engines)))
             .child(
                 v_flex()
                     .gap_2()
-                    .child(section_label(format!("Versi · {}", self.engine.name())))
+                    .child(section_label(format!("Versions · {}", self.engine.name())))
                     .child(
                         v_flex()
                             .rounded(px(8.))
@@ -243,9 +243,9 @@ impl Render for NewInstanceForm {
                         v_flex()
                             .flex_1()
                             .gap_1p5()
-                            .child(div().font_weight(gpui_kit::FontWeight::MEDIUM).child("Nama instance"))
+                            .child(div().font_weight(gpui_kit::FontWeight::MEDIUM).child("Instance name"))
                             .child(Input::new(&self.name))
-                            .child(div().text_xs().text_color(tokens::text_muted()).child("huruf kecil, angka, tanda hubung")),
+                            .child(div().text_xs().text_color(tokens::text_muted()).child("lowercase letters, digits, hyphens")),
                     )
                     .child(
                         v_flex()
@@ -285,7 +285,7 @@ impl Render for NewInstanceForm {
                     .bg(if self.no_auth { tokens::tint(tokens::danger(), 0.08) } else { tokens::tint(tokens::danger(), 0.) })
                     .child(
                         Checkbox::new("no-auth")
-                            .label("Izinkan koneksi tanpa password")
+                            .label("Allow connections without a password")
                             .checked(self.no_auth)
                             .on_click(cx.listener(|this, checked: &bool, _, cx| {
                                 this.no_auth = *checked;
@@ -293,7 +293,7 @@ impl Render for NewInstanceForm {
                             })),
                     )
                     .child(div().pl(px(24.)).text_xs().text_color(tokens::text_muted()).child(
-                        "Proses dan user lain di mesin ini bisa terhubung tanpa kredensial. Tidak bisa diubah setelah dibuat.",
+                        "Other processes and users on this machine can connect without credentials. This cannot be changed after creation.",
                     )),
             )
             .when_some(self.error.clone(), |s, err| {

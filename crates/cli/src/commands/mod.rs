@@ -73,7 +73,7 @@ pub fn dispatch(ctx: &mut Ctx<'_>, command: &Command) -> u8 {
                 ctx.err,
                 &crate::messages::code_line(
                     dblocal_core::error::CODE_INVALID_INPUT,
-                    "autostart-run tidak tersedia di mode ini",
+                    "autostart-run is not available in this mode",
                 ),
             );
             crate::cli::EXIT_BAD_ARGS

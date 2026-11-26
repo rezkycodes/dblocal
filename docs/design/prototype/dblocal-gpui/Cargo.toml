@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 rust-version = "1.92"
 license = "GPL-3.0-only"
-description = "DBLocal — kelola server database lokal (PostgreSQL, MySQL, MariaDB, Valkey) tanpa container. Prototipe UI dengan GPUI Kit."
+description = "DBLocal — manage local database servers (PostgreSQL, MySQL, MariaDB, Valkey) without containers. UI prototype built with GPUI Kit."
 
 [[bin]]
 name = "dblocal"

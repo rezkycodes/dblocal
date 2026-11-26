@@ -7,17 +7,17 @@
 
 pub mod strings {
     pub const APP_NAME: &str = "DBLocal";
-    pub const UI_TRAY_OPEN: &str = "Buka DBLocal";
-    pub const UI_TRAY_QUIT: &str = "Keluar";
-    pub const UI_START: &str = "Mulai";
-    pub const UI_STOP: &str = "Hentikan";
-    pub const STATUS_RUNNING: &str = "berjalan";
-    pub const STATUS_STOPPED: &str = "berhenti";
-    pub const STATUS_FAILED: &str = "gagal";
-    pub const STATUS_PROVISIONING: &str = "menyiapkan";
-    pub const STATUS_INITIALIZING: &str = "inisialisasi";
-    pub const STATUS_STARTING: &str = "memulai";
-    pub const STATUS_STOPPING: &str = "menghentikan";
+    pub const UI_TRAY_OPEN: &str = "Open DBLocal";
+    pub const UI_TRAY_QUIT: &str = "Quit";
+    pub const UI_START: &str = "Start";
+    pub const UI_STOP: &str = "Stop";
+    pub const STATUS_RUNNING: &str = "running";
+    pub const STATUS_STOPPED: &str = "stopped";
+    pub const STATUS_FAILED: &str = "failed";
+    pub const STATUS_PROVISIONING: &str = "provisioning";
+    pub const STATUS_INITIALIZING: &str = "initializing";
+    pub const STATUS_STARTING: &str = "starting";
+    pub const STATUS_STOPPING: &str = "stopping";
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

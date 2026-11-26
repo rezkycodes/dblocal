@@ -171,7 +171,7 @@ pub fn format_launch_plan(plan: &dblocal_core::clients::LaunchPlan) -> String {
         out.push_str(url);
     }
     if plan.temp_file().is_some() {
-        out.push_str("\nlauncher: script privat (0600, dihapus saat dijalankan)");
+        out.push_str("\nlauncher: private script (0600, deleted when run)");
     }
     out
 }

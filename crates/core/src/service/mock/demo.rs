@@ -62,11 +62,11 @@ const PG_APP_LOG: [&str; 5] = [
 const PG_SHOP_LOG: [&str; 8] = [
     "received fast shutdown request",
     "database system is shut down",
-    "stop selesai: shutdown bersih dalam 0,21 dtk",
-    "sesi baru · 22:39:12",
-    "start diminta oleh GUI",
-    "uji bind 127.0.0.1:5434 … EADDRINUSE",
-    "uji bind [::1]:5434 … EADDRINUSE",
+    "stop finished: clean shutdown in 0.21 s",
+    "new session · 22:39:12",
+    "start requested by the GUI",
+    "bind test 127.0.0.1:5434 … EADDRINUSE",
+    "bind test [::1]:5434 … EADDRINUSE",
     "port 5434 is used by another process; the engine was not started (DBL-1302)",
 ];
 

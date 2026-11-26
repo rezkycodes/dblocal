@@ -1,5 +1,5 @@
-//! Workspace utama bergaya Zed: title bar, dock Instances di kiri, pane bertab per
-//! instance di tengah, dan status bar di bawah (D-23).
+//! The main Zed-style workspace: title bar, Instances dock on the left, a tabbed pane per
+//! instance in the centre, and a status bar at the bottom (D-23).
 
 use std::collections::HashSet;
 use std::time::Duration;
@@ -131,7 +131,7 @@ impl Workspace {
         let note = if inst.status == Status::Running {
             "Connection URI disalin ke clipboard".to_string()
         } else {
-            format!("URI disalin — {} belum berjalan", inst.name)
+            format!("URI copied — {} is not running yet", inst.name)
         };
         window.push_notification(Notification::success(note), cx);
     }
@@ -156,7 +156,7 @@ impl Workspace {
         window.push_notification(Notification::info("500 baris log terakhir disalin"), cx);
     }
 
-    /// Start/Stop dengan transisi status yang disimulasikan.
+    /// Start/Stop with a simulated status transition.
     pub(crate) fn toggle_run(&mut self, idx: usize, window: &mut Window, cx: &mut Context<Self>) {
         let inst = &mut self.instances[idx];
         match inst.status {
@@ -173,7 +173,7 @@ impl Workspace {
                 if let Some(Failure::PortInUse { port, .. }) = inst.failure {
                     if port == inst.port {
                         window.push_notification(
-                            Notification::error(format!("Port {port} sedang dipakai proses lain")),
+                            Notification::error(format!("Port {port} is already used by another process")),
                             cx,
                         );
                         return;
@@ -208,7 +208,7 @@ impl Workspace {
         cx.notify();
     }
 
-    /// F-PRT-02: pindah ke port bebas berikutnya lalu lanjutkan start.
+    /// F-PRT-02: move to the next free port, then continue the start.
     pub(crate) fn move_port_and_start(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let idx = self.selected;
         let Some(Failure::PortInUse { suggested, .. }) = self.instances[idx].failure else {
@@ -251,14 +251,14 @@ impl Workspace {
         let form = cx.new(|cx| NewInstanceForm::new(workspace, taken_ports, window, cx));
         window.open_dialog(cx, move |dialog, _, _| {
             dialog
-                .title("Instance baru")
+                .title("New instance")
                 .w(px(720.))
                 .child(form.clone())
         });
     }
 
-    /// Dipanggil dialog New Instance. Runtime yang belum terpasang melewati
-    /// state `Provisioning` (unduh → SHA-256 → ekstrak → initdb).
+    /// Called by the New Instance dialog. A runtime that is not installed goes
+    /// through the `Provisioning` state (download → SHA-256 → extract → initdb).
     pub fn create_instance(&mut self, spec: NewInstanceSpec, cx: &mut Context<Self>) {
         let port = spec
             .port
@@ -370,14 +370,14 @@ impl Workspace {
                                 .size(px(14.))
                                 .text_color(tokens::ok()),
                         )
-                        .child("Katalog diperbarui 3 jam lalu"),
+                        .child("Catalog updated 3 hours ago"),
                 )
                 .child(
                     Button::new("title-new")
                         .ghost()
                         .small()
                         .icon(IconName::Plus)
-                        .tooltip("Instance baru (Ctrl+N)")
+                        .tooltip("New instance (Ctrl+N)")
                         .on_click(cx.listener(|this, _, window, cx| {
                             this.open_new_instance(window, cx)
                         })),
@@ -417,7 +417,7 @@ impl Workspace {
                             .ghost()
                             .xsmall()
                             .icon(IconName::Close)
-                            .tooltip("Tutup tab")
+                            .tooltip("Close tab")
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 cx.stop_propagation();
                                 this.close_tab(idx, cx)
@@ -432,8 +432,8 @@ impl Workspace {
         let busy = inst.status.is_busy();
         let running = inst.status == Status::Running;
         let sub = match inst.status {
-            Status::Running => "berjalan · detached".to_string(),
-            Status::Failed => "gagal start".to_string(),
+            Status::Running => "running · detached".to_string(),
+            Status::Failed => "failed to start".to_string(),
             Status::Provisioning => format!("menyiapkan runtime · {:.0}%", inst.progress),
             s => s.label().to_lowercase(),
         };
@@ -533,20 +533,20 @@ impl Workspace {
             .border_color(tokens::border_strong())
             .text_xs()
             .text_color(tokens::text_muted())
-            .child(h_flex().gap_1p5().child(status_dot(Status::Running, 8.)).child(format!("{running} berjalan")))
-            .child(h_flex().gap_1p5().child(status_dot(Status::Stopped, 8.)).child(format!("{stopped} berhenti")))
+            .child(h_flex().gap_1p5().child(status_dot(Status::Running, 8.)).child(format!("{running} running")))
+            .child(h_flex().gap_1p5().child(status_dot(Status::Stopped, 8.)).child(format!("{stopped} stopped")))
             .when(failed > 0, |s| {
                 s.child(
                     h_flex()
                         .gap_1p5()
                         .text_color(tokens::danger())
                         .child(status_dot(Status::Failed, 8.))
-                        .child(format!("{failed} gagal")),
+                        .child(format!("{failed} failed")),
                 )
             })
             .child(mono("~/.dblocal · 3,1 GB", cx))
             .child(div().flex_1())
-            .child("Kredensial: Keychain")
+            .child("Credential: keychain")
             .child(std::env::consts::OS.to_string() + " " + std::env::consts::ARCH)
             .child(concat!("v", env!("CARGO_PKG_VERSION")))
     }

@@ -442,7 +442,7 @@ mod tests {
         );
         assert_eq!(code, EXIT_OK);
         assert!(
-            String::from_utf8_lossy(&err).contains("Autostart: tray tidak tersedia")
+            String::from_utf8_lossy(&err).contains("Autostart: the tray is unavailable")
                 || String::from_utf8_lossy(&err).contains("Autostart")
         );
     }
@@ -453,7 +453,7 @@ mod tests {
         let code = run_login_mode_with(
             &mut err,
             false,
-            &|_: &mut dyn Write| Err("DBL-8500 tidak didukung".to_owned()),
+            &|_: &mut dyn Write| Err("DBL-8500 not supported".to_owned()),
             &|| EXIT_OK,
         );
         assert_eq!(code, EXIT_GENERAL);
@@ -662,7 +662,7 @@ mod tests {
                     self.view(&self.blocked_id, "auto-blocked", InstanceStatus::Failed);
                 blocked.failure = Some(dblocal_core::service::FailureInfo {
                     code: "DBL-1005".to_owned(),
-                    message: "Port itu sedang dipakai proses lain.".to_owned(),
+                    message: "That port is already used by another process.".to_owned(),
                     diagnosis: dblocal_core::model::StartFailure::PortInUse,
                     log_tail: Vec::new(),
                     restore_available: false,

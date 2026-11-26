@@ -456,7 +456,7 @@ fn palette_actions_reach_the_same_handlers(cx: &mut TestAppContext) {
     assert!(view.read_with(cx, |this, _| this.palette_is_open()));
     let labels = view.read_with(cx, |this, _| this.palette_labels());
     assert!(
-        labels.iter().any(|l| l.contains("Instance baru")),
+        labels.iter().any(|l| l.contains("New instance")),
         "{labels:?}"
     );
 

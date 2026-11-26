@@ -1,31 +1,31 @@
-# DBLocal — prototipe UI (GPUI Kit)
+# DBLocal — UI prototype (GPUI Kit)
 
-Implementasi desain DBLocal dengan **[GPUI Kit](https://gpui-kit.com/docs/) 0.10** (GPUI dari Zed + `gpui-component`), tema gelap berbasis **#15161d**.
+A DBLocal design implementation with **[GPUI Kit](https://gpui-kit.com/docs/) 0.10** (Zed's GPUI + `gpui-component`), dark theme based on **#15161d**.
 
-> Status: **prototipe UI**. Semua data instance adalah data contoh di memori.
-> Start/Stop, unduhan runtime, dan pembuatan database disimulasikan — belum ada
-> proses engine sungguhan. Lapisan `dblocal-core` (katalog, unduhan + SHA-256,
-> EngineAdapter, state.db) dari PRD menyusul dan akan menggantikan `src/model.rs`.
+> Status: **UI prototype**. All instance data is in-memory sample data.
+> Start/Stop, runtime downloads and database creation are simulated — there is no
+> real engine process yet. The `dblocal-core` layer from the PRD (catalog, download
+> + SHA-256, EngineAdapter, state.db) follows and will replace `src/model.rs`.
 
-## Yang sudah bisa dicoba
+## What you can try
 
-| Fitur PRD | Di aplikasi |
+| PRD feature | In the app |
 |---|---|
-| D-23 Workspace gaya Zed | Title bar, dock Instances (pohon per engine, filter, collapse), tab per instance, status bar |
-| F-INS-03 Start/Stop | Tombol Start/Stop/Restart dengan transisi `starting`/`stopping` |
-| F-CRD-02 Copy URI / .env | Menyalin ke clipboard sungguhan + notifikasi; tombol Tampilkan/Sembunyikan password |
-| F-INS-01 + F-CAT-02 + F-PRT-01 | Dialog **Instance baru**: pilih engine & versi (badge *Terpasang*), nama & port terisi otomatis, validasi nama/port, opsi tanpa password |
-| F-RTM-01 | Versi yang belum terpasang masuk state *Provisioning* dengan progres unduhan |
-| F-LOG-01/02 | Tab Logs + banner diagnosa "Port sedang dipakai" → **Pindah ke port berikutnya & start** (coba di `pg-shop`) |
-| F-DBU | Tab Databases: daftar, buat database (validasi `[A-Za-z0-9_]`), user & hak, reset password |
-| F-CFG | Tab Config: nilai saat ini vs default, banner restart |
-| F-PLH-02 | Status tidak hanya warna: ● running · ○ stopped · ▲ failed · ◐ sibuk |
+| D-23 Zed-style workspace | Title bar, Instances dock (tree per engine, filter, collapse), tab per instance, status bar |
+| F-INS-03 Start/Stop | Start/Stop/Restart buttons with `starting`/`stopping` transitions |
+| F-CRD-02 Copy URI / .env | Copies to the real clipboard + a notification; Show/Hide password toggle |
+| F-INS-01 + F-CAT-02 + F-PRT-01 | **New instance** dialog: pick engine & version (Installed badge), pre-filled name & port, name/port validation, no-password option |
+| F-RTM-01 | A version that is not installed yet enters the *Provisioning* state with download progress |
+| F-LOG-01/02 | Logs tab + a "Port is already in use" diagnosis banner → **Move to the next port and start** (try `pg-shop`) |
+| F-DBU | Databases tab: list, create a database (validate `[A-Za-z0-9_]`), users & privileges, reset password |
+| F-CFG | Config tab: current vs default values, restart banner |
+| F-PLH-02 | Status is never colour only: ● running · ○ stopped · ▲ failed · ◐ busy |
 
-Pintasan: `Ctrl/Cmd+N` instance baru · `Ctrl/Cmd+Shift+C` copy URI · `Ctrl/Cmd+Enter` start/stop.
+Shortcuts: `Ctrl/Cmd+N` new instance · `Ctrl/Cmd+Shift+C` copy URI · `Ctrl/Cmd+Enter` start/stop.
 
-## Menjalankan
+## Running
 
-Butuh **Rust 1.92+** (`rustup update`).
+Needs **Rust 1.92+** (`rustup update`).
 
 ### Linux (Fedora)
 ```bash
@@ -48,49 +48,49 @@ cargo run --release
 ```
 
 ### Windows 10/11
-Pasang Visual Studio 2022 Build Tools (workload *Desktop development with C++*), CMake, dan toolchain Rust **MSVC**, lalu:
+Install Visual Studio 2022 Build Tools (the *Desktop development with C++* workload), CMake, and the **MSVC** Rust toolchain, then:
 ```powershell
 cargo run --release
 ```
 
-Build pertama mengompilasi GPUI dan butuh beberapa menit; build berikutnya cepat.
+The first build compiles GPUI and takes a few minutes; later builds are fast.
 
-Binary siap pakai untuk tiga OS bisa dibuat otomatis: push repo ini ke GitHub, workflow
-`.github/workflows/build.yml` akan menghasilkan artefak `dblocal-linux-x86_64`,
-`dblocal-macos-arm64`, dan `dblocal-windows-x86_64.exe` di tab *Actions*.
+Ready-to-use binaries for three OSes can be built automatically: push this repo to GitHub and
+the `.github/workflows/build.yml` workflow produces `dblocal-linux-x86_64`,
+`dblocal-macos-arm64` and `dblocal-windows-x86_64.exe` artifacts under the *Actions* tab.
 
-## Struktur
+## Structure
 
 ```
 dblocal-gpui/
-├─ Cargo.toml                # gpui-kit = "=0.10.0" (dipin, pre-1.0)
-├─ themes/dblocal.json       # tema "DBLocal Dark" (#15161d) untuk komponen gpui-kit
+├─ Cargo.toml                # gpui-kit = "=0.10.0" (pinned, pre-1.0)
+├─ themes/dblocal.json       # "DBLocal Dark" theme (#15161d) for the gpui-kit components
 ├─ src/
-│  ├─ main.rs                # bootstrap: application(), init, tema, keybinding, jendela
-│  ├─ assets.rs              # ikon bawaan + ikon Lucide tambahan (icon_assets!)
-│  ├─ theme.rs               # load tema + token warna untuk elemen kustom
-│  ├─ model.rs               # EngineKind, Status, Instance, data contoh
+│  ├─ main.rs                # bootstrap: application(), init, theme, keybindings, window
+│  ├─ assets.rs              # bundled icons + extra Lucide icons (icon_assets!)
+│  ├─ theme.rs               # load the theme + colour tokens for custom elements
+│  ├─ model.rs               # EngineKind, Status, Instance, sample data
 │  └─ ui/
-│     ├─ workspace.rs        # state, aksi, title bar, tab instance, header, status bar
-│     ├─ sidebar.rs          # dock Instances + Runtimes
+│     ├─ workspace.rs        # state, actions, title bar, instance tabs, header, status bar
+│     ├─ sidebar.rs          # Instances + Runtimes dock
 │     ├─ pages.rs            # Overview, Logs, Databases, Config
-│     ├─ new_instance.rs     # dialog Instance baru
+│     ├─ new_instance.rs     # New instance dialog
 │     └─ components.rs       # status_dot, engine_badge, card, banner, …
 └─ .github/workflows/build.yml
 ```
 
-## Mengganti warna tema
+## Changing the theme colours
 
-Semua warna komponen ada di `themes/dblocal.json` (kunci mengikuti skema tema
-gpui-kit). Warna elemen buatan sendiri ada di `src/theme.rs` → `tokens`.
-Pertahankan rasio kontras teks ≥ 4,5:1 (F-PLH-02).
+Every component colour lives in `themes/dblocal.json` (keys follow the gpui-kit theme
+schema). Colours for our own elements live in `src/theme.rs` → `tokens`.
+Keep the text contrast ratio at 4.5:1 or better (F-PLH-02).
 
-## Belum termasuk
+## Not included
 
-- Tray/menubar dan dialog Quit (F-TRY) — GPUI belum punya API tray; ini spike F-SPK-04.
-- Command palette `Ctrl+K`, tema terang, hapus instance, Settings › Storage.
-- Integrasi engine sungguhan (`dblocal-core`).
+- Tray/menubar and the Quit dialog (F-TRY) — GPUI has no tray API yet; this is spike F-SPK-04.
+- The `Ctrl+K` command palette, the light theme, deleting an instance, Settings › Storage.
+- Real engine integration (`dblocal-core`).
 
-## Lisensi
+## License
 
-GPL-3.0-only (D-05). GPUI Kit, `gpui-component`, dan GPUI berlisensi Apache-2.0; ikon Lucide berlisensi ISC.
+GPL-3.0-only (D-05). GPUI Kit, `gpui-component` and GPUI are Apache-2.0; the Lucide icons are ISC.

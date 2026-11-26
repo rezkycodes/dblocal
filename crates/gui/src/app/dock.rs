@@ -1,5 +1,5 @@
 //! The instances dock: engine groups with counts, collapsible rows, the
-//! runtime list and the primary "Instance baru" button (D-25 prototype).
+//! runtime list and the primary "New instance" button (D-25 prototype).
 //!
 //! Rendering only. The groups, the filter and the runtime rows all come from
 //! [`crate::format`], so the decisions are unit-tested without a window.

@@ -246,13 +246,13 @@ fn a_failed_create_keeps_the_name(cx: &mut TestAppContext) {
 fn a_drop_reports_itself_in_the_status_bar(cx: &mut TestAppContext) {
     let (view, service, cx) = fixture(cx);
     let id = open_databases(&view, &service, cx);
-    // Reproduce the report: a create leaves "Database shop_db dibuat (UTF-8)".
+    // Reproduce the report: a create leaves "Database shop_db created (UTF-8)".
     set_db_name(&view, "shop_db", cx);
     view.update(cx, |this, cx| this.create_database(&id, cx));
     settle(cx);
     assert!(
         view.read_with(cx, |this, _| this.toast_text())
-            .is_some_and(|t| t.contains("dibuat")),
+            .is_some_and(|t| t.contains("created")),
         "the create toast is up first"
     );
 
@@ -267,7 +267,7 @@ fn a_drop_reports_itself_in_the_status_bar(cx: &mut TestAppContext) {
         .map(|t| t.to_string())
         .unwrap_or_default();
     assert!(
-        toast.contains("app") && toast.contains("dihapus"),
+        toast.contains("app") && toast.contains("deleted"),
         "a drop must replace the create line with its own confirmation: {toast}"
     );
 }

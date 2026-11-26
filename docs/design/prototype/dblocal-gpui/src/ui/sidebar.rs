@@ -1,4 +1,4 @@
-//! Dock kiri: pohon instance per engine, daftar runtime, tombol Instance baru.
+//! Left dock: instance tree per engine, runtime list, New instance button.
 
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::input::Input;
@@ -134,7 +134,7 @@ impl Workspace {
                             .ghost()
                             .xsmall()
                             .icon(IconName::Plus)
-                            .tooltip("Instance baru")
+                            .tooltip("New instance")
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.open_new_instance(window, cx)
                             })),
@@ -190,7 +190,7 @@ impl Workspace {
                     .primary()
                     .w_full()
                     .icon(IconName::Plus)
-                    .label("Instance baru")
+                    .label("New instance")
                     .on_click(cx.listener(|this, _, window, cx| this.open_new_instance(window, cx))),
             )
     }

@@ -60,7 +60,7 @@ impl Workspace {
     }
 
     /// Preview with the palette open and its query filtered to a **single** row
-    /// ("Instance baru"), so a render test can prove the panel's height follows
+    /// ("New instance"), so a render test can prove the panel's height follows
     /// its content instead of stretching to the window bottom (W4-I D2).
     pub fn preview_palette_one_row(
         service: Arc<dyn DblService>,

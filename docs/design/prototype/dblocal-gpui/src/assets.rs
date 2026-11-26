@@ -1,5 +1,5 @@
-//! Sumber aset: ikon bawaan gpui-kit + ikon Lucide tambahan yang dipakai DBLocal.
-//! Hanya ikon yang didaftarkan di sini yang ikut tertanam ke binary.
+//! Asset source: the bundled gpui-kit icons plus the extra Lucide icons DBLocal uses.
+//! Only icons registered here are embedded into the binary.
 
 use std::borrow::Cow;
 

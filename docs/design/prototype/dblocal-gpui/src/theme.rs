@@ -1,7 +1,7 @@
-//! Tema DBLocal: palet dasar #15161d (turunan One Dark, semua teks lolos kontras 4,5:1).
+//! The DBLocal theme: base palette #15161d (derived from One Dark, all text meets 4.5:1 contrast).
 //!
-//! Warna komponen gpui-kit diatur lewat `themes/dblocal.json`; konstanta di bawah
-//! dipakai untuk elemen buatan sendiri (titik status, badge engine, panel log).
+//! gpui-kit component colours are set through `themes/dblocal.json`; the constants below
+//! are used for our own elements (status dots, engine badges, log panels).
 
 use gpui_kit::component::{Theme, ThemeRegistry};
 use gpui_kit::{App, Hsla, Rgba, SharedString, rgb, rgba};
@@ -9,10 +9,10 @@ use gpui_kit::{App, Hsla, Rgba, SharedString, rgb, rgba};
 const THEME_JSON: &str = include_str!("../themes/dblocal.json");
 const THEME_NAME: &str = "DBLocal Dark";
 
-/// Muat tema dari JSON lalu jadikan tema aktif.
+/// Load the theme from JSON and make it active.
 pub fn init(cx: &mut App) {
     if let Err(err) = ThemeRegistry::global_mut(cx).load_themes_from_str(THEME_JSON) {
-        eprintln!("[dblocal] gagal memuat tema: {err:#}");
+        eprintln!("[dblocal] could not load the theme: {err:#}");
         return;
     }
     let config = ThemeRegistry::global(cx)
@@ -24,7 +24,7 @@ pub fn init(cx: &mut App) {
     }
 }
 
-/// Token warna untuk elemen kustom.
+/// Colour tokens for custom elements.
 pub mod tokens {
     use super::*;
 
@@ -86,7 +86,7 @@ pub mod tokens {
         rgb(0x1e2227)
     }
 
-    /// Latar transparan dari sebuah warna (untuk badge dan banner).
+    /// A transparent background from a colour (for badges and banners).
     pub fn tint(color: Rgba, alpha: f32) -> Hsla {
         let mut hsla: Hsla = color.into();
         hsla.a = alpha;

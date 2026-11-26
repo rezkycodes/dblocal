@@ -1,9 +1,9 @@
 //! DBLocal — prototipe UI desktop (GPUI Kit 0.10).
 //!
 //! Struktur:
-//! - `theme`  : tema #15161d dari `themes/dblocal.json` + token warna
+//! - `theme`  : the #15161d theme from `themes/dblocal.json` + colour tokens
 //! - `assets` : ikon gpui-kit + ikon Lucide tambahan
-//! - `model`  : tipe domain + data contoh (nanti diganti `dblocal-core`)
+//! - `model`  : domain types + sample data (later replaced by `dblocal-core`)
 //! - `ui`     : workspace (dock, tab, overview/logs/databases/config), dialog
 
 mod assets;
@@ -35,7 +35,7 @@ fn main() {
             gpui_kit::open_window(options, cx, |window, cx| {
                 cx.new(|cx| Workspace::new(window, cx))
             })
-            .expect("gagal membuka jendela DBLocal");
+            .expect("could not open the DBLocal window");
 
             cx.activate(true);
         });

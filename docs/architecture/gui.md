@@ -36,11 +36,11 @@ Owner: W1-G. This document describes the `crates/gui` shell built against `dbloc
 | `app/settings_state.rs` | Pure Settings state (`F-PKG-05`, `F-AUT-01`) | unit, thorough | — |
 | `app/settings_dialog.rs` / `app/settings_actions.rs` | Settings dialog view and its background handlers | render | — |
 | `app/login_item.rs` | The `F-AUT-01` login-item seam over the W4-D autostart core API | unit | — |
-| `app/screens/config.rs` | The live Config tab (`F-CFG-01`, `F-CFG-02`): one "Pengaturan" card from `config_view`, read-only rows, apply/reset/restore/open-file and the restart banner | render + handler tests | — |
-| `app/config_state.rs` | Pure Config-tab state: the last view, local edits until "Terapkan", per-field errors, in-flight actions, re-base on `ConfigChanged`, id derivation | unit, thorough | — |
+| `app/screens/config.rs` | The live Config tab (`F-CFG-01`, `F-CFG-02`): one "Settings" card from `config_view`, read-only rows, apply/reset/restore/open-file and the restart banner | render + handler tests | — |
+| `app/config_state.rs` | Pure Config-tab state: the last view, local edits until "Apply", per-field errors, in-flight actions, re-base on `ConfigChanged`, id derivation | unit, thorough | — |
 | `app/config_actions.rs` | Config-tab handlers on `Workspace::bg` (read, apply, restore, restart, open raw, copy) | unit (render) | — |
 | `app/config_dialogs.rs` | The restore confirmation (`F-CFG-01` AC3) | unit + render | — |
-| `app/events.rs` | Event reduction into the workspace: `apply_event`/`apply_event_with_cx`, the Databases/Config invalidation and a pending "Restart sekarang" | unit | — |
+| `app/events.rs` | Event reduction into the workspace: `apply_event`/`apply_event_with_cx`, the Databases/Config invalidation and a pending "Restart now" | unit | — |
 | `format.rs` | Pure view-models (grouping, labels, bytes/speed/ETA, masking, palette, validation) | unit, thorough | 98.5% |
 | `logs.rs` | Per-instance `LogStore` of `LogBuffer`s, follow, copy | unit, thorough | 99.5% |
 | `service_bridge.rs` | Event bridge, no polling, Resync on lag | unit | 92.1% |
@@ -116,9 +116,9 @@ completable from the keyboard, with the focus always visible. The rules:
   them; a start/stop/copy command that does not apply is listed **disabled with a
   plain-text reason**, never hidden, and Enter on it does nothing.
 - **`F-INS-05` has two entry points, both through the same handler (W4-I D1).**
-  The instance header carries a "Hapus" button after "Open in…" (ghost style like
+  The instance header carries a "Delete" button after "Open in…" (ghost style like
   its neighbours, danger-toned; always enabled because the dialog explains the
-  consequence) and the palette carries a "Hapus <name>" row per instance (always
+  consequence) and the palette carries a "Delete <name>" row per instance (always
   enabled, same reason). Both call `Workspace::open_delete_dialog`, so the dialog,
   the typed-name check and `confirm_delete` cannot drift between them, and the
   palette row still returns focus through `run_palette_action`'s restore.
@@ -132,7 +132,7 @@ completable from the keyboard, with the focus always visible. The rules:
 - **Log rows are one line, never wrapped (`W4-I` D3).** The Logs viewer is a
   `UniformList` with a fixed row height; a wrapped line would paint a second
   visual line inside its single-height row and overprint the next one. Rows clip
-  and ellipsise (`screens/logs.rs`, `LOG_ROW_HEIGHT`), and "Salin log" copies the
+  and ellipsise (`screens/logs.rs`, `LOG_ROW_HEIGHT`), and "Copy logs" copies the
   full buffer lines unchanged. Horizontal scrolling was rejected: it needs a
   second scroll axis inside the uniform virtual list and breaks its fixed-height
   model.
@@ -384,7 +384,7 @@ Events drive everything (`app.rs::apply_event` / `apply_event_with_cx`):
 
 - `TrayMenuModel::from_views(&[InstanceView])` is pure: instance rows grouped by engine in dock
   order, each with a shape+word status label (`●`/`○`/`▲`/`◐` + status) and a start or stop action,
-  disabled while `Starting`/`Stopping`; plus "Buka DBLocal" (`UI_TRAY_OPEN`) and "Keluar"
+  disabled while `Starting`/`Stopping`; plus "Open DBLocal" (`UI_TRAY_OPEN`) and "Quit"
   (`UI_TRAY_QUIT`). Unit-tested for grouping, labels, disabled states and id→action lookup.
 - `TrayBackend` is the platform glue trait. Linux implements it with **ksni 0.3** (StatusNotifierItem
   over D-Bus, `blocking` + `async-io`, no GTK).
@@ -403,10 +403,10 @@ Events drive everything (`app.rs::apply_event` / `apply_event_with_cx`):
 
 Close with a tray really closed the window and the process, tray and both engines stayed up (RSS
 195 MB -> 75 MB). "Open DBLocal" opened a window showing "2 running" and the "Select an instance" empty
-state. With the window open, tray "Keluar" showed the dialog and "Hentikan semua lalu keluar" kept the
+state. With the window open, tray "Quit" showed the dialog and "Stop all, then quit" kept the
 window until both engines were down (Valkey at 1.3 s, PostgreSQL at 1.6 s, exit at 2.5 s). Relaunch
 re-adopted the running engines. Two defects were confirmed there and are fixed in the section above:
-tray "Keluar" with no window exited at once with both engines running (`R1`), and the D-Bus menu
+tray "Quit" with no window exited at once with both engines running (`R1`), and the D-Bus menu
 carried no `icon-data` while `IconName` stayed `utilities-terminal-symbolic` (`R8`).
 
 #### Tray latency (W2-B-r2, deliverable 5)
@@ -465,14 +465,14 @@ Every transition is unit-tested, including "a stop fails", "the user cancels", a
 `StopFinished` is driven only by `UiEvent::OperationFinished` for the quit-issued stop operation id.
 Request acceptance (`stop_instance` returning `Ok(OperationId)`) records the pending operation but
 does not advance the machine. If the bounded wait elapses (`STOP_GRACE_SECS + 10s`), the machine moves
-to `StopFailed` and the dialog offers "Keluar sekarang".
+to `StopFailed` and the dialog offers "Quit now".
 
 Window behaviour: on Linux `cx.hide()` is not implemented in gpui-pre, so with a tray present the
 window is actually closed and the app-level runtime (service, tray, bridge, quit state owner) stays
-alive via `QuitMode::Explicit`. "Buka DBLocal" opens a fresh window attached to the same service; if
+alive via `QuitMode::Explicit`. "Open DBLocal" opens a fresh window attached to the same service; if
 a main window already exists it is focused instead of opening a second one. Without a tray the close
 goes through the quit flow. The quit dialog's default (primary) button is "Leave them running"
-(AC2, AC3); "Hentikan semua lalu keluar" disables actions while stopping and only exits after
+(AC2, AC3); "Stop all, then quit" disables actions while stopping and only exits after
 operation completion, failure, timeout, or explicit force-exit confirmation.
 
 ### Windows and macOS tray backends (W2-G, F-TRY-01 AC1/AC2)

@@ -26,10 +26,10 @@ use crate::strings;
 
 /// Reason shown for an engine that has no build on this host.
 ///
-/// The wording is the PRD's ("tidak tersedia di platform ini", F-CAT-02 AC2).
+/// The wording is the PRD's ("not available on this platform", F-CAT-02 AC2).
 /// It lives here rather than in `strings` only because that module belongs to
 /// another worker this wave; see the W1-B report.
-pub const UNAVAILABLE_ON_PLATFORM: &str = "Tidak tersedia di platform ini";
+pub const UNAVAILABLE_ON_PLATFORM: &str = "Not available on this platform";
 
 /// Versions already installed locally, as `(engine, version)` pairs.
 ///

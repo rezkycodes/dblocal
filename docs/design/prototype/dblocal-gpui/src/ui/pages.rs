@@ -44,7 +44,7 @@ impl Workspace {
                             .flex_1()
                             .text_sm()
                             .font_weight(gpui_kit::FontWeight::SEMIBOLD)
-                            .child("Koneksi"),
+                            .child("Connection"),
                     )
                     .child(
                         h_flex()
@@ -131,7 +131,7 @@ impl Workspace {
             );
 
         let idx = self.selected;
-        let details = card(Some("Detail"))
+        let details = card(Some("Details"))
             .child(kv("Engine", format!("{} {} · {}", inst.engine.name(), inst.version, std::env::consts::ARCH)))
             .child(kv("Superuser", mono(inst.engine.superuser(), cx)))
             .child(kv(
@@ -140,13 +140,13 @@ impl Workspace {
                     .gap_1()
                     .child(mono(inst.port.to_string(), cx))
                     .when(inst.port == inst.engine.canonical_port(), |s| {
-                        s.child(div().text_color(tokens::text_muted()).child("(kanonik)"))
+                        s.child(div().text_color(tokens::text_muted()).child("(canonical)"))
                     }),
             ))
             .child(kv("Data dir", mono(inst.data_dir(), cx).truncate()))
-            .child(kv("Ukuran data", inst.data_size.clone()));
+            .child(kv("Data size", inst.data_size.clone()));
 
-        let process = card(Some("Proses"))
+        let process = card(Some("Process"))
             .child(kv(
                 "PID",
                 mono(inst.pid.map(|p| p.to_string()).unwrap_or_else(|| "—".into()), cx),
@@ -156,17 +156,17 @@ impl Workspace {
                 div()
                     .text_color(if inst.status == Status::Running { tokens::ok() } else { tokens::text_muted() })
                     .child(match inst.status {
-                        Status::Running => "OK · protokol handshake",
-                        Status::Failed => "Gagal — lihat Logs",
-                        _ => "Tidak berjalan",
+                        Status::Running => "OK · protocol handshake",
+                        Status::Failed => "Failed — see Logs",
+                        _ => "Not running",
                     }),
             ))
-            .child(kv("Mode proses", "Detached · tetap hidup saat app ditutup"))
-            .child(kv("Kredensial", mono(format!("dblocal:{}", inst.name), cx)))
+            .child(kv("Process mode", "Detached · keeps running when the app quits"))
+            .child(kv("Credential", mono(format!("dblocal:{}", inst.name), cx)))
             .child(
                 div().pt_2().border_t_1().border_color(tokens::border_subtle()).child(
                     Checkbox::new("autostart")
-                        .label("Jalankan otomatis saat login")
+                        .label("Run automatically at login")
                         .checked(inst.autostart)
                         .on_click(cx.listener(move |this, checked: &bool, _, cx| {
                             this.instances[idx].autostart = *checked;
@@ -183,13 +183,13 @@ impl Workspace {
                             .flex_1()
                             .text_sm()
                             .font_weight(gpui_kit::FontWeight::SEMIBOLD)
-                            .child("Log terbaru"),
+                            .child("Recent logs"),
                     )
                     .child(
                         Button::new("goto-logs")
                             .link()
                             .small()
-                            .label("Buka tab Logs")
+                            .label("Open the Logs tab")
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.section = crate::ui::workspace::Section::Logs;
                                 cx.notify();
@@ -212,7 +212,7 @@ impl Workspace {
         let pct = inst.progress;
         let total_mb = 34.0_f32;
         let steps = [
-            ("Unduh runtime", pct < 100.),
+            ("Downloading the runtime", pct < 100.),
             ("Verifikasi SHA-256", false),
             ("Ekstrak ke ~/.dblocal/runtimes", false),
             ("Inisialisasi data (initdb)", false),
@@ -313,11 +313,11 @@ impl Workspace {
                             .child(
                                 h_flex()
                                     .gap_2()
-                                    .child(div().text_sm().font_weight(gpui_kit::FontWeight::SEMIBOLD).child(format!("Port {port} sedang dipakai")))
+                                    .child(div().text_sm().font_weight(gpui_kit::FontWeight::SEMIBOLD).child(format!("Port {port} is already in use")))
                                     .child(mono("DBL-1302", cx).text_xs().text_color(tokens::text_muted())),
                             )
                             .child(div().text_color(tokens::text_muted()).child(format!(
-                                "Uji bind ke 127.0.0.1:{port} gagal sebelum engine dijalankan. Port ditempati proses di luar DBLocal. Port bebas terdekat: {suggested}."
+                                "Binding 127.0.0.1:{port} failed before the engine was started. A process outside DBLocal holds the port. The nearest free port is {suggested}."
                             ))),
                     )
                     .child(
@@ -327,12 +327,12 @@ impl Workspace {
                             .child(
                                 Button::new("move-port")
                                     .primary()
-                                    .label(format!("Pindah ke {suggested} & start"))
+                                    .label(format!("Move to {suggested} and start"))
                                     .on_click(cx.listener(|this, _, window, cx| this.move_port_and_start(window, cx))),
                             )
                             .child(
                                 Button::new("report")
-                                    .label("Laporkan issue")
+                                    .label("Report an issue")
                                     .on_click(cx.listener(|_, _, window, cx| {
                                         window.push_notification(
                                             Notification::info("Template issue disiapkan tanpa password & path home"),
@@ -362,10 +362,10 @@ impl Workspace {
                         Button::new("copy-logs")
                             .small()
                             .icon(IconName::Copy)
-                            .label("Salin 500 baris")
+                            .label("Copy 500 lines")
                             .on_click(cx.listener(|this, _, window, cx| this.copy_logs(window, cx))),
                     )
-                    .child(Button::new("open-folder").small().icon(IconName::FolderOpen).label("Buka folder")),
+                    .child(Button::new("open-folder").small().icon(IconName::FolderOpen).label("Open folder")),
             )
             .child(div().p(px(8.)).child(self.render_log_lines(1000, cx)))
             .child(
@@ -392,14 +392,14 @@ impl Workspace {
         if inst.engine == EngineKind::Valkey {
             return page()
                 .child(card(None).child(div().text_color(tokens::text_muted()).child(
-                    "Valkey tidak punya database bernama atau user SQL. Gunakan indeks 0–15 langsung dari URI.",
+                    "Valkey has no named databases or SQL users. Use indexes 0–15 directly from the URI.",
                 )))
                 .into_any_element();
         }
         if inst.status != Status::Running {
             return page()
                 .child(card(None).child(div().text_color(tokens::text_muted()).child(
-                    "Jalankan instance untuk melihat dan mengelola database.",
+                    "Start the instance to view and manage databases.",
                 )))
                 .into_any_element();
         }
@@ -414,14 +414,14 @@ impl Workspace {
                     .primary()
                     .small()
                     .icon(IconName::Plus)
-                    .label("Buat database")
+                    .label("Create database")
                     .on_click(cx.listener(|this, _, window, cx| {
                         let name = this.new_db_name.read(cx).value().to_string();
                         let valid = !name.is_empty()
                             && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
                         if !valid {
                             window.push_notification(
-                                Notification::error("Nama hanya boleh huruf, angka, dan garis bawah"),
+                                Notification::error("The name may contain only letters, digits and underscores"),
                                 cx,
                             );
                             return;
@@ -432,7 +432,7 @@ impl Workspace {
                             size: "7,3 MB".into(),
                         });
                         this.new_db_name.update(cx, |s, cx| s.set_value("", window, cx));
-                        window.push_notification(Notification::success(format!("Database {name} dibuat (UTF-8)")), cx);
+                        window.push_notification(Notification::success(format!("Database {name} created (UTF-8)")), cx);
                         cx.notify();
                     })),
             );
@@ -452,7 +452,7 @@ impl Workspace {
                             .ghost()
                             .small()
                             .icon(IconName::Delete)
-                            .tooltip("Hapus database (ketik nama untuk konfirmasi)")
+                            .tooltip("Delete database (type the name to confirm)")
                             .disabled(db.name.as_ref() == "postgres"),
                     ),
                 )
@@ -472,17 +472,17 @@ impl Workspace {
                     .text_color(tokens::text_muted())
                     .border_t_1()
                     .border_color(tokens::border())
-                    .child(div().flex_1().child("Nama"))
+                    .child(div().flex_1().child("Name"))
                     .child(div().w(px(140.)).child("Encoding"))
-                    .child(div().w(px(100.)).text_right().child("Ukuran"))
+                    .child(div().w(px(100.)).text_right().child("Size"))
                     .child(div().w(px(80.))),
             )
             .children(rows);
 
-        let users = card(Some("User & hak akses"))
+        let users = card(Some("Users and privileges"))
             .children(
                 [
-                    (inst.engine.superuser(), "semua", "superuser", tokens::purple()),
+                    (inst.engine.superuser(), "all", "superuser", tokens::purple()),
                     ("app_rw", "app_dev", "read-write", tokens::accent()),
                     ("report_ro", "app_dev", "read-only", tokens::text_muted()),
                 ]
@@ -504,11 +504,11 @@ impl Workspace {
                         )
                 }),
             )
-            .child(h_flex().child(Button::new("new-user").small().icon(IconName::Plus).label("User baru")));
+            .child(h_flex().child(Button::new("new-user").small().icon(IconName::Plus).label("New user")));
 
-        let reset = card(Some("Password superuser"))
+        let reset = card(Some("Superuser password"))
             .child(div().text_color(tokens::text_muted()).child(
-                "Membuat password baru dan memperbarui URI. Bila gagal, password lama tetap berlaku.",
+                "Generates a new password and updates the URI. If it fails, the old password stays in effect.",
             ))
             .child(h_flex().child(
                 Button::new("reset-pass")
@@ -516,7 +516,7 @@ impl Workspace {
                     .on_click(cx.listener(|this, _, window, cx| {
                         let idx = this.selected;
                         this.instances[idx].password = crate::model::demo_password(idx + 97);
-                        window.push_notification(Notification::success("Password baru tersimpan di Keychain"), cx);
+                        window.push_notification(Notification::success("New password saved in the keychain"), cx);
                         cx.notify();
                     })),
             ));
@@ -535,7 +535,7 @@ impl Workspace {
                 banner(tokens::text_muted())
                     .items_center()
                     .child(div().flex_1().text_color(tokens::text_muted()).child(
-                        "DBLocal mengelola server, bukan isi data. Untuk menjelajah tabel, buka instance di client Anda.",
+                        "DBLocal manages the server, not the data. To browse tables, open the instance in your client.",
                     ))
                     .child(Button::new("open-client").icon(IconName::ExternalLink).label("Open in…")),
             )
@@ -552,7 +552,7 @@ impl Workspace {
                 ("max_connections", "200".into(), "100", "Butuh restart"),
                 ("shared_buffers", "512MB".into(), "128MB", "Butuh restart"),
                 ("work_mem", "4MB".into(), "4MB", "Berlaku setelah reload"),
-                ("timezone", "Asia/Makassar".into(), "Etc/UTC", "Zona waktu sesi default"),
+                ("timezone", "Asia/Makassar".into(), "Etc/UTC", "Default session time zone"),
                 ("password_encryption", "scram-sha-256".into(), "scram-sha-256", "Hanya 127.0.0.1 dan ::1"),
             ],
             EngineKind::Valkey => vec![
@@ -622,7 +622,7 @@ impl Workspace {
                 banner(tokens::warn())
                     .items_center()
                     .child(svg().path("icons/refresh-cw.svg").flex_none().size(px(18.)).text_color(tokens::warn()))
-                    .child(div().flex_1().child("Tersimpan. Restart diperlukan agar perubahan berlaku."))
+                    .child(div().flex_1().child("Saved. A restart is required for the changes to take effect."))
                     .child(Button::new("later").label("Nanti"))
                     .child(
                         Button::new("restart-now")
@@ -647,7 +647,7 @@ impl Workspace {
                             .px(px(18.))
                             .py(px(12.))
                             .child(div().flex_1().text_sm().font_weight(gpui_kit::FontWeight::SEMIBOLD).child("Setting penting"))
-                            .child(div().text_xs().text_color(tokens::text_muted()).child("Nilai saat ini · Default")),
+                            .child(div().text_xs().text_color(tokens::text_muted()).child("Current value · Default")),
                     )
                     .children(rows)
                     .child(
@@ -657,11 +657,11 @@ impl Workspace {
                             .py(px(12.))
                             .border_t_1()
                             .border_color(tokens::border())
-                            .child(Button::new("open-conf").icon(IconName::ExternalLink).label("Buka file konfigurasi"))
-                            .child(Button::new("revert").label("Kembalikan konfigurasi sebelumnya"))
+                            .child(Button::new("open-conf").icon(IconName::ExternalLink).label("Open config file"))
+                            .child(Button::new("revert").label("Restore the previous configuration"))
                             .child(div().flex_1())
                             .child(Button::new("discard").label("Buang perubahan"))
-                            .child(Button::new("save").primary().label("Simpan")),
+                            .child(Button::new("save").primary().label("Save")),
                     ),
             )
             .into_any_element()

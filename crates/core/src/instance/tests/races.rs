@@ -155,7 +155,7 @@ fn a_failed_create_ends_with_instance_removed_and_one_error() {
 
 #[test]
 fn a_failed_row_recovered_after_a_restart_still_carries_a_diagnosis() {
-    // `F-LOG-02`: a row that says "gagal" must explain itself. The in-memory
+    // `F-LOG-02`: a row that says "failed" must explain itself. The in-memory
     // failure map is empty in a new process, so the view derives the failure from
     // the log tail instead of showing an empty panel.
     let h = Harness::new(EngineKey::Postgresql);

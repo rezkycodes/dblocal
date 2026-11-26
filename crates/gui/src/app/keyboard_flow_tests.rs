@@ -369,7 +369,7 @@ fn palette_starts_an_instance_with_the_keyboard(cx: &mut TestAppContext) {
         "ctrl-k must open the palette"
     );
 
-    // Type the instance name so the first (selected) row is "Mulai pg-stop",
+    // Type the instance name so the first (selected) row is "Start pg-stop",
     // then confirm with Enter. This exercises the filtered-index ->
     // original-index mapping the earlier direct call skipped.
     type_text(cx, "pg-stop");
@@ -619,11 +619,11 @@ fn full_first_session_creates_starts_and_copies(cx: &mut TestAppContext) {
     assert_eq!(created[0].engine(), EngineKey::Postgresql, "engine chosen");
     assert_eq!(created[0].version(), "16.6", "keys chose version 16.6");
 
-    // 3) Copy the URI: open the stopped instance's tab via the palette ("Buka"),
+    // 3) Copy the URI: open the stopped instance's tab via the palette ("Open"),
     //    then Ctrl+Shift+C. Assert the clipboard holds the plaintext URI.
     press(cx, "ctrl-k");
     type_text(cx, "pg-stop");
-    // Move the highlight to the "Buka pg-stop" row (first row is "Mulai"); Down
+    // Move the highlight to the "Open pg-stop" row (first row is "Start"); Down
     // selects the next enabled row, then Enter opens the tab.
     press(cx, "down");
     press(cx, "enter");
@@ -644,7 +644,7 @@ fn full_first_session_creates_starts_and_copies(cx: &mut TestAppContext) {
     );
 
     // 4) Start it from the palette: type the name (the first enabled row for a
-    //    stopped instance is "Mulai pg-stop") and Enter.
+    //    stopped instance is "Start pg-stop") and Enter.
     press(cx, "ctrl-k");
     assert!(
         view.read_with(cx, |this, _| this.palette_is_open()),
@@ -692,7 +692,7 @@ fn the_palette_finds_an_instance_by_the_engine_word(cx: &mut TestAppContext) {
 }
 
 /// `F3`: Enter on a DISABLED palette row does nothing — no service call, and the
-/// palette stays open. Drives the disabled `Hentikan pg-stop` (the instance is
+/// palette stays open. Drives the disabled `Stop pg-stop` (the instance is
 /// stopped) through the CommandState and a real Enter.
 #[gpui_kit::test]
 fn enter_on_a_disabled_palette_row_does_nothing(cx: &mut TestAppContext) {

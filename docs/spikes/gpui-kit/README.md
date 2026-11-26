@@ -3,7 +3,7 @@
 Branch: `w2-gpui-kit`. Date: 2026-11-21. Host: Fedora 44, kernel 7.3.0-cachyos1, GNOME 50.6,
 Wayland `wayland-0` (Xwayland `:0`), AMD Radeon (RADV RENOIR) + NVIDIA GTX 1660 Ti.
 
-User direction (verbatim): "saya mau aplikasi ini UI nya menggunakan https://gpui-kit.com/docs/".
+User direction (translated from Indonesian): "I want this app's UI to use https://gpui-kit.com/docs/".
 Layout stays Zed-style (D-23 → **D-25**). GPUI Kit is the toolkit and design rulebook. The user
 then supplied a full prototype UI (`docs/design/prototype/dblocal-gpui/`); **W2-E ports it** after
 this merges. This task is the foundation under it: the dependency edge, the measurements, the
@@ -180,7 +180,7 @@ Kit's `design-guides` is normative ("must / should / may"). W2-E ported the prot
 | A4 | Icon-only controls have an accessible name (+ tooltip when unclear) | must | grep icon-only Button for tooltip/label | Pass: icon-only dock/close/palette buttons carry `.tooltip(...)` and/or `.accessibility_label(...)`. |
 | A5 | Status never colour alone (dot + text/icon) | must | render test samples glyph colour; status word always rendered | Pass: `status_glyph` draws shape by state and `status_pill`/row render the status word; render tests sample running/failed glyph colours. |
 | A6 | No hover-only destructive/essential action | must | code review | Pass: delete/start/stop/copy/create are visible buttons or keyboard commands; no hover-only essential action. |
-| B1 | `Button` for application commands; `Link`/underline only for URLs | must | grep | Pass: commands use `Button`; `.link()` only for the "Buka tab Logs" inline navigation affordance. |
+| B1 | `Button` for application commands; `Link`/underline only for URLs | must | grep | Pass: commands use `Button`; `.link()` only for the "Open the Logs tab" inline navigation affordance. |
 | B2 | Secondary region commands in `DropdownMenu`; object commands in `ContextMenu`; primary stays visible | should | code review | Pass: "Open in…" is a `DropdownButton` menu (placeholder entries disabled in product build); primary Start/Stop/Copy URI remain visible. |
 | B3 | One `primary` per decision area; `danger` only for destructive commit; `ghost` for quiet toolbar | should | grep/render | Pass: create has one primary Create, delete confirm is danger, toolbar controls are ghost/small. |
 | C1 | Colours from theme tokens, no raw hex/rgb/hsla in views | should | grep views for rgb/hsla/# | Pass with exception: modal scrim uses `hsla(0,0,0,0.45)` in create_dialog overlay (documented; not text). No view hex literals. |
@@ -189,7 +189,7 @@ Kit's `design-guides` is normative ("must / should / may"). W2-E ported the prot
 | D1 | Minimum window size + resizable panes with a documented minimum | must | WindowOptions in bootstrap | Pass: window min size set in bootstrap (`window_min_size`), dock fixed width, centre scrolls. |
 | D2 | Density: medium default, compact only for data-dense areas | should | code review | Pass: dock rows 30px, status bar 28px, compact buttons in dense chrome. |
 | D3 | States visible: hover, focus, selected, disabled, loading, error, offline, empty | must | render tests + code review | Pass: selected row, failed/diagnosis banner, stale/offline banners, empty/welcome, placeholder disabled controls, busy loading state covered by render/code. |
-| E1 | Dialogs: one compact decision; title names it; actions Cancel + result; destructive styling on the result only | should | delete/create render | Pass: delete has Batal + Hapus (danger, disabled until name typed for purge); create has Batal + Create. |
+| E1 | Dialogs: one compact decision; title names it; actions Cancel + result; destructive styling on the result only | should | delete/create render | Pass: delete has Cancel + Delete (danger, disabled until name typed for purge); create has Cancel + Create. |
 | E2 | Escape dismisses the topmost overlay; no overlay stacking | must | CloseOverlay action | Pass: Escape bound to `CloseOverlay`; overlays not stacked by workspace state. |
 | E3 | Uppercase only for short section labels; never combined with strong colour + bold | should | grep | Pass: section labels use `section_label` (uppercase, small, muted) only. |
 | E4 | Ellipsis (…) on buttons that open a dialog; none on immediate commands | should | grep labels | Pass: "Open in…" uses ellipsis; immediate commands do not. |

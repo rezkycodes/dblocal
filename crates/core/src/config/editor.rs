@@ -1,8 +1,8 @@
 //! Line-level `my.cnf`, `postgresql.conf` and `valkey.conf` editor (PRD
 //! `F-CFG-02` AC1).
 //!
-//! The rule the PRD states is "komentar serta baris yang tidak dikenal app tidak
-//! pernah ditulis ulang atau dihapus". A parse-and-re-render editor cannot keep
+//! The rule the PRD states is "comments and lines the app does not recognize are
+//! never rewritten or deleted". A parse-and-re-render editor cannot keep
 //! that promise: it reflows the whole file, rewrites comments, drops keys it does
 //! not know and normalises line endings. So this editor works on the raw bytes
 //! split into lines and changes only the one line of the key it was asked to

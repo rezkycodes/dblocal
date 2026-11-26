@@ -105,14 +105,16 @@ fn classify(
     };
     let Some(view) = views.into_iter().find(|view| &view.id == id) else {
         // The row vanished mid-start (deleted, or a rolled-back create).
-        return Some(Err("[DBL-1002] instance hilang saat autostart".to_owned()));
+        return Some(Err(
+            "[DBL-1002] the instance disappeared during autostart".to_owned()
+        ));
     };
     match view.status {
         InstanceStatus::Running => Some(Ok(())),
-        InstanceStatus::Failed => Some(Err(failure_message(&view, "gagal"))),
-        InstanceStatus::Stopped => {
-            Some(Err("[DBL-4001] instance berhenti sebelum siap".to_owned()))
-        }
+        InstanceStatus::Failed => Some(Err(failure_message(&view, "failed"))),
+        InstanceStatus::Stopped => Some(Err(
+            "[DBL-4001] the instance stopped before it was ready".to_owned()
+        )),
         _ => None,
     }
 }
@@ -222,7 +224,9 @@ mod tests {
             self.completed
                 .store(true, std::sync::atomic::Ordering::SeqCst);
             match self.fail_after {
-                Some(_) => Err("[DBL-1005] Port itu sedang dipakai proses lain.".to_owned()),
+                Some(_) => {
+                    Err("[DBL-1005] That port is already used by another process.".to_owned())
+                }
                 None => Ok(()),
             }
         }
@@ -411,7 +415,7 @@ mod tests {
         view.id = id.clone();
         view.failure = Some(crate::service::FailureInfo {
             code: "DBL-1005".to_owned(),
-            message: "port dipakai".to_owned(),
+            message: "port in use".to_owned(),
             diagnosis: crate::model::StartFailure::PortInUse,
             log_tail: Vec::new(),
             restore_available: false,

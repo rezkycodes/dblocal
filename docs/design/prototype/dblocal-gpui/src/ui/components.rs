@@ -1,4 +1,4 @@
-//! Elemen kecil yang dipakai ulang di seluruh workspace.
+//! Small elements reused across the workspace.
 
 use gpui_kit::component::{ActiveTheme, h_flex, v_flex};
 use gpui_kit::prelude::*;
@@ -7,7 +7,7 @@ use gpui_kit::{AnyElement, App, Div, Rgba, SharedString, div, px, svg};
 use crate::model::{EngineKind, Status};
 use crate::theme::tokens;
 
-/// Titik status. Bentuk ikut berbeda (bukan hanya warna) sesuai F-PLH-02:
+/// A status dot. The shape also differs (not just the colour) per F-PLH-02:
 /// ● running · ○ stopped · ▲ failed · ◐ sibuk.
 pub fn status_dot(status: Status, size: f32) -> AnyElement {
     let color = status.color();
@@ -52,7 +52,7 @@ pub fn engine_badge(engine: EngineKind, size: f32) -> Div {
         .child(engine.mono())
 }
 
-/// Pill status dengan label teks.
+/// A status pill with a text label.
 pub fn status_pill(status: Status) -> Div {
     let color = status.color();
     h_flex()
@@ -77,7 +77,7 @@ pub fn section_label(text: impl Into<SharedString>) -> Div {
         .child(text.into().to_uppercase())
 }
 
-/// Kartu berbingkai dengan judul opsional.
+/// A bordered card with an optional title.
 pub fn card(title: Option<&'static str>) -> Div {
     v_flex()
         .gap_3()
@@ -96,7 +96,7 @@ pub fn card(title: Option<&'static str>) -> Div {
         })
 }
 
-/// Baris "label — nilai" untuk kartu detail.
+/// A "label — value" row for detail cards.
 pub fn kv(label: &'static str, value: impl IntoElement) -> Div {
     h_flex()
         .gap_3()
@@ -111,7 +111,7 @@ pub fn kv(label: &'static str, value: impl IntoElement) -> Div {
         .child(div().flex_1().min_w_0().child(value))
 }
 
-/// Teks monospace dengan font mono tema.
+/// Monospace text using the theme mono font.
 pub fn mono(text: impl Into<SharedString>, cx: &App) -> Div {
     div()
         .font_family(cx.theme().mono_font_family.clone())

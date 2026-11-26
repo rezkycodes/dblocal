@@ -38,7 +38,7 @@ pub(crate) fn check_update(inner: &Arc<std::sync::Mutex<Inner>>) -> ServiceResul
         Some(AvailableUpdateView {
             version: MOCK_AVAILABLE_VERSION.to_owned(),
             tag: format!("v{MOCK_AVAILABLE_VERSION}"),
-            release_notes: "Catatan rilis contoh dari mock.".to_owned(),
+            release_notes: "Sample release notes from the mock.".to_owned(),
             asset_name: "dblocal-linux-x86_64.tar.gz".to_owned(),
             size_bytes: 42 * 1024 * 1024,
             can_self_update: kind.can_self_update(),

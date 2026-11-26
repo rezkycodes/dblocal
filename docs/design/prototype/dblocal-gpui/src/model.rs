@@ -1,8 +1,8 @@
-//! Model domain DBLocal (sisi UI).
+//! The DBLocal domain model (UI side).
 //!
-//! Prototipe ini memakai data contoh di memori. Pada implementasi nyata, struct di
-//! sini dibaca dari crate `dblocal-core` (state.db SQLite + EngineAdapter) — UI tidak
-//! boleh tahu detail proses engine (aturan arsitektur #1 di PRD).
+//! This prototype uses in-memory sample data. In the real implementation, the structs
+//! here are read from the `dblocal-core` crate (SQLite state.db + EngineAdapter) — the UI does not
+//! know engine process details (architecture rule #1 in the PRD).
 
 use gpui_kit::{Rgba, SharedString};
 
@@ -68,7 +68,7 @@ impl EngineKind {
         }
     }
 
-    /// Versi di katalog (contoh). `true` = runtime sudah terpasang.
+    /// Versions in the catalog (sample). `true` = the runtime is already installed.
     pub fn catalog(self) -> &'static [(&'static str, &'static str, bool)] {
         match self {
             Self::Postgres => &[
@@ -201,7 +201,7 @@ pub struct Instance {
     pub pid: Option<u32>,
     pub data_size: SharedString,
     pub autostart: bool,
-    /// 0–100 saat `Provisioning`.
+    /// 0–100 while `Provisioning`.
     pub progress: f32,
     pub failure: Option<Failure>,
     pub logs: Vec<LogLine>,
@@ -234,7 +234,7 @@ impl Instance {
     }
 }
 
-/// Password contoh. Implementasi nyata: 24 karakter dari CSPRNG OS → Keychain.
+/// Sample password. Real implementation: 24 characters from the OS CSPRNG → keychain.
 pub fn demo_password(seed: usize) -> String {
     const ALPHA: &[u8] = b"ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789";
     let mut x = (seed as u64).wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
@@ -259,12 +259,12 @@ pub fn demo_instances() -> Vec<Instance> {
     let shop_logs = vec![
         LogLine::new("20:02:41.006", LogLevel::Log, "received fast shutdown request"),
         LogLine::new("20:02:41.214", LogLevel::Log, "database system is shut down"),
-        LogLine::new("20:02:41.220", LogLevel::Dbl, "stop selesai: shutdown bersih dalam 0,21 dtk"),
-        LogLine::new("", LogLevel::Separator, "sesi baru · 22:39:12"),
+        LogLine::new("20:02:41.220", LogLevel::Dbl, "stop finished: clean shutdown in 0.21 s"),
+        LogLine::new("", LogLevel::Separator, "new session · 22:39:12"),
         LogLine::new("22:39:12.031", LogLevel::Dbl, "start diminta oleh GUI"),
         LogLine::new("22:39:12.033", LogLevel::Dbl, "uji bind 127.0.0.1:5434 … EADDRINUSE"),
         LogLine::new("22:39:12.034", LogLevel::Dbl, "uji bind [::1]:5434 … EADDRINUSE"),
-        LogLine::new("22:39:12.034", LogLevel::Error, "port 5434 dipakai proses lain; engine tidak dijalankan (DBL-1302)"),
+        LogLine::new("22:39:12.034", LogLevel::Error, "port 5434 is used by another process; the engine was not started (DBL-1302)"),
         LogLine::new("22:39:12.035", LogLevel::Dbl, "status: starting → failed"),
     ];
     let pg_dbs = vec![
@@ -304,7 +304,7 @@ pub fn demo_instances() -> Vec<Instance> {
     vec![pg_app, pg_legacy, pg_shop, cache, hr, blog]
 }
 
-/// Port bebas berikutnya mulai dari port kanonik engine, melompati yang dialokasikan.
+/// The next free port starting from the engine canonical port, skipping allocated ones.
 pub fn next_free_port(instances: &[Instance], engine: EngineKind) -> u16 {
     let mut port = engine.canonical_port();
     while instances.iter().any(|i| i.port == port) {

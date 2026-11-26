@@ -426,7 +426,7 @@ mod tests {
         for kind in kinds {
             assert!(!install_kind_label(&kind).is_empty());
         }
-        assert_eq!(install_kind_label(&distro()), "Paket distribusi");
+        assert_eq!(install_kind_label(&distro()), "Distribution package");
         assert_eq!(
             install_kind_label(&InstallKind::Homebrew {
                 exe_path: "/x".into()
