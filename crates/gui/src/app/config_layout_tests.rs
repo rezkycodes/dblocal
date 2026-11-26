@@ -226,7 +226,7 @@ fn the_failed_overview_draws_the_restore_action_and_it_restores(cx: &mut TestApp
         failed.status = InstanceStatus::Failed;
         failed.failure = Some(FailureInfo {
             code: "DBL-4001".to_owned(),
-            message: "mesin gagal start".to_owned(),
+            message: "engine failed to start".to_owned(),
             diagnosis: StartFailure::Unknown,
             log_tail: Vec::new(),
             restore_available: true,

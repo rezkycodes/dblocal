@@ -86,7 +86,7 @@ impl Workspace {
         }
     }
 
-    /// Re-reads the tab after a failure ("Muat ulang").
+    /// Re-reads the tab after a failure ("Reload").
     pub(crate) fn retry_admin(&mut self, id: &InstanceId, cx: &mut Context<Self>) {
         self.reload_admin_bg(id, cx);
         cx.notify();
@@ -168,7 +168,7 @@ impl Workspace {
 
     /// Takes focus for a SecretDialog, which has no text field of its own.
     ///
-    /// The dialog's Copy and "Sudah saya simpan" buttons are its Tab stops, so
+    /// The dialog's Copy and "I have saved it" buttons are its Tab stops, so
     /// focusing the dialog container puts the keyboard inside it while leaving
     /// the covered field behind (F3), and the trap keeps Tab inside (F2).
     pub(crate) fn focus_dialog_buttons(&mut self, cx: &mut Context<Self>) {
@@ -319,7 +319,7 @@ impl Workspace {
                             },
                             value: password,
                         });
-                        // F3: the Copy / "Sudah saya simpan" buttons are what a
+                        // F3: the Copy / "I have saved it" buttons are what a
                         // keyboard user acts on next, so the dialog takes focus
                         // away from the field behind it.
                         this.focus_dialog_buttons(cx);

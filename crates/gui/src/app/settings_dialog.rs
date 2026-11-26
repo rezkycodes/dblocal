@@ -3,11 +3,11 @@
 //!
 //! Two sections, both reading only confirmed state:
 //!
-//! - **Pembaruan**: the running version, how the app was installed, a manual
-//!   "Periksa sekarang", the result, and "Pasang" only when this install may
+//! - **Updates**: the running version, how the app was installed, a manual
+//!   "Check now", the result, and "Install" only when this install may
 //!   self-update — otherwise the package-manager hint the service returned
 //!   (`F-PKG-05` AC2). No timer, no check at startup.
-//! - **Jalankan saat login**: the W4-D login-item state read on open, a switch,
+//! - **Run at login**: the W4-D login-item state read on open, a switch,
 //!   the location of the item, and a typed error when a write fails — the
 //!   switch never shows enabled after a failed enable.
 
@@ -288,7 +288,7 @@ fn render_login_section(
     column.into_any_element()
 }
 
-/// One typed failure line: code plus the Indonesian message.
+/// One typed failure line: code plus the message.
 fn error_line(code: &str, message: &str, theme: &gpui_kit::component::Theme) -> AnyElement {
     h_flex()
         .id(SharedString::from(format!("settings-error-{code}")))

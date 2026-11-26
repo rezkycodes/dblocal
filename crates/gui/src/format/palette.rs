@@ -161,7 +161,7 @@ enum PaletteVerb {
     CopyUri,
 }
 
-/// The Indonesian reason a palette row is disabled, from the instance status.
+/// The reason a palette row is disabled, from the instance status.
 ///
 /// `F-PLH-01` AC2 names "start on a running instance" as the canonical case; the
 /// busy states get their own sentence so the reason is never generic.

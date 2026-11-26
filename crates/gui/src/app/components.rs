@@ -111,7 +111,7 @@ pub fn engine_badge(engine: EngineKey, size: f32, theme: &Theme) -> Div {
         )
 }
 
-/// A status chip: the glyph plus the Indonesian word.
+/// A status chip: the glyph plus the status word.
 ///
 /// A11y: the same status can be drawn more than once in a frame (an instance
 /// row, a header pill, a filter result), so the label id carries the status.

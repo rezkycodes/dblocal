@@ -7,7 +7,7 @@
 //!
 //! There is no timer and no check at startup: `open_settings` reads the login
 //! item (local, instant) and leaves the update section in `Idle` until the user
-//! presses "Periksa sekarang" (`F-PKG-05` AC1).
+//! presses "Check now" (`F-PKG-05` AC1).
 
 use std::sync::Arc;
 

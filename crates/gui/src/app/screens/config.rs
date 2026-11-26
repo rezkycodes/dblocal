@@ -1,10 +1,10 @@
 //! The Config tab (`F-CFG-01`, `F-CFG-02`), live over `DblService`.
 //!
-//! One card "Pengaturan" with a row per setting from `config_view`: the key, the
+//! One card "Settings" with a row per setting from `config_view`: the key, the
 //! current value in a field (or plain text when read-only), the default next to
-//! it, the unit and the one-line description, and a "perlu restart" marker in
-//! text. Edits are local until "Terapkan"; the footer keeps "Buka file
-//! konfigurasi", "Pulihkan konfigurasi sebelumnya", "Batalkan perubahan" and the
+//! it, the unit and the one-line description, and a "restart required" marker in
+//! text. Edits are local until "Apply"; the footer keeps "Open config
+//! file", "Restore the previous configuration", "Discard changes" and the
 //! apply. A read failure is the service's typed message with a retry.
 //!
 //! Nothing per-engine is hard-coded here: every row, its default and its unit
@@ -195,7 +195,7 @@ impl Workspace {
                     this.dismiss_config_applied(&id_later, cx);
                 })),
             );
-        // "Restart sekarang" only when the instance runs (`F-CFG-01` AC2).
+        // "Restart now" only when the instance runs (`F-CFG-01` AC2).
         if running {
             let restart_selector = config_action_id("config-restart", &view.id);
             row = row.child(
@@ -442,7 +442,7 @@ impl Workspace {
                         .text_color(theme.muted_foreground),
                 );
             }
-            // An unset key shows "bawaan" so the default is clearly in effect.
+            // An unset key shows "default" so the default is clearly in effect.
             if setting.current.is_none() {
                 default_note = default_note.child(
                     Label::new(strings::UI_CONFIG_UNSET_NOTE)

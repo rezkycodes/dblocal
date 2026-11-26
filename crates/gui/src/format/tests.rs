@@ -256,12 +256,6 @@ fn byte_formatting_uses_sensible_units() {
 }
 
 #[test]
-fn indonesian_byte_formatting_swaps_the_decimal_point() {
-    assert_eq!(format_bytes_id(7_864_320), "7,50 MB");
-    assert_eq!(format_bytes_id(31_457_280), "30,0 MB");
-}
-
-#[test]
 fn speed_and_eta_formatting() {
     assert_eq!(format_speed(13 * 1024 * 1024), "13.0 MB/s");
     assert_eq!(format_eta(0), "0s");
@@ -284,7 +278,7 @@ fn header_subtitle_names_engine_endpoint_state_and_process_mode() {
     let v = view("app", EngineKey::Postgresql, InstanceStatus::Running, 5432);
     assert_eq!(
         header_subtitle(&v),
-        "PostgreSQL 17.4 · 127.0.0.1:5432 · berjalan · detached"
+        "PostgreSQL 17.4 · 127.0.0.1:5432 · running · detached"
     );
 }
 
@@ -795,7 +789,7 @@ fn the_config_tab_has_its_own_live_strings() {
     );
     assert_eq!(strings::config_unit(""), None);
     assert!(strings::config_unit("bytes").is_some());
-    // The backup age reads as Indonesian time, not a raw epoch.
+    // The backup age reads as elapsed time, not a raw epoch.
     assert_eq!(
         strings::config_backup_age(1_000, 1_030),
         strings::UI_CONFIG_AGE_SECONDS.replace("{n}", "30")

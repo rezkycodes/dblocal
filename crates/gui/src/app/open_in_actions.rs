@@ -18,7 +18,7 @@ use super::open_in::OpenInMenu;
 impl Workspace {
     /// The menu for one engine, from the cached detection.
     ///
-    /// Before the first read the menu is empty, so it shows "Salin URI" and the
+    /// Before the first read the menu is empty, so it shows "Copy URI" and the
     /// refresh item rather than an invented list.
     pub(crate) fn open_in_menu(&self, engine: EngineKey) -> OpenInMenu {
         match &self.clients {

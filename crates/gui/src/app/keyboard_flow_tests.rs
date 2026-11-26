@@ -699,11 +699,11 @@ fn enter_on_a_disabled_palette_row_does_nothing(cx: &mut TestAppContext) {
     let (view, service, cx) = harness(cx);
     let calls_before = service.calls();
     press(cx, "ctrl-k");
-    // "hentikan pg-stop": the stop command for a stopped instance is disabled.
-    type_text(cx, "hentikan pg-stop");
+    // "stop pg-stop": the stop command for a stopped instance is disabled.
+    type_text(cx, "stop pg-stop");
     let (matched, reason_first) = view.read_with(cx, |this, cx| {
         let items = this.palette_items();
-        let filtered = crate::format::filter_palette(&items, "hentikan pg-stop");
+        let filtered = crate::format::filter_palette(&items, "stop pg-stop");
         (
             this.command_state().read(cx).matched_count(),
             filtered.first().and_then(|i| i.reason.clone()),

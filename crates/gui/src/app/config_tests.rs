@@ -80,7 +80,7 @@ fn entering_the_tab_reads_the_config_view(cx: &mut TestAppContext) {
 #[gpui_kit::test]
 fn a_failed_read_is_a_typed_error_not_a_panic(cx: &mut TestAppContext) {
     let (view, service, cx) = fixture(cx);
-    let failure = UserFacingError::new("DBL-8603", "Berkas konfigurasi tidak dapat dibaca.");
+    let failure = UserFacingError::new("DBL-8603", "The configuration file could not be read.");
     service.set(|script| script.config_view = Err(failure));
     let id = open_config(&view, &service, cx);
     let error = view.read_with(cx, |this, _| {
@@ -250,7 +250,7 @@ fn a_busy_apply_error_is_reported_typed(cx: &mut TestAppContext) {
     service.set(|script| {
         script.config_apply = Err(UserFacingError::new(
             "DBL-8604",
-            "Instance sedang dipakai operasi lain. Coba lagi setelah selesai.",
+            "The instance is busy with another operation. Try again when it finishes.",
         ));
     });
     let id = open_config(&view, &service, cx);
@@ -336,7 +336,7 @@ fn a_launcher_failure_is_typed_and_keeps_the_path(cx: &mut TestAppContext) {
     service.set(|script| {
         script.config_open_raw = Err(UserFacingError::new(
             "DBL-8608",
-            "Editor bawaan sistem tidak dapat dibuka. Buka berkasnya secara manual.",
+            "The system's default editor could not be opened. Open the file manually.",
         ));
     });
     let id = open_config(&view, &service, cx);
@@ -562,12 +562,12 @@ fn cancel_changes_drops_every_edit(cx: &mut TestAppContext) {
     assert!(!can_apply, "nothing left to apply");
 }
 
-/// "Muat ulang" issues a fresh read after a failed load.
+/// "Reload" issues a fresh read after a failed load.
 #[gpui_kit::test]
 fn retry_re_reads_after_a_failed_load(cx: &mut TestAppContext) {
     let (view, service, cx) = fixture(cx);
     service.set(|script| {
-        script.config_view = Err(UserFacingError::new("DBL-8603", "gagal baca"));
+        script.config_view = Err(UserFacingError::new("DBL-8603", "read failed"));
     });
     let id = open_config(&view, &service, cx);
     let before = service.counts().config_view;
@@ -576,7 +576,7 @@ fn retry_re_reads_after_a_failed_load(cx: &mut TestAppContext) {
     settle(cx);
     assert!(
         service.counts().config_view > before,
-        "Muat ulang issues a fresh read"
+        "Reload issues a fresh read"
     );
     let ready = view.read_with(cx, |this, _| {
         this.config_state_for(&id)
@@ -638,7 +638,7 @@ fn a_failed_restore_is_reported_typed(cx: &mut TestAppContext) {
     let (view, service, cx) = fixture(cx);
     service.set(|script| {
         script.config_view = Ok(view_with_backup());
-        script.config_restore = Err(UserFacingError::new("DBL-8605", "pulihkan gagal"));
+        script.config_restore = Err(UserFacingError::new("DBL-8605", "restore failed"));
     });
     let id = open_config(&view, &service, cx);
     view.update(cx, |this, cx| this.restore_and_restart(&id, cx));

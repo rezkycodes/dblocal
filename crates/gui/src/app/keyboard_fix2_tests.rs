@@ -228,21 +228,21 @@ fn tab_reaches_the_group_header_and_enter_toggles_it(cx: &mut TestAppContext) {
 }
 
 /// `G3(e)`: the palette's Copy URI command copies the URI (clipboard + recorded
-/// `connection_uri`), driven by typing "salin" and Enter.
+/// `connection_uri`), driven by typing "copy" and Enter.
 #[gpui_kit::test]
 fn palette_copy_uri_puts_the_uri_on_the_clipboard(cx: &mut TestAppContext) {
     let (view, service, cx) = harness(cx);
     let stopped = service.id_with(InstanceStatus::Stopped);
     press(cx, "ctrl-k");
     assert!(view.read_with(cx, |this, _| this.palette_is_open()));
-    // "salin" leaves one Copy URI row per instance in dock order
+    // "copy" leaves one Copy URI row per instance in dock order
     // (pg-run, pg-stop, pg-fail); Down once selects the pg-stop copy and Enter
     // confirms — driven by keys only.
-    type_text(cx, "salin");
+    type_text(cx, "copy");
     let matched = view.read_with(cx, |this, cx| this.command_state().read(cx).matched_count());
     assert_eq!(
         matched, 3,
-        "one Copy URI row per instance for the salin query"
+        "one Copy URI row per instance for the copy query"
     );
     press(cx, "down");
     press(cx, "enter");

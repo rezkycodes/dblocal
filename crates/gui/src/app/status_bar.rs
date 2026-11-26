@@ -24,7 +24,7 @@ pub(super) fn render(workspace: &Workspace, cx: &mut Context<Workspace>) -> impl
     let counts = workspace.counts();
     let total = workspace
         .total_home_size()
-        .map(format::format_bytes_id)
+        .map(format::format_bytes)
         .unwrap_or_else(|| strings::UI_VALUE_UNKNOWN.to_owned());
     let data_dir = workspace.home_display();
     let backend = credential_backend_label(workspace);

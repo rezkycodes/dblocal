@@ -147,7 +147,7 @@ fn refuse(ctx: &mut Ctx<'_>, message: &str) -> u8 {
 /// Maps a machine-readable unit to what the user reads and types.
 ///
 /// A size setting's value column shows `128MB`, so its unit says the size words,
-/// not the storage primitive `bytes`; `seconds` becomes the Indonesian `detik`.
+/// not the storage primitive `bytes`; `seconds` becomes the word the user types.
 /// `--json` keeps the raw unit.
 fn human_unit(unit: &str) -> String {
     match unit {

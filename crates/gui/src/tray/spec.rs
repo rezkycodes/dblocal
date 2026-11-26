@@ -46,7 +46,7 @@ pub struct MenuRow {
 /// The complete native menu plus the aggregate tray icon.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TraySpec {
-    /// Rows in menu order: instances, a separator, "Buka DBLocal", "Keluar".
+    /// Rows in menu order: instances, a separator, "Open DBLocal", "Quit".
     pub rows: Vec<MenuRow>,
     /// RGBA8 aggregate tray icon (`TRAY_ICON_SIZE` square).
     pub icon_rgba: Vec<u8>,
@@ -55,7 +55,7 @@ pub struct TraySpec {
 /// Builds the native menu spec from the tray model and the instance views.
 ///
 /// The row order matches the Linux menu: grouped instances, a separator (only
-/// when there is at least one instance), then "Buka DBLocal" and "Keluar".
+/// when there is at least one instance), then "Open DBLocal" and "Quit".
 pub fn build(model: &TrayMenuModel, views: &[InstanceView]) -> TraySpec {
     let mut rows: Vec<MenuRow> = model.instances.iter().map(item_row).collect();
     if !rows.is_empty() {

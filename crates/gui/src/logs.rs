@@ -23,7 +23,7 @@ pub fn capacity() -> usize {
     dblocal_core::consts::LOG_TAIL_LINES
 }
 
-/// How many lines "Salin log" puts on the clipboard (`F-LOG-01` AC3).
+/// How many lines "Copy logs" puts on the clipboard (`F-LOG-01` AC3).
 pub fn copy_count() -> usize {
     500
 }
@@ -103,7 +103,7 @@ impl LogBuffer {
         self.following = following;
     }
 
-    /// The last `n` lines, oldest first, for "Salin log".
+    /// The last `n` lines, oldest first, for "Copy logs".
     pub fn copy_tail(&self, n: usize) -> Vec<String> {
         let skip = self.lines.len().saturating_sub(n);
         self.lines
@@ -113,7 +113,7 @@ impl LogBuffer {
             .collect()
     }
 
-    /// The "Salin log" payload, joined with newlines.
+    /// The "Copy logs" payload, joined with newlines.
     pub fn copy_text(&self) -> String {
         self.copy_tail(copy_count()).join("\n")
     }
@@ -267,7 +267,7 @@ mod tests {
         assert!(buffer.line(0).is_none());
     }
 
-    /// W4-I D3: the log view truncates for display but "Salin log" must copy the
+    /// W4-I D3: the log view truncates for display but "Copy logs" must copy the
     /// **complete** lines, so a truncated long line is not lost.
     #[test]
     fn copy_text_keeps_a_long_line_whole() {

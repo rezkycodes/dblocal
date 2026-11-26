@@ -295,7 +295,7 @@ fn wait_operation_rx_reports_progress_and_returns_the_outcome() {
     assert!(result.is_ok());
     let text = String::from_utf8_lossy(&err);
     assert!(text.contains("downloading"), "err: {text}");
-    assert!(text.contains("unduhan 50%"), "err: {text}");
+    assert!(text.contains("downloading 50%"), "err: {text}");
 }
 
 #[test]
@@ -547,7 +547,7 @@ fn wait_for_status_rx_resolves_from_finish_by_re_reading_the_status() {
     assert_eq!(status, InstanceStatus::Running);
     let text = String::from_utf8_lossy(&err);
     assert!(text.contains("starting"), "err: {text}");
-    assert!(text.contains("unduhan 50%"), "err: {text}");
+    assert!(text.contains("downloading 50%"), "err: {text}");
 }
 
 #[test]
@@ -691,7 +691,7 @@ fn message_helpers_carry_their_codes() {
     assert_eq!(crate::messages::code_line("DBL-1002", "x"), "[DBL-1002] x");
     assert_eq!(
         crate::messages::download_progress(50, 5, 10),
-        "... unduhan 50% (5/10)"
+        "... downloading 50% (5/10)"
     );
     assert_eq!(crate::messages::stage_line("starting"), "... starting");
 }

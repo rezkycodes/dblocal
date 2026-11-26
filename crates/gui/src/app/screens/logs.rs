@@ -250,7 +250,7 @@ impl Workspace {
     /// clipped and its text ellipsised; horizontal scrolling was rejected because
     /// it would need a second scroll axis inside the uniform virtual list and
     /// break the fixed-row-height model it relies on. The full line is still
-    /// available: "Salin log" copies the complete buffer lines unchanged.
+    /// available: "Copy logs" copies the complete buffer lines unchanged.
     fn render_log_lines(&self, buffer: &LogBuffer, theme: &Theme) -> gpui_kit::AnyElement {
         let lines = buffer.clone();
         let mono = theme.mono_font_family.clone();

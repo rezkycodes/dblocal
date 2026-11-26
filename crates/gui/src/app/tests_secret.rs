@@ -82,7 +82,7 @@ fn every_label_the_card_builds_is_masked_before_show() {
     let view = state.uri(&id).expect("uri view");
     let labels = [
         view.text().to_owned(),
-        format::format_bytes_id(1234),
+        format::format_bytes(1234),
         format::status_label(dblocal_core::model::InstanceStatus::Running).to_owned(),
     ];
     for label in labels {

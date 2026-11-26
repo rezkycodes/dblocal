@@ -71,7 +71,7 @@ fn no_detected_clients_falls_back_to_copy_uri(cx: &mut TestAppContext) {
     let menu = view.read_with(cx, |this, _| this.open_in_menu(EngineKey::Postgresql));
     assert!(
         menu.copy_uri_fallback,
-        "nothing detected must offer Salin URI, not an empty list (F-OPN-01 AC2)"
+        "nothing detected must offer Copy URI, not an empty list (F-OPN-01 AC2)"
     );
     assert!(!menu.has_launchable());
 }
@@ -121,7 +121,7 @@ fn a_launch_failure_is_a_typed_message(cx: &mut TestAppContext) {
                 reason: "spawn".to_owned(),
             }
             .code(),
-            "Klien gagal dibuka.",
+            "The client failed to open.",
         ));
     });
     let id = service.id_with(dblocal_core::model::InstanceStatus::Running);

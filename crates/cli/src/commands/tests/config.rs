@@ -220,7 +220,7 @@ fn the_cli_never_prints_a_requirepass_value() {
 
 /// F3: the unit column says what the user types, not the storage primitive.
 #[test]
-fn show_prints_human_units_not_bytes_or_english_seconds() {
+fn show_prints_human_units_not_raw_seconds() {
     let svc = MockService::deterministic();
     // Valkey `timeout` has unit "seconds"; `maxmemory` has unit "bytes".
     svc.seed_instance(
@@ -239,17 +239,13 @@ fn show_prints_human_units_not_bytes_or_english_seconds() {
     );
     assert_eq!(code, EXIT_OK, "stderr: {err}");
     // A size setting shows the size words, never the primitive `bytes`, and the
-    // English `seconds` becomes the Indonesian `detik`.
+    // The `seconds` unit becomes the word the user types.
     assert!(out.contains(messages::UNIT_SIZE), "{out}");
     assert!(
         !out.contains("bytes"),
         "the table must not say `bytes`: {out}"
     );
     assert!(out.contains(messages::UNIT_SECONDS), "{out}");
-    assert!(
-        !out.contains("seconds"),
-        "the table must not say `seconds`: {out}"
-    );
     // --json keeps the machine-readable unit.
     let (code, json_out, _e) = run_cmd(
         &svc,

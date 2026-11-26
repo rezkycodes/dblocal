@@ -11,7 +11,7 @@ use dblocal_core::service::{InstanceView, OperationId};
 
 use crate::format;
 
-/// Bound on how long "Hentikan semua lalu keluar" waits for every stop to
+/// Bound on how long "Stop all, then quit" waits for every stop to
 /// finish. Derived from the engine grace period (never a literal) with a margin
 /// for the service to report the outcome.
 pub const QUIT_STOP_TIMEOUT: Duration =

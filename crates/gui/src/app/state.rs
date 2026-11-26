@@ -31,7 +31,7 @@ impl InnerTab {
     /// Every inner tab, in bar order.
     pub const ALL: [Self; 4] = [Self::Overview, Self::Logs, Self::Databases, Self::Config];
 
-    /// Indonesian label for the tab bar.
+    /// Label for the tab bar.
     pub fn label(self) -> &'static str {
         match self {
             Self::Overview => dblocal_core::strings::UI_SUBTAB_OVERVIEW,

@@ -51,7 +51,7 @@ pub struct InstanceConfig {
     pub error: Option<UserFacingError>,
     /// Whether `error` came from a failed READ rather than an action. A re-read
     /// that succeeds replaces a read failure, but a failed apply/restore/open
-    /// keeps its banner until the next action or "Muat ulang" (`F10`).
+    /// keeps its banner until the next action or "Reload" (`F10`).
     pub error_from_read: bool,
     /// Actions currently in flight for this instance.
     pub busy: BTreeSet<ConfigAction>,
@@ -244,7 +244,7 @@ impl InstanceConfig {
         self.touched_outside = file_changed && !self.edits.is_empty();
     }
 
-    /// Clears the card error explicitly ("Muat ulang" / the next user action).
+    /// Clears the card error explicitly ("Reload" / the next user action).
     ///
     /// The one way a failed apply/restore/open banner goes away besides a new
     /// action; a successful re-read alone no longer does (`F10`).
@@ -264,7 +264,7 @@ impl InstanceConfig {
             self.data = Loadable::Loading;
         }
         // A read failure is what the next read replaces; a failed apply or open
-        // keeps its banner until the next action or "Muat ulang" (`F10`).
+        // keeps its banner until the next action or "Reload" (`F10`).
         if self.error_from_read {
             self.error = None;
             self.error_from_read = false;
@@ -593,7 +593,7 @@ mod tests {
     fn a_failed_refresh_keeps_the_previous_rows_and_shows_the_error() {
         let mut config = ready(EngineKey::Postgresql);
         config.begin_refresh();
-        config.end_refresh_failed(UserFacingError::new("DBL-8603", "gagal baca"));
+        config.end_refresh_failed(UserFacingError::new("DBL-8603", "read failed"));
         assert!(!config.refreshing);
         assert!(config.view().is_some(), "F7b: the rows stay on screen");
         assert_eq!(
@@ -748,7 +748,7 @@ mod f8_tests {
         let mut config = ready(EngineKey::Postgresql);
         config.set_field("max_connections", "300");
         config.begin(ConfigAction::Apply);
-        config.error = Some(UserFacingError::new("DBL-8604", "sedang dipakai"));
+        config.error = Some(UserFacingError::new("DBL-8604", "busy"));
         config.end(ConfigAction::Apply);
         // A re-read lands and succeeds: the failed-apply banner stays (`F10`).
         config.begin_refresh();
@@ -759,16 +759,16 @@ mod f8_tests {
             "F10: a failed apply keeps its banner through a re-read"
         );
 
-        // "Muat ulang" is the explicit dismissal.
+        // "Reload" is the explicit dismissal.
         config.dismiss_card_error();
-        assert!(config.error.is_none(), "F10: Muat ulang clears it");
+        assert!(config.error.is_none(), "F10: Reload clears it");
     }
 
     #[test]
     fn a_failed_read_error_is_replaced_by_the_next_read() {
         let mut config = ready(EngineKey::Postgresql);
         config.begin_refresh();
-        config.end_refresh_failed(UserFacingError::new("DBL-8603", "gagal baca"));
+        config.end_refresh_failed(UserFacingError::new("DBL-8603", "read failed"));
         assert_eq!(
             config.error.as_ref().map(|e| e.code.as_str()),
             Some("DBL-8603")

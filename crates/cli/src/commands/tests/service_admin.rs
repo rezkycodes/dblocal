@@ -169,7 +169,7 @@ fn db_drop_rejects_a_mismatched_confirm() {
         false,
     );
     assert_eq!(code, EXIT_BAD_ARGS);
-    assert!(err.contains("tidak cocok"), "{err}");
+    assert!(err.contains("does not match"), "{err}");
 }
 
 #[test]
@@ -213,7 +213,7 @@ fn user_create_prints_the_password_once_to_stdout() {
         out.starts_with("pwd-user-"),
         "stdout is the password: {out}"
     );
-    assert!(err.contains("sekali"), "{err}");
+    assert!(err.contains("only once"), "{err}");
 }
 
 #[test]
@@ -255,7 +255,7 @@ fn password_reset_prints_the_new_uri_once() {
         out.contains("pwd-reset-"),
         "the URI carries the new password: {out}"
     );
-    assert!(err.contains("diganti"), "{err}");
+    assert!(err.contains("changed"), "{err}");
 }
 
 // --- update ------------------------------------------------------------------
@@ -354,7 +354,7 @@ fn open_unknown_client_is_a_bad_argument() {
         false,
     );
     assert_eq!(code, EXIT_BAD_ARGS);
-    assert!(err.contains("Client tidak dikenal"), "{err}");
+    assert!(err.contains("Unknown client"), "{err}");
 }
 
 #[test]

@@ -578,7 +578,7 @@ fn delete_archives(home: &Home, port: u16, name: &str) {
     ok(&delete, "delete --yes");
     let delete_err = String::from_utf8_lossy(&delete.stderr).into_owned();
     assert!(
-        delete_err.contains("Data diarsipkan ke"),
+        delete_err.contains("Data archived to"),
         "archive notice missing: {delete_err}"
     );
     let archives = home.path().join("archive");

@@ -26,149 +26,149 @@ pub const EXIT_ENGINE_FAILED: u8 = 4;
 
 /// DBLocal command-line interface.
 ///
-/// Help text is Indonesian (matching the GUI) while flags stay English.
+/// Help text is English, like the GUI; flags stay English too.
 #[derive(Debug, Parser)]
 #[command(
     name = "dblocal",
     version,
-    about = "DBLocal — server database lokal tanpa container",
-    long_about = "DBLocal mengelola server PostgreSQL, MySQL, MariaDB, dan Valkey \n\
-                  di mesin lokal. Tanpa argumen, aplikasi GUI terbuka; dengan \n\
-                  subperintah, mode CLI yang berjalan.",
-    after_help = "Tanpa argumen, jendela DBLocal terbuka."
+    about = "DBLocal — local database servers without containers",
+    long_about = "DBLocal manages PostgreSQL, MySQL, MariaDB and Valkey servers \n\
+                  on your local machine. Without arguments the GUI opens; with a \n\
+                  subcommand it runs in CLI mode.",
+    after_help = "Without arguments, the DBLocal window opens."
 )]
 pub struct Cli {
-    /// Subperintah yang dijalankan. Tanpa subperintah, GUI terbuka.
+    /// The subcommand to run. Without a subcommand the GUI opens.
     #[command(subcommand)]
     pub command: Option<Command>,
 }
 
-/// Setiap subperintah pada PRD §8.
+/// Every subcommand in PRD §8.
 #[derive(Debug, Subcommand)]
 pub enum Command {
-    /// Menampilkan daftar instance.
+    /// List instances.
     List {
-        /// Cetak JSON yang bisa dipipe.
+        /// Print JSON that can be piped.
         #[arg(long)]
         json: bool,
     },
-    /// Menampilkan status satu instance.
+    /// Show the status of one instance.
     Status {
-        /// Nama instance.
+        /// Instance name.
         name: String,
     },
-    /// Menjalankan instance dan menunggu sampai sehat.
+    /// Start an instance and wait until it is healthy.
     Start {
-        /// Nama instance.
+        /// Instance name.
         name: String,
-        /// Detik menunggu sampai instance sehat.
+        /// Seconds to wait until the instance is healthy.
         #[arg(long, default_value_t = crate::consts::DEFAULT_START_TIMEOUT_SECS)]
         timeout: u64,
     },
-    /// Menghentikan instance.
+    /// Stop an instance.
     Stop {
-        /// Nama instance.
+        /// Instance name.
         name: String,
     },
-    /// Mencetak connection URI (atau blok .env).
+    /// Print the connection URI (or the .env block).
     Uri {
-        /// Nama instance.
+        /// Instance name.
         name: String,
-        /// Cetak blok `.env` alih-alih URI saja.
+        /// Print the `.env` block instead of only the URI.
         #[arg(long)]
         env: bool,
     },
-    /// Membuat instance baru tanpa interaksi.
+    /// Create a new instance without prompting.
     Create {
-        /// Engine: postgresql, mysql, mariadb, atau valkey.
+        /// Engine: postgresql, mysql, mariadb or valkey.
         #[arg(long)]
         engine: String,
-        /// Tag versi engine, mis. 18.7.0.
+        /// Engine version tag, e.g. 18.7.0.
         #[arg(long)]
         version: String,
-        /// Nama instance.
+        /// Instance name.
         #[arg(long)]
         name: String,
-        /// Port yang dipakai; kosong berarti dipilih otomatis.
+        /// Port to use; empty means one is chosen automatically.
         #[arg(long)]
         port: Option<u16>,
-        /// Buat tanpa password.
+        /// Create without a password.
         #[arg(long = "no-password")]
         no_password: bool,
     },
-    /// Menghapus instance (default mengarsipkan data).
+    /// Delete an instance (the data is archived by default).
     Delete {
-        /// Nama instance.
+        /// Instance name.
         name: String,
-        /// Lewati konfirmasi.
+        /// Skip the confirmation.
         #[arg(long)]
         yes: bool,
-        /// Hapus data juga, bukan diarsipkan.
+        /// Delete the data too instead of archiving it.
         #[arg(long)]
         purge: bool,
     },
-    /// Menampilkan log instance.
+    /// Show an instance log.
     Logs {
-        /// Nama instance.
+        /// Instance name.
         name: String,
-        /// Ikuti baris baru sampai Ctrl-C.
+        /// Follow new lines until Ctrl-C.
         #[arg(long, short)]
         follow: bool,
-        /// Jumlah baris terakhir yang ditampilkan.
+        /// Number of trailing lines to show.
         #[arg(long, default_value_t = crate::consts::DEFAULT_LOG_LINES)]
         lines: usize,
     },
-    /// Mengatur autostart aplikasi saat login (status, enable, disable).
+    /// Manage the app autostart at login (status, enable, disable).
     Autostart {
-        /// Aksi: status, enable, atau disable.
+        /// Action: status, enable or disable.
         action: String,
-        /// Cetak JSON yang bisa dipipe.
+        /// Print JSON that can be piped.
         #[arg(long)]
         json: bool,
     },
-    /// Mode login item: buka ke tray tanpa jendela dan jalankan instance bertanda.
+    /// Login-item mode: open to the tray without a window and start the flagged instances.
     ///
-    /// Flag ini dipasang sendiri oleh entri login yang dibuat `dblocal autostart
-    /// enable`; biasanya tidak dipanggil manual.
+    /// The login entry created by `dblocal autostart enable` passes this flag
+    /// itself; it is not normally run by hand.
     #[command(name = "autostart-run")]
     AutostartRun {
-        /// Tetap jalankan headless walau tray tidak tersedia.
+        /// Keep running headless even when the tray is unavailable.
         #[arg(long)]
         headless: bool,
     },
-    /// Mengelola database pada satu instance (F-DBU-01).
+    /// Manage databases on one instance (F-DBU-01).
     Db {
         #[command(subcommand)]
         command: DbCommand,
     },
-    /// Mengelola user database pada satu instance (F-DBU-02).
+    /// Manage database users on one instance (F-DBU-02).
     User {
         #[command(subcommand)]
         command: UserCommand,
     },
-    /// Mengganti password superuser satu instance (F-DBU-03).
+    /// Change the superuser password of one instance (F-DBU-03).
     Password {
         #[command(subcommand)]
         command: PasswordCommand,
     },
-    /// Memeriksa dan memasang pembaruan DBLocal (F-PKG-05).
+    /// Check for and install DBLocal updates (F-PKG-05).
     Update {
         #[command(subcommand)]
         command: UpdateCommand,
     },
-    /// Membuka instance di client eksternal (F-OPN).
+    /// Open an instance in an external client (F-OPN).
     Open {
-        /// Nama instance.
+        /// Instance name.
         instance: String,
-        /// Client yang dibuka: psql, mysql, mariadb, valkey-cli, redis-cli,
-        /// tableplus, dbeaver, atau dbdelve.
+        /// Client to open: psql, mysql, mariadb, valkey-cli, redis-cli,
+        /// tableplus, dbeaver or dbdelve.
         #[arg(long)]
         client: String,
-        /// Cetak rencana peluncuran tanpa menjalankan client.
+        /// Print the launch plan without running the client.
         #[arg(long = "dry-run")]
         dry_run: bool,
     },
-    /// Menampilkan, mengubah, dan memulihkan konfigurasi engine (F-CFG).
+    /// Show, change and restore the engine configuration (F-CFG).
     Config {
         #[command(subcommand)]
         command: ConfigCommand,
@@ -178,34 +178,34 @@ pub enum Command {
 /// `dblocal config ...` subcommands.
 #[derive(Debug, Subcommand)]
 pub enum ConfigCommand {
-    /// Menampilkan setelan penting instance beserta nilai dan bawaannya.
+    /// Show the instance settings with their current and default values.
     Show {
-        /// Nama instance.
+        /// Instance name.
         name: String,
-        /// Cetak JSON yang bisa dipipe.
+        /// Print JSON that can be piped.
         #[arg(long)]
         json: bool,
     },
-    /// Mengubah satu atau beberapa setelan (`key=nilai`).
+    /// Change one or more settings (`key=value`).
     Set {
-        /// Nama instance.
+        /// Instance name.
         name: String,
-        /// Pasangan `key=nilai`, mis. `max_connections=200`.
+        /// A `key=value` pair, e.g. `max_connections=200`.
         changes: Vec<String>,
     },
-    /// Mengembalikan konfigurasi dari salinan terbaru.
+    /// Restore the configuration from the newest backup.
     Restore {
-        /// Nama instance.
+        /// Instance name.
         name: String,
     },
-    /// Mencetak path berkas konfigurasi mentah.
+    /// Print the path of the raw configuration file.
     Path {
-        /// Nama instance.
+        /// Instance name.
         name: String,
     },
-    /// Membuka berkas konfigurasi mentah di editor bawaan OS (F-CFG-02).
+    /// Open the raw configuration file in the OS default editor (F-CFG-02).
     Open {
-        /// Nama instance.
+        /// Instance name.
         name: String,
     },
 }
@@ -213,31 +213,31 @@ pub enum ConfigCommand {
 /// `dblocal db ...` subcommands.
 #[derive(Debug, Subcommand)]
 pub enum DbCommand {
-    /// Menampilkan daftar database.
+    /// List databases.
     List {
-        /// Nama instance.
+        /// Instance name.
         instance: String,
-        /// Cetak JSON yang bisa dipipe.
+        /// Print JSON that can be piped.
         #[arg(long)]
         json: bool,
     },
-    /// Membuat database baru.
+    /// Create a database.
     Create {
-        /// Nama instance.
+        /// Instance name.
         instance: String,
-        /// Nama database.
+        /// Database name.
         name: String,
     },
-    /// Menghapus database. Wajib konfirmasi ulang nama (F-DBU-01 AC3).
+    /// Drop a database. Requires the name to be confirmed again (F-DBU-01 AC3).
     Drop {
-        /// Nama instance.
+        /// Instance name.
         instance: String,
-        /// Nama database.
+        /// Database name.
         name: String,
         /// Lewati konfirmasi.
         #[arg(long)]
         yes: bool,
-        /// Ketik ulang nama database di sini; harus sama dengan `name`.
+        /// Retype the database name here; must match `name`.
         #[arg(long)]
         confirm: Option<String>,
     },
@@ -246,16 +246,16 @@ pub enum DbCommand {
 /// `dblocal user ...` subcommands.
 #[derive(Debug, Subcommand)]
 pub enum UserCommand {
-    /// Membuat user dengan tingkat hak tertentu.
+    /// Create a user with a given privilege level.
     Create {
-        /// Nama instance.
+        /// Instance name.
         instance: String,
-        /// Nama user.
+        /// User name.
         name: String,
-        /// Database tujuan GRANT.
+        /// Database the GRANT applies to.
         #[arg(long)]
         db: String,
-        /// Tingkat hak: `ro` (read-only) atau `rw` (read-write).
+        /// Privilege level: `ro` (read-only) or `rw` (read-write).
         #[arg(long)]
         level: String,
     },
@@ -264,9 +264,9 @@ pub enum UserCommand {
 /// `dblocal password ...` subcommands.
 #[derive(Debug, Subcommand)]
 pub enum PasswordCommand {
-    /// Mengganti password superuser; URI baru dicetak sekali ke stdout.
+    /// Change the superuser password; the new URI is printed once to stdout.
     Reset {
-        /// Nama instance.
+        /// Instance name.
         instance: String,
     },
 }
@@ -274,13 +274,13 @@ pub enum PasswordCommand {
 /// `dblocal update ...` subcommands.
 #[derive(Debug, Subcommand)]
 pub enum UpdateCommand {
-    /// Memeriksa apakah ada versi lebih baru.
+    /// Check whether a newer version exists.
     Check {
-        /// Cetak JSON yang bisa dipipe.
+        /// Print JSON that can be piped.
         #[arg(long)]
         json: bool,
     },
-    /// Mengunduh, memverifikasi, dan memasang pembaruan.
+    /// Download, verify and install an update.
     Apply {
         /// Lewati konfirmasi.
         #[arg(long)]

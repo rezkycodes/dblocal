@@ -80,7 +80,7 @@ fn instance_removed_drops_tab_logs_and_caches(cx: &mut TestAppContext) {
     assert!(logs, "the removed instance kept its log buffer");
 }
 
-/// `StopForced` raises the Indonesian forced-stop toast.
+/// `StopForced` raises the forced-stop toast.
 #[gpui_kit::test]
 fn stop_forced_raises_the_toast(cx: &mut TestAppContext) {
     let (view, service, cx) = fixture(cx);
@@ -103,7 +103,7 @@ fn a_failed_operation_shows_the_code_and_message(cx: &mut TestAppContext) {
     let (view, _service, cx) = fixture(cx);
     let err = dblocal_core::DblError::InvalidInput {
         field: "port",
-        reason: "nilai tidak valid".to_owned(),
+        reason: "invalid value".to_owned(),
     };
     let facing = UserFacingError::from(&err);
     view.update(cx, |this, cx| {

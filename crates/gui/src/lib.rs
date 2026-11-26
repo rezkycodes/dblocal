@@ -103,7 +103,7 @@ fn build_real_service() -> Result<Arc<dyn DblService>> {
     }
 }
 
-/// Shows a clear Indonesian startup-failure message. Falls back to stderr when
+/// Shows a clear startup-failure message. Falls back to stderr when
 /// no display is available.
 fn show_startup_failure(message: &str) {
     if gui_unavailable_reason().is_some() {

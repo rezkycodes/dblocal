@@ -69,7 +69,7 @@ pub enum UiEvent {
     /// The service stream lagged and the UI may have missed changes.
     ///
     /// `broadcast` drops the oldest events of a slow receiver. After a lag the
-    /// visible state can be stale forever (a row stuck "berjalan"), so the
+    /// visible state can be stale forever (a row stuck "running"), so the
     /// workspace re-reads `list_instances()` and the catalog when it sees this.
     Resync,
     /// The service event stream ended.

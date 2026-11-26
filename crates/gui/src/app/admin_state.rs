@@ -7,7 +7,7 @@
 //!
 //! Identifier validation deliberately calls `dblocal_core::admin::Identifier`
 //! instead of re-implementing the allowlist: the form rejects the obvious bad
-//! name with the same rule (and the same Indonesian message) the service would
+//! name with the same rule (and the same message) the service would
 //! apply, without a round trip (`F-DBU-01` AC4).
 
 use std::collections::{BTreeSet, HashMap};
@@ -107,7 +107,7 @@ impl InstanceAdmin {
             .unwrap_or_default()
     }
 
-    /// Whether the view should show the "Membaca database…" line.
+    /// Whether the view should show the "Reading databases…" line.
     ///
     /// `Idle` counts: on a running instance the read is issued when the tab is
     /// entered, so a frame drawn before it lands must not claim the list is
@@ -201,7 +201,7 @@ pub fn drop_confirmation_matches(typed: &str, name: &str) -> bool {
     !name.is_empty() && typed == name
 }
 
-/// The Indonesian label of a privilege level.
+/// The label of a privilege level.
 pub fn level_label(level: PrivilegeLevel) -> &'static str {
     match level {
         PrivilegeLevel::ReadOnly => dblocal_core::strings::UI_DATABASES_LEVEL_READ_ONLY,
@@ -377,7 +377,7 @@ mod tests {
     }
 
     #[test]
-    fn level_and_user_labels_are_the_indonesian_strings() {
+    fn level_and_user_labels_are_the_expected_strings() {
         assert_eq!(
             level_label(PrivilegeLevel::ReadOnly),
             dblocal_core::strings::UI_DATABASES_LEVEL_READ_ONLY

@@ -1,6 +1,6 @@
 //! Two `LocalService` instances over one home, racing to start the same stopped
 //! instance: the store's compare-and-set must let exactly one claim it, so the
-//! CLI's "sudah berjalan" path is not merely a local check (F-CLI-02 AC3).
+//! CLI's "already running" path is not merely a local check (F-CLI-02 AC3).
 //!
 //! No engine runs here: the assertion is on which service accepted the start,
 //! not on a healthy process.
@@ -64,7 +64,7 @@ fn race_one_round(round: usize) {
     // `busy` is what a loser sees when the row moved between its read and the
     // write; a loser that read the row just after the winner persisted
     // `Starting` sees `starting -> starting`. Both are refusals, and the CLI
-    // treats both as "sudah berjalan".
+    // treats both as "already running".
     let message = err.to_string();
     assert!(
         message.contains("busy") || message.contains("starting"),

@@ -310,7 +310,7 @@ fn postgres_uri_env_without_a_password_has_no_db_password_line() {
 }
 
 #[test]
-fn start_already_running_prints_sudah_berjalan() {
+fn start_already_running_prints_already_running() {
     let svc = MockService::deterministic();
     svc.seed_instance(
         spec("app", EngineKey::Postgresql, "17.4", 5432),
@@ -325,7 +325,7 @@ fn start_already_running_prints_sudah_berjalan() {
         false,
     );
     assert_eq!(code, EXIT_OK);
-    assert!(err.contains("sudah berjalan"));
+    assert!(err.contains("already running"));
 }
 
 #[test]
@@ -337,7 +337,7 @@ fn stop_already_stopped_is_ok() {
     );
     let (code, _out, err) = run_cmd(&svc, &Command::Stop { name: "app".into() }, false);
     assert_eq!(code, EXIT_OK);
-    assert!(err.contains("sudah berhenti"));
+    assert!(err.contains("already stopped"));
 }
 
 #[test]
@@ -377,7 +377,7 @@ fn delete_with_yes_archives_reports_path() {
         false,
     );
     assert_eq!(code, EXIT_OK, "err={err}");
-    assert!(err.contains("Data diarsipkan ke") || err.to_lowercase().contains("arsip"));
+    assert!(err.contains("Data archived to") || err.to_lowercase().contains("archiv"));
 }
 
 #[test]

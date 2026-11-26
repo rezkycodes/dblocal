@@ -117,7 +117,7 @@ impl DblService for RacyService {
 }
 
 #[test]
-fn start_losing_the_race_prints_sudah_berjalan_and_exits_0() {
+fn start_losing_the_race_prints_already_running_and_exits_0() {
     let inner = MockService::deterministic();
     let id = inner.seed_instance(
         spec("raced", EngineKey::Postgresql, "17.4", 5432),
@@ -137,11 +137,11 @@ fn start_losing_the_race_prints_sudah_berjalan_and_exits_0() {
         },
     );
     assert_eq!(code, EXIT_OK, "err={err}");
-    assert!(err.contains("sudah berjalan"), "err={err}");
+    assert!(err.contains("already running"), "err={err}");
 }
 
 #[test]
-fn start_of_an_instance_another_process_is_starting_says_sudah_berjalan() {
+fn start_of_an_instance_another_process_is_starting_says_already_running() {
     let svc = std::sync::Arc::new(MockService::deterministic());
     svc.seed_instance(
         spec("busy", EngineKey::Postgresql, "17.4", 5432),
@@ -159,7 +159,7 @@ fn start_of_an_instance_another_process_is_starting_says_sudah_berjalan() {
             timeout: 1,
         },
     );
-    assert!(err.contains("sudah berjalan"), "err={err}");
+    assert!(err.contains("already running"), "err={err}");
     assert_ne!(code, EXIT_OK);
 }
 
@@ -319,7 +319,7 @@ fn cross_process(scripted: &'static str, status: InstanceStatus) -> CrossProcess
 }
 
 #[test]
-fn start_busy_loser_reports_sudah_berjalan() {
+fn start_busy_loser_reports_already_running() {
     let service = std::sync::Arc::new(cross_process("stopped", InstanceStatus::Stopped));
     let (code, err) = within(
         std::time::Duration::from_secs(5),
@@ -329,7 +329,7 @@ fn start_busy_loser_reports_sudah_berjalan() {
             timeout: 1,
         },
     );
-    assert!(err.contains("sudah berjalan"), "err: {err}");
+    assert!(err.contains("already running"), "err: {err}");
     assert_ne!(code, EXIT_OK);
 }
 
@@ -477,7 +477,7 @@ impl DblService for AlreadyClaimed {
 }
 
 #[test]
-fn start_refused_with_a_concrete_process_status_is_sudah_berjalan() {
+fn start_refused_with_a_concrete_process_status_is_already_running() {
     let inner = MockService::deterministic();
     let target = inner.seed_instance(
         spec("claimed", EngineKey::Postgresql, "17.4", 5432),
@@ -497,5 +497,5 @@ fn start_refused_with_a_concrete_process_status_is_sudah_berjalan() {
         false,
     );
     assert_eq!(code, EXIT_OK, "err: {err}");
-    assert!(err.contains("sudah berjalan"), "err: {err}");
+    assert!(err.contains("already running"), "err: {err}");
 }

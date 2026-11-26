@@ -69,7 +69,7 @@ pub struct TrayMenuEntry {
 pub struct TrayMenuModel {
     /// Instance rows, in the same engine-group order the dock uses.
     pub instances: Vec<TrayMenuEntry>,
-    /// "Buka DBLocal".
+    /// "Open DBLocal".
     pub open: TrayMenuEntry,
     /// "Keluar".
     pub quit: TrayMenuEntry,

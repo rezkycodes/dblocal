@@ -249,10 +249,6 @@ pub fn format_bytes(bytes: u64) -> String {
     }
 }
 
-/// Formats a byte count in the Indonesian decimal style the prototype uses.
-///
-/// `7.5 MB` becomes `7,5 MB`, so a size reads as a sentence rather than a
-/// machine figure.
 /// Abbreviate a path by replacing the home prefix with `~`.
 ///
 /// The remainder is joined onto `~` with `Path::join`, so the printed path uses
@@ -288,10 +284,6 @@ pub fn engine_log_path(
             .join("engine.log"),
         home,
     )
-}
-
-pub fn format_bytes_id(bytes: u64) -> String {
-    format_bytes(bytes).replace('.', ",")
 }
 
 /// Formats a transfer rate, e.g. `13.0 MB/s`.
@@ -455,7 +447,7 @@ pub fn catalog_banner(catalog: &CatalogView) -> Option<&str> {
 
 /// Human label for the catalog freshness indicator.
 ///
-/// Returns the Indonesian words from `strings`, never the raw enum tag.
+/// Returns the words from `strings`, never the raw enum tag.
 pub fn catalog_status_label(catalog: &CatalogView) -> &'static str {
     match catalog.status {
         CatalogStatus::Fresh => strings::CATALOG_FRESH_LABEL,

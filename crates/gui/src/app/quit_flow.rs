@@ -230,8 +230,8 @@ impl Workspace {
         });
     }
 
-    /// The quit dialog: default "Biarkan tetap berjalan", alternative
-    /// "Hentikan semua lalu keluar", a stop-in-flight state, and a failure state.
+    /// The quit dialog: default "Leave them running", alternative
+    /// "Stop all, then quit", a stop-in-flight state, and a failure state.
     pub(crate) fn render_quit_dialog(
         &self,
         window: &mut gpui_kit::Window,

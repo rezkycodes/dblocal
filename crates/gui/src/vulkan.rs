@@ -231,12 +231,12 @@ mod tests {
     #[test]
     fn report_is_actionable_and_names_each_distro() {
         let text = report("no Vulkan ICD manifest found");
-        assert!(text.contains("Terdeteksi: no Vulkan ICD manifest found"));
+        assert!(text.contains("Detected: no Vulkan ICD manifest found"));
         for needle in ["Fedora", "Ubuntu", "Arch", "vulkaninfo", "vulkan-loader"] {
             assert!(text.contains(needle), "missing {needle}");
         }
         assert!(text.contains(DOCS_URL));
-        assert!(text.ends_with(&format!("Kode keluar: {EXIT_VULKAN} (DBLOCAL_E_VULKAN).\n")));
+        assert!(text.ends_with(&format!("Exit code: {EXIT_VULKAN} (DBLOCAL_E_VULKAN).\n")));
     }
 
     #[test]
@@ -299,7 +299,7 @@ mod tests {
         let result = preflight_with_skip(false);
         match result {
             Ok(()) => {}
-            Err(report) => assert!(report.contains("DBLocal tidak bisa dijalankan")),
+            Err(report) => assert!(report.contains("DBLocal cannot start")),
         }
     }
 

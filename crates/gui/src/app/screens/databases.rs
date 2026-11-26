@@ -3,14 +3,14 @@
 //! Three cards, exactly as the prototype draws them:
 //!
 //! 1. **Database** — a table of name / owner / size from `list_databases`, a
-//!    name field and "Buat database" (validated with the core allowlist before
+//!    name field and "Create database" (validated with the core allowlist before
 //!    any round trip, `F-DBU-01` AC4), and a "Hapus" per row that opens a
 //!    type-the-name confirmation (`F-DBU-01` AC3).
 //! 2. **User & hak akses** — the roles `list_users` returned and a create-user
 //!    form (name, database, read-only / read-write). The generated password is
 //!    shown once in a dialog and never enters this view's state
 //!    (`F-DBU-02` AC2).
-//! 3. **Password superuser** — "Reset password" behind a confirmation; the new
+//! 3. **Superuser password** — "Reset password" behind a confirmation; the new
 //!    URI is shown once with Copy (`F-DBU-03` AC1). A failed reset keeps the
 //!    old password working and says so (`F-DBU-03` AC2).
 //!
@@ -280,7 +280,7 @@ impl Workspace {
                             .text_color(theme.muted_foreground),
                     )
                     .child(
-                        Label::new(format::format_bytes_id(
+                        Label::new(format::format_bytes(
                             u64::try_from(db.size_bytes()).unwrap_or(0),
                         ))
                         .id(SharedString::from(row_part_id(
@@ -553,7 +553,7 @@ impl Workspace {
     /// The last card-level error, rendered under the tables when one is set.
     ///
     /// The typed message is exactly what the service returned (`DBL-xxxx` plus
-    /// its Indonesian sentence). "Muat ulang" re-reads, so a transient failure
+    /// its sentence). "Reload" re-reads, so a transient failure
     /// (a server that stopped, a no-password instance) is recoverable without a
     /// restart, and a no-password or Valkey instance shows the service's own
     /// reason instead of an invented note.

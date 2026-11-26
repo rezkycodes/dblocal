@@ -61,7 +61,7 @@ fn a_failed_read_is_a_typed_error_not_a_panic(cx: &mut TestAppContext) {
     let (view, service, cx) = fixture(cx);
     let failure = UserFacingError::new(
         "DBL-8111",
-        "Operasi ini belum didukung untuk engine tersebut.",
+        "This operation is not supported for that engine yet.",
     );
     service.set(|script| script.databases = Err(failure.clone()));
     let id = open_databases(&view, &service, cx);
@@ -216,7 +216,7 @@ fn a_failed_reset_keeps_the_old_password_and_says_so(cx: &mut TestAppContext) {
     let (view, service, cx) = fixture(cx);
     let failure = UserFacingError::new(
         "DBL-8112",
-        "Password baru tidak dapat dipakai untuk login; password lama dipulihkan.",
+        "The new password cannot be used to log in; the old password was restored.",
     );
     service.set(|script| script.reset_password = Err(failure));
     let id = open_databases(&view, &service, cx);

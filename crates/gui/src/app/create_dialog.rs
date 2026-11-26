@@ -1,11 +1,11 @@
 //! The create-instance modal (`F-INS-01`, `F-CAT-02`, `F-PRT-01`, `F-CRD-03`).
 //!
 //! The prototype's layout: engine cards with a monogram and the canonical port,
-//! a version list from the catalog read model with the "Terpasang" / "Unduh,
+//! a version list from the catalog read model with the "Installed" / "Download,
 //! size" badges, name and port fields, the superuser name, the no-password
 //! option with its warning, and a footer that only promises a download when one
 //! is really needed. Unavailable engines and versions are shown as
-//! "tidak tersedia di platform ini", never hidden (`F-CAT-02` AC2).
+//! "not available on this platform", never hidden (`F-CAT-02` AC2).
 //!
 //! Validation goes through the service's `validate_spec`, so the form and the
 //! real backend agree on every rule.
@@ -183,7 +183,7 @@ fn render_engine_cards(
             )
             .child(Label::new(engine.display_name()).font_weight(gpui_kit::FontWeight::SEMIBOLD))
             .child(
-                Label::new(format!("Port kanonik {}", engine.canonical_port()))
+                Label::new(format!("Canonical port {}", engine.canonical_port()))
                     .text_xs()
                     .text_color(theme.muted_foreground),
             )
@@ -240,7 +240,7 @@ fn render_versions(
             Some((strings::UI_VERSION_INSTALLED.to_owned(), theme.success))
         } else {
             Some((
-                format::create_download_badge(&format::format_bytes_id(version.size_bytes)),
+                format::create_download_badge(&format::format_bytes(version.size_bytes)),
                 theme.muted_foreground,
             ))
         };

@@ -271,7 +271,7 @@ impl login_item::LoginItemControl for RefusingLoginItem {
         })
     }
     fn enable(&self) -> Result<login_item::LoginStatus, UserFacingError> {
-        Err(UserFacingError::new("DBL-8502", "systemctl gagal"))
+        Err(UserFacingError::new("DBL-8502", "systemctl failed"))
     }
     fn disable(&self) -> Result<login_item::LoginStatus, UserFacingError> {
         Ok(login_item::LoginStatus {
@@ -316,7 +316,7 @@ impl login_item::LoginItemControl for SwitchLoginItem {
     fn disable(&self) -> Result<login_item::LoginStatus, UserFacingError> {
         if self.fail_disable {
             // The unit is still enabled, exactly as the failed call leaves it.
-            return Err(UserFacingError::new("DBL-8503", "disable gagal"));
+            return Err(UserFacingError::new("DBL-8503", "disable failed"));
         }
         Ok(login_item::LoginStatus {
             enabled: false,

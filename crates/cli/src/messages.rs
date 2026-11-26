@@ -1,4 +1,4 @@
-//! User-facing CLI strings (Indonesian, per AGENTS.md). Flags stay English.
+//! User-facing CLI strings. Flags stay English.
 //!
 //! Every sentence, label and code the CLI prints lives here; a handler that
 //! builds its own text is a defect, because this file is also the translation
@@ -11,47 +11,47 @@
 /// code.
 pub const CODE_TIMEOUT: &str = "DBL-8401";
 /// Message for [`CODE_TIMEOUT`].
-pub const ERR_TIMEOUT: &str = "waktu tunggu habis";
+pub const ERR_TIMEOUT: &str = "timed out";
 /// Code for a failure to build the CLI's own async runtime.
 pub const CODE_RUNTIME: &str = "DBL-8402";
 /// Message for [`CODE_RUNTIME`].
-pub const ERR_RUNTIME: &str = "gagal menyiapkan runtime CLI";
+pub const ERR_RUNTIME: &str = "could not set up the CLI runtime";
 
 /// Label in front of a start failure's diagnosis.
 pub const LABEL_DIAGNOSIS: &str = "diagnosis:";
 /// Prefix of a download-progress line.
-pub const PROGRESS_DOWNLOAD: &str = "... unduhan";
+pub const PROGRESS_DOWNLOAD: &str = "... downloading";
 /// Prefix of an operation-stage line.
 pub const PROGRESS_STAGE: &str = "...";
 
-pub const ERR_SERVICE_OPEN: &str = "Gagal membuka layanan DBLocal.";
-pub const ERR_INSTANCE_NOT_FOUND: &str = "Instance tidak ditemukan";
-pub const ERR_ALREADY_RUNNING: &str = "sudah berjalan";
-pub const ERR_STOPPING_ELSEWHERE: &str = "sedang dihentikan oleh proses lain";
-pub const ERR_NAME_CONFIRMATION: &str = "Penghapusan dibatalkan: nama instance tidak cocok.";
-pub const ERR_DELETE_NEEDS_YES: &str = "Penghapusan memerlukan --yes pada sesi non-interaktif.";
-pub const ERR_UNKNOWN_ENGINE: &str = "Engine tidak dikenal.";
-pub const ERR_CONFIRM_READ: &str = "gagal membaca konfirmasi";
-pub const ERR_CREATE_MISSING: &str = "instance hilang setelah create";
-pub const MSG_ARCHIVED_TO: &str = "Data diarsipkan ke";
-pub const MSG_DELETED: &str = "Instance dihapus.";
-pub const MSG_CREATING: &str = "Membuat instance";
-pub const MSG_STARTING: &str = "Menjalankan instance";
-pub const MSG_STOPPING: &str = "Menghentikan instance";
-pub const MSG_ALREADY_STOPPED: &str = "sudah berhenti";
-pub const MSG_READY: &str = "Siap.";
-pub const PROMPT_DELETE: &str = "Ketik nama instance untuk konfirmasi penghapusan: ";
+pub const ERR_SERVICE_OPEN: &str = "Could not open the DBLocal service.";
+pub const ERR_INSTANCE_NOT_FOUND: &str = "Instance not found";
+pub const ERR_ALREADY_RUNNING: &str = "already running";
+pub const ERR_STOPPING_ELSEWHERE: &str = "another process is stopping it";
+pub const ERR_NAME_CONFIRMATION: &str = "Delete cancelled: the instance name does not match.";
+pub const ERR_DELETE_NEEDS_YES: &str = "Deleting requires --yes in a non-interactive session.";
+pub const ERR_UNKNOWN_ENGINE: &str = "Unknown engine.";
+pub const ERR_CONFIRM_READ: &str = "could not read the confirmation";
+pub const ERR_CREATE_MISSING: &str = "the instance is missing after create";
+pub const MSG_ARCHIVED_TO: &str = "Data archived to";
+pub const MSG_DELETED: &str = "Instance deleted.";
+pub const MSG_CREATING: &str = "Creating instance";
+pub const MSG_STARTING: &str = "Starting instance";
+pub const MSG_STOPPING: &str = "Stopping instance";
+pub const MSG_ALREADY_STOPPED: &str = "already stopped";
+pub const MSG_READY: &str = "Ready.";
+pub const PROMPT_DELETE: &str = "Type the instance name to confirm deletion: ";
 
 /// Reply to `autostart status`/`enable` when the login item exists.
-pub const AUTOSTART_ENABLED: &str = "autostart: aktif";
+pub const AUTOSTART_ENABLED: &str = "autostart: enabled";
 /// Reply to `autostart status`/`disable` when the login item is absent.
-pub const AUTOSTART_DISABLED: &str = "autostart: nonaktif";
+pub const AUTOSTART_DISABLED: &str = "autostart: disabled";
 /// Label in front of the login-item location.
-pub const AUTOSTART_LOCATION: &str = "lokasi";
-/// Unknown `autostart` action (English noun kept for the parser contract).
-pub const ERR_AUTOSTART_ACTION: &str = "Aksi autostart tidak dikenal";
+pub const AUTOSTART_LOCATION: &str = "location";
+/// Unknown `autostart` action.
+pub const ERR_AUTOSTART_ACTION: &str = "Unknown autostart action";
 /// The running executable path could not be resolved for `autostart enable`.
-pub const ERR_AUTOSTART_EXE: &str = "lokasi aplikasi tidak bisa ditentukan";
+pub const ERR_AUTOSTART_EXE: &str = "could not determine the application location";
 
 /// Formats the service-open failure with a stable-looking diagnostic.
 pub fn service_open_error(detail: &str) -> String {
@@ -104,37 +104,37 @@ pub fn code_line(code: &str, message: &str) -> String {
 // --- Database, user, password, update, open (W4-A) ---------------------------
 
 /// A database was created.
-pub const MSG_DB_CREATED: &str = "Database dibuat.";
+pub const MSG_DB_CREATED: &str = "Database created.";
 /// A database was dropped.
-pub const MSG_DB_DROPPED: &str = "Database dihapus.";
+pub const MSG_DB_DROPPED: &str = "Database deleted.";
 /// A login role was created.
-pub const MSG_USER_CREATED: &str = "User dibuat. Simpan password ini; hanya ditampilkan sekali:";
+pub const MSG_USER_CREATED: &str = "User created. Save this password; it is shown only once:";
 /// The superuser password was reset; the new URI is printed once.
-pub const MSG_PASSWORD_RESET: &str = "Password superuser diganti. URI baru (ditampilkan sekali):";
+pub const MSG_PASSWORD_RESET: &str = "Superuser password changed. New URI (shown only once):";
 /// No newer release is available.
-pub const MSG_UPDATE_UP_TO_DATE: &str = "DBLocal sudah versi terbaru.";
+pub const MSG_UPDATE_UP_TO_DATE: &str = "DBLocal is up to date.";
 /// An update is available; `{}` is the version.
-pub const MSG_UPDATE_AVAILABLE: &str = "Versi baru tersedia:";
+pub const MSG_UPDATE_AVAILABLE: &str = "A new version is available:";
 /// The update was applied.
-pub const MSG_UPDATE_APPLIED: &str = "Pembaruan dipasang.";
+pub const MSG_UPDATE_APPLIED: &str = "Update installed.";
 /// The install is package-manager owned, so self-update is refused.
 pub const MSG_UPDATE_PACKAGE_MANAGER: &str =
-    "Pembaruan otomatis tidak tersedia; perbarui lewat package manager.";
+    "Automatic updates are not available; update through your package manager.";
 /// The client was launched.
-pub const MSG_CLIENT_OPENED: &str = "Client dibuka.";
+pub const MSG_CLIENT_OPENED: &str = "Client opened.";
 /// The dry run printed the plan instead of launching.
-pub const MSG_CLIENT_DRY_RUN: &str = "Rencana peluncuran (belum dijalankan):";
+pub const MSG_CLIENT_DRY_RUN: &str = "Launch plan (not executed):";
 /// `update apply` requires `--yes` on a non-interactive session.
 pub const ERR_UPDATE_NEEDS_YES: &str =
-    "Pemasangan pembaruan memerlukan --yes pada sesi non-interaktif.";
+    "Installing an update requires --yes in a non-interactive session.";
 /// The `--confirm` value did not match the database name.
-pub const ERR_DB_CONFIRM_MISMATCH: &str = "Penghapusan dibatalkan: nama database tidak cocok.";
+pub const ERR_DB_CONFIRM_MISMATCH: &str = "Delete cancelled: the database name does not match.";
 /// `db drop` needs `--yes` or a matching `--confirm` on a non-interactive session.
 pub const ERR_DB_NEEDS_CONFIRM: &str =
-    "Penghapusan database memerlukan --yes atau --confirm <nama>.";
+    "Dropping a database requires --yes or --confirm <name>.";
 /// The `--level` value was neither `ro` nor `rw`.
-pub const ERR_BAD_LEVEL: &str = "Tingkat hak harus `ro` atau `rw`.";
+pub const ERR_BAD_LEVEL: &str = "The privilege level must be `ro` or `rw`.";
 /// The `--client` value named no known client.
-pub const ERR_UNKNOWN_CLIENT: &str = "Client tidak dikenal.";
+pub const ERR_UNKNOWN_CLIENT: &str = "Unknown client.";
 /// Prompt for the typed database-name confirmation.
-pub const PROMPT_DB_CONFIRM: &str = "Ketik nama database untuk konfirmasi penghapusan: ";
+pub const PROMPT_DB_CONFIRM: &str = "Type the database name to confirm deletion: ";

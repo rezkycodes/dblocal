@@ -4,7 +4,7 @@
 //! menu shows. Two rules from the PRD drive it:
 //!
 //! - Only clients that were really detected appear (`F-OPN-01` AC1).
-//! - When nothing was detected, the menu offers "Salin URI" instead of an empty
+//! - When nothing was detected, the menu offers "Copy URI" instead of an empty
 //!   list (`F-OPN-01` AC2).
 //!
 //! Clients are grouped GUI-first, then CLI, because that is the order the
@@ -48,7 +48,7 @@ pub struct OpenInGroup {
 pub struct OpenInMenu {
     /// Non-empty groups, GUI first.
     pub groups: Vec<OpenInGroup>,
-    /// Whether to show "Salin URI" instead of the (empty) client list.
+    /// Whether to show "Copy URI" instead of the (empty) client list.
     pub copy_uri_fallback: bool,
 }
 

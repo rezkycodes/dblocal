@@ -54,7 +54,7 @@ fn open_tab_loads_the_uri_masked(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
-fn start_and_stop_report_the_indonesian_toast(cx: &mut TestAppContext) {
+fn start_and_stop_report_the_status_toast(cx: &mut TestAppContext) {
     let (view, service, cx) = fixture(cx);
     let id = service.id_with(InstanceStatus::Stopped);
 
@@ -242,7 +242,7 @@ fn submit_create_reopens_the_form_with_the_validation_message(cx: &mut TestAppCo
     );
     assert!(
         view.read_with(cx, |this, _| this.toast_text().is_some()),
-        "an invalid submit must explain the problem in Indonesian"
+        "an invalid submit must explain the problem"
     );
 }
 

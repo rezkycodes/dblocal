@@ -220,7 +220,7 @@ fn start_of_a_stopping_instance_says_stopping_and_exits_1() {
     );
     assert_eq!(code, EXIT_GENERAL, "err: {err}");
     assert!(
-        err.contains("sedang dihentikan oleh proses lain"),
+        err.contains("another process is stopping it"),
         "err: {err}"
     );
 }
@@ -246,10 +246,10 @@ fn start_refused_from_stopping_says_stopping_and_exits_1() {
     );
     assert_eq!(code, EXIT_GENERAL, "err: {err}");
     assert!(
-        err.contains("sedang dihentikan oleh proses lain"),
+        err.contains("another process is stopping it"),
         "err: {err}"
     );
-    assert!(!err.contains("sudah berjalan"), "err: {err}");
+    assert!(!err.contains("already running"), "err: {err}");
 }
 
 /// `stop` when another process is already stopping it: idempotent success.
@@ -272,7 +272,7 @@ fn stop_of_a_stopping_instance_waits_then_exits_0() {
         false,
     );
     assert!(
-        err.contains("sedang dihentikan oleh proses lain"),
+        err.contains("another process is stopping it"),
         "err: {err}"
     );
     assert_eq!(_code, EXIT_OK, "err: {err}");
@@ -295,7 +295,7 @@ fn stop_refused_from_stopped_is_idempotent_success() {
         false,
     );
     assert_eq!(code, EXIT_OK, "err: {err}");
-    assert!(err.contains("sudah berhenti"), "err: {err}");
+    assert!(err.contains("already stopped"), "err: {err}");
 }
 
 /// `stop` refused with the concrete `stopping` (the row moved under us) is the
@@ -320,7 +320,7 @@ fn stop_refused_from_stopping_waits_then_exits_0() {
     );
     assert_eq!(code, EXIT_OK, "err: {err}");
     assert!(
-        err.contains("sedang dihentikan oleh proses lain"),
+        err.contains("another process is stopping it"),
         "err: {err}"
     );
 }

@@ -1,4 +1,4 @@
-//! The "Jalankan saat login" seam (`F-AUT-01`).
+//! The "Run at login" seam (`F-AUT-01`).
 //!
 //! The frozen `DblService` has no login-item call — that was deliberately kept
 //! out of the service surface when W4-D landed the backends — so the Settings
@@ -115,7 +115,7 @@ mod tests {
     impl LoginItemControl for FakeLoginItem {
         fn status(&self) -> Result<LoginStatus, UserFacingError> {
             if self.fail_status {
-                return Err(UserFacingError::new("DBL-8504", "status gagal"));
+                return Err(UserFacingError::new("DBL-8504", "status check failed"));
             }
             Ok(LoginStatus {
                 enabled: self.enabled,
@@ -124,7 +124,7 @@ mod tests {
         }
         fn enable(&self) -> Result<LoginStatus, UserFacingError> {
             if self.fail_enable {
-                return Err(UserFacingError::new("DBL-8502", "systemctl gagal"));
+                return Err(UserFacingError::new("DBL-8502", "systemctl failed"));
             }
             Ok(LoginStatus {
                 enabled: true,

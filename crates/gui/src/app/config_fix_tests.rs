@@ -24,7 +24,7 @@ fn a_failed_restore_is_typed_and_does_not_start_the_instance(cx: &mut TestAppCon
     let (view, service, cx) = fixture(cx);
     service.set(|script| {
         script.config_view = Ok(view_with_backup());
-        script.config_restore = Err(UserFacingError::new("DBL-8605", "pulihkan gagal"));
+        script.config_restore = Err(UserFacingError::new("DBL-8605", "restore failed"));
     });
     let id = open_config(&view, &service, cx);
     let starts_before = service.counts().start_instance;
@@ -50,7 +50,7 @@ fn a_good_restore_then_a_failed_start_reports_the_start(cx: &mut TestAppContext)
     service.set(|script| {
         script.config_view = Ok(view_with_backup());
         script.config_restore = Ok(());
-        script.start_instance = Err(UserFacingError::new("DBL-4001", "mesin gagal start"));
+        script.start_instance = Err(UserFacingError::new("DBL-4001", "engine failed to start"));
     });
     let id = open_config(&view, &service, cx);
     view.update(cx, |this, cx| this.restore_and_restart(&id, cx));
@@ -91,7 +91,7 @@ fn a_failed_stop_after_restart_now_leaves_no_pending_restart(cx: &mut TestAppCon
         this.apply_event_with_cx(
             UiEvent::OperationFinished {
                 id: dblocal_core::service::OperationId::new("op-stop"),
-                result: Err(UserFacingError::new("DBL-4002", "stop gagal")),
+                result: Err(UserFacingError::new("DBL-4002", "stop failed")),
             },
             cx,
         );
@@ -126,7 +126,7 @@ fn a_pending_restart_matches_only_its_own_stop_and_instance(cx: &mut TestAppCont
         this.apply_event_with_cx(
             UiEvent::OperationFinished {
                 id: dblocal_core::service::OperationId::new("op-unrelated"),
-                result: Err(UserFacingError::new("DBL-4002", "lain gagal")),
+                result: Err(UserFacingError::new("DBL-4002", "other failure")),
             },
             cx,
         );
@@ -435,7 +435,7 @@ fn a_re_read_keeps_the_typed_text_and_the_rows(cx: &mut TestAppContext) {
     });
     assert!(
         rows > 0,
-        "F7b: a refresh keeps the rows on screen, no 'Memuat...'"
+        "F7b: a refresh keeps the rows on screen, no 'Loading...'"
     );
     assert!(refreshing, "F7b: the card knows a read is in flight");
     let typed = view.read_with(cx, |this, _| {
@@ -659,7 +659,7 @@ fn a_refused_stop_leaves_no_pending_restart(cx: &mut TestAppContext) {
     );
 }
 
-/// `F10c`: the "Muat ulang" button is the only dismissal of a failed-action
+/// `F10c`: the "Reload" button is the only dismissal of a failed-action
 /// banner since a successful re-read no longer clears it. A failed apply leaves
 /// the card error, `retry_config` drops it, issues a fresh read, and the view
 /// stays `Ready`.
@@ -669,7 +669,7 @@ fn retry_dismisses_a_failed_apply_error_and_re_reads(cx: &mut TestAppContext) {
     service.set(|script| {
         script.config_apply = Err(UserFacingError::new(
             "DBL-8604",
-            "Instance sedang dipakai operasi lain. Coba lagi setelah selesai.",
+            "The instance is busy with another operation. Try again when it finishes.",
         ));
     });
     let id = open_config(&view, &service, cx);
@@ -689,7 +689,7 @@ fn retry_dismisses_a_failed_apply_error_and_re_reads(cx: &mut TestAppContext) {
         "F10c: the failed apply set the card error first"
     );
 
-    // "Muat ulang" is the user's dismissal: it clears that error and re-reads.
+    // "Reload" is the user's dismissal: it clears that error and re-reads.
     let reads_before = service.counts().config_view;
     view.update(cx, |this, cx| this.retry_config(&id, cx));
     settle(cx);
@@ -703,11 +703,11 @@ fn retry_dismisses_a_failed_apply_error_and_re_reads(cx: &mut TestAppContext) {
     });
     assert!(
         error_now.is_none(),
-        "F10c: Muat ulang clears the failed-apply error"
+        "F10c: Reload clears the failed-apply error"
     );
     assert!(
         reads_now > reads_before,
-        "F10c: Muat ulang issues a fresh config_view read"
+        "F10c: Reload issues a fresh config_view read"
     );
     assert!(ready, "F10c: the re-read lands a Ready view");
 }

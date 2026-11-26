@@ -119,7 +119,7 @@ impl Workspace {
             )
     }
 
-    /// The failure banner that offers "Pulihkan konfigurasi dan mulai ulang"
+    /// The failure banner that offers "Restore the configuration and restart"
     /// (`F-CFG-01` AC3): shown where the failure is, not only in the Config tab.
     fn render_restore_banner(
         &self,
@@ -351,7 +351,7 @@ impl Workspace {
         let arch = std::env::consts::ARCH;
         let size = self
             .data_size(&view.id)
-            .map(format::format_bytes_id)
+            .map(format::format_bytes)
             .unwrap_or_else(|| strings::UI_VALUE_UNKNOWN.to_owned());
         let canonical = format::is_canonical_port(view);
         card(Some(strings::UI_OVERVIEW_DETAIL), None, theme)

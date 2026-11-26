@@ -228,7 +228,7 @@ fn a_successful_create_clears_the_name_fields(cx: &mut TestAppContext) {
 fn a_failed_create_keeps_the_name(cx: &mut TestAppContext) {
     let (view, service, cx) = fixture(cx);
     service.set(|script| {
-        script.create_database = Err(UserFacingError::new("DBL-8104", "sudah ada"));
+        script.create_database = Err(UserFacingError::new("DBL-8104", "already exists"));
     });
     let id = open_databases(&view, &service, cx);
     set_db_name(&view, "shop_db", cx);
@@ -277,7 +277,7 @@ fn a_drop_reports_itself_in_the_status_bar(cx: &mut TestAppContext) {
 fn a_failed_drop_does_not_confirm(cx: &mut TestAppContext) {
     let (view, service, cx) = fixture(cx);
     service.set(|script| {
-        script.drop_database = Err(UserFacingError::new("DBL-8106", "masih dipakai"));
+        script.drop_database = Err(UserFacingError::new("DBL-8106", "still in use"));
     });
     let id = open_databases(&view, &service, cx);
     view.update(cx, |this, cx| {
@@ -557,7 +557,7 @@ fn every_dialog_close_path_returns_focus_through_the_frame(cx: &mut TestAppConte
     cx.update(|window, cx| window.draw(cx).clear(cx));
     assert!(
         cx.update(|window, _| field.is_focused(window)),
-        "F3b: \"Sudah saya simpan\" must return focus to the covered field"
+        "F3b: \"I have saved it\" must return focus to the covered field"
     );
 }
 

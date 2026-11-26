@@ -163,7 +163,7 @@ impl SettingsState {
     }
 }
 
-/// Whether the "Pasang" button may be offered: only for a found release on an
+/// Whether the "Install" button may be offered: only for a found release on an
 /// install kind that can self-update (`F-PKG-05` AC2).
 pub fn can_install(state: &SettingsState) -> bool {
     match state.checked().and_then(|status| status.available.as_ref()) {
@@ -172,7 +172,7 @@ pub fn can_install(state: &SettingsState) -> bool {
     }
 }
 
-/// The package-manager hint to show instead of "Pasang", when the service has
+/// The package-manager hint to show instead of "Install", when the service has
 /// one for this install kind (`F-PKG-05` AC2).
 pub fn package_manager_hint(state: &SettingsState) -> Option<&str> {
     state
@@ -198,14 +198,14 @@ pub fn install_kind_label(kind: &dblocal_core::update::InstallKind) -> &'static 
     use dblocal_core::update::InstallKind;
     match kind {
         InstallKind::AppImage { .. } => "AppImage",
-        InstallKind::PortableTarball { .. } => "Tarball portabel",
-        InstallKind::WindowsZip { .. } => "Zip Windows",
-        InstallKind::WindowsMsi { .. } => "MSI Windows",
-        InstallKind::MacApp { .. } => "Aplikasi macOS",
-        InstallKind::DistPackage { .. } => "Paket distribusi",
+        InstallKind::PortableTarball { .. } => "Portable tarball",
+        InstallKind::WindowsZip { .. } => "Windows zip",
+        InstallKind::WindowsMsi { .. } => "Windows MSI",
+        InstallKind::MacApp { .. } => "macOS app",
+        InstallKind::DistPackage { .. } => "Distribution package",
         InstallKind::Homebrew { .. } => "Homebrew",
-        InstallKind::Unknown { .. } => "Tidak dikenali",
-        _ => "Tidak dikenali",
+        InstallKind::Unknown { .. } => "Unknown",
+        _ => "Unknown",
     }
 }
 
@@ -309,7 +309,7 @@ mod tests {
         };
         assert_eq!(
             check_headline(&state).as_deref(),
-            Some("Versi 0.9.0 tersedia.")
+            Some("Version 0.9.0 is available.")
         );
     }
 

@@ -75,7 +75,7 @@ fn create_no_password_stdout_is_exactly_the_no_password_uri() {
     assert_eq!(out, "redis://127.0.0.1:25100/0\n");
     assert!(!out.contains('@'), "no userinfo expected: {out}");
     // Progress goes to stderr; stdout is just the URI.
-    assert!(err.contains("Membuat instance"), "stderr: {err}");
+    assert!(err.contains("Creating instance"), "stderr: {err}");
 }
 
 /// A no-password PostgreSQL create prints `user@`, never `user:@`.
@@ -215,7 +215,7 @@ fn start_then_stop_through_the_mock() {
         false,
     );
     assert_eq!(code, EXIT_OK, "stderr: {err}");
-    assert!(err.contains("Siap.") || err.contains("Siap"));
+    assert!(err.contains("Ready.") || err.contains("Ready"));
     let view = svc.list_instances().unwrap().into_iter().next().unwrap();
     assert_eq!(view.status, InstanceStatus::Running);
 
@@ -410,7 +410,7 @@ fn interactive_delete_with_no_input_is_refused() {
         none,
     );
     assert_eq!(code, EXIT_BAD_ARGS);
-    assert!(err.contains("gagal membaca konfirmasi"));
+    assert!(err.contains("could not read the confirmation"));
     assert_eq!(svc.list_instances().unwrap().len(), 1);
 }
 
@@ -561,7 +561,7 @@ fn create_download_progress_goes_to_stderr_only() {
     // stdout carries the URI and nothing else.
     assert_eq!(out.trim().lines().count(), 1, "out: {out}");
     assert!(
-        err.contains("unduhan") || err.contains("downloading"),
+        err.contains("downloading"),
         "err: {err}"
     );
 }

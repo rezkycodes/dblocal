@@ -334,7 +334,7 @@ impl Workspace {
     ///
     /// Entries come from the cached detection, grouped GUI then CLI, with a
     /// refresh item. A client that cannot open this engine is listed disabled.
-    /// When nothing was detected the menu offers "Salin URI" instead of an empty
+    /// When nothing was detected the menu offers "Copy URI" instead of an empty
     /// list (`F-OPN-01` AC2). A launch failure is reported as a typed toast.
     ///
     /// `slot` keeps the element ids unique when two of these menus are on screen
@@ -351,7 +351,7 @@ impl Workspace {
         use gpui_kit::component::menu::PopupMenuItem;
         let menu = self.open_in_menu(view.engine);
         let opening = self.opening_instance() == Some(&view.id);
-        // "Salin URI" is the fallback when nothing was detected (`F-OPN-01` AC2)
+        // "Copy URI" is the fallback when nothing was detected (`F-OPN-01` AC2)
         // and also when every detected client is for another engine, so the menu
         // is never a list of dead rows.
         let copy_uri = menu.copy_uri_fallback || !menu.has_launchable();

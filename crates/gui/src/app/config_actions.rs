@@ -28,7 +28,7 @@ use super::config_state::ConfigAction;
 enum RestoreFollowUp {
     /// "Pulihkan konfigurasi sebelumnya" from the dialog: only the file changes.
     FileOnly,
-    /// The failure banner's "Pulihkan konfigurasi dan mulai ulang": restore, start.
+    /// The failure banner's "Restore the configuration and restart": restore, start.
     Start,
 }
 
@@ -101,7 +101,7 @@ impl Workspace {
         self.config.entry(&id).data = super::admin_state::Loadable::Ready(view);
     }
 
-    /// "Muat ulang": re-reads after a failure.
+    /// "Reload": re-reads after a failure.
     ///
     /// It is itself the user's dismissal of whatever card banner was showing, so
     /// a failed apply/restore/open error goes away here too (`F10`).
