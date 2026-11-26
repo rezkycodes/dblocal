@@ -45,3 +45,35 @@ fn every_screen_renders_in_both_themes() {
         );
     }
 }
+
+#[test]
+fn renders_create_dialog_with_all_versions_in_both_themes() {
+    let dark = render(
+        true,
+        "create-all-versions-dark.png",
+        Workspace::preview_create_all_versions,
+    );
+    let light = render(
+        false,
+        "create-all-versions-light.png",
+        Workspace::preview_create_all_versions,
+    );
+    eprintln!(
+        "CREATE-ALL-VERSIONS: dark_colours={} light_colours={}",
+        dark.colours, light.colours
+    );
+    assert!(
+        dark.colours > 24,
+        "create-all-versions dark render too flat ({})",
+        dark.colours
+    );
+    assert!(
+        light.colours > 24,
+        "create-all-versions light render too flat ({})",
+        light.colours
+    );
+    assert!(
+        light.mean_luminance() > dark.mean_luminance(),
+        "create-all-versions light frame is not lighter than dark"
+    );
+}

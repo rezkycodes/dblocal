@@ -405,6 +405,36 @@ impl Workspace {
         workspace
     }
 
+    /// Preview of the create modal with "Only show latest versions" unchecked
+    /// and an older patch present on the 17.x line so the extra row is visible.
+    pub fn preview_create_all_versions(
+        service: Arc<dyn DblService>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let mut workspace = Self::preview_create(service, window, cx);
+        if let Some(entry) = workspace
+            .catalog
+            .engines
+            .iter_mut()
+            .find(|entry| entry.engine == dblocal_core::model::EngineKey::Postgresql)
+        {
+            entry.versions.insert(
+                1,
+                dblocal_core::service::VersionEntry {
+                    version: "17.3".to_owned(),
+                    line: "17".to_owned(),
+                    eol: false,
+                    status: None,
+                    installed: false,
+                    size_bytes: 54_000_000,
+                },
+            );
+        }
+        workspace.set_latest_only(false, window, cx);
+        workspace
+    }
+
     /// Preview of the create modal with an engine unavailable on this platform.
     pub fn preview_create_unavailable(
         service: Arc<dyn DblService>,
