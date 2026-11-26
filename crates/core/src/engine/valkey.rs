@@ -1,29 +1,34 @@
 //! Valkey engine adapter.
 //!
-//! Renders `valkey.conf`, builds the `valkey-server` start command, probes with
-//! `PING` over RESP, stops with `SHUTDOWN`, parses the pidfile and diagnoses
-//! start failures — including causes that only appear in the logfile (C-10).
+//! Thin wrapper over [`crate::engine::resp`]: renders `valkey.conf`, builds the
+//! `valkey-server` start command, probes with `PING` over RESP, stops with
+//! `SHUTDOWN`, parses the pidfile and diagnoses start failures — including
+//! causes that only appear in the logfile (C-10).
 
-use std::fmt::Write as _;
-use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
-use std::time::Duration;
+use std::process::Command;
 
 use crate::consts;
-use crate::engine::uri::{self, exe_name};
-use crate::engine::{AdminOps, Credential, EngineAdapter, Health, InitContext, RunContext};
-use crate::error::{DblError, Result};
-use crate::model::{AuthMode, EngineKey, StartFailure};
+use crate::engine::resp::{self, RespBrand};
+use crate::engine::{AdminOps, Credential, EngineAdapter, Health, InitContext, RunContext, uri};
+use crate::error::Result;
+use crate::model::{EngineKey, StartFailure};
 use crate::secret::SecretString;
 use crate::service::UriFormat;
 
-/// Valkey listens on IPv4 and IPv6 loopback only (never `0.0.0.0`).
-pub const BIND: &str = "127.0.0.1 -::1";
-/// Dependency policy: AOF keeps data across a forced kill (C-11).
-const PERSISTENCE: &str = "appendonly yes\nappendfilename \"appendonly.aof\"\nappenddirname \"appendonlydir\"\nsave 3600 1 300 100 60 10000";
-/// Mode passed to `SHUTDOWN`; AOF already carries committed data.
-pub const SHUTDOWN_MODE: &str = "NOSAVE";
+pub use crate::engine::resp::{ConfigParams, ServerIdentity};
+
+/// Brand parameters for Valkey.
+pub const BRAND: RespBrand = RespBrand {
+    engine: EngineKey::Valkey,
+    label: "valkey",
+    server_bin: "valkey-server",
+    multicall_bin: None,
+    config_file: "valkey.conf",
+    pid_file: "valkey.pid",
+    log_file: "valkey.log",
+    superuser: consts::SUPERUSER_VALKEY,
+};
 
 /// Valkey adapter.
 #[derive(Debug, Clone, Copy, Default)]
@@ -35,77 +40,19 @@ impl EngineAdapter for ValkeyAdapter {
     }
 
     fn initialize(&self, ctx: &InitContext) -> Result<()> {
-        let run_dir = sibling_dir(&ctx.data_dir, consts::DIR_RUN);
-        let logs_dir = sibling_dir(&ctx.data_dir, consts::DIR_LOGS);
-        for (dir, label) in [
-            (&ctx.data_dir, "data"),
-            (&run_dir, "run"),
-            (&logs_dir, "logs"),
-        ] {
-            ensure_private_dir(dir, label)?;
-        }
-        let params = ConfigParams {
-            port: ctx.port.get(),
-            data_dir: &ctx.data_dir,
-            run_dir: &run_dir,
-            logs_dir: &logs_dir,
-            password: ctx.password.as_ref(),
-            auth: ctx.auth,
-        };
-        let rendered = render_config(&params);
-        write_config(&config_path(&run_dir), rendered.expose())?;
-        tracing::debug!(instance = %ctx.instance_name, "valkey.conf written");
-        Ok(())
+        resp::initialize(&BRAND, ctx)
     }
 
     fn spawn_command(&self, ctx: &RunContext) -> Command {
-        let server = ctx.runtime_dir.join("bin").join(exe_name("valkey-server"));
-        let mut cmd = Command::new(server);
-        cmd.arg(config_path(&ctx.run_dir));
-        cmd.stdin(Stdio::null());
-        cmd
+        resp::spawn_command(&BRAND, ctx)
     }
 
     fn health_check(&self, ctx: &RunContext) -> Result<Health> {
-        // Parse the RESP reply. `valkey-cli` exits 0 on NOAUTH (C-12), so a CLI
-        // exit code proves nothing.
-        let client = client_for(ctx)?;
-        let mut con = client
-            .get_connection_with_timeout(Duration::from_secs(5))
-            .map_err(|e| classify_redis_connect(&e))?;
-        match redis::cmd("PING").query::<String>(&mut con) {
-            Ok(reply) if reply == "PONG" => Ok(Health::Ready),
-            Ok(reply) => Ok(Health::NotReady(format!("unexpected PING reply: {reply}"))),
-            Err(err) => {
-                if is_auth_challenge(&err) {
-                    // The server answered the protocol with an auth requirement:
-                    // it is up (trait contract).
-                    Ok(Health::Ready)
-                } else {
-                    Err(DblError::Engine {
-                        reason: format!("valkey PING failed: {err}"),
-                    })
-                }
-            }
-        }
+        resp::health_check(&BRAND, ctx)
     }
 
     fn shutdown(&self, ctx: &RunContext) -> Result<()> {
-        let client = client_for(ctx)?;
-        let mut con = client
-            .get_connection_with_timeout(Duration::from_secs(consts::STOP_GRACE_SECS))
-            .map_err(|e| classify_redis_connect(&e))?;
-        let reply: redis::RedisResult<()> =
-            redis::cmd("SHUTDOWN").arg(SHUTDOWN_MODE).query(&mut con);
-        match reply {
-            Ok(()) => Ok(()),
-            // `SHUTDOWN` closes the socket before acknowledging; a dropped
-            // connection after we sent the command is the success path.
-            Err(err) if is_connection_closed(&err) => Ok(()),
-            Err(err) => Err(DblError::Engine {
-                reason: format!("valkey SHUTDOWN failed: {err}"),
-            }),
-        }
+        resp::shutdown(&BRAND, ctx)
     }
 
     fn connection_uri(
@@ -127,259 +74,63 @@ impl EngineAdapter for ValkeyAdapter {
     }
 }
 
-/// Inputs of a rendered `valkey.conf`.
-#[derive(Debug, Clone, Copy)]
-pub struct ConfigParams<'a> {
-    /// Listening port.
-    pub port: u16,
-    /// Server working directory (`dir`); must exist.
-    pub data_dir: &'a Path,
-    /// Directory holding the pidfile and config.
-    pub run_dir: &'a Path,
-    /// Directory holding the logfile.
-    pub logs_dir: &'a Path,
-    /// Superuser password, present only in password auth mode.
-    pub password: Option<&'a SecretString>,
-    /// Authentication mode; drives `requirepass`.
-    pub auth: AuthMode,
-}
-
 /// Renders the managed `valkey.conf`. Secret because it may carry `requirepass`.
 pub fn render_config(params: &ConfigParams<'_>) -> SecretString {
-    let mut out = String::new();
-    let _ = writeln!(out, "bind {BIND}");
-    let _ = writeln!(out, "protected-mode yes");
-    let _ = writeln!(out, "port {}", params.port);
-    let _ = writeln!(out, "daemonize no");
-    let _ = writeln!(out, "supervised no");
-    let _ = writeln!(out, "tcp-backlog 511");
-    let _ = writeln!(out, "timeout 0");
-    let _ = writeln!(out, "tcp-keepalive 300");
-    let _ = writeln!(out, "loglevel notice");
-    let _ = writeln!(out, "pidfile {}", pidfile_path(params.run_dir).display());
-    let _ = writeln!(out, "logfile {}", logfile_path(params.logs_dir).display());
-    let _ = writeln!(out, "databases 16");
-    let _ = writeln!(out, "dir {}", params.data_dir.display());
-    if params.auth == AuthMode::Password
-        && let Some(password) = params.password
-    {
-        // `requirepass` must be a single token; generated passwords are
-        // alphanumeric, so they never need quoting.
-        let _ = writeln!(out, "requirepass {}", password.expose());
-    }
-    let _ = writeln!(out, "{PERSISTENCE}");
-    SecretString::new(out)
+    resp::render_config(&BRAND, params)
 }
 
 /// Path of the generated config inside the run directory.
 pub fn config_path(run_dir: &Path) -> PathBuf {
-    run_dir.join("valkey.conf")
+    resp::config_path(&BRAND, run_dir)
 }
 
 /// Path of the server pidfile.
 pub fn pidfile_path(run_dir: &Path) -> PathBuf {
-    run_dir.join("valkey.pid")
+    resp::pidfile_path(&BRAND, run_dir)
 }
 
 /// Path of the server logfile.
 pub fn logfile_path(logs_dir: &Path) -> PathBuf {
-    logs_dir.join("valkey.log")
+    resp::logfile_path(&BRAND, logs_dir)
 }
 
 /// Ensures the directories the server needs exist at start time.
-///
-/// `spawn_command` cannot fail; the service can call this before spawning to get
-/// a clear error when the instance layout is damaged.
 pub fn prepare_run(ctx: &RunContext) -> Result<()> {
-    ensure_private_dir(&ctx.data_dir, "data")?;
-    ensure_private_dir(&ctx.run_dir, "run")?;
-    ensure_private_dir(&ctx.logs_dir, "logs")?;
-    Ok(())
-}
-
-fn ensure_private_dir(dir: &Path, label: &str) -> Result<()> {
-    crate::fsutil::ensure_private_dir(dir).map_err(|e| DblError::Engine {
-        reason: format!(
-            "cannot create/chmod {label} directory {}: {e}",
-            dir.display()
-        ),
-    })
+    resp::prepare_run(ctx)
 }
 
 /// Rewrites the managed `port` line in `run_dir/valkey.conf`.
-///
-/// Atomic: temp file in the same directory, fsync, rename. Other settings and
-/// comments are preserved. Idempotent. Fails if the config is missing or has no
-/// `port` directive (the caller should treat that as a config-drift error).
 pub fn sync_port(run_dir: &Path, port: u16) -> Result<()> {
-    let path = config_path(run_dir);
-    let contents = fs::read_to_string(&path).map_err(|e| DblError::Engine {
-        reason: format!("cannot read {}: {e}", path.display()),
-    })?;
-    let mut replaced = false;
-    let mut out = String::with_capacity(contents.len() + 16);
-    for line in contents.lines() {
-        let trimmed = line.trim_start();
-        if trimmed.starts_with("port ") {
-            let _ = writeln!(out, "port {port}");
-            replaced = true;
-        } else {
-            out.push_str(line);
-            out.push('\n');
-        }
-    }
-    if !replaced {
-        return Err(DblError::Engine {
-            reason: format!("{} has no `port` directive to rewrite", path.display()),
-        });
-    }
-    write_private_config_atomic(&path, &out)
-}
-
-fn write_private_config_atomic(path: &Path, contents: &str) -> Result<()> {
-    crate::fsutil::write_private_file_atomic(path, contents.as_bytes()).map_err(|e| {
-        DblError::Engine {
-            reason: format!("cannot write {}: {e}", path.display()),
-        }
-    })
+    resp::sync_port(&BRAND, run_dir, port)
 }
 
 /// Returns `data_dir`'s sibling directory `leaf` (`run`, `logs`).
 pub fn sibling_dir(data_dir: &Path, leaf: &str) -> PathBuf {
-    match data_dir.parent() {
-        Some(parent) => parent.join(leaf),
-        None => data_dir.join(leaf),
-    }
-}
-
-fn write_config(path: &Path, contents: &str) -> Result<()> {
-    write_private_config_atomic(path, contents)
-}
-
-/// Parsed Valkey pidfile: the server writes a single PID line.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ServerIdentity {
-    /// Server process id.
-    pub pid: u32,
+    resp::sibling_dir(data_dir, leaf)
 }
 
 /// Parses a Valkey pidfile. Callers must still verify the executable and the
 /// `/proc/<pid>` start time before signalling (C-08 discipline, D-17).
 pub fn parse_pidfile(contents: &str) -> Result<ServerIdentity> {
-    let first = contents
-        .lines()
-        .map(str::trim)
-        .find(|line| !line.is_empty())
-        .ok_or_else(|| DblError::Engine {
-            reason: "valkey.pid is empty".to_owned(),
-        })?;
-    let pid = first.parse::<u32>().map_err(|_| DblError::Engine {
-        reason: "valkey.pid does not contain a pid".to_owned(),
-    })?;
-    Ok(ServerIdentity { pid })
+    resp::parse_pidfile(&BRAND, contents)
 }
 
 /// Reads and parses `<run_dir>/valkey.pid`.
 pub fn read_pidfile(run_dir: &Path) -> Result<ServerIdentity> {
-    let path = pidfile_path(run_dir);
-    let contents = fs::read_to_string(&path).map_err(|e| DblError::Engine {
-        reason: format!("cannot read {}: {e}", path.display()),
-    })?;
-    parse_pidfile(&contents)
-}
-
-fn client_for(ctx: &RunContext) -> Result<redis::Client> {
-    let username = if ctx.superuser.is_empty() {
-        consts::SUPERUSER_VALKEY.to_owned()
-    } else {
-        ctx.superuser.clone()
-    };
-    let password = ctx
-        .credential
-        .as_ref()
-        .map(|c| c.password.clone())
-        .unwrap_or_else(|| SecretString::new(String::new()));
-    let credential = Credential::new(username, password);
-    let uri = uri::render(
-        EngineKey::Valkey,
-        ctx.port.get(),
-        &credential,
-        UriFormat::Uri,
-    );
-    redis::Client::open(uri.expose()).map_err(|e| DblError::Engine {
-        reason: format!("cannot build valkey client: {e}"),
-    })
-}
-
-/// A server that answered with an auth requirement is up; this is not a
-/// failure (trait contract).
-fn is_auth_challenge(err: &redis::RedisError) -> bool {
-    if err.kind() == redis::ErrorKind::AuthenticationFailed {
-        return true;
-    }
-    err.detail()
-        .is_some_and(|detail| detail.contains("NOAUTH") || detail.contains("AUTH"))
-}
-
-fn is_connection_closed(err: &redis::RedisError) -> bool {
-    if err.is_io_error() {
-        return true;
-    }
-    err.detail().is_some_and(|detail| {
-        detail.contains("broken pipe")
-            || detail.contains("Connection reset")
-            || detail.contains("connection closed")
-    })
-}
-
-fn classify_redis_connect(err: &redis::RedisError) -> DblError {
-    if is_auth_challenge(err) {
-        // Reached the server and it challenged us: it is running. The health
-        // probe is the only caller that has a meaningful "Ready" answer here;
-        // for stop/URI callers this is a real error.
-        DblError::Engine {
-            reason: "valkey rejected the credentials".to_owned(),
-        }
-    } else {
-        DblError::Engine {
-            reason: format!("cannot connect to valkey: {err}"),
-        }
-    }
+    resp::read_pidfile(&BRAND, run_dir)
 }
 
 /// Classifies raw Valkey start output or log tail into a [`StartFailure`].
-///
-/// Valkey writes some fatal causes only to the logfile (C-10), so the caller
-/// must pass the log tail here, not only stderr.
 pub fn diagnose_failure_text(output: &str) -> StartFailure {
-    let lower = output.to_ascii_lowercase();
-
-    // Port genuinely occupied (spike 6.1). A generic bind failure such as
-    // "Cannot assign requested address" or a bare "Failed listening" has no
-    // honest variant, so it falls through to Unknown with the raw tail.
-    if output.contains("Address already in use") {
-        return StartFailure::PortInUse;
-    }
-
-    // Only a real "permission denied" (including the append-only directory
-    // case, spike 6.7) is an honest PermissionDenied. A missing directory
-    // ("No such file or directory") or an append-only path that is "Not a
-    // directory" has no honest variant, so it stays Unknown with the raw tail.
-    if output.contains("Permission denied") || lower.contains("permission denied") {
-        return StartFailure::PermissionDenied;
-    }
-
-    if output.contains("Can't open or create append-only dir") {
-        return StartFailure::Unknown;
-    }
-
-    StartFailure::Unknown
+    resp::diagnose_failure_text(output)
 }
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
     use super::*;
-    use crate::model::Port;
+    use crate::model::{AuthMode, Port};
+    use crate::error::DblError;
     use tempfile::tempdir;
 
     fn params<'a>(password: Option<&'a SecretString>, auth: AuthMode) -> ConfigParams<'a> {

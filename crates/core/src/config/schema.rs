@@ -35,6 +35,11 @@ pub const DEFAULTS_PROVENANCE: &[(&str, &str, &str)] = &[
         "9.2.0",
         "`valkey-server` then `CONFIG GET maxmemory maxmemory-policy appendonly save timeout`",
     ),
+    (
+        "redis",
+        "7.4.12",
+        "`redis-server` (via `redis-check-rdb` arg0) then `CONFIG GET maxmemory maxmemory-policy appendonly save timeout`",
+    ),
 ];
 
 /// Whether a setting needs a restart to take effect.
@@ -344,7 +349,7 @@ pub fn settings_for(engine: EngineKey) -> &'static [SettingSpec] {
         EngineKey::Postgresql => PG_SETTINGS,
         EngineKey::Mysql => MYSQL_SETTINGS,
         EngineKey::Mariadb => MARIADB_SETTINGS,
-        EngineKey::Valkey => VALKEY_SETTINGS,
+        EngineKey::Valkey | EngineKey::Redis => VALKEY_SETTINGS,
     }
 }
 
@@ -356,7 +361,7 @@ pub fn readonly_keys(engine: EngineKey) -> &'static [&'static str] {
     match engine {
         EngineKey::Postgresql => &["port", "authentication method"],
         EngineKey::Mysql | EngineKey::Mariadb => &["port"],
-        EngineKey::Valkey => &["port"],
+        EngineKey::Valkey | EngineKey::Redis => &["port"],
     }
 }
 

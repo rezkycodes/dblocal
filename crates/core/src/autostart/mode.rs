@@ -59,7 +59,7 @@ impl AutostartService for Arc<dyn DblService> {
 /// observe the outcome.
 pub fn start_wait_bound(engine: EngineKey) -> Duration {
     let base = match engine {
-        EngineKey::Valkey => consts::START_TIMEOUT_SECS_VALKEY,
+        EngineKey::Valkey | EngineKey::Redis => consts::START_TIMEOUT_SECS_VALKEY,
         _ => consts::START_TIMEOUT_SECS,
     };
     Duration::from_secs(base + consts::AUTOSTART_START_MARGIN_SECS)

@@ -223,7 +223,9 @@ fn parse_engine(value: &str) -> Result<EngineKey> {
     value.parse::<EngineKey>().map_err(|_| {
         invalid(
             "engine",
-            format!("unknown engine {value:?}, expected one of postgresql, mysql, mariadb, valkey"),
+            format!(
+                "unknown engine {value:?}, expected one of postgresql, mysql, mariadb, valkey, redis"
+            ),
         )
     })
 }

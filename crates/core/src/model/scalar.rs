@@ -32,7 +32,7 @@ impl Family {
     }
 }
 
-/// The four engines DBLocal can manage.
+/// The five engines DBLocal can manage.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[non_exhaustive]
 pub enum EngineKey {
@@ -44,11 +44,19 @@ pub enum EngineKey {
     Mariadb,
     /// Valkey.
     Valkey,
+    /// Redis.
+    Redis,
 }
 
 impl EngineKey {
     /// Every engine, in catalog order.
-    pub const ALL: [Self; 4] = [Self::Postgresql, Self::Mysql, Self::Mariadb, Self::Valkey];
+    pub const ALL: [Self; 5] = [
+        Self::Postgresql,
+        Self::Mysql,
+        Self::Mariadb,
+        Self::Valkey,
+        Self::Redis,
+    ];
 
     /// Stable identifier used in paths, the catalog and SQLite.
     pub const fn as_str(self) -> &'static str {
@@ -57,6 +65,7 @@ impl EngineKey {
             Self::Mysql => "mysql",
             Self::Mariadb => "mariadb",
             Self::Valkey => "valkey",
+            Self::Redis => "redis",
         }
     }
 
@@ -67,6 +76,7 @@ impl EngineKey {
             Self::Mysql => consts::PORT_MYSQL,
             Self::Mariadb => consts::PORT_MARIADB,
             Self::Valkey => consts::PORT_VALKEY,
+            Self::Redis => consts::PORT_REDIS,
         }
     }
 
@@ -77,6 +87,7 @@ impl EngineKey {
             Self::Mysql => "MySQL",
             Self::Mariadb => "MariaDB",
             Self::Valkey => "Valkey",
+            Self::Redis => "Redis",
         }
     }
 
@@ -85,7 +96,7 @@ impl EngineKey {
         match self {
             Self::Postgresql => Family::Postgres,
             Self::Mysql | Self::Mariadb => Family::Mysql,
-            Self::Valkey => Family::Redis,
+            Self::Valkey | Self::Redis => Family::Redis,
         }
     }
 
@@ -95,6 +106,7 @@ impl EngineKey {
             Self::Postgresql => consts::SUPERUSER_POSTGRESQL,
             Self::Mysql | Self::Mariadb => consts::SUPERUSER_MYSQL,
             Self::Valkey => consts::SUPERUSER_VALKEY,
+            Self::Redis => consts::SUPERUSER_REDIS,
         }
     }
 }
@@ -114,6 +126,7 @@ impl FromStr for EngineKey {
             "mysql" => Ok(Self::Mysql),
             "mariadb" => Ok(Self::Mariadb),
             "valkey" => Ok(Self::Valkey),
+            "redis" => Ok(Self::Redis),
             other => Err(DblError::InvalidInput {
                 field: "engine",
                 reason: format!("unknown engine: {other}"),

@@ -111,18 +111,20 @@ impl ClientKind {
                 EngineKey::Mysql,
                 EngineKey::Mariadb,
                 EngineKey::Valkey,
+                EngineKey::Redis,
             ],
             Self::DBeaver => vec![
                 EngineKey::Postgresql,
                 EngineKey::Mysql,
                 EngineKey::Mariadb,
                 EngineKey::Valkey,
+                EngineKey::Redis,
             ],
             Self::Psql => vec![EngineKey::Postgresql],
             Self::Mysql | Self::Mariadb => {
                 vec![EngineKey::Mysql, EngineKey::Mariadb]
             }
-            Self::ValkeyCli | Self::RedisCli => vec![EngineKey::Valkey],
+            Self::ValkeyCli | Self::RedisCli => vec![EngineKey::Valkey, EngineKey::Redis],
         }
     }
 }

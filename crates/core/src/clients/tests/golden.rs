@@ -33,7 +33,7 @@ fn target(engine: EngineKey) -> OpenTarget {
         EngineKey::Mariadb => {
             OpenTarget::new(engine, "127.0.0.1", 3307, "root", "", "my-app").unwrap()
         }
-        EngineKey::Valkey => {
+        EngineKey::Valkey | EngineKey::Redis => {
             OpenTarget::new(engine, "127.0.0.1", 6379, "default", "0", "my-app").unwrap()
         }
     }

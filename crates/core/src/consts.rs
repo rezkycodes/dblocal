@@ -10,6 +10,8 @@ pub const PORT_MYSQL: u16 = 3306;
 pub const PORT_MARIADB: u16 = 3307;
 /// Canonical Valkey port.
 pub const PORT_VALKEY: u16 = 6379;
+/// Canonical Redis port (port allocator avoids clashes when Valkey is on 6379).
+pub const PORT_REDIS: u16 = 6379;
 
 /// Lowest port an instance may use; anything below needs privileges.
 pub const MIN_PORT: u16 = 1024;
@@ -20,6 +22,8 @@ pub const MAX_PORT: u16 = 65535;
 pub const START_TIMEOUT_SECS: u64 = 30;
 /// Start timeout for Valkey.
 pub const START_TIMEOUT_VALKEY_SECS: u64 = 10;
+/// Start timeout for Redis.
+pub const START_TIMEOUT_REDIS_SECS: u64 = START_TIMEOUT_VALKEY_SECS;
 /// Grace period before a stop escalates to a forced kill.
 pub const STOP_GRACE_SECS: u64 = 20;
 /// Grace given to the escalation after an engine that accepted its own shutdown
@@ -87,6 +91,8 @@ pub const SUPERUSER_POSTGRESQL: &str = "postgres";
 pub const SUPERUSER_MYSQL: &str = "root";
 /// Canonical user name for Valkey.
 pub const SUPERUSER_VALKEY: &str = "default";
+/// Canonical user name for Redis.
+pub const SUPERUSER_REDIS: &str = "default";
 
 /// Default database name used in connection URIs.
 pub const DEFAULT_DATABASE: &str = "postgres";

@@ -300,6 +300,7 @@ fn expected_binaries_for(engine: crate::model::EngineKey, windows: bool) -> Vec<
     let bases: &[&str] = match engine {
         crate::model::EngineKey::Postgresql => &["postgres", "initdb", "pg_ctl"],
         crate::model::EngineKey::Valkey => &["valkey-server"],
+        crate::model::EngineKey::Redis => &["redis-check-rdb", "redis-cli"],
         crate::model::EngineKey::Mysql => &["mysqld"],
         crate::model::EngineKey::Mariadb => &["mariadbd", "mysqld"],
     };
@@ -338,9 +339,10 @@ mod expected_binaries_tests {
     use super::expected_binaries_for;
     use crate::model::EngineKey;
 
-    const ENGINES: [EngineKey; 4] = [
+    const ENGINES: [EngineKey; 5] = [
         EngineKey::Postgresql,
         EngineKey::Valkey,
+        EngineKey::Redis,
         EngineKey::Mysql,
         EngineKey::Mariadb,
     ];
@@ -382,6 +384,7 @@ mod expected_binaries_tests {
             let bases: &[&str] = match engine {
                 EngineKey::Postgresql => &["postgres", "initdb", "pg_ctl"],
                 EngineKey::Valkey => &["valkey-server"],
+                EngineKey::Redis => &["redis-check-rdb", "redis-cli"],
                 EngineKey::Mysql => &["mysqld"],
                 EngineKey::Mariadb => &["mariadbd", "mysqld"],
             };

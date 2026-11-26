@@ -24,7 +24,7 @@ pub(super) fn stripped_relative_path(
     raw_name: &str,
 ) -> Result<Option<PathBuf>> {
     let normalized = normalize_archive_path(path, raw_name)?;
-    if normalized.as_os_str().is_empty() {
+    if normalized.as_os_str().is_empty() && matches!(raw_name, "." | "./") {
         // Bare `.` / `./` root marker (standard in Debian `data.tar.*`).
         return Ok(None);
     }

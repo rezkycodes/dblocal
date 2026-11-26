@@ -9,6 +9,9 @@ pub mod glibc;
 pub mod mariadb;
 mod mysql;
 mod postgres;
+mod redis;
+pub mod resp;
+pub mod shlib;
 pub mod sockdir;
 pub mod uri;
 mod valkey;
@@ -33,6 +36,10 @@ pub use postgres::{
     choose_socket_dir as choose_postgres_socket_dir,
     configure_after_init as configure_postgres_after_init, parse_postmaster_pid,
     prepare_run as prepare_postgres_run, read_postmaster_pid, sync_port as sync_postgres_port,
+};
+pub use redis::{
+    RedisAdapter, prepare_run as prepare_redis_run, read_pidfile as read_redis_pidfile,
+    sync_port as sync_redis_port,
 };
 pub use valkey::{
     ConfigParams, ServerIdentity, ValkeyAdapter, parse_pidfile, prepare_run as prepare_valkey_run,
@@ -259,6 +266,7 @@ pub fn adapter_for(engine: EngineKey) -> Box<dyn EngineAdapter> {
     match engine {
         EngineKey::Postgresql => Box::new(postgres::PostgresAdapter),
         EngineKey::Valkey => Box::new(valkey::ValkeyAdapter),
+        EngineKey::Redis => Box::new(redis::RedisAdapter),
         EngineKey::Mariadb => Box::new(mariadb::MariaDbAdapter),
         EngineKey::Mysql => Box::new(mysql::MysqlAdapter),
     }

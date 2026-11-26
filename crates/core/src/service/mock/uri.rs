@@ -34,11 +34,11 @@ pub(crate) fn uri(
             }
             AuthMode::None => format!("mysql://{encoded_user}@127.0.0.1:{port}/"),
         },
-        EngineKey::Valkey => match auth {
+        EngineKey::Valkey | EngineKey::Redis => match auth {
             AuthMode::Password => {
                 format!("redis://{encoded_user}:{encoded_pass}@127.0.0.1:{port}/0")
             }
-            // Valkey has no database name; an empty user means no userinfo.
+            // Valkey and Redis have no database name; an empty user means no userinfo.
             AuthMode::None => format!("redis://127.0.0.1:{port}/0"),
         },
     }
@@ -72,14 +72,14 @@ pub(crate) fn dotenv(
             out.push_str("DB_DATABASE=\n");
             out.push_str(&format!("DB_USERNAME={user}\n"));
         }
-        EngineKey::Valkey => {
+        EngineKey::Valkey | EngineKey::Redis => {
             out.push_str(&format!("REDIS_URL={connection_uri}\n"));
             out.push_str("REDIS_HOST=127.0.0.1\n");
             out.push_str(&format!("REDIS_PORT={port}\n"));
         }
     }
     if auth == AuthMode::Password {
-        let key = if engine == EngineKey::Valkey {
+        let key = if matches!(engine, EngineKey::Valkey | EngineKey::Redis) {
             "REDIS_PASSWORD"
         } else {
             "DB_PASSWORD"

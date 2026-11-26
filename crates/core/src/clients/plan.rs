@@ -348,7 +348,9 @@ fn tableplus_url(target: &OpenTarget) -> ClientResult<String> {
         EngineKey::Mysql | EngineKey::Mariadb => {
             format!("mysql://{user}@{host}:{}/{db}", target.port())
         }
-        EngineKey::Valkey => format!("redis://{user}@{host}:{}/{db}", target.port()),
+        EngineKey::Valkey | EngineKey::Redis => {
+            format!("redis://{user}@{host}:{}/{db}", target.port())
+        }
     };
     Ok(url)
 }
@@ -358,7 +360,7 @@ fn plan_dbeaver(client: &DetectedClient, target: &OpenTarget) -> ClientResult<La
         EngineKey::Postgresql => "postgresql",
         EngineKey::Mysql => "mysql",
         EngineKey::Mariadb => "maria",
-        EngineKey::Valkey => "redis",
+        EngineKey::Valkey | EngineKey::Redis => "redis",
     };
     let spec = format!(
         "driver={driver}|name={}|host={}|port={}|user={}|database={}|openConsole=true",
@@ -380,10 +382,10 @@ fn plan_dbeaver(client: &DetectedClient, target: &OpenTarget) -> ClientResult<La
 }
 
 fn plan_dbdelve(client: &DetectedClient, target: &OpenTarget) -> ClientResult<LaunchPlan> {
-    if matches!(target.engine, EngineKey::Valkey) {
+    if matches!(target.engine, EngineKey::Valkey | EngineKey::Redis) {
         return Err(ClientError::UnsupportedClient {
             client: ClientKind::DbDelve.as_str(),
-            engine: EngineKey::Valkey.as_str(),
+            engine: target.engine.as_str(),
         });
     }
     // DBDelve connection-argument mechanism is unverified on this machine;
@@ -405,7 +407,9 @@ fn passwordless_uri(target: &OpenTarget) -> ClientResult<String> {
         EngineKey::Mysql | EngineKey::Mariadb => {
             format!("mysql://{user}@{host}:{}/{db}", target.port())
         }
-        EngineKey::Valkey => format!("redis://{user}@{host}:{}/{db}", target.port()),
+        EngineKey::Valkey | EngineKey::Redis => {
+            format!("redis://{user}@{host}:{}/{db}", target.port())
+        }
     };
     Ok(url)
 }

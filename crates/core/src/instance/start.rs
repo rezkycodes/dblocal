@@ -32,7 +32,7 @@ enum IdentitySource {
 fn identity_source(engine: EngineKey) -> IdentitySource {
     match engine {
         EngineKey::Postgresql => IdentitySource::PostmasterPid,
-        EngineKey::Valkey => IdentitySource::ValkeyPid,
+        EngineKey::Valkey | EngineKey::Redis => IdentitySource::ValkeyPid,
         EngineKey::Mysql | EngineKey::Mariadb => IdentitySource::Child,
     }
 }
@@ -242,6 +242,7 @@ fn prepare(adapter: &dyn EngineAdapter, ctx: &RunContext) -> Result<()> {
     match adapter.key() {
         EngineKey::Postgresql => crate::engine::prepare_postgres_run(ctx).map(|_| ()),
         EngineKey::Valkey => crate::engine::prepare_valkey_run(ctx),
+        EngineKey::Redis => crate::engine::prepare_redis_run(ctx),
         EngineKey::Mysql => crate::engine::mysql_prepare_run(ctx),
         EngineKey::Mariadb => crate::engine::prepare_mariadb_run(ctx),
     }
@@ -340,6 +341,11 @@ fn read_engine_pid(inner: &Inner, engine: EngineKey, instance: &Instance) -> Opt
         EngineKey::Valkey => crate::engine::read_pidfile(&inner.paths.run_dir(instance.name()))
             .ok()
             .map(|pid| pid.pid),
+        EngineKey::Redis => {
+            crate::engine::read_redis_pidfile(&inner.paths.run_dir(instance.name()))
+                .ok()
+                .map(|pid| pid.pid)
+        }
         EngineKey::Mysql | EngineKey::Mariadb => None,
     }
 }

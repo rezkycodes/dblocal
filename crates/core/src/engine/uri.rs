@@ -101,7 +101,7 @@ fn uri_with(
                 consts::DEFAULT_DATABASE
             ))
         }
-        EngineKey::Valkey => match password {
+        EngineKey::Valkey | EngineKey::Redis => match password {
             Some(password) => SecretString::new(format!(
                 "redis://{}@127.0.0.1:{port}/0",
                 userinfo(&user, Some(password))
@@ -162,7 +162,7 @@ fn dotenv_with(
                 let _ = writeln!(out, "DB_PASSWORD={}", password.expose());
             }
         }
-        EngineKey::Valkey => {
+        EngineKey::Valkey | EngineKey::Redis => {
             let _ = writeln!(out, "REDIS_URL={}", uri.expose());
             let _ = writeln!(out, "REDIS_HOST=127.0.0.1");
             let _ = writeln!(out, "REDIS_PORT={port}");

@@ -294,6 +294,12 @@ pub(crate) fn sync_instance_port(paths: &DblPaths, instance: &Instance) -> Resul
                 crate::engine::sync_valkey_port(&paths.run_dir(name), port)?;
             }
         }
+        EngineKey::Redis => {
+            let conf = paths.run_dir(name).join("redis.conf");
+            if conf.exists() {
+                crate::engine::sync_redis_port(&paths.run_dir(name), port)?;
+            }
+        }
         EngineKey::Mariadb => {
             let conf = paths.data_dir(name).join("my.cnf");
             if conf.exists() {
@@ -387,6 +393,7 @@ pub(crate) fn log_file_for(paths: &DblPaths, instance: &Instance) -> PathBuf {
     match instance.engine() {
         EngineKey::Postgresql => logs.join("postgres.log"),
         EngineKey::Valkey => logs.join("valkey.log"),
+        EngineKey::Redis => logs.join("redis.log"),
         EngineKey::Mysql => logs.join("mysql.log"),
         EngineKey::Mariadb => logs.join("mariadb.log"),
     }
@@ -411,7 +418,7 @@ pub(crate) fn identity_of(instance: &Instance) -> Option<ProcessIdentity> {
 
 pub(crate) fn start_timeout(engine: EngineKey) -> Duration {
     match engine {
-        EngineKey::Valkey => Duration::from_secs(consts::START_TIMEOUT_VALKEY_SECS),
+        EngineKey::Valkey | EngineKey::Redis => Duration::from_secs(consts::START_TIMEOUT_VALKEY_SECS),
         _ => Duration::from_secs(consts::START_TIMEOUT_SECS),
     }
 }

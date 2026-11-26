@@ -20,7 +20,7 @@ fn target(engine: EngineKey) -> OpenTarget {
         EngineKey::Postgresql => ("postgres", "postgres", 5432),
         EngineKey::Mysql => ("root", "", 3306),
         EngineKey::Mariadb => ("root", "", 3307),
-        EngineKey::Valkey => ("default", "0", 6379),
+        EngineKey::Valkey | EngineKey::Redis => ("default", "0", 6379),
     };
     OpenTarget::new(engine, "127.0.0.1", port, user, db, "my-app").unwrap()
 }
