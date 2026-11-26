@@ -276,7 +276,7 @@ fn select_platform_asset_picks_appimage_over_tarball() {
         ),
         asset("checksums.txt", "https://example.com/checksums.txt"),
     ];
-    let selected = select_platform_asset(&assets, Os::Linux, Arch::X86_64)
+    let selected = select_platform_asset(&assets, Os::Linux, Arch::X86_64, None)
         .unwrap()
         .unwrap();
     assert_eq!(selected.kind(), UpdateAssetKind::AppImage);
@@ -479,7 +479,7 @@ fn map_network_classifies_rate_limit_messages() {
 fn select_platform_asset_rejects_unsupported_platform() {
     let err = platform_asset_tokens(Os::Windows, Arch::Aarch64).is_some();
     assert!(err);
-    let selected = select_platform_asset(&[], Os::Windows, Arch::Aarch64).unwrap();
+    let selected = select_platform_asset(&[], Os::Windows, Arch::Aarch64, None).unwrap();
     assert!(selected.is_none());
 }
 

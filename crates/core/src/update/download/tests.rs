@@ -564,28 +564,29 @@ fn staged_update_accessors() {
     let staged = StagedUpdate {
         version: semver::Version::parse("2.0.0").unwrap(),
         staged_path: path.clone(),
+        run_dir: dir.path().to_path_buf(),
         asset_name: "dblocal-linux-x86_64.tar.gz".to_owned(),
+        asset_kind: super::super::model::UpdateAssetKind::TarGz,
     };
     assert_eq!(staged.version().to_string(), "2.0.0");
     assert_eq!(staged.staged_path(), path.as_path());
     assert_eq!(staged.asset_name(), "dblocal-linux-x86_64.tar.gz");
+    assert_eq!(
+        staged.asset_kind(),
+        super::super::model::UpdateAssetKind::TarGz
+    );
 }
 
 #[tokio::test]
-async fn read_bounded_text_rejects_oversize_and_non_utf8() {
+async fn read_bounded_bytes_rejects_oversize_and_missing() {
     let dir = tempdir().expect("tmp");
     let big = dir.path().join("big.txt");
     tokio::fs::write(&big, vec![b'a'; 32]).await.unwrap();
-    let err = read_bounded_text(&big, 16).await.expect_err("oversize");
-    assert_eq!(err.code(), crate::update::error::CODE_UPDATE_CHECKSUM);
-
-    let bin = dir.path().join("bin.txt");
-    tokio::fs::write(&bin, [0xff, 0xfe, 0xfd]).await.unwrap();
-    let err = read_bounded_text(&bin, 16).await.expect_err("utf8");
+    let err = read_bounded_bytes(&big, 16).await.expect_err("oversize");
     assert_eq!(err.code(), crate::update::error::CODE_UPDATE_CHECKSUM);
 
     let missing = dir.path().join("missing.txt");
-    let err = read_bounded_text(&missing, 16).await.expect_err("missing");
+    let err = read_bounded_bytes(&missing, 16).await.expect_err("missing");
     assert_eq!(err.code(), crate::update::error::CODE_UPDATE_CHECKSUM);
 }
 
@@ -594,24 +595,6 @@ fn parse_and_validate_url_rejects_garbage() {
     let err =
         parse_and_validate_url("not a url", &UpdateDownloadOptions::default()).expect_err("bad");
     assert_eq!(err.code(), crate::update::error::CODE_UPDATE_MALFORMED);
-}
-
-#[test]
-fn content_range_total_parsing() {
-    use reqwest::header::HeaderValue;
-    assert_eq!(
-        content_range_total(Some(&HeaderValue::from_static("bytes 0-9/100"))),
-        Some(100)
-    );
-    assert_eq!(
-        content_range_total(Some(&HeaderValue::from_static("bytes 0-9/*"))),
-        None
-    );
-    assert_eq!(
-        content_range_total(Some(&HeaderValue::from_static("garbage"))),
-        None
-    );
-    assert_eq!(content_range_total(None), None);
 }
 
 #[test]

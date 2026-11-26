@@ -407,16 +407,20 @@ fn install_kind_paths_and_hints() {
     let k = InstallKind::MacApp {
         bundle_path: std::path::PathBuf::from("/Applications/DBLocal.app"),
     };
-    assert!(k.can_self_update());
+    assert!(!k.can_self_update());
     assert_eq!(k.path(), Path::new("/Applications/DBLocal.app"));
     let k = InstallKind::WindowsZip {
         exe_path: std::path::PathBuf::from("C:\\d\\dblocal.exe"),
     };
     assert!(k.can_self_update());
     let k = InstallKind::WindowsMsi {
-        exe_path: std::path::PathBuf::from("C:\\d\\dblocal.exe"),
+        exe_path: std::path::PathBuf::from("C:\\Program Files\\DBLocal\\dblocal.exe"),
     };
     assert!(!k.can_self_update());
+    let k_user = InstallKind::WindowsMsi {
+        exe_path: std::path::PathBuf::from("C:\\Users\\me\\AppData\\Local\\DBLocal\\dblocal.exe"),
+    };
+    assert!(k_user.can_self_update());
     let h = PackageManagerHint::Rpm;
     assert!(h.message().contains("rpm"));
     let h = PackageManagerHint::Other {

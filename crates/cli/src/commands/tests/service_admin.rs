@@ -288,6 +288,12 @@ fn update_check_json_has_the_expected_shape() {
     let parsed: serde_json::Value = serde_json::from_str(out.trim()).expect("json");
     assert_eq!(parsed["can_self_update"], true);
     assert_eq!(parsed["available"]["version"], "0.9.0");
+    assert!(
+        parsed["available"]["release_url"]
+            .as_str()
+            .is_some_and(|u| u.starts_with("https://github.com/")),
+        "{parsed}"
+    );
 }
 
 #[test]
@@ -305,7 +311,7 @@ fn update_apply_needs_yes_non_interactively() {
 }
 
 #[test]
-fn update_apply_succeeds_for_a_self_update_kind() {
+fn update_apply_succeeds_and_streams_progress_for_a_self_update_kind() {
     let svc = MockService::deterministic();
     let (code, _, err) = run_cmd(
         &svc,
@@ -315,6 +321,13 @@ fn update_apply_succeeds_for_a_self_update_kind() {
         false,
     );
     assert_eq!(code, EXIT_OK, "{err}");
+    assert!(err.contains("downloading"), "progress missing: {err}");
+    assert!(err.contains("verifying"), "verify stage missing: {err}");
+    assert!(err.contains("installing"), "install stage missing: {err}");
+    assert!(
+        err.contains("Update installed"),
+        "completion missing: {err}"
+    );
 }
 
 #[test]

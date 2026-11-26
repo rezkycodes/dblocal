@@ -74,7 +74,7 @@ fn plan_windows_zip_is_helper_command() {
 }
 
 #[test]
-fn plan_mac_is_plan_only() {
+fn plan_mac_is_refused_as_deferred() {
     let plan = plan_install(
         &InstallKind::MacApp {
             bundle_path: PathBuf::from("/Applications/DBLocal.app"),
@@ -84,10 +84,10 @@ fn plan_mac_is_plan_only() {
         &ver("1.2.0"),
     )
     .unwrap();
-    assert!(matches!(
-        plan.steps()[0],
-        InstallStep::ReplaceMacBundle { .. }
-    ));
+    match &plan.steps()[0] {
+        InstallStep::Refuse { reason } => assert!(reason.contains("macOS"), "{reason}"),
+        other => panic!("unexpected {other:?}"),
+    }
 }
 
 #[test]
@@ -403,7 +403,10 @@ fn plan_accessors_and_apply_refusals() {
     )
     .unwrap();
     let err = apply(&mac).expect_err("mac apply refused");
-    assert_eq!(err.code(), crate::update::error::CODE_UPDATE_APPLY_FAILED);
+    assert_eq!(
+        err.code(),
+        crate::update::error::CODE_UPDATE_UNSUPPORTED_KIND
+    );
 }
 
 #[test]
@@ -482,27 +485,39 @@ fn ensure_target_writable_rejects_relative_target_without_parent() {
 }
 
 #[test]
-fn plan_windows_msi_is_refused_with_generic_reason() {
-    // WindowsMsi cannot self-update and has no package-manager hint, so the plan
-    // falls back to the generic refusal instead of an empty reason.
+fn plan_windows_per_machine_msi_is_refused_with_elevation_reason() {
     let plan = plan_install(
         &InstallKind::WindowsMsi {
             exe_path: PathBuf::from("C:\\Program Files\\DBLocal\\dblocal.exe"),
         },
-        Path::new("C:\\staged.zip"),
+        Path::new("C:\\staged.msi"),
         Path::new("C:\\Program Files\\DBLocal\\dblocal.exe"),
         &ver("1.2.0"),
     )
     .unwrap();
     match &plan.steps()[0] {
         InstallStep::Refuse { reason } => {
-            assert_eq!(
-                reason,
-                "Automatic updates are not available for this install method."
-            );
+            assert!(reason.contains("administrator"), "{reason}");
         }
         other => panic!("unexpected {other:?}"),
     }
+}
+
+#[test]
+fn plan_windows_per_user_msi_is_helper_command() {
+    let plan = plan_install(
+        &InstallKind::WindowsMsi {
+            exe_path: PathBuf::from("C:\\Users\\me\\AppData\\Local\\DBLocal\\dblocal.exe"),
+        },
+        Path::new("C:\\staged.msi"),
+        Path::new("C:\\Users\\me\\AppData\\Local\\DBLocal\\dblocal.exe"),
+        &ver("1.2.0"),
+    )
+    .unwrap();
+    assert!(matches!(
+        plan.steps()[0],
+        InstallStep::SpawnWindowsHelper { .. }
+    ));
 }
 
 #[test]
