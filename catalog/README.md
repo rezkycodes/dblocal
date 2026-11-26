@@ -1,17 +1,20 @@
 # DBLocal engine catalog
 
 This directory is the bundled source of truth for "what can I install on this
-host". The application compiles `engines.json` into the binary and refreshes it
-in the background; the file here is never edited by hand.
+host". The application compiles `engines-v2.json` (`schema_version: 2`) into
+the binary and refreshes it in the background; `engines.json`
+(`schema_version: 1`) is kept frozen for released `v0.1.x` clients whose UI
+does not render EOL/status badges or the "Hanya versi terbaru" filter. Neither
+file is edited by hand.
 
 ## Generating and validating
 
 ```sh
 # Rebuild the catalog (HTTPS; needs network, and GITHUB_TOKEN for PostgreSQL).
-cargo xtask catalog build --output catalog/engines.json
+cargo xtask catalog build --output catalog/engines-v2.json
 
 # Validate any catalog file offline (used in CI).
-cargo xtask catalog validate --file catalog/engines.json
+cargo xtask catalog validate --file catalog/engines-v2.json
 ```
 
 The builder output is deterministic: entries are sorted, every artifact carries a

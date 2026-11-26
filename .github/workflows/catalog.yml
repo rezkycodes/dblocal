@@ -35,7 +35,7 @@ jobs:
           # F-CAT-03 edge case: authenticated GitHub API usage avoids low
           # unauthenticated rate limits when querying upstream release metadata.
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: cargo xtask catalog build --output catalog/engines.json
+        run: cargo xtask catalog build --output catalog/engines-v2.json
 
       - name: Create pull request
         # F-CAT-03 AC3: always a PR, never a direct push to main.
@@ -47,7 +47,7 @@ jobs:
           delete-branch: true
           title: "chore(catalog): refresh engines catalog"
           body: |
-            Automated daily refresh of `catalog/engines.json` via `cargo xtask catalog build`.
+            Automated daily refresh of `catalog/engines-v2.json` via `cargo xtask catalog build`.
 
             - Sources queried per F-CAT-03: GitHub Releases for PostgreSQL, the
               `downloads.mariadb.org` REST API for MariaDB, the official MySQL
@@ -60,7 +60,7 @@ jobs:
 
             Trigger: `${{ github.event_name }}` (run `${{ github.run_id }}`).
           add-paths: |
-            catalog/engines.json
+            catalog/engines-v2.json
           labels: |
             catalog
             automation
