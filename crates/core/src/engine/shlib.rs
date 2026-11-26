@@ -9,7 +9,9 @@
 
 use std::collections::BTreeSet;
 use std::fs;
-use std::path::{Path, PathBuf};
+#[cfg(any(target_os = "linux", test))]
+use std::path::Path;
+use std::path::PathBuf;
 
 use crate::error::{DblError, Result};
 
@@ -102,7 +104,7 @@ fn library_exists_in(soname: &str, dirs: &[PathBuf]) -> bool {
 
 /// Collects the Linux dynamic loader's search directories without spawning any
 /// process.
-#[cfg(any(target_os = "linux", test))]
+#[cfg(target_os = "linux")]
 pub(crate) fn linux_library_search_dirs() -> Vec<PathBuf> {
     let mut dirs = Vec::new();
     let mut seen = BTreeSet::new();
@@ -142,6 +144,7 @@ pub(crate) fn linux_library_search_dirs() -> Vec<PathBuf> {
 
 /// Parses an `/etc/ld.so.conf`-format file, following `include` directives up
 /// to a bounded depth.
+#[cfg(any(target_os = "linux", test))]
 fn parse_ld_so_conf(path: &Path, depth: u8) -> Vec<PathBuf> {
     if depth > 4 {
         return Vec::new();
@@ -177,6 +180,7 @@ fn parse_ld_so_conf(path: &Path, depth: u8) -> Vec<PathBuf> {
 
 /// Expands a simple `dir/*.ext` glob (the shape used by `/etc/ld.so.conf` ->
 /// `include /etc/ld.so.conf.d/*.conf`) without pulling in a glob crate.
+#[cfg(any(target_os = "linux", test))]
 fn expand_simple_glob(base: &Path, pattern: &str) -> Vec<PathBuf> {
     let pat_path = if Path::new(pattern).is_absolute() {
         PathBuf::from(pattern)
