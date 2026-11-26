@@ -73,7 +73,7 @@ impl InstallKind {
             Self::DistPackage { hint, .. } => Some(hint.message()),
             Self::Homebrew { .. } => Some(PackageManagerHint::Homebrew.message()),
             Self::Unknown { reason, .. } => Some(format!(
-                "Jenis pemasangan tidak dikenali; pembaruan otomatis ditolak demi keamanan. {reason}"
+                "Unknown install kind; automatic updates are refused for safety. {reason}"
             )),
             _ => None,
         }
@@ -95,20 +95,20 @@ pub enum PackageManagerHint {
 }
 
 impl PackageManagerHint {
-    /// Indonesian hint telling the user where to update.
+    /// Hint telling the user where to update.
     pub fn message(&self) -> String {
         match self {
             Self::Dpkg => {
-                "Pembaruan dikelola oleh package manager sistem (dpkg/apt). Perbarui DBLocal lewat package manager Anda.".to_owned()
+                "Updates are managed by the system package manager (dpkg/apt). Update DBLocal through your package manager.".to_owned()
             }
             Self::Rpm => {
-                "Pembaruan dikelola oleh package manager sistem (rpm/dnf/yum). Perbarui DBLocal lewat package manager Anda.".to_owned()
+                "Updates are managed by the system package manager (rpm/dnf/yum). Update DBLocal through your package manager.".to_owned()
             }
             Self::Homebrew => {
-                "Pembaruan dikelola oleh Homebrew. Jalankan pembaruan lewat Homebrew.".to_owned()
+                "Updates are managed by Homebrew. Update DBLocal through Homebrew.".to_owned()
             }
             Self::Other { manager } => format!(
-                "Pembaruan dikelola oleh package manager sistem ({manager}). Perbarui DBLocal lewat package manager Anda."
+                "Updates are managed by the system package manager ({manager}). Update DBLocal through your package manager."
             ),
         }
     }
@@ -152,7 +152,7 @@ pub fn detect_install_kind_with(
 
 fn current_exe_path() -> UpdateResult<PathBuf> {
     std::env::current_exe().map_err(|source| UpdateError::ApplyFailed {
-        reason: format!("gagal menentukan path executable saat ini: {source}"),
+        reason: format!("could not determine the current executable path: {source}"),
     })
 }
 
@@ -215,7 +215,7 @@ fn detect_linux(exe_path: &Path) -> InstallKind {
     if !looks_like_portable_linux(exe_path) {
         return InstallKind::Unknown {
             exe_path: exe_path.to_path_buf(),
-            reason: "lokasi executable Linux tidak dikenali sebagai instalasi portabel".to_owned(),
+            reason: "the Linux executable location is not a recognized portable install".to_owned(),
         };
     }
     InstallKind::PortableTarball {
@@ -245,17 +245,17 @@ enum DenyReason {
 }
 
 impl DenyReason {
-    /// Indonesian explanation naming the matched rule input.
+    /// Explanation naming the matched rule input.
     fn message(self) -> String {
         match self {
             Self::ManagedPrefix { prefix } => {
-                format!("path berada di lokasi terkelola: {prefix}")
+                format!("path is in a managed location: {prefix}")
             }
             Self::BuildTooling { suffix } => {
-                format!("path berada di lokasi build/tooling: {suffix}")
+                format!("path is in a build/tooling location: {suffix}")
             }
             Self::NotWritable => {
-                "direktori executable tidak dapat ditulis oleh pengguna saat ini".to_owned()
+                "the executable directory is not writable by the current user".to_owned()
             }
         }
     }
@@ -337,7 +337,7 @@ fn detect_macos(exe_path: &Path) -> InstallKind {
     }
     InstallKind::Unknown {
         exe_path: exe_path.to_path_buf(),
-        reason: "path executable macOS tidak berada di dalam bundle .app yang dikenali".to_owned(),
+        reason: "the macOS executable path is not inside a recognized .app bundle".to_owned(),
     }
 }
 

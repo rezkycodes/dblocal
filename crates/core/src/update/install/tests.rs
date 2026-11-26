@@ -484,7 +484,7 @@ fn ensure_target_writable_rejects_relative_target_without_parent() {
 #[test]
 fn plan_windows_msi_is_refused_with_generic_reason() {
     // WindowsMsi cannot self-update and has no package-manager hint, so the plan
-    // falls back to the generic Indonesian refusal instead of an empty reason.
+    // falls back to the generic refusal instead of an empty reason.
     let plan = plan_install(
         &InstallKind::WindowsMsi {
             exe_path: PathBuf::from("C:\\Program Files\\DBLocal\\dblocal.exe"),
@@ -498,7 +498,7 @@ fn plan_windows_msi_is_refused_with_generic_reason() {
         InstallStep::Refuse { reason } => {
             assert_eq!(
                 reason,
-                "Pembaruan otomatis tidak tersedia untuk cara pemasangan ini."
+                "Automatic updates are not available for this install method."
             );
         }
         other => panic!("unexpected {other:?}"),
@@ -510,7 +510,7 @@ fn ensure_target_writable_reports_unreadable_directory() {
     let target = Path::new("/definitely-not-a-real-parent-dir-xyz/dblocal");
     let err = ensure_target_writable(target).expect_err("missing parent");
     assert_eq!(err.code(), crate::update::error::CODE_UPDATE_APPLY_FAILED);
-    assert!(err.detail().contains("izin direktori"));
+    assert!(err.detail().contains("target directory permissions"));
 }
 
 #[cfg(unix)]
@@ -561,7 +561,7 @@ fn apply_reports_missing_staged_file_and_leaves_no_sibling() {
     .unwrap();
     let err = apply(&plan).expect_err("staged file missing");
     assert_eq!(err.code(), crate::update::error::CODE_UPDATE_APPLY_FAILED);
-    assert!(err.detail().contains("menyalin file update"));
+    assert!(err.detail().contains("copy the update file"));
     let names: Vec<String> = fs::read_dir(dir.path())
         .unwrap()
         .map(|e| e.unwrap().file_name().to_string_lossy().to_string())

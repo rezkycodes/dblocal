@@ -78,7 +78,7 @@ pub(crate) fn open(
                 name: client.as_str().to_owned(),
             }
             .code(),
-            "Client tidak ditemukan.",
+            "Client not found.",
         ));
     }
     let found = DetectedClients::default_detected()
@@ -90,7 +90,7 @@ pub(crate) fn open(
                     name: client.as_str().to_owned(),
                 }
                 .code(),
-                "Client tidak ditemukan.",
+                "Client not found.",
             )
         })?;
     let target = OpenTarget::new(

@@ -56,7 +56,7 @@ const PG_APP_LOG: [&str; 5] = [
     "listening on IPv4 address \"127.0.0.1\", port 5432",
     "listening on IPv6 address \"::1\", port 5432",
     "database system is ready to accept connections",
-    "health check pg_isready OK (284 ms sejak spawn)",
+    "health check pg_isready OK (284 ms since spawn)",
 ];
 
 const PG_SHOP_LOG: [&str; 8] = [
@@ -67,12 +67,12 @@ const PG_SHOP_LOG: [&str; 8] = [
     "start diminta oleh GUI",
     "uji bind 127.0.0.1:5434 … EADDRINUSE",
     "uji bind [::1]:5434 … EADDRINUSE",
-    "port 5434 dipakai proses lain; engine tidak dijalankan (DBL-1302)",
+    "port 5434 is used by another process; the engine was not started (DBL-1302)",
 ];
 
 const CACHE_LOG: [&str; 3] = [
     "Ready to accept connections tcp",
-    "port 6379 sudah terikat ke 127.0.0.1",
+    "port 6379 is already bound to 127.0.0.1",
     "health check PING → PONG",
 ];
 

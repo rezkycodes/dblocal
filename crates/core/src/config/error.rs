@@ -72,7 +72,7 @@ impl ConfigError {
         }
     }
 
-    /// Indonesian message, never containing the rejected value.
+    /// User-facing message, never containing the rejected value.
     pub const fn message(&self) -> &'static str {
         match self {
             Self::UnknownKey => messages::ERR_UNKNOWN_KEY,
@@ -90,7 +90,7 @@ impl ConfigError {
 
 /// Maps a static validation reason to its user message.
 ///
-/// The reasons in `schema.rs` are all Indonesian already; this returns the
+/// The reasons in `schema.rs` are already English; this returns the
 /// static string so `message()` can be `const` and cannot echo a value.
 const fn reason_static(reason: &'static str) -> &'static str {
     reason

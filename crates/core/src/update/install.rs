@@ -96,7 +96,7 @@ pub fn plan_install(
 ) -> UpdateResult<InstallPlan> {
     if !kind.can_self_update() {
         let reason = kind.refusal_reason().unwrap_or_else(|| {
-            "Pembaruan otomatis tidak tersedia untuk cara pemasangan ini.".to_owned()
+            "Automatic updates are not available for this install method.".to_owned()
         });
         let target_path = install_target_path(kind, current_exe)?;
         return Ok(InstallPlan {
@@ -126,7 +126,7 @@ pub fn plan_install(
         | InstallKind::Homebrew { .. }
         | InstallKind::Unknown { .. } => {
             return Err(UpdateError::UnsupportedInstallKind {
-                reason: "jenis instalasi tidak mendukung self-update".to_owned(),
+                reason: "this install kind does not support self-update".to_owned(),
             });
         }
     };
@@ -152,21 +152,21 @@ fn install_target_path(kind: &InstallKind, current_exe: &Path) -> UpdateResult<P
 fn ensure_target_writable(target: &Path) -> UpdateResult<()> {
     let Some(dir) = target.parent().filter(|dir| !dir.as_os_str().is_empty()) else {
         return Err(UpdateError::ApplyFailed {
-            reason: "direktori target pembaruan tidak valid".to_owned(),
+            reason: "the update target directory is not valid".to_owned(),
         });
     };
     let meta = std::fs::metadata(dir).map_err(|source| UpdateError::ApplyFailed {
-        reason: format!("gagal membaca izin direktori target pembaruan: {source}"),
+        reason: format!("could not read the update target directory permissions: {source}"),
     })?;
     if !meta.is_dir() {
         return Err(UpdateError::ApplyFailed {
-            reason: "path direktori target pembaruan tidak valid".to_owned(),
+            reason: "the update target directory path is not valid".to_owned(),
         });
     }
     if !super::kind::directory_is_writable(dir) {
         return Err(UpdateError::UnsupportedInstallKind {
             reason: format!(
-                "direktori target pembaruan tidak dapat ditulis: {}",
+                "the update target directory is not writable: {}",
                 dir.display()
             ),
         });
@@ -250,10 +250,10 @@ pub fn apply(plan: &InstallPlan) -> UpdateResult<()> {
             reason: "penerapan update Windows membutuhkan helper runtime; gunakan command yang direncanakan".to_owned(),
         }),
         InstallKind::MacApp { .. } => Err(UpdateError::ApplyFailed {
-            reason: "penerapan update macOS belum dieksekusi di modul ini; gunakan install plan".to_owned(),
+            reason: "macOS update application is not executed in this module; use an install plan".to_owned(),
         }),
         _ => Err(UpdateError::UnsupportedInstallKind {
-            reason: "jenis instalasi tidak mendukung self-update".to_owned(),
+            reason: "this install kind does not support self-update".to_owned(),
         }),
     }
 }
@@ -302,7 +302,7 @@ fn apply_step(step: &InstallStep, created_backup: &mut bool) -> UpdateResult<()>
         InstallStep::RenameOver { src, dst } => std::fs::rename(src, dst).map_err(|source| {
             let _ = std::fs::remove_file(src);
             UpdateError::ApplyFailed {
-                reason: format!("gagal mengganti binary: {source}"),
+                reason: format!("could not replace the binary: {source}"),
             }
         }),
         InstallStep::KeepBackup { .. }
@@ -361,7 +361,7 @@ pub fn inject_fail_after_write_for_test() {
 
 fn copy_with_mode(src: &Path, dst: &Path, mode_source: &Path) -> UpdateResult<()> {
     std::fs::copy(src, dst).map_err(|source| UpdateError::ApplyFailed {
-        reason: format!("gagal menyalin file update: {source}"),
+        reason: format!("could not copy the update file: {source}"),
     })?;
     #[cfg(unix)]
     {
@@ -369,13 +369,13 @@ fn copy_with_mode(src: &Path, dst: &Path, mode_source: &Path) -> UpdateResult<()
         let mode = std::fs::metadata(mode_source)
             .or_else(|_| std::fs::metadata(src))
             .map_err(|source| UpdateError::ApplyFailed {
-                reason: format!("gagal membaca mode file saat ini: {source}"),
+                reason: format!("could not read the current file mode: {source}"),
             })?
             .permissions()
             .mode();
         std::fs::set_permissions(dst, std::fs::Permissions::from_mode(mode)).map_err(|source| {
             UpdateError::ApplyFailed {
-                reason: format!("gagal mengatur mode file update: {source}"),
+                reason: format!("could not set the update file mode: {source}"),
             }
         })?;
     }
@@ -388,17 +388,17 @@ fn copy_with_mode(src: &Path, dst: &Path, mode_source: &Path) -> UpdateResult<()
 
 fn fsync_path(path: &Path) -> UpdateResult<()> {
     let file = std::fs::File::open(path).map_err(|source| UpdateError::ApplyFailed {
-        reason: format!("gagal membuka file untuk fsync: {source}"),
+        reason: format!("could not open the file for fsync: {source}"),
     })?;
     file.sync_all().map_err(|source| UpdateError::ApplyFailed {
-        reason: format!("gagal fsync file update: {source}"),
+        reason: format!("could not fsync the update file: {source}"),
     })
 }
 
 fn create_backup(target: &Path, backup: &Path) -> UpdateResult<()> {
     if backup.exists() {
         std::fs::remove_file(backup).map_err(|source| UpdateError::ApplyFailed {
-            reason: format!("gagal menghapus backup lama: {source}"),
+            reason: format!("could not remove the old backup: {source}"),
         })?;
     }
     if !target.exists() {
@@ -416,7 +416,7 @@ fn smoke_or_rollback(target: &Path, backup: &Path, expected: &Version) -> Update
         Err(err) => {
             let _ = restore_backup(backup, target);
             Err(UpdateError::ApplyFailed {
-                reason: format!("smoke check gagal, binary lama dipulihkan: {err}"),
+                reason: format!("smoke check failed, the old binary was restored: {err}"),
             })
         }
     }
@@ -427,7 +427,7 @@ fn smoke_or_rollback(target: &Path, backup: &Path, expected: &Version) -> Update
 pub fn restore_backup(backup: &Path, target: &Path) -> UpdateResult<()> {
     if !backup.exists() {
         return Err(UpdateError::ApplyFailed {
-            reason: "backup binary lama tidak ditemukan".to_owned(),
+            reason: "no backup of the old binary was found".to_owned(),
         });
     }
     let temp = sibling_temp_path(target);
@@ -436,7 +436,7 @@ pub fn restore_backup(backup: &Path, target: &Path) -> UpdateResult<()> {
     std::fs::rename(&temp, target).map_err(|source| {
         let _ = std::fs::remove_file(&temp);
         UpdateError::ApplyFailed {
-            reason: format!("gagal memulihkan backup: {source}"),
+            reason: format!("could not restore the backup: {source}"),
         }
     })
 }
@@ -446,7 +446,7 @@ pub fn cleanup_backup(current_exe: &Path) -> UpdateResult<()> {
     let backup = backup_path(current_exe);
     if backup.exists() {
         std::fs::remove_file(&backup).map_err(|source| UpdateError::ApplyFailed {
-            reason: format!("gagal menghapus backup update: {source}"),
+            reason: format!("could not remove the update backup: {source}"),
         })?;
     }
     Ok(())
@@ -470,7 +470,7 @@ pub fn smoke_check(binary: &Path, expected: &Version) -> UpdateResult<()> {
     let text = format!("{stdout}\n{stderr}");
     if !version_reported(&text, expected) {
         return Err(UpdateError::ApplyFailed {
-            reason: format!("smoke check tidak melaporkan versi {}", expected),
+            reason: format!("the smoke check did not report version {}", expected),
         });
     }
     Ok(())
@@ -509,7 +509,7 @@ fn run_with_timeout(
             }
             Err(source) => {
                 return Err(UpdateError::ApplyFailed {
-                    reason: format!("gagal menjalankan {label}: {source}"),
+                    reason: format!("could not run {label}: {source}"),
                 });
             }
         }
@@ -524,7 +524,7 @@ fn run_with_timeout(
         if let Some(status) = child
             .try_wait()
             .map_err(|source| UpdateError::ApplyFailed {
-                reason: format!("gagal menunggu {label}: {source}"),
+                reason: format!("could not wait for {label}: {source}"),
             })?
         {
             break status;

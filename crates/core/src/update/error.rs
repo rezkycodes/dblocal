@@ -1,4 +1,4 @@
-//! Typed update outcomes with stable DBL codes and Indonesian messages.
+//! Typed update outcomes with stable DBL codes and English messages.
 
 use std::fmt;
 
@@ -34,7 +34,7 @@ pub const CODE_UPDATE_SOURCE_NOT_FOUND: &str = "DBL-8011";
 pub type UpdateResult<T> = std::result::Result<T, UpdateError>;
 
 /// Distinct update outcomes. Every variant has a stable DBL code and an
-/// Indonesian user-facing message. Payloads are diagnostic details for logs and
+/// User-facing message. Payloads are diagnostic details for logs and
 /// must never contain secrets.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
@@ -78,37 +78,37 @@ impl UpdateError {
         }
     }
 
-    /// Indonesian user-facing message. Safe to display; contains no secrets.
+    /// User-facing message. Safe to display; contains no secrets.
     pub fn user_message(&self) -> String {
         match self {
             Self::Malformed { .. } => {
-                "Data rilis pembaruan tidak valid. Coba lagi nanti.".to_owned()
+                "The update release data is not valid. Try again later.".to_owned()
             }
             Self::RateLimited { .. } => {
-                "Batas permintaan pemeriksaan pembaruan tercapai. Coba lagi nanti.".to_owned()
+                "The update check request limit was reached. Try again later.".to_owned()
             }
             Self::Network { .. } => {
-                "Gagal memeriksa pembaruan. Periksa koneksi lalu coba lagi.".to_owned()
+                "The update check failed. Check your connection and try again.".to_owned()
             }
             Self::ChecksumMetadata { .. } => {
-                "File checksum pembaruan tidak ditemukan atau tidak valid.".to_owned()
+                "The update checksum file is missing or not valid.".to_owned()
             }
             Self::VerifyFailed { .. } => {
-                "Checksum pembaruan tidak cocok. File unduhan dihapus demi keamanan.".to_owned()
+                "The update checksum does not match. The download was removed for safety.".to_owned()
             }
             Self::DowngradeRefused { .. } => {
-                "Versi pembaruan tidak lebih baru dari versi saat ini.".to_owned()
+                "The update version is not newer than the current version.".to_owned()
             }
             Self::UnsupportedInstallKind { .. } => {
-                "Pembaruan otomatis tidak tersedia untuk cara pemasangan ini.".to_owned()
+                "Automatic updates are not available for this install method.".to_owned()
             }
-            Self::AssetMissing { .. } => "Pembaruan tidak tersedia untuk platform ini.".to_owned(),
+            Self::AssetMissing { .. } => "The update is not available for this platform.".to_owned(),
             Self::ApplyFailed { .. } => {
-                "Gagal memasang pembaruan. Versi sebelumnya dipulihkan bila memungkinkan."
+                "The update could not be installed. The previous version is restored when possible."
                     .to_owned()
             }
             Self::SourceNotFound { .. } => {
-                "Sumber rilis pembaruan tidak ditemukan atau tidak publik.".to_owned()
+                "The update release source was not found or is not public.".to_owned()
             }
         }
     }

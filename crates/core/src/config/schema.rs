@@ -102,7 +102,7 @@ pub struct SettingSpec {
     pub unit: &'static str,
     /// Whether the setting needs a restart.
     pub apply: ApplyTime,
-    /// Indonesian one-line description, from `config/messages.rs`.
+    /// English one-line description, from `config/messages.rs`.
     pub description: &'static str,
 }
 
@@ -400,18 +400,18 @@ pub fn is_managed_key(key: &str) -> bool {
 pub fn parse_size(value: &str) -> Result<u64, ConfigError> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
-        return Err(ConfigError::InvalidValue("ukuran kosong"));
+        return Err(ConfigError::InvalidValue("the size is empty"));
     }
     let (number, unit) = split_number_unit(trimmed)?;
     let digits: String = number.to_owned();
     let base: u64 = if digits.contains('.') {
         // A fractional size is unusual and engine details vary; refuse it rather
         // than guess a rounding.
-        return Err(ConfigError::InvalidValue("ukuran harus bilangan bulat"));
+        return Err(ConfigError::InvalidValue("the size must be a whole number"));
     } else {
         digits
             .parse()
-            .map_err(|_| ConfigError::InvalidValue("ukuran bukan angka"))?
+            .map_err(|_| ConfigError::InvalidValue("the size is not a number"))?
     };
     let multiplier = match unit.to_ascii_lowercase().as_str() {
         "" | "b" | "bytes" => 1,
@@ -421,11 +421,11 @@ pub fn parse_size(value: &str) -> Result<u64, ConfigError> {
         "t" | "tb" => 1024u64 * 1024 * 1024 * 1024,
         other => {
             let _ = other;
-            return Err(ConfigError::InvalidValue("satuan ukuran tidak dikenal"));
+            return Err(ConfigError::InvalidValue("unknown size unit"));
         }
     };
     base.checked_mul(multiplier)
-        .ok_or(ConfigError::InvalidValue("ukuran terlalu besar"))
+        .ok_or(ConfigError::InvalidValue("the size is too large"))
 }
 
 /// Splits `128MB` into `("128", "MB")`.
@@ -461,25 +461,25 @@ pub fn format_size(bytes: u64) -> String {
 pub fn validate_value(spec: &SettingSpec, value: &str) -> Result<(), ConfigError> {
     // Reject control characters and a newline for every kind.
     if value.contains('\n') || value.contains('\r') || value.contains('\0') {
-        return Err(ConfigError::InvalidValue("nilai berisi karakter kontrol"));
+        return Err(ConfigError::InvalidValue("the value contains a control character"));
     }
     if is_comment_injection(value) {
-        return Err(ConfigError::InvalidValue("nilai berisi komentar"));
+        return Err(ConfigError::InvalidValue("the value contains a comment"));
     }
     match &spec.kind {
         ValueKind::Integer { min, max } => {
             let parsed: u64 = value
                 .trim()
                 .parse()
-                .map_err(|_| ConfigError::InvalidValue("nilai harus bilangan bulat"))?;
+                .map_err(|_| ConfigError::InvalidValue("the value must be a whole number"))?;
             if parsed < *min || parsed > *max {
-                return Err(ConfigError::InvalidValue("nilai di luar rentang"));
+                return Err(ConfigError::InvalidValue("the value is out of range"));
             }
         }
         ValueKind::Size { min, max } => {
             let bytes = parse_size(value)?;
             if bytes < *min || bytes > *max {
-                return Err(ConfigError::InvalidValue("ukuran di luar rentang"));
+                return Err(ConfigError::InvalidValue("the size is out of range"));
             }
         }
         ValueKind::Boolean { on, off } => {
@@ -489,7 +489,7 @@ pub fn validate_value(spec: &SettingSpec, value: &str) -> Result<(), ConfigError
                 _ => ["yes", "no"],
             };
             if !accepted.contains(&lower.as_str()) {
-                return Err(ConfigError::InvalidValue("nilai harus ya/tidak"));
+                return Err(ConfigError::InvalidValue("the value must be yes/no"));
             }
         }
         ValueKind::Enum { allowed } => {
@@ -497,13 +497,13 @@ pub fn validate_value(spec: &SettingSpec, value: &str) -> Result<(), ConfigError
                 .iter()
                 .any(|candidate| candidate.eq_ignore_ascii_case(value.trim()))
             {
-                return Err(ConfigError::InvalidValue("nilai tidak ada di daftar"));
+                return Err(ConfigError::InvalidValue("the value is not in the list"));
             }
         }
         ValueKind::Token { min_len, max_len } => {
             let len = value.chars().count();
             if len < *min_len || len > *max_len {
-                return Err(ConfigError::InvalidValue("panjang nilai di luar rentang"));
+                return Err(ConfigError::InvalidValue("the value length is out of range"));
             }
             // A `save` schedule is pairs of integers; other tokens may not contain
             // whitespace-joined junk that would become extra arguments, but the
@@ -513,7 +513,7 @@ pub fn validate_value(spec: &SettingSpec, value: &str) -> Result<(), ConfigError
                 .chars()
                 .all(|c| c.is_ascii_digit() || c.is_whitespace())
             {
-                return Err(ConfigError::InvalidValue("nilai tidak valid"));
+                return Err(ConfigError::InvalidValue("invalid value"));
             }
         }
         ValueKind::TimeZone => {
@@ -544,30 +544,30 @@ fn is_comment_injection(value: &str) -> bool {
 fn validate_timezone(value: &str) -> Result<(), ConfigError> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
-        return Err(ConfigError::InvalidValue("zona waktu kosong"));
+        return Err(ConfigError::InvalidValue("the time zone is empty"));
     }
     // A MySQL time zone may be an UTC offset (`+07:00`, `-08:00`).
     if let Some(offset) = trimmed.strip_prefix(['+', '-']) {
         return validate_offset(offset)
             .then_some(())
-            .ok_or(ConfigError::InvalidValue("offset zona waktu tidak valid"));
+            .ok_or(ConfigError::InvalidValue("invalid time zone offset"));
     }
     if trimmed == "UTC" || trimmed == "GMT" || trimmed == "localtime" {
         return Ok(());
     }
     // Reject path traversal or an absolute path masquerading as a zone name.
     if trimmed.starts_with('/') || trimmed.contains("..") || trimmed.contains('\0') {
-        return Err(ConfigError::InvalidValue("zona waktu tidak valid"));
+        return Err(ConfigError::InvalidValue("invalid time zone"));
     }
     if !well_formed_zone(trimmed) {
-        return Err(ConfigError::InvalidValue("zona waktu tidak dikenal"));
+        return Err(ConfigError::InvalidValue("unknown time zone"));
     }
     let root = std::path::Path::new("/usr/share/zoneinfo");
     if root.is_dir() {
         if root.join(trimmed).is_file() {
             Ok(())
         } else {
-            Err(ConfigError::InvalidValue("zona waktu tidak dikenal"))
+            Err(ConfigError::InvalidValue("unknown time zone"))
         }
     } else {
         // No system tzdata to consult; accept a syntactically valid name and let

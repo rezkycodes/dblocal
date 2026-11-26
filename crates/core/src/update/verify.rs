@@ -31,18 +31,18 @@ impl Checksums {
             }
             let (hash, name) =
                 parse_checksum_line(line).ok_or_else(|| UpdateError::ChecksumMetadata {
-                    reason: format!("baris checksums.txt tidak valid pada baris {}", idx + 1),
+                    reason: format!("invalid line in checksums.txt at line {}", idx + 1),
                 })?;
             if entries.iter().any(|(existing, _)| existing == name) {
                 return Err(UpdateError::ChecksumMetadata {
-                    reason: format!("entri checksums.txt duplikat untuk {name}"),
+                    reason: format!("duplicate checksums.txt entry for {name}"),
                 });
             }
             entries.push((name.to_owned(), hash));
         }
         if entries.is_empty() {
             return Err(UpdateError::ChecksumMetadata {
-                reason: "checksums.txt kosong atau tidak berisi entri valid".to_owned(),
+                reason: "checksums.txt is empty or has no valid entries".to_owned(),
             });
         }
         Ok(Self { entries })
@@ -94,7 +94,7 @@ pub async fn sha256_file_hex(path: &Path) -> UpdateResult<String> {
         tokio::fs::File::open(path)
             .await
             .map_err(|source| UpdateError::ApplyFailed {
-                reason: format!("gagal membaca file untuk verifikasi: {source}"),
+                reason: format!("could not read the file for verification: {source}"),
             })?;
     let mut hasher = Sha256::new();
     let mut buf = vec![0u8; 64 * 1024];
@@ -103,7 +103,7 @@ pub async fn sha256_file_hex(path: &Path) -> UpdateResult<String> {
             .read(&mut buf)
             .await
             .map_err(|source| UpdateError::ApplyFailed {
-                reason: format!("gagal membaca file untuk verifikasi: {source}"),
+                reason: format!("could not read the file for verification: {source}"),
             })?;
         if n == 0 {
             break;
@@ -122,7 +122,7 @@ pub async fn verify_sha256_file(path: &Path, expected_hex: &str, label: &str) ->
     let _ = tokio::fs::remove_file(path).await;
     Err(UpdateError::VerifyFailed {
         reason: format!(
-            "checksum tidak cocok untuk {label}: expected {expected_hex}, got {actual}"
+            "checksum mismatch for {label}: expected {expected_hex}, got {actual}"
         ),
     })
 }

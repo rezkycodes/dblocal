@@ -7,75 +7,75 @@
 
 // --- Card and columns -------------------------------------------------------
 
-/// Config card heading (PRD F-CFG-01 AC1: one card "Pengaturan").
-pub const UI_CONFIG_CARD_TITLE: &str = "Pengaturan";
+/// Config card heading (PRD F-CFG-01 AC1: one card "Settings").
+pub const UI_CONFIG_CARD_TITLE: &str = "Settings";
 /// The settings are being read.
-pub const UI_CONFIG_LOADING: &str = "Membaca konfigurasi…";
+pub const UI_CONFIG_LOADING: &str = "Reading the configuration…";
 /// No editable or read-only settings were returned.
-pub const UI_CONFIG_EMPTY: &str = "Belum ada setelan untuk instance ini.";
+pub const UI_CONFIG_EMPTY: &str = "No settings yet for this instance.";
 /// A read of the config failed; the card offers a retry.
-pub const UI_CONFIG_RETRY: &str = "Muat ulang";
+pub const UI_CONFIG_RETRY: &str = "Reload";
 
 // --- One row ----------------------------------------------------------------
 
-/// Default value shown next to the field (`Bawaan: 100`).
-pub const UI_CONFIG_DEFAULT_PREFIX: &str = "Bawaan: ";
+/// Default value shown next to the field (`Default: 100`).
+pub const UI_CONFIG_DEFAULT_PREFIX: &str = "Default: ";
 /// Word shown for a key the file does not set, so the default is in effect.
-pub const UI_CONFIG_UNSET_NOTE: &str = "bawaan";
+pub const UI_CONFIG_UNSET_NOTE: &str = "default";
 /// Marker that an applied value needs a restart (text, never colour alone).
-pub const UI_CONFIG_RESTART_MARKER: &str = "perlu restart";
+pub const UI_CONFIG_RESTART_MARKER: &str = "restart required";
 /// Unit hint shown after the field when the view carries one.
-pub const UI_CONFIG_UNIT_PREFIX: &str = "satuan: ";
+pub const UI_CONFIG_UNIT_PREFIX: &str = "unit: ";
 /// What a byte-size field accepts: the value is written in MB/GB, not bytes.
-pub const UI_CONFIG_UNIT_BYTES: &str = "byte (boleh KB, MB, GB)";
+pub const UI_CONFIG_UNIT_BYTES: &str = "bytes (KB, MB, GB allowed)";
 /// What a duration field accepts: seconds.
-pub const UI_CONFIG_UNIT_SECONDS: &str = "detik";
-/// Why `port` is read-only here (it goes through the Ubah port action).
-pub const UI_CONFIG_READONLY_PORT: &str = "Ubah port lewat tindakan Ubah port";
+pub const UI_CONFIG_UNIT_SECONDS: &str = "seconds";
+/// Why `port` is read-only here (it goes through the Change port action).
+pub const UI_CONFIG_READONLY_PORT: &str = "Change the port with the Change port action";
 /// Why the PostgreSQL authentication method is read-only here.
-pub const UI_CONFIG_READONLY_MANAGED: &str = "Dikelola DBLocal, tidak dapat diubah di sini";
+pub const UI_CONFIG_READONLY_MANAGED: &str = "Managed by DBLocal, cannot be changed here";
 
 // --- Actions and results ----------------------------------------------------
 
-/// Apply the edited settings ("Terapkan").
-pub const UI_CONFIG_APPLY: &str = "Terapkan";
+/// Apply the edited settings ("Apply").
+pub const UI_CONFIG_APPLY: &str = "Apply";
 /// Discard the local edits and go back to the file's values.
-pub const UI_CONFIG_CANCEL_CHANGES: &str = "Batalkan perubahan";
+pub const UI_CONFIG_CANCEL_CHANGES: &str = "Discard changes";
 /// Shown after a successful apply (F-CFG-01 AC2).
-pub const UI_CONFIG_APPLIED: &str = "Tersimpan. Berlaku setelah restart.";
+pub const UI_CONFIG_APPLIED: &str = "Saved. Takes effect after a restart.";
 /// The banner that a config file changed on disk while the tab is open.
-pub const UI_CONFIG_CHANGED_OUTSIDE: &str = "File berubah di luar aplikasi";
+pub const UI_CONFIG_CHANGED_OUTSIDE: &str = "File changed outside the app";
 /// Copy the raw path to the clipboard.
-pub const UI_CONFIG_COPY_PATH: &str = "Salin";
+pub const UI_CONFIG_COPY_PATH: &str = "Copy";
 /// Toast after copying the path.
-pub const UI_CONFIG_PATH_COPIED: &str = "Path konfigurasi disalin ke clipboard";
+pub const UI_CONFIG_PATH_COPIED: &str = "Config path copied to the clipboard";
 /// A restore done in the background.
-pub const UI_CONFIG_RESTORED: &str = "Konfigurasi dikembalikan dari salinan terbaru.";
+pub const UI_CONFIG_RESTORED: &str = "Configuration restored from the newest backup.";
 
 // --- Restore confirmation ---------------------------------------------------
 
 /// Restore dialog title (F-CFG-01 AC3).
-pub const UI_CONFIG_RESTORE_TITLE: &str = "Pulihkan konfigurasi sebelumnya";
+pub const UI_CONFIG_RESTORE_TITLE: &str = "Restore the previous configuration";
 /// Restore action on the card.
-pub const UI_CONFIG_RESTORE: &str = "Pulihkan konfigurasi sebelumnya";
+pub const UI_CONFIG_RESTORE: &str = "Restore the previous configuration";
 /// Restore dialog body; `{time}` is the newest backup's time.
-pub const UI_CONFIG_RESTORE_PROMPT: &str = "Berkas saat ini disimpan sebagai salinan terbaru, lalu konfigurasi dari {time} dikembalikan. Restart diperlukan agar berlaku.";
+pub const UI_CONFIG_RESTORE_PROMPT: &str = "The current file is saved as the newest backup, then the configuration from {time} is restored. A restart is required for it to take effect.";
 /// Restore dialog confirm action.
-pub const UI_CONFIG_RESTORE_CONFIRM: &str = "Pulihkan";
+pub const UI_CONFIG_RESTORE_CONFIRM: &str = "Restore";
 /// The one-click failure-banner action (F-CFG-01 AC3).
-pub const UI_CONFIG_RESTORE_AND_RESTART: &str = "Pulihkan konfigurasi dan mulai ulang";
+pub const UI_CONFIG_RESTORE_AND_RESTART: &str = "Restore the configuration and restart";
 /// The failure banner's short body: why a restore is offered.
-pub const UI_CONFIG_RESTORE_BANNER_BODY: &str = "Berkas konfigurasi berubah sejak start terakhir yang berhasil. Kembalikan salinan sebelum perubahan lalu jalankan ulang.";
-/// The backup time, as an age: `{n} detik lalu`.
-pub const UI_CONFIG_AGE_SECONDS: &str = "{n} detik lalu";
-/// The backup time, as an age: `{n} menit lalu`.
-pub const UI_CONFIG_AGE_MINUTES: &str = "{n} menit lalu";
-/// The backup time, as an age: `{n} jam lalu`.
-pub const UI_CONFIG_AGE_HOURS: &str = "{n} jam lalu";
-/// The backup time, as an age: `{n} hari lalu`.
-pub const UI_CONFIG_AGE_DAYS: &str = "{n} hari lalu";
+pub const UI_CONFIG_RESTORE_BANNER_BODY: &str = "The configuration file changed since the last successful start. Restore the copy from before the change, then start the instance again.";
+/// The backup time, as an age: `{n} seconds ago`.
+pub const UI_CONFIG_AGE_SECONDS: &str = "{n} seconds ago";
+/// The backup time, as an age: `{n} minutes ago`.
+pub const UI_CONFIG_AGE_MINUTES: &str = "{n} minutes ago";
+/// The backup time, as an age: `{n} hours ago`.
+pub const UI_CONFIG_AGE_HOURS: &str = "{n} hours ago";
+/// The backup time, as an age: `{n} days ago`.
+pub const UI_CONFIG_AGE_DAYS: &str = "{n} days ago";
 /// The backup time when the clock is behind the backup's stamp.
-pub const UI_CONFIG_AGE_NOW: &str = "baru saja";
+pub const UI_CONFIG_AGE_NOW: &str = "just now";
 
 /// Formats the default-value note next to a field.
 pub fn config_default(default: &str) -> String {
@@ -111,8 +111,8 @@ pub fn config_restore_prompt(time: &str) -> String {
 
 /// Formats a backup's age from its Unix stamp, given the current Unix time.
 ///
-/// A backup is shown as "12 menit lalu", never a raw epoch number; a stamp in
-/// the future (a clock skew) reads "baru saja" rather than a negative age.
+/// A backup is shown as "12 minutes ago", never a raw epoch number; a stamp in
+/// the future (a clock skew) reads "just now" rather than a negative age.
 pub fn config_backup_age(taken_at_secs: u64, now_secs: u64) -> String {
     let age = now_secs.saturating_sub(taken_at_secs);
     if age < 60 {
@@ -141,7 +141,7 @@ mod tests {
 
     #[test]
     fn a_byte_size_unit_says_what_may_be_typed_not_the_base_unit() {
-        // `F9`: the field takes `16MB`, so "satuan: bytes" next to `128MB` is a
+        // `F9`: the field takes `16MB`, so "unit: bytes" next to `128MB` is a
         // contradiction; the note names the suffixes the field accepts.
         let note = config_unit("bytes").expect("a byte unit has a note");
         assert_eq!(
@@ -155,7 +155,7 @@ mod tests {
     }
 
     #[test]
-    fn a_duration_unit_says_seconds_in_indonesian() {
+    fn a_duration_unit_says_seconds() {
         let note = config_unit("seconds").expect("a duration unit has a note");
         assert_eq!(
             note,

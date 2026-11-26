@@ -134,7 +134,7 @@ fn every_admin_call_refuses_a_non_running_instance_before_reading_or_dialling() 
                     engine.display_name()
                 );
                 assert!(
-                    err.message.contains("Pastikan server sedang berjalan"),
+                    err.message.contains("Make sure the server is running"),
                     "{name}: the message must say the server is not running: {}",
                     err.message
                 );

@@ -107,14 +107,14 @@ pub async fn download_update(
     tokio::fs::create_dir_all(staging_dir)
         .await
         .map_err(|source| UpdateError::ApplyFailed {
-            reason: format!("gagal membuat direktori staging update: {source}"),
+            reason: format!("could not create the update staging directory: {source}"),
         })?;
 
     let checksums = fetch_checksums(update, staging_dir, options).await?;
     let expected = checksums.digest_for(update.asset().name()).ok_or_else(|| {
         UpdateError::ChecksumMetadata {
             reason: format!(
-                "checksums.txt tidak berisi entri untuk aset {}",
+                "checksums.txt has no entry for asset {}",
                 update.asset().name()
             ),
         }
@@ -148,7 +148,7 @@ async fn fetch_checksums(
     let hard_cap = super::check::MAX_CHECKSUMS_BODY_BYTES as u64;
     if declared == 0 || declared > hard_cap {
         return Err(UpdateError::ChecksumMetadata {
-            reason: format!("ukuran checksums.txt tidak valid: {declared}"),
+            reason: format!("invalid checksums.txt size: {declared}"),
         });
     }
     let max_bytes = declared.saturating_add(1024).min(hard_cap);
@@ -162,7 +162,7 @@ async fn read_bounded_text(path: &Path, max_bytes: u64) -> UpdateResult<String> 
     let meta = tokio::fs::metadata(path)
         .await
         .map_err(|source| UpdateError::ChecksumMetadata {
-            reason: format!("gagal membaca checksums.txt: {source}"),
+            reason: format!("could not read checksums.txt: {source}"),
         })?;
     if meta.len() > max_bytes {
         let _ = tokio::fs::remove_file(path).await;
@@ -173,7 +173,7 @@ async fn read_bounded_text(path: &Path, max_bytes: u64) -> UpdateResult<String> 
     let bytes = tokio::fs::read(path)
         .await
         .map_err(|source| UpdateError::ChecksumMetadata {
-            reason: format!("gagal membaca checksums.txt: {source}"),
+            reason: format!("could not read checksums.txt: {source}"),
         })?;
     String::from_utf8(bytes).map_err(|_| UpdateError::ChecksumMetadata {
         reason: "checksums.txt bukan UTF-8 yang valid".to_owned(),
@@ -201,7 +201,7 @@ fn url_label(url: &str) -> &str {
 fn effective_max(declared: u64, hard_cap: u64) -> UpdateResult<u64> {
     if declared == 0 {
         return Err(UpdateError::Malformed {
-            reason: "ukuran asset update tidak valid".to_owned(),
+            reason: "invalid update asset size".to_owned(),
         });
     }
     let max = declared.saturating_add(1024 * 1024); // 1MB slack over metadata
@@ -219,7 +219,7 @@ fn parse_and_validate_url(
     options: &UpdateDownloadOptions,
 ) -> UpdateResult<reqwest::Url> {
     let parsed = reqwest::Url::parse(url).map_err(|e| UpdateError::Malformed {
-        reason: format!("URL update tidak valid: {e}"),
+        reason: format!("invalid update URL: {e}"),
     })?;
     validate_url(&parsed, options)?;
     Ok(parsed)
@@ -290,7 +290,7 @@ fn build_client(options: &UpdateDownloadOptions) -> UpdateResult<reqwest::Client
         }))
         .build()
         .map_err(|e| UpdateError::Network {
-            reason: format!("gagal membuat HTTP client: {e}"),
+            reason: format!("could not build the HTTP client: {e}"),
         })
 }
 
@@ -304,7 +304,7 @@ async fn download_to_file(
         tokio::fs::create_dir_all(parent)
             .await
             .map_err(|source| UpdateError::ApplyFailed {
-                reason: format!("gagal membuat direktori unduhan: {source}"),
+                reason: format!("could not create the download directory: {source}"),
             })?;
     }
     let client = build_client(options)?;
@@ -350,7 +350,7 @@ async fn download_to_file(
     let status = resp.status();
     if !status.is_success() {
         return Err(UpdateError::Network {
-            reason: format!("status HTTP tidak terduga: {status}"),
+            reason: format!("unexpected HTTP status: {status}"),
         });
     }
     enforce_declared_size(&resp, offset, max_bytes, dest).await?;
@@ -363,7 +363,7 @@ async fn download_to_file(
         .open(dest)
         .await
         .map_err(|source| UpdateError::ApplyFailed {
-            reason: format!("gagal membuka file unduhan: {source}"),
+            reason: format!("could not open the download file: {source}"),
         })?;
     let mut downloaded = offset;
     let mut stream = resp;
@@ -381,19 +381,19 @@ async fn download_to_file(
         file.write_all(&chunk)
             .await
             .map_err(|source| UpdateError::ApplyFailed {
-                reason: format!("gagal menulis file unduhan: {source}"),
+                reason: format!("could not write the download file: {source}"),
             })?;
         downloaded = next;
     }
     file.flush()
         .await
         .map_err(|source| UpdateError::ApplyFailed {
-            reason: format!("gagal flush file unduhan: {source}"),
+            reason: format!("could not flush the download file: {source}"),
         })?;
     file.sync_all()
         .await
         .map_err(|source| UpdateError::ApplyFailed {
-            reason: format!("gagal fsync file unduhan: {source}"),
+            reason: format!("could not fsync the download file: {source}"),
         })?;
     Ok(())
 }

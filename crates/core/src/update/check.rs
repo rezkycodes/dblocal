@@ -121,7 +121,7 @@ impl ReqwestUpdateFetcher {
             }))
             .build()
             .map_err(|err| UpdateError::Network {
-                reason: format!("gagal membuat HTTP client: {err}"),
+                reason: format!("could not build the HTTP client: {err}"),
             })?;
         Ok(Self { client })
     }
@@ -144,7 +144,7 @@ impl UpdateFetcher for ReqwestUpdateFetcher {
             if let Some(len) = response.content_length()
                 && len > MAX_RELEASES_BODY_BYTES as u64
             {
-                return Err(format!("respons rilis terlalu besar: {len} byte"));
+                return Err(format!("release response too large: {len} bytes"));
             }
             let mut body: Vec<u8> = Vec::new();
             let mut stream = response;
@@ -152,7 +152,7 @@ impl UpdateFetcher for ReqwestUpdateFetcher {
                 let next = body.len().saturating_add(chunk.len());
                 if next > MAX_RELEASES_BODY_BYTES {
                     return Err(format!(
-                        "respons rilis terlalu besar: melebihi {} byte",
+                        "release response too large: over {} bytes",
                         MAX_RELEASES_BODY_BYTES
                     ));
                 }
@@ -189,7 +189,7 @@ fn releases_url(repo: &str) -> UpdateResult<String> {
         || repo.chars().any(|c| c.is_whitespace())
     {
         return Err(UpdateError::Malformed {
-            reason: "nama repo tidak valid".to_owned(),
+            reason: "invalid repository name".to_owned(),
         });
     }
     let mut parts = repo.split('/');
@@ -197,12 +197,12 @@ fn releases_url(repo: &str) -> UpdateResult<String> {
     let name = parts.next().unwrap_or_default();
     if owner.is_empty() || name.is_empty() || parts.next().is_some() {
         return Err(UpdateError::Malformed {
-            reason: "format repo harus owner/name".to_owned(),
+            reason: "repository must be in owner/name form".to_owned(),
         });
     }
     if !is_repo_segment(owner) || !is_repo_segment(name) {
         return Err(UpdateError::Malformed {
-            reason: "nama repo mengandung karakter tidak valid".to_owned(),
+            reason: "repository name contains invalid characters".to_owned(),
         });
     }
     Ok(format!(
@@ -234,28 +234,28 @@ fn parse_releases_response(response: &FetchResponse) -> UpdateResult<Vec<GhRelea
         // A 403 that is not a rate limit is a source problem (repository private
         // or gone), not a connection problem: the request reached GitHub.
         return Err(UpdateError::SourceNotFound {
-            reason: format!("GitHub API mengembalikan status {}", response.status),
+            reason: format!("the GitHub API returned status {}", response.status),
         });
     }
     if response.status == 404 {
         // The repository named in the release source does not exist or is not
         // public; reporting "check your connection" would be wrong.
         return Err(UpdateError::SourceNotFound {
-            reason: format!("GitHub API mengembalikan status {}", response.status),
+            reason: format!("the GitHub API returned status {}", response.status),
         });
     }
     if response.status != 200 {
         return Err(UpdateError::Network {
-            reason: format!("GitHub API mengembalikan status {}", response.status),
+            reason: format!("the GitHub API returned status {}", response.status),
         });
     }
     if response.body.len() > MAX_RELEASES_BODY_BYTES {
         return Err(UpdateError::Malformed {
-            reason: "respons rilis terlalu besar".to_owned(),
+            reason: "release response too large".to_owned(),
         });
     }
     serde_json::from_slice::<Vec<GhRelease>>(&response.body).map_err(|err| UpdateError::Malformed {
-        reason: format!("JSON rilis tidak valid: {err}"),
+        reason: format!("invalid release JSON: {err}"),
     })
 }
 
@@ -316,7 +316,7 @@ fn parse_release_version(tag: &str) -> UpdateResult<Version> {
     let trimmed = tag.trim();
     let no_v = trimmed.strip_prefix('v').unwrap_or(trimmed);
     Version::parse(no_v).map_err(|err| UpdateError::Malformed {
-        reason: format!("versi rilis tidak valid '{tag}': {err}"),
+        reason: format!("invalid release version '{tag}': {err}"),
     })
 }
 
@@ -358,7 +358,7 @@ fn select_platform_asset(
     arch: Arch,
 ) -> UpdateResult<Option<ReleaseAsset>> {
     let tokens = platform_asset_tokens(os, arch).ok_or_else(|| UpdateError::AssetMissing {
-        reason: format!("platform tidak didukung: {os}-{arch}"),
+        reason: format!("unsupported platform: {os}-{arch}"),
     })?;
     let mut selected: Option<ReleaseAsset> = None;
     for asset in assets {
@@ -468,7 +468,7 @@ fn validate_asset_name(name: &str) -> UpdateResult<()> {
         || name.chars().any(|c| c.is_control())
     {
         return Err(UpdateError::Malformed {
-            reason: format!("nama asset tidak aman: {name}"),
+            reason: format!("unsafe asset name: {name}"),
         });
     }
     Ok(())

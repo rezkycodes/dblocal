@@ -38,7 +38,7 @@ fn emit_port_failure(
     let mut g = lock(inner);
     let msg = strings::ERR_PORT_IN_USE.to_owned();
     g.set_failed(id, CODE_PORT_IN_USE, msg.clone(), StartFailure::PortInUse);
-    g.push_log(id, format!("[error] port {port} sudah dipakai"));
+    g.push_log(id, format!("[error] port {port} is already in use"));
     let _ = tx.send(ServiceEvent::OperationFinished {
         id: op.clone(),
         result: Err(UserFacingError::from(&DblError::PortInUse { port })
@@ -80,7 +80,7 @@ fn emit_download_failure(
     let mut g = lock(inner);
     let msg = strings::ERR_NETWORK.to_owned();
     g.set_failed(id, CODE_NETWORK, msg.clone(), StartFailure::Unknown);
-    g.push_log(id, "[error] unduhan gagal".to_owned());
+    g.push_log(id, "[error] download failed".to_owned());
     let _ = tx.send(ServiceEvent::OperationFinished {
         id: op.clone(),
         result: Err(UserFacingError::from(&DblError::Network {
@@ -311,7 +311,7 @@ impl DblService for MockService {
                         id: op_task.clone(),
                         progress: DownloadProgress::new(done, total, bps, Some(eta)),
                     });
-                    lock(&inner).push_log(&iid, format!("[info] unduhan {done}/{total} byte"));
+                    lock(&inner).push_log(&iid, format!("[info] downloading {done}/{total} bytes"));
                 }
                 let _ = tx.send(ServiceEvent::OperationProgress {
                     id: op_task.clone(),
@@ -331,7 +331,7 @@ impl DblService for MockService {
                     let mut g = lock(&inner);
                     g.runtimes.insert((spec_engine, spec_version.clone()));
                     g.apply(&iid, InstanceEvent::DownloadVerified);
-                    g.push_log(&iid, "[info] runtime terpasang dan diverifikasi".to_owned());
+                    g.push_log(&iid, "[info] runtime installed and verified".to_owned());
                     g.sync_view(&iid);
                 }
             }
@@ -383,7 +383,7 @@ impl DblService for MockService {
             if let Ok(next) = inst.status().apply(InstanceEvent::StartRequested) {
                 g.instances.insert(id.clone(), inst.with_status(next));
             }
-            g.push_log(id, "[info] mulai menjalankan engine".to_owned());
+            g.push_log(id, "[info] starting the engine".to_owned());
             g.sync_view(id);
             (
                 op,
@@ -433,7 +433,7 @@ impl DblService for MockService {
                 if g.apply(&iid, InstanceEvent::HealthCheckPassed) {
                     g.push_log(
                         &iid,
-                        "[info] health check lolos, engine berjalan".to_owned(),
+                        "[info] health check passed, the engine is running".to_owned(),
                     );
                     g.sync_view(&iid);
                 }
@@ -487,7 +487,7 @@ impl DblService for MockService {
                 let _ = tx.send(ServiceEvent::StopForced { id: iid.clone() });
                 lock(&inner).push_log(
                     &iid,
-                    "[warn] shutdown tidak selesai dalam 20 detik, kill paksa".to_owned(),
+                    "[warn] shutdown did not finish within 20 seconds, forcing a kill".to_owned(),
                 );
             }
             {

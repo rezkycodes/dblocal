@@ -189,7 +189,7 @@ fn executor_for(inner: &Inner, instance: &Instance) -> ServiceResult<Box<dyn Adm
         return Err(AdminError::Unsupported.into());
     }
     if instance.status() != InstanceStatus::Running {
-        // The same DBL-8100 "Pastikan server sedang berjalan" a stopped server
+        // The same DBL-8100 "Make sure the server is running" a stopped server
         // already produced by failing to connect, so no caller changes.
         return Err(AdminError::Connect.into());
     }

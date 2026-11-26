@@ -83,13 +83,13 @@ pub(crate) fn apply_update(inner: &Inner) -> ServiceResult<()> {
     if !kind.can_self_update() {
         // The hint names the package manager, so the user knows what to run.
         let reason = kind.refusal_reason().unwrap_or_else(|| {
-            "Pembaruan otomatis tidak tersedia untuk cara pemasangan ini.".to_owned()
+            "Automatic updates are not available for this install method.".to_owned()
         });
         return Err(to_facing(UpdateError::UnsupportedInstallKind { reason }));
     }
     let Some(update) = checked.available else {
         return Err(to_facing(UpdateError::DowngradeRefused {
-            reason: "tidak ada versi yang lebih baru".to_owned(),
+            reason: "no newer version is available".to_owned(),
         }));
     };
     inner
@@ -144,7 +144,7 @@ impl DownloadInstaller {
             return Err(UpdateError::UnsupportedInstallKind {
                 reason: kind
                     .refusal_reason()
-                    .unwrap_or_else(|| "jenis instalasi tidak mendukung self-update".to_owned()),
+                    .unwrap_or_else(|| "this install kind does not support self-update".to_owned()),
             });
         }
         Ok(())

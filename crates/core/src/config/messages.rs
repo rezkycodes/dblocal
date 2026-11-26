@@ -1,4 +1,4 @@
-//! Indonesian user-facing messages for the config editor (`DBL-86xx`).
+//! User-facing messages for the config editor (`DBL-86xx`).
 //!
 //! Every string is static, so a message can never scream a value the user typed
 //! (which could be a password for `requirepass`, though that key is not editable
@@ -6,105 +6,105 @@
 
 /// `DBL-8600`: the key is not editable for this engine.
 pub const ERR_UNKNOWN_KEY: &str =
-    "Setelan itu tidak ada di daftar yang bisa diubah untuk engine ini.";
+    "That setting is not in the list that can be changed for this engine.";
 /// `DBL-8602`: the key is managed by DBLocal.
 pub const ERR_MANAGED_KEY: &str =
-    "Setelan itu dikelola DBLocal sendiri. Gunakan tindakan yang sesuai (misalnya ubah port).";
+    "That setting is managed by DBLocal itself. Use the matching action instead (for example, change the port).";
 /// `DBL-8603`: the file could not be read or written.
-pub const ERR_IO: &str = "Berkas konfigurasi tidak dapat dibaca atau ditulis.";
+pub const ERR_IO: &str = "The configuration file could not be read or written.";
 /// `DBL-8604`: a lifecycle operation owns the instance.
-pub const ERR_BUSY: &str = "Instance sedang dipakai operasi lain. Coba lagi setelah selesai.";
+pub const ERR_BUSY: &str = "The instance is busy with another operation. Try again when it finishes.";
 /// `DBL-8605`: nothing to restore.
-pub const ERR_NO_BACKUP: &str = "Belum ada salinan konfigurasi yang bisa dikembalikan.";
+pub const ERR_NO_BACKUP: &str = "There is no configuration backup to restore yet.";
 /// `DBL-8606`: the whole call was refused.
 pub const ERR_REFUSED: &str =
-    "Perubahan ditolak seluruhnya karena ada setelan yang tidak diizinkan.";
+    "All changes were rejected because one setting is not allowed.";
 /// `DBL-8607`: the config file to open does not exist.
 pub const ERR_MISSING_FILE: &str =
-    "Berkas konfigurasi belum ada. Jalankan instance sekali agar berkas dibuat.";
+    "The configuration file does not exist yet. Start the instance once so the file is created.";
 /// `DBL-8608`: the OS handler could not be started.
 pub const ERR_LAUNCHER: &str =
-    "Editor bawaan sistem tidak dapat dibuka. Buka berkasnya secara manual.";
+    "The system's default editor could not be opened. Open the file manually.";
 
 // --- One-line descriptions for the editable settings -------------------------
 
 /// PostgreSQL `max_connections`.
 pub const DESC_MAX_CONNECTIONS_PG: &str =
-    "Jumlah maksimum koneksi klien yang diterima server sekaligus.";
+    "Maximum number of client connections the server accepts at once.";
 /// MySQL `max_connections`.
 pub const DESC_MAX_CONNECTIONS_MYSQL: &str =
-    "Jumlah maksimum koneksi klien yang diterima server sekaligus.";
+    "Maximum number of client connections the server accepts at once.";
 /// MariaDB `max_connections`.
 pub const DESC_MAX_CONNECTIONS_MARIADB: &str =
-    "Jumlah maksimum koneksi klien yang diterima server sekaligus.";
+    "Maximum number of client connections the server accepts at once.";
 /// PostgreSQL `shared_buffers`.
 pub const DESC_SHARED_BUFFERS: &str =
-    "Memori bersama untuk cache halaman; sekitar 25% RAM adalah titik awal yang lazim.";
+    "Shared memory for the page cache; about 25% of RAM is a common starting point.";
 /// PostgreSQL `work_mem`.
 pub const DESC_WORK_MEM: &str =
-    "Batas memori per operasi pengurutan atau hash sebelum memakai berkas sementara.";
+    "Memory limit per sort or hash operation before it uses temporary files.";
 /// PostgreSQL `timezone`.
-pub const DESC_TIMEZONE_PG: &str = "Zona waktu yang dipakai server saat menampilkan waktu.";
+pub const DESC_TIMEZONE_PG: &str = "Time zone the server uses when it displays times.";
 /// MySQL `default-time-zone`.
 pub const DESC_TIME_ZONE_MYSQL: &str =
-    "Zona waktu bawaan server; kosong berarti zona waktu sistem.";
+    "The server's default time zone; empty means the system time zone.";
 /// MariaDB `default-time-zone`.
 pub const DESC_TIME_ZONE_MARIADB: &str =
-    "Zona waktu bawaan server; kosong berarti zona waktu sistem.";
+    "The server's default time zone; empty means the system time zone.";
 /// MySQL/MariaDB `innodb_buffer_pool_size`.
 pub const DESC_INNODB_BUFFER_POOL: &str =
-    "Cache data dan indeks InnoDB; bagian terbesar dari memori database.";
+    "Cache for InnoDB data and indexes; the largest part of database memory.";
 /// MySQL `sort_buffer_size`.
 pub const DESC_SORT_BUFFER_MYSQL: &str =
-    "Memori per operasi pengurutan pada MySQL; nilainya berlaku per koneksi.";
+    "Memory per sort operation in MySQL; the value applies per connection.";
 /// MariaDB `sort_buffer_size`.
 pub const DESC_SORT_BUFFER_MARIADB: &str =
-    "Memori per operasi pengurutan pada MariaDB; nilainya berlaku per koneksi.";
+    "Memory per sort operation in MariaDB; the value applies per connection.";
 /// MySQL/MariaDB `character-set-server`.
-pub const DESC_CHARACTER_SET: &str = "Set karakter bawaan untuk data dan koneksi baru.";
+pub const DESC_CHARACTER_SET: &str = "The default character set for new data and connections.";
 /// Valkey `maxmemory`.
-pub const DESC_MAXMEMORY: &str = "Batas memori yang boleh dipakai Valkey; 0 berarti tanpa batas.";
+pub const DESC_MAXMEMORY: &str = "Memory limit for Valkey; 0 means no limit.";
 /// Valkey `maxmemory-policy`.
-pub const DESC_MAXMEMORY_POLICY: &str = "Cara Valkey membuang kunci saat memori mencapai batas.";
+pub const DESC_MAXMEMORY_POLICY: &str = "How Valkey evicts keys when memory reaches the limit.";
 /// Valkey `appendonly`.
 pub const DESC_APPENDONLY: &str =
-    "Menyimpan setiap perubahan ke berkas append-only agar data tidak hilang saat restart.";
+    "Writes every change to an append-only file so data survives a restart.";
 /// Valkey `save`.
 pub const DESC_SAVE: &str =
-    "Jadwal snapshot RDB (pasangan detik dan jumlah perubahan); kosong berarti nonaktif.";
+    "RDB snapshot schedule (pairs of seconds and number of changes); empty means disabled.";
 /// Valkey `timeout`.
 pub const DESC_TIMEOUT: &str =
-    "Menutup koneksi klien yang menganggur lebih lama dari detik ini; 0 berarti tidak pernah.";
+    "Closes a client connection that idles longer than this many seconds; 0 means never.";
 
 // --- CLI strings -------------------------------------------------------------
 
 /// Shown after a successful `config set`.
-pub const MSG_SAVED: &str = "Konfigurasi tersimpan. Perubahan berlaku setelah restart.";
+pub const MSG_SAVED: &str = "Configuration saved. Changes take effect after a restart.";
 /// Shown when a backup path is printed.
-pub const MSG_BACKUP_AT: &str = "Salinan sebelum perubahan:";
+pub const MSG_BACKUP_AT: &str = "Copy from before the change:";
 /// Shown when a restore succeeded.
-pub const MSG_RESTORED: &str = "Konfigurasi dikembalikan dari salinan terbaru.";
+pub const MSG_RESTORED: &str = "Configuration restored from the newest backup.";
 /// Column header for the settings table.
-pub const HEADER_SETTING: &str = "SETELAN";
+pub const HEADER_SETTING: &str = "SETTING";
 /// Column header for the current value.
-pub const HEADER_CURRENT: &str = "SAAT INI";
+pub const HEADER_CURRENT: &str = "CURRENT";
 /// Column header for the default.
-pub const HEADER_DEFAULT: &str = "BAWAAN";
+pub const HEADER_DEFAULT: &str = "DEFAULT";
 /// Column header for the unit.
-pub const HEADER_UNIT: &str = "SATUAN";
+pub const HEADER_UNIT: &str = "UNIT";
 /// Column header for restart-required.
 pub const HEADER_RESTART: &str = "RESTART";
 /// The word shown for "yes" in the restart column.
-pub const YES: &str = "ya";
+pub const YES: &str = "yes";
 /// The word shown for "default" when a setting is unset in the file.
-pub const DEFAULT_LABEL: &str = "bawaan";
+pub const DEFAULT_LABEL: &str = "default";
 /// The word shown for a read-only row.
-pub const READONLY_LABEL: &str = "hanya-baca";
+pub const READONLY_LABEL: &str = "read-only";
 /// Prompt for a `key=value` pair the CLI cannot parse.
-pub const ERR_SET_FORMAT: &str = "Format harus key=nilai.";
+pub const ERR_SET_FORMAT: &str = "The format must be key=value.";
 /// Unit for a byte-size setting: what the user actually types.
-pub const UNIT_SIZE: &str = "ukuran (MB/GB)";
+pub const UNIT_SIZE: &str = "size (MB/GB)";
 /// Unit for a duration in seconds.
-pub const UNIT_SECONDS: &str = "detik";
+pub const UNIT_SECONDS: &str = "seconds";
 /// Shown after a successful `config open`.
-pub const MSG_OPENED: &str = "Berkas konfigurasi dibuka di editor bawaan sistem.";
+pub const MSG_OPENED: &str = "Configuration file opened in the system's default editor.";

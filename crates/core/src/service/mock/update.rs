@@ -67,7 +67,7 @@ pub(crate) fn apply_update(inner: &Arc<std::sync::Mutex<Inner>>) -> ServiceResul
     if !kind.can_self_update() {
         let err = UpdateError::UnsupportedInstallKind {
             reason: kind.refusal_reason().unwrap_or_else(|| {
-                "Pembaruan otomatis tidak tersedia untuk cara pemasangan ini.".to_owned()
+                "Automatic updates are not available for this install method.".to_owned()
             }),
         };
         return Err(UserFacingError::new(err.code(), err.user_message()));

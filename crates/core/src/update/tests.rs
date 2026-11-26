@@ -215,7 +215,7 @@ fn install_kind_unknown_refused() {
     let plan = plan_install(
         &InstallKind::Unknown {
             exe_path: std::path::PathBuf::from("/tmp/dblocal"),
-            reason: "tidak dikenal".to_owned(),
+            reason: "unknown".to_owned(),
         },
         Path::new("/tmp/staged"),
         Path::new("/tmp/dblocal"),

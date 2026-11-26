@@ -317,7 +317,7 @@ fn unwritable_directory_is_denied() {
     std::fs::set_permissions(dir.path(), original).unwrap();
     assert_eq!(reason, Some(DenyReason::NotWritable));
     assert!(
-        reason.unwrap().message().contains("tidak dapat ditulis"),
+        reason.unwrap().message().contains("not writable"),
         "message must explain the writability refusal"
     );
 }
