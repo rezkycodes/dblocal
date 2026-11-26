@@ -166,7 +166,7 @@ mod tests {
             &nothing_installed(),
         );
         assert!(view.banner.is_none());
-        assert_eq!(view.engines.len(), 5);
+        assert_eq!(view.engines.len(), 6);
     }
 
     #[test]
