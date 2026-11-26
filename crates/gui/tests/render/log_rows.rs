@@ -5,7 +5,7 @@
 //! kept the single-line height, so the wrapped part overprinted the next line and
 //! the text was unreadable. The log list is a `UniformList`, whose rows all share
 //! one height, so wrapping must never happen: the row clips and ellipsises, and
-//! "Salin log" still copies the complete lines.
+//! "Copy logs" still copies the complete lines.
 //!
 //! The fixture is a 300-character line between two short ones. The test finds the
 //! log body between the drawn header/footer borders and counts horizontal text

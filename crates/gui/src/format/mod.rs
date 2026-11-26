@@ -693,7 +693,7 @@ pub fn create_versions(engine: &str) -> String {
     strings::create_versions(engine)
 }
 
-/// Formats the "Unduh, <size>" badge on a catalog version.
+/// Formats the "Download, <size>" badge on a catalog version.
 pub fn create_download_badge(size: &str) -> String {
     strings::create_download_badge(size)
 }

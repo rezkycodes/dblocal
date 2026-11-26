@@ -263,7 +263,7 @@ pub struct Workspace {
     quit_timeout_task: Option<Task<()>>,
     version: &'static str,
     focus_handle: FocusHandle,
-    /// The instance header's "Hapus" button handle (`F-INS-05`): a stable tab
+    /// The instance header's "Delete" button handle (`F-INS-05`): a stable tab
     /// stop the keyboard tests can focus to prove Enter opens the dialog.
     delete_focus: FocusHandle,
     /// The delete dialog's two mode cards' handles, in order

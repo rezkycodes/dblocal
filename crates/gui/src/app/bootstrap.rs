@@ -3,7 +3,7 @@
 //! The app-level runtime (service, tray, event bridge, quit state) outlives any
 //! single window so F-TRY-02 works on Linux where `cx.hide()` is a no-op: closing
 //! the window with a tray present closes the window but keeps the process alive,
-//! and "Buka DBLocal" opens a fresh window attached to the same service.
+//! and "Open DBLocal" opens a fresh window attached to the same service.
 
 use std::sync::Arc;
 

@@ -26,7 +26,7 @@ use super::config_state::ConfigAction;
 /// variants say exactly which service call follows the restore (`F1`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RestoreFollowUp {
-    /// "Pulihkan konfigurasi sebelumnya" from the dialog: only the file changes.
+    /// "Restore the previous configuration" from the dialog: only the file changes.
     FileOnly,
     /// The failure banner's "Restore the configuration and restart": restore, start.
     Start,
@@ -67,7 +67,7 @@ impl Workspace {
     /// Reads the tab on entry: every time, so an edit by the CLI, a second
     /// DBLocal or the external editor is seen (`F7a`).
     ///
-    /// Re-reading unconditionally is what makes "Buka file konfigurasi" useful:
+    /// Re-reading unconditionally is what makes "Open config file" useful:
     /// the whole point of that button is that something else changes the file.
     pub(crate) fn enter_config_tab(&mut self, id: &InstanceId, cx: &mut Context<Self>) {
         if self.instance(id).is_none() {
@@ -156,7 +156,7 @@ impl Workspace {
                             this.record_config_field(&iid, &field_key, &text, cx);
                         }
                         InputEvent::PressEnter { .. } => {
-                            // Enter applies only when "Terapkan" is enabled.
+                            // Enter applies only when "Apply" is enabled.
                             this.apply_config_if_ready(&iid, cx);
                         }
                         _ => {}
@@ -230,12 +230,12 @@ impl Workspace {
         cx.notify();
     }
 
-    /// Whether "Terapkan" is enabled for one instance.
+    /// Whether "Apply" is enabled for one instance.
     pub(crate) fn config_can_apply(&self, id: &InstanceId) -> bool {
         self.config.get(id).is_some_and(|config| config.can_apply())
     }
 
-    /// Applies on Enter only when "Terapkan" is enabled.
+    /// Applies on Enter only when "Apply" is enabled.
     pub(crate) fn apply_config_if_ready(&mut self, id: &InstanceId, cx: &mut Context<Self>) {
         if self.config_can_apply(id) {
             self.apply_config(id, cx);
@@ -289,13 +289,13 @@ impl Workspace {
         cx.notify();
     }
 
-    /// Dismisses the "Tersimpan" banner's restart offer ("Nanti").
+    /// Dismisses the "Saved" banner's restart offer ("Later").
     pub(crate) fn dismiss_config_applied(&mut self, id: &InstanceId, cx: &mut Context<Self>) {
         self.config.entry(id).applied = None;
         cx.notify();
     }
 
-    /// "Restart sekarang": the documented stop-then-start pair (`F-CFG-01` AC2).
+    /// "Restart now": the documented stop-then-start pair (`F-CFG-01` AC2).
     ///
     /// The stop completes asynchronously, so the start is scheduled and runs when
     /// the stop's `OperationFinished` arrives; starting a `Stopping` instance
@@ -409,7 +409,7 @@ impl Workspace {
         cx.notify();
     }
 
-    /// "Buka file konfigurasi": opens the raw file in the OS handler
+    /// "Open config file": opens the raw file in the OS handler
     /// (`F-CFG-02` AC1); the path is shown regardless so a failed launcher is
     /// recoverable by hand (`DBL-8608`).
     pub(crate) fn open_config_raw(&mut self, id: &InstanceId, cx: &mut Context<Self>) {
@@ -473,7 +473,7 @@ impl Workspace {
         }
     }
 
-    /// Drops a pending "Restart sekarang" that can no longer be the stop it
+    /// Drops a pending "Restart now" that can no longer be the stop it
     /// waited for, whatever took it away (`F2`).
     pub(crate) fn clear_pending_restart_for(&mut self, id: &InstanceId) {
         if self.config_restart_after_stop.as_ref() == Some(id) {

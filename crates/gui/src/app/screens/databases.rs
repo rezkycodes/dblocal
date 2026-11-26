@@ -4,9 +4,9 @@
 //!
 //! 1. **Database** — a table of name / owner / size from `list_databases`, a
 //!    name field and "Create database" (validated with the core allowlist before
-//!    any round trip, `F-DBU-01` AC4), and a "Hapus" per row that opens a
+//!    any round trip, `F-DBU-01` AC4), and a "Delete" per row that opens a
 //!    type-the-name confirmation (`F-DBU-01` AC3).
-//! 2. **User & hak akses** — the roles `list_users` returned and a create-user
+//! 2. **Users and privileges** — the roles `list_users` returned and a create-user
 //!    form (name, database, read-only / read-write). The generated password is
 //!    shown once in a dialog and never enters this view's state
 //!    (`F-DBU-02` AC2).
@@ -319,7 +319,7 @@ impl Workspace {
         table
     }
 
-    /// The User & hak akses card: role list and the create-user form.
+    /// The Users and privileges card: role list and the create-user form.
     fn render_users_card(
         &self,
         view: &InstanceView,

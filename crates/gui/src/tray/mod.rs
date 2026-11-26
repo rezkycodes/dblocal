@@ -71,7 +71,7 @@ pub struct TrayMenuModel {
     pub instances: Vec<TrayMenuEntry>,
     /// "Open DBLocal".
     pub open: TrayMenuEntry,
-    /// "Keluar".
+    /// "Quit".
     pub quit: TrayMenuEntry,
 }
 

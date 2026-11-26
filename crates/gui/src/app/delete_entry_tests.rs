@@ -184,7 +184,7 @@ fn purge_mode_needs_the_typed_name(cx: &mut TestAppContext) {
         view.update(cx, |this, cx| {
             if let Some(input) = this.delete_name_input.clone() {
                 input.update(cx, |state, cx| {
-                    state.set_value("salah".to_owned(), window, cx)
+                    state.set_value("wrong".to_owned(), window, cx)
                 });
             }
         });

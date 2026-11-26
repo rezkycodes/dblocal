@@ -150,7 +150,7 @@ impl Workspace {
             .set_inner(workspace.tabs.selected_index(), InnerTab::Logs);
         if let Some(id) = workspace.tabs.selected_instance().cloned() {
             let lines = (0..200)
-                .map(|index| format!("baris log panjang {index:03} — payload stabil"))
+                .map(|index| format!("long log line {index:03} — stable payload"))
                 .collect::<Vec<_>>();
             workspace.logs.load(&id, lines);
             if let Some(buffer) = workspace.logs.get_mut(&id) {
@@ -172,9 +172,7 @@ impl Workspace {
             .tabs
             .set_inner(workspace.tabs.selected_index(), InnerTab::Logs);
         if let Some(id) = workspace.tabs.selected_instance().cloned() {
-            workspace
-                .logs
-                .load(&id, vec!["satu baris pendek".to_owned()]);
+            workspace.logs.load(&id, vec!["one short line".to_owned()]);
         }
         workspace
     }
@@ -204,9 +202,9 @@ impl Workspace {
             workspace.logs.load(
                 &id,
                 vec![
-                    "baris pendek sebelum".to_owned(),
+                    "short line before".to_owned(),
                     long,
-                    "baris pendek sesudah".to_owned(),
+                    "short line after".to_owned(),
                 ],
             );
             if let Some(buffer) = workspace.logs.get_mut(&id) {

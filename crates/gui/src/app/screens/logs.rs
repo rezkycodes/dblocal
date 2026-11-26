@@ -1,7 +1,7 @@
 //! The Logs tab: the per-instance buffer with follow, copy, and the diagnosis
 //! banner for a failed start (`F-LOG-01`, `F-LOG-02`).
 //!
-//! The banner offers the one-click "Pindah ke port berikutnya & start" only
+//! The banner offers the one-click "Move to <port> and start" only
 //! when the failure is the typed port-in-use error, implemented as
 //! `suggest_port` + `change_port` + `start_instance` (`F-PRT-02` AC1–AC2).
 
@@ -241,7 +241,7 @@ impl Workspace {
     ///
     /// `size_full` gives the list a definite height inside the flex viewer; without
     /// it the default `Auto` sizing collapses to zero in a `min_h_0` chain and no
-    /// lines paint (the "8 baris" footer proved the buffer had lines).
+    /// lines paint (the "8 lines" footer proved the buffer had lines).
     ///
     /// Rows are **one line, never wrapped** (W4-I D3): `UniformList` gives every
     /// row the same height, so a wrapped line painted a second visual line into

@@ -246,7 +246,7 @@ fn package_manager_status() -> UpdateStatus {
         available: Some(dblocal_core::service::AvailableUpdateView {
             version: "0.9.0".to_owned(),
             tag: "v0.9.0".to_owned(),
-            release_notes: "Catatan".to_owned(),
+            release_notes: "Notes".to_owned(),
             asset_name: "dblocal-linux-x86_64.tar.gz".to_owned(),
             size_bytes: 1024,
             can_self_update: false,

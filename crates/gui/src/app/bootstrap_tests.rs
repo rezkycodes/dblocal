@@ -428,7 +428,7 @@ fn close_without_tray_nothing_running_quits(cx: &mut TestAppContext) {
     assert_eq!(cx.read(quit_requests), 1, "R4: nothing running must quit");
 }
 
-/// R4.3: "Buka DBLocal" with a window open keeps exactly one window.
+/// R4.3: "Open DBLocal" with a window open keeps exactly one window.
 #[gpui_kit::test]
 fn tray_open_reuses_the_existing_window(cx: &mut TestAppContext) {
     cx.update(gpui_kit::init);
@@ -440,11 +440,11 @@ fn tray_open_reuses_the_existing_window(cx: &mut TestAppContext) {
     cx.update(|cx| handle_tray_action(crate::tray::TrayAction::OpenWindow, cx));
     cx.run_until_parked();
     let after = cx.read(|cx| cx.windows().len());
-    assert_eq!(before, after, "R4: 'Buka DBLocal' must not duplicate");
+    assert_eq!(before, after, "R4: 'Open DBLocal' must not duplicate");
     assert_eq!(after, 1);
 }
 
-/// R4.4: "Buka DBLocal" with no window opens exactly one, showing the instances.
+/// R4.4: "Open DBLocal" with no window opens exactly one, showing the instances.
 #[gpui_kit::test]
 fn tray_open_with_no_window_opens_one_showing_instances(cx: &mut TestAppContext) {
     cx.update(gpui_kit::init);

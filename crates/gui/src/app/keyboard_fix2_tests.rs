@@ -103,7 +103,7 @@ fn delete_confirm_restores_focus_and_keeps_the_keyboard_alive(cx: &mut TestAppCo
     });
     draw(cx);
     assert!(has_focus(cx), "delete dialog takes focus on open");
-    // Confirm delete (Enter on the focused "Hapus" is bypassed by typing the
+    // Confirm delete (Enter on the focused "Delete" is bypassed by typing the
     // name not being needed in Archive mode; call the confirm action the button
     // runs — the focus restore is what is under test).
     cx.update(|_window, cx| {
@@ -156,7 +156,7 @@ fn quit_cancel_restores_focus_and_keeps_the_keyboard_alive(cx: &mut TestAppConte
         view.read_with(cx, |this, _| this.quit_machine().is_confirming()),
         "the quit dialog must be open"
     );
-    // Cancel it (the "Batal" button path).
+    // Cancel it (the "Cancel" button path).
     cx.update(|_window, cx| {
         view.update(cx, |this, cx| this.quit_cancel(cx));
     });

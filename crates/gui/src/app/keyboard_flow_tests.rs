@@ -300,7 +300,7 @@ fn keyboard_only_first_session(cx: &mut TestAppContext) {
     );
 
     // 3) Name is pre-filled from the engine+version; create by focusing the
-    //    "Buat" button and pressing Enter. No pointer event anywhere.
+    //    "Create" button and pressing Enter. No pointer event anywhere.
     let submit = view.read_with(cx, |this, _| {
         this.create_form().map(|f| f.submit_focus.clone())
     });
@@ -432,7 +432,7 @@ fn create_confirm_keeps_the_keyboard_alive(cx: &mut TestAppContext) {
     focus(cx, &root_focus);
     press(cx, "ctrl-n");
     assert!(view.read_with(cx, |this, _| this.create_form().is_some()));
-    // Confirm by focusing "Buat" and pressing Enter.
+    // Confirm by focusing "Create" and pressing Enter.
     let submit = view
         .read_with(cx, |this, _| {
             this.create_form().map(|f| f.submit_focus.clone())
@@ -443,7 +443,7 @@ fn create_confirm_keeps_the_keyboard_alive(cx: &mut TestAppContext) {
     cx.run_until_parked();
     assert!(
         view.read_with(cx, |this, _| this.create_form().is_none()),
-        "Enter on Buat closes the dialog"
+        "Enter on Create closes the dialog"
     );
     assert!(has_focus(cx), "focus must survive the create confirm");
     press(cx, "ctrl-n");
@@ -601,7 +601,7 @@ fn full_first_session_creates_starts_and_copies(cx: &mut TestAppContext) {
     focus(cx, &version_handle);
     press(cx, "space");
 
-    // 2) Create by focusing "Buat" and pressing Enter.
+    // 2) Create by focusing "Create" and pressing Enter.
     let submit = view
         .read_with(cx, |this, _| {
             this.create_form().map(|f| f.submit_focus.clone())

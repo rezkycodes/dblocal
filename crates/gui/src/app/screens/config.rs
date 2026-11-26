@@ -134,7 +134,7 @@ impl Workspace {
         )
     }
 
-    /// The "Tersimpan. Berlaku setelah restart." banner with the backup time and
+    /// The "Saved. Takes effect after a restart." banner with the backup time and
     /// the restart offer (`F-CFG-01` AC2).
     fn render_config_applied(
         &self,

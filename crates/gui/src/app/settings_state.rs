@@ -2,10 +2,10 @@
 //!
 //! Two sections, each with its own read model:
 //!
-//! - **Pembaruan**: the result of the last manual check. There is no timer and
+//! - **Updates**: the result of the last manual check. There is no timer and
 //!   no startup check (`F-PKG-05` AC1 says "when the user opens Settings →
 //!   Updates"); the dialog only ever shows what a click produced.
-//! - **Jalankan saat login**: the login-item state, read on open and updated
+//! - **Run at login**: the login-item state, read on open and updated
 //!   only by the switch. A failed enable never shows "enabled" (`F-AUT-01`
 //!   AC1/AC2).
 //!
@@ -16,7 +16,7 @@ use dblocal_core::service::{UpdateStatus, UserFacingError};
 
 use super::login_item::LoginStatus;
 
-/// The last update check, as the Pembaruan section renders it.
+/// The last update check, as the Updates section renders it.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum UpdateCheckState {
     /// No check was made yet.
@@ -180,7 +180,7 @@ pub fn package_manager_hint(state: &SettingsState) -> Option<&str> {
         .and_then(|status| status.package_manager_hint.as_deref())
 }
 
-/// The line the Pembaruan section shows for the last check.
+/// The line the Updates section shows for the last check.
 pub fn check_headline(state: &SettingsState) -> Option<String> {
     let status = state.checked()?;
     Some(match &status.available {
@@ -222,7 +222,7 @@ mod tests {
         AvailableUpdateView {
             version: "0.9.0".to_owned(),
             tag: "v0.9.0".to_owned(),
-            release_notes: "Catatan".to_owned(),
+            release_notes: "Notes".to_owned(),
             asset_name: "dblocal-linux-x86_64.tar.gz".to_owned(),
             size_bytes: 1024,
             can_self_update,

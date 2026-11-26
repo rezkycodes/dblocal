@@ -36,7 +36,7 @@ pub(super) fn render(
     let can_purge = mode == DeleteMode::PurgeData && typed_matches;
     // Each mode card is a tab stop with the ring and Enter/Space activation, so a
     // keyboard-only user can reach purge mode (W4-I: the cards used to only
-    // listen for the mouse, leaving "Hapus instance & data" unreachable by key).
+    // listen for the mouse, leaving "Delete instance and data" unreachable by key).
     let [archive_focus, purge_focus] = workspace.delete_mode_focus();
 
     let modes = v_flex()

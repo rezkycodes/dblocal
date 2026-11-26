@@ -76,7 +76,7 @@ fn a_good_restore_then_a_failed_start_reports_the_start(cx: &mut TestAppContext)
     );
 }
 
-/// `F2`: a stop that fails after "Restart sekarang" must not leave a restart
+/// `F2`: a stop that fails after "Restart now" must not leave a restart
 /// that a later manual stop consumes. This is the reviewer's second probe.
 #[gpui_kit::test]
 fn a_failed_stop_after_restart_now_leaves_no_pending_restart(cx: &mut TestAppContext) {
@@ -107,7 +107,7 @@ fn a_failed_stop_after_restart_now_leaves_no_pending_restart(cx: &mut TestAppCon
     assert_eq!(
         service.counts().start_instance,
         starts_before,
-        "F2: a manual stop after a failed Restart sekarang must not auto-start"
+        "F2: a manual stop after a failed Restart now must not auto-start"
     );
 }
 
@@ -193,7 +193,7 @@ fn a_stop_that_ends_running_drops_the_pending_restart(cx: &mut TestAppContext) {
     );
 }
 
-/// `F4`: the "Tersimpan. Berlaku setelah restart." banner is gone once the
+/// `F4`: the "Saved. Takes effect after a restart." banner is gone once the
 /// instance is running again — a stopped Valkey that was applied and then
 /// started must not keep offering a restart for a change already in effect.
 #[gpui_kit::test]
@@ -242,7 +242,7 @@ fn the_applied_banner_stays_while_a_running_instance_just_sits_there(cx: &mut Te
         this.apply_config(&id, cx);
     });
     settle(cx);
-    // A running instance's banner waits for "Restart sekarang"/"Nanti".
+    // A running instance's banner waits for "Restart now"/"Later".
     let applied = view.read_with(cx, |this, _| {
         this.config_state_for(&id)
             .is_some_and(|c| c.applied.is_some())
@@ -289,14 +289,14 @@ fn the_applied_banner_survives_the_stop_half_of_a_restart(cx: &mut TestAppContex
     );
 }
 
-/// `F5`: "Terapkan" is disabled while a field carries a validation error, and
+/// `F5`: "Apply" is disabled while a field carries a validation error, and
 /// Enter in that field does not call the service.
 #[gpui_kit::test]
 fn apply_is_disabled_and_enter_is_inert_while_a_field_has_an_error(cx: &mut TestAppContext) {
     let (view, service, cx) = fixture(cx);
     let id = open_config(&view, &service, cx);
     view.update(cx, |this, cx| {
-        this.record_config_field(&id, "max_connections", "bukan-angka", cx);
+        this.record_config_field(&id, "max_connections", "not-a-number", cx);
     });
     settle(cx);
     let (can_apply, has_error) = view.read_with(cx, |this, _| {
@@ -309,7 +309,7 @@ fn apply_is_disabled_and_enter_is_inert_while_a_field_has_an_error(cx: &mut Test
     assert!(has_error, "F5: the field shows its DBL-8601 error");
     assert!(
         !can_apply,
-        "F5: Terapkan is disabled while a field has an error"
+        "F5: Apply is disabled while a field has an error"
     );
 
     let before = service.counts().config_apply;
@@ -402,7 +402,7 @@ fn re_entering_the_tab_sees_an_out_of_process_edit(cx: &mut TestAppContext) {
 }
 
 /// `F7a`: a window activation re-reads the visible Config tab, which is the path
-/// back from the external editor that "Buka file konfigurasi" launches.
+/// back from the external editor that "Open config file" launches.
 #[gpui_kit::test]
 fn a_window_activation_re_reads_the_visible_config_tab(cx: &mut TestAppContext) {
     let (view, service, cx) = fixture(cx);
@@ -451,7 +451,7 @@ fn a_re_read_keeps_the_typed_text_and_the_rows(cx: &mut TestAppContext) {
 }
 
 /// `M9`: typing an invalid value shows the `DBL-8601` sentence under the field
-/// immediately, before any Terapkan — the real window does, and only the apply
+/// immediately, before any Apply — the real window does, and only the apply
 /// path was tested before.
 #[gpui_kit::test]
 fn typing_an_invalid_value_shows_the_error_before_apply(cx: &mut TestAppContext) {
@@ -484,7 +484,7 @@ fn removing_an_instance_forgets_its_whole_config_tab(cx: &mut TestAppContext) {
     let (view, service, cx) = fixture(cx);
     service.set(|script| script.config_view = Ok(view_with_backup()));
     let id = open_config(&view, &service, cx);
-    // A pending "Restart sekarang" and an open confirmation on this instance.
+    // A pending "Restart now" and an open confirmation on this instance.
     view.update(cx, |this, cx| {
         let running = service.id_with(InstanceStatus::Running);
         this.restart_after_apply(&running, cx);
@@ -542,7 +542,7 @@ fn a_second_restore_or_open_while_busy_does_nothing(cx: &mut TestAppContext) {
     );
 }
 
-/// `F8`: an invalid edit keeps its error across a re-read, so "Terapkan" never
+/// `F8`: an invalid edit keeps its error across a re-read, so "Apply" never
 /// turns blue while the field is invalid. Repro: type `abc`, leave the tab and
 /// come back (the tab re-reads every entry now).
 #[gpui_kit::test]
@@ -560,7 +560,7 @@ fn an_invalid_edit_keeps_its_error_across_a_re_read(cx: &mut TestAppContext) {
         )
     });
     assert!(before.0, "F8: the invalid field shows DBL-8601");
-    assert!(!before.1, "F8: Terapkan is disabled before the re-read");
+    assert!(!before.1, "F8: Apply is disabled before the re-read");
 
     // Leave and come back: every entry re-reads, which re-bases the edits.
     view.update(cx, |this, cx| this.set_inner_tab(InnerTab::Overview, cx));
@@ -586,11 +586,11 @@ fn an_invalid_edit_keeps_its_error_across_a_re_read(cx: &mut TestAppContext) {
     );
     assert!(
         !after.2,
-        "F8: Terapkan never turns blue while a field is invalid"
+        "F8: Apply never turns blue while a field is invalid"
     );
 }
 
-/// `N13`: "Buka file konfigurasi" re-reads after the launcher returns, so a
+/// `N13`: "Open config file" re-reads after the launcher returns, so a
 /// change the editor made (no window activation) is in the form.
 #[gpui_kit::test]
 fn opening_the_raw_file_re_reads_the_new_values(cx: &mut TestAppContext) {
@@ -629,7 +629,7 @@ fn a_refused_stop_leaves_no_pending_restart(cx: &mut TestAppContext) {
     let (view, service, cx) = fixture(cx);
     let id = service.id_with(InstanceStatus::Running);
     service.set(|script| {
-        script.stop_instance = Err(UserFacingError::new("DBL-4002", "stop ditolak"));
+        script.stop_instance = Err(UserFacingError::new("DBL-4002", "stop rejected"));
     });
     let starts_before = service.counts().start_instance;
     view.update(cx, |this, cx| this.restart_after_apply(&id, cx));
@@ -655,7 +655,7 @@ fn a_refused_stop_leaves_no_pending_restart(cx: &mut TestAppContext) {
     assert_eq!(
         service.counts().start_instance,
         starts_before,
-        "N14: a manual stop after a refused Restart sekarang must not auto-start"
+        "N14: a manual stop after a refused Restart now must not auto-start"
     );
 }
 

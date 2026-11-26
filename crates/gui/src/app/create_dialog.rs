@@ -430,7 +430,7 @@ fn render_no_password(
         )
 }
 
-/// The footer: the download note only when one is needed, then Batal / Create.
+/// The footer: the download note only when one is needed, then Cancel / Create.
 fn render_footer(
     form: &super::CreateForm,
     installed: bool,

@@ -1,14 +1,14 @@
 //! Pure state for the Config tab (`F-CFG-01`, `F-CFG-02`).
 //!
 //! The service is the only source of truth: the tab holds the `ConfigView` its
-//! last read returned, the local edits not yet applied ("Terapkan"), the typed
+//! last read returned, the local edits not yet applied ("Apply"), the typed
 //! error of each field, and which action is in flight. None of this needs a
 //! window or a live service, so every branch is unit-tested here and the screen
 //! only reads it.
 //!
 //! Two rules the PRD makes explicit shape this module:
 //!
-//! 1. **Edits are local until "Terapkan".** `edits` holds only the fields whose
+//! 1. **Edits are local until "Apply".** `edits` holds only the fields whose
 //!    text differs from the file, keyed by the setting's key. An untouched field
 //!    therefore always shows the value of the latest read, which is exactly what
 //!    "re-base only the untouched fields" on a `ConfigChanged` means.
@@ -142,7 +142,7 @@ impl InstanceConfig {
             .collect()
     }
 
-    /// Whether "Terapkan" is enabled.
+    /// Whether "Apply" is enabled.
     ///
     /// Something must have changed, nothing may be in flight, and no field may
     /// carry a validation error: a blue button that silently does nothing while
@@ -154,7 +154,7 @@ impl InstanceConfig {
             && !self.changed_pairs().is_empty()
     }
 
-    /// Whether "Batalkan perubahan" is enabled.
+    /// Whether "Discard changes" is enabled.
     pub fn can_reset(&self) -> bool {
         !self.any_busy() && !self.edits.is_empty()
     }
@@ -215,7 +215,7 @@ impl InstanceConfig {
     /// An edit whose text now equals the new file value is no longer an edit, so
     /// it is dropped; every untouched field already renders the new value. The
     /// flag is only raised when an edit actually survived, so the banner says
-    /// "File berubah di luar aplikasi" only when there is a field to protect.
+    /// "File changed outside the app" only when there is a field to protect.
     pub fn rebase(&mut self, view: ConfigView) {
         // Whether the file itself differs between the view on screen and the one
         // just read. A re-read that returned the same file must never raise the
@@ -234,7 +234,7 @@ impl InstanceConfig {
         self.edits
             .retain(|key, text| current.get(key.as_str()) != Some(&text.as_str()));
         // `errors` must always match the remaining edits: a surviving `abc` keeps
-        // its `DBL-8601` across the re-read, so "Terapkan" never turns blue while
+        // its `DBL-8601` across the re-read, so "Apply" never turns blue while
         // a field is invalid (`F8`). Re-validating is what an apply would do.
         self.validate(engine);
         // The banner shows only when the file really changed outside and the user
@@ -257,7 +257,7 @@ impl InstanceConfig {
     ///
     /// A refresh keeps the last good `Ready` rows (and every field entity and
     /// its focus) visible; only a tab that has nothing yet goes to `Loading`, so
-    /// its card can honestly say "Memuat..." (`F7b`).
+    /// its card can honestly say "Loading..." (`F7b`).
     pub fn begin_refresh(&mut self) {
         self.refreshing = true;
         if self.data.ready().is_none() {
@@ -436,7 +436,7 @@ mod tests {
         config.set_field("max_connections", "250");
         assert!(config.can_apply());
         config.begin(ConfigAction::Apply);
-        assert!(!config.can_apply(), "a call in flight disables Terapkan");
+        assert!(!config.can_apply(), "a call in flight disables Apply");
         config.end(ConfigAction::Apply);
         assert!(config.can_apply());
     }
@@ -534,7 +534,7 @@ mod tests {
         assert!(!config.validate(EngineKey::Postgresql));
         assert!(
             !config.can_apply(),
-            "F5: Terapkan is disabled while a field shows an error"
+            "F5: Apply is disabled while a field shows an error"
         );
         // Clearing the error re-enables it (the change is still there).
         config.set_field("max_connections", "200");
@@ -582,7 +582,7 @@ mod tests {
         );
         assert!(config.refreshing);
 
-        // No view yet: the card honestly says 'Memuat...'.
+        // No view yet: the card honestly says 'Loading...'.
         let mut fresh = InstanceConfig::default();
         fresh.begin_refresh();
         assert!(fresh.view().is_none(), "F7b: nothing to show yet");
@@ -715,7 +715,7 @@ mod f8_tests {
         );
         assert!(
             !config.can_apply(),
-            "F8: Terapkan never turns blue while a field is invalid"
+            "F8: Apply never turns blue while a field is invalid"
         );
     }
 
@@ -726,7 +726,7 @@ mod f8_tests {
         assert!(config.validate(EngineKey::Postgresql));
         config.rebase(view(EngineKey::Postgresql, Some("100")));
         assert!(config.errors.is_empty(), "F8: a valid edit is not flagged");
-        assert!(config.can_apply(), "F8: and Terapkan is enabled");
+        assert!(config.can_apply(), "F8: and Apply is enabled");
     }
 
     #[test]

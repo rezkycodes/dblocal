@@ -386,7 +386,7 @@ fn purge_refuses_without_the_typed_name(cx: &mut TestAppContext) {
     view.update_in(cx, |this, window, cx| {
         this.open_delete_dialog(id.clone(), window, cx);
         this.set_delete_mode(dblocal_core::model::DeleteMode::PurgeData);
-        this.delete_typed_name = Some("salah".to_owned());
+        this.delete_typed_name = Some("wrong".to_owned());
         this.confirm_delete(cx);
     });
     cx.run_until_parked();

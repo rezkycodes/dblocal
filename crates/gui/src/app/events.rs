@@ -135,7 +135,7 @@ impl Workspace {
             UiEvent::OperationFinished { id, result } => Some((id.clone(), result.is_ok())),
             _ => None,
         };
-        // `F2`: the stop a pending "Restart sekarang" queued failed, so that
+        // `F2`: the stop a pending "Restart now" queued failed, so that
         // restart can never happen. Drop it here — matching the operation id,
         // never clearing on an unrelated operation — instead of leaving it to
         // fire on the next manual stop.
@@ -193,7 +193,7 @@ impl Workspace {
     }
 
     /// After a start/stop: invalidate the Databases rows, run a pending
-    /// "Restart sekarang" once the stop has settled, and retire the "Tersimpan"
+    /// "Restart now" once the stop has settled, and retire the "Saved"
     /// banner once the change is in effect (`F4`).
     fn after_status_change(&mut self, id: &InstanceId, cx: &mut Context<Self>) {
         use dblocal_core::model::InstanceStatus;
@@ -202,7 +202,7 @@ impl Workspace {
             self.reload_admin_bg(id, cx);
         }
         let status = self.instance(id).map(|v| v.status);
-        // A Config apply's "Restart sekarang" waits for the stop to settle:
+        // A Config apply's "Restart now" waits for the stop to settle:
         // starting a `Stopping` instance would be refused, so the start runs
         // here, on the transition to `Stopped`, and only for the stop it queued
         // (`F-CFG-01` AC2, `F2`).
@@ -225,7 +225,7 @@ impl Workspace {
             }
         }
         // `F4`: once the instance is running again the applied config is in
-        // effect, so the "Tersimpan. Berlaku setelah restart." banner is stale.
+        // effect, so the "Saved. Takes effect after a restart." banner is stale.
         // The stop half of our own queued restart keeps it, so the banner does
         // not flicker between stop and start.
         if status == Some(InstanceStatus::Running) {

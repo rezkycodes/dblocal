@@ -31,7 +31,7 @@ fn view(name: &str, engine: EngineKey, status: InstanceStatus, port: u16) -> Ins
 fn only_a_failed_instance_offers_the_restore_banner() {
     let failure = || FailureInfo {
         code: "DBL-8601".to_owned(),
-        message: "config berubah".to_owned(),
+        message: "config changed".to_owned(),
         diagnosis: StartFailure::Unknown,
         log_tail: vec![],
         restore_available: true,

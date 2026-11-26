@@ -170,7 +170,7 @@ fn a_restore_available_failure_offers_the_banner_action(cx: &mut TestAppContext)
         changed.status = InstanceStatus::Failed;
         changed.failure = Some(FailureInfo {
             code: "DBL-8601".to_owned(),
-            message: "nilai salah".to_owned(),
+            message: "invalid value".to_owned(),
             diagnosis: StartFailure::Unknown,
             log_tail: Vec::new(),
             restore_available: true,
@@ -478,10 +478,10 @@ fn every_call_is_busy_while_in_flight(cx: &mut TestAppContext) {
         (config.is_busy(ConfigAction::Apply), config.can_apply())
     });
     assert!(busy);
-    assert!(!can_apply, "Terapkan is disabled while a call is in flight");
+    assert!(!can_apply, "Apply is disabled while a call is in flight");
 }
 
-/// "Restart sekarang" stops a running instance, then starts it once the stop has
+/// "Restart now" stops a running instance, then starts it once the stop has
 /// settled (`F-CFG-01` AC2). Starting a `Stopping` instance would be refused, so
 /// the start must run on the transition to `Stopped`, not immediately.
 ///
@@ -495,13 +495,13 @@ fn restart_now_stops_then_starts_on_the_stopped_transition(cx: &mut TestAppConte
     let starts_before = service.counts().start_instance;
     let stops_before = service.counts().stop_instance;
 
-    // The user accepts "Restart sekarang": a running instance is stopped first.
+    // The user accepts "Restart now": a running instance is stopped first.
     view.update(cx, |this, cx| this.restart_after_apply(&id, cx));
     settle(cx);
     assert_eq!(
         service.counts().stop_instance,
         stops_before + 1,
-        "Restart sekarang stops a running instance first"
+        "Restart now stops a running instance first"
     );
     assert_eq!(
         service.counts().start_instance,
@@ -544,7 +544,7 @@ fn restart_now_on_a_stopped_instance_starts_it_directly(cx: &mut TestAppContext)
     );
 }
 
-/// "Batalkan perubahan" drops the edits and disables Terapkan again.
+/// "Discard changes" drops the edits and disables Apply again.
 #[gpui_kit::test]
 fn cancel_changes_drops_every_edit(cx: &mut TestAppContext) {
     let (view, service, cx) = fixture(cx);
@@ -558,7 +558,7 @@ fn cancel_changes_drops_every_edit(cx: &mut TestAppContext) {
         let config = this.config_state_for(&id).expect("config state");
         (config.edits.len(), config.can_apply())
     });
-    assert_eq!(edits, 0, "Batalkan perubahan clears every edit");
+    assert_eq!(edits, 0, "Discard changes clears every edit");
     assert!(!can_apply, "nothing left to apply");
 }
 
@@ -585,7 +585,7 @@ fn retry_re_reads_after_a_failed_load(cx: &mut TestAppContext) {
     assert!(ready, "the retry must land a view, not stay failed");
 }
 
-/// "Nanti" dismisses the restart banner without restarting.
+/// "Later" dismisses the restart banner without restarting.
 #[gpui_kit::test]
 fn nanti_dismisses_the_restart_banner(cx: &mut TestAppContext) {
     let (view, service, cx) = fixture(cx);
@@ -607,11 +607,11 @@ fn nanti_dismisses_the_restart_banner(cx: &mut TestAppContext) {
         this.config_state_for(&id)
             .is_some_and(|c| c.applied.is_some())
     });
-    assert!(!applied, "Nanti clears the banner");
+    assert!(!applied, "Later clears the banner");
     assert_eq!(
         service.counts().stop_instance,
         stops,
-        "Nanti must not restart the instance"
+        "Later must not restart the instance"
     );
 }
 
@@ -654,7 +654,7 @@ fn a_failed_restore_is_reported_typed(cx: &mut TestAppContext) {
     );
 }
 
-/// A plain restore (no start) after "Pulihkan" from the dialog.
+/// A plain restore (no start) after "Restore" from the dialog.
 #[gpui_kit::test]
 fn confirm_restore_restores_without_starting(cx: &mut TestAppContext) {
     let (view, service, cx) = fixture(cx);

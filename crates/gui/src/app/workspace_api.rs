@@ -289,7 +289,7 @@ impl Workspace {
         self.delete_name_input.as_ref()
     }
 
-    /// The instance header's "Hapus" button handle (`F-INS-05`), so a keyboard
+    /// The instance header's "Delete" button handle (`F-INS-05`), so a keyboard
     /// test can walk Tab onto it and confirm the real control opens the dialog.
     #[cfg(test)]
     pub(crate) fn delete_button_focus(&self) -> gpui_kit::FocusHandle {
@@ -570,12 +570,12 @@ impl Workspace {
         self.user_name_input.read(cx).value().to_string()
     }
 
-    /// The instance a "Restart sekarang" is waiting to start, for assertions.
+    /// The instance a "Restart now" is waiting to start, for assertions.
     pub(crate) fn config_restart_pending_for_test(&self) -> Option<&InstanceId> {
         self.config_restart_after_stop.as_ref()
     }
 
-    /// Runs the Enter path ("apply only when Terapkan is enabled") for one
+    /// Runs the Enter path ("apply only when Apply is enabled") for one
     /// instance, exactly as a keypress in a Config field does.
     pub(crate) fn apply_config_if_ready_for_test(
         &mut self,

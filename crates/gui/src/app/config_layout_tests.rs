@@ -1,4 +1,4 @@
-//! Render-level Config tests: the fixed grid (`F3`), "Restart sekarang" only
+//! Render-level Config tests: the fixed grid (`F3`), "Restart now" only
 //! for a running instance (`M8`) and the Overview restore banner (`M12`).
 //!
 //! These read element bounds through `VisualTestContext::debug_bounds` (the
@@ -162,8 +162,8 @@ fn the_grid_holds_at_the_minimum_window_size(cx: &mut TestAppContext) {
     }
 }
 
-/// `M8`: "Restart sekarang" exists only for a running instance; a stopped one
-/// draws "Nanti" alone.
+/// `M8`: "Restart now" exists only for a running instance; a stopped one
+/// draws "Later" alone.
 #[gpui_kit::test]
 fn restart_now_is_drawn_only_for_a_running_instance(cx: &mut TestAppContext) {
     let (view, cx) = config_window(cx);
@@ -177,10 +177,10 @@ fn restart_now_is_drawn_only_for_a_running_instance(cx: &mut TestAppContext) {
     let restart_sel = config_action_id("config-restart", &running);
     assert!(
         bounds_of(cx, &restart_sel).is_some(),
-        "M8: a running instance draws 'Restart sekarang'"
+        "M8: a running instance draws 'Restart now'"
     );
 
-    // A stopped instance keeps the banner (Nanti) but no restart button.
+    // A stopped instance keeps the banner (Later) but no restart button.
     let stopped = view.read_with(cx, |this, _| {
         this.state
             .instances
@@ -203,11 +203,11 @@ fn restart_now_is_drawn_only_for_a_running_instance(cx: &mut TestAppContext) {
     let stopped_restart = config_action_id("config-restart", &stopped);
     assert!(
         bounds_of(cx, &stopped_restart).is_none(),
-        "M8: a stopped instance must not draw 'Restart sekarang'"
+        "M8: a stopped instance must not draw 'Restart now'"
     );
     assert!(
         bounds_of(cx, &config_action_id("config-later", &stopped)).is_some(),
-        "M8: the banner is still there, with 'Nanti'"
+        "M8: the banner is still there, with 'Later'"
     );
 }
 

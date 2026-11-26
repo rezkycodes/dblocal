@@ -152,7 +152,7 @@ impl Workspace {
     /// Gives a dialog the keyboard and remembers where to return it (F3).
     ///
     /// Without this the covered field keeps focus: typing `x` appended to the
-    /// "Buat database" field behind the overlay while the dialog's own field
+    /// "Create database" field behind the overlay while the dialog's own field
     /// stayed empty, and Enter confirmed nothing.
     fn focus_dialog(
         &mut self,

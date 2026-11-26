@@ -573,8 +573,8 @@ impl Workspace {
 
     /// Opens the delete dialog for an instance (`F-INS-05`).
     ///
-    /// Two entry points reach this: the instance header's "Hapus" button and the
-    /// palette row "Hapus <name>". Both run the same path, so the dialog, the
+    /// Two entry points reach this: the instance header's "Delete" button and the
+    /// palette row "Delete <name>". Both run the same path, so the dialog, the
     /// typed-name check and the focus capture/return cannot drift apart.
     pub(crate) fn open_delete_dialog(
         &mut self,

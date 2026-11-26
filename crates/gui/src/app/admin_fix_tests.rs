@@ -85,7 +85,7 @@ fn a_stopped_instance_drops_its_rows_again(cx: &mut TestAppContext) {
 
 /// F3: the drop dialog takes the keyboard, and gives it back on close.
 ///
-/// Before the fix the covered "Buat database" field kept focus, so typing `x`
+/// Before the fix the covered "Create database" field kept focus, so typing `x`
 /// appended there and the dialog's field stayed empty.
 #[gpui_kit::test]
 fn the_drop_dialog_takes_focus_and_returns_it_on_close(cx: &mut TestAppContext) {
@@ -294,7 +294,7 @@ fn a_failed_drop_does_not_confirm(cx: &mut TestAppContext) {
         )
     });
     assert!(
-        !toast.contains("dihapus"),
+        !toast.contains("deleted"),
         "a failed drop must not claim it happened: {toast}"
     );
     assert_eq!(error.as_deref(), Some("DBL-8106"));
@@ -508,7 +508,7 @@ fn assert_no_canary_outside_the_dialog(
 /// first body left every test green because the render-time one covered it. The
 /// redundant one is deleted; this test pins that **each** close path parks the
 /// handle and the next frame gives the covered field the keyboard: Enter-confirm,
-/// Cancel, and "Sudah saya simpan".
+/// Cancel, and "I have saved it".
 #[gpui_kit::test]
 fn every_dialog_close_path_returns_focus_through_the_frame(cx: &mut TestAppContext) {
     let (view, service, cx) = fixture(cx);
@@ -544,7 +544,7 @@ fn every_dialog_close_path_returns_focus_through_the_frame(cx: &mut TestAppConte
         "F3b: Cancel must return focus to the covered field"
     );
 
-    // 3. "Sudah saya simpan" on the one-time secret dialog.
+    // 3. "I have saved it" on the one-time secret dialog.
     cx.update(|window, cx| field.focus(window, cx));
     set_user_name(&view, "app_ro", cx);
     view.update(cx, |this, cx| {

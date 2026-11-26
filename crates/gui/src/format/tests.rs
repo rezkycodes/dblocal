@@ -679,7 +679,7 @@ fn platform_label_joins_os_and_arch() {
 
 #[test]
 fn connection_title_appears_once() {
-    // Defect 2: the card chrome and the header row both drew "Koneksi".
+    // Defect 2: the card chrome and the header row both drew "Connection".
     let header = connection_header(strings::UI_CREDENTIAL_KEYCHAIN);
     assert_eq!(header.card_title, None);
     assert_eq!(connection_title_occurrences(&header), 1);

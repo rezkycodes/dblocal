@@ -40,7 +40,7 @@ pub fn create_footer_note(installed: bool) -> &'static str {
 ///
 /// `card_title` is the optional heading the card chrome draws. It stays `None`
 /// because the header row already paints the title; setting both would print
-/// "Koneksi" twice, which is the regression this struct prevents.
+/// "Connection" twice, which is the regression this struct prevents.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConnectionHeader {
     /// Heading drawn by the card chrome itself, if any.
@@ -60,7 +60,7 @@ pub fn connection_header(credential_note: &str) -> ConnectionHeader {
     }
 }
 
-/// How many times "Koneksi" appears in the connection card's chrome and header.
+/// How many times "Connection" appears in the connection card's chrome and header.
 pub fn connection_title_occurrences(header: &ConnectionHeader) -> usize {
     usize::from(header.card_title == Some(strings::UI_OVERVIEW_CONNECTION))
         + usize::from(header.title == strings::UI_OVERVIEW_CONNECTION)

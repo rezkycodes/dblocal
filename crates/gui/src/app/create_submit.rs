@@ -39,9 +39,9 @@ pub struct CreateForm {
     /// Per-version-row keyboard focus handles, for the currently selected
     /// engine's versions, in list order.
     pub version_focus: Vec<(String, FocusHandle)>,
-    /// The footer "Buat" (create) button's focus handle.
+    /// The footer "Create" button's focus handle.
     pub submit_focus: FocusHandle,
-    /// The footer "Batal" (cancel) button's focus handle.
+    /// The footer "Cancel" button's focus handle.
     pub cancel_focus: FocusHandle,
 }
 
