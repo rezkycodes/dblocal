@@ -24,6 +24,22 @@ use crate::platform::{Arch, Os};
 use crate::service::{CatalogView, EngineEntry, VersionEntry};
 use crate::strings;
 
+/// How many older patches of one release line the "all versions" list keeps.
+///
+/// Only used when the picker's "latest only" toggle is off; the newest patch of
+/// a line is always shown. A single constant so the ceiling is one edit.
+pub const MAX_PATCHES_PER_LINE: usize = 3;
+
+/// Which versions the picker lists.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum VersionFilter {
+    /// One row per release line: its newest patch.
+    #[default]
+    LatestOnly,
+    /// Up to [`MAX_PATCHES_PER_LINE`] newest patches per release line.
+    All,
+}
+
 /// Reason shown for an engine that has no build on this host.
 ///
 /// The wording is the PRD's ("not available on this platform", F-CAT-02 AC2).
@@ -130,7 +146,9 @@ fn engine_entry(
         };
         versions.push(VersionEntry {
             version: entry.version().to_owned(),
+            line: entry.line().to_owned(),
             eol: entry.is_eol(),
+            status: entry.status(),
             installed: installed.contains(engine, entry.version()),
             size_bytes: artifact.size_bytes(),
         });
@@ -173,6 +191,40 @@ pub fn major_line_groups(entry: &EngineEntry) -> Vec<MajorLineGroup> {
         }
     }
     groups
+}
+
+/// Applies the picker's "latest only" choice to one engine's version list.
+///
+/// Rules, from the owner's sketch of Laravel Herd's dialog:
+///
+/// - Latest only (`LatestOnly`): one row per release line, its newest patch.
+///   EOL lines stay visible; they are the newest of their line and carry the
+///   EOL badge, so hiding them would hide a line the user may still need.
+/// - All (`All`): up to [`MAX_PATCHES_PER_LINE`] newest patches per line, so a
+///   line with twenty patches does not fill the dialog.
+/// - An already installed version is always kept, whatever the filter, so an
+///   instance created earlier can always be picked again.
+///
+/// EOL rows are never dropped by the per-line cap: the newest patch of an EOL
+/// line is its only offered row, and older patches of it are not shown.
+pub fn filter_versions(versions: &[VersionEntry], filter: VersionFilter) -> Vec<VersionEntry> {
+    let keep = match filter {
+        VersionFilter::LatestOnly => 1,
+        VersionFilter::All => MAX_PATCHES_PER_LINE,
+    };
+    let mut seen_per_line = std::collections::BTreeMap::<&str, usize>::new();
+    let mut out = Vec::with_capacity(versions.len());
+    for version in versions {
+        let count = seen_per_line.entry(version.line.as_str()).or_default();
+        let within_cap = *count < keep;
+        if within_cap {
+            *count += 1;
+        }
+        if within_cap || version.installed {
+            out.push(version.clone());
+        }
+    }
+    out
 }
 
 fn parse(tag: &str) -> Option<Version> {
@@ -345,6 +397,70 @@ mod tests {
         assert_eq!(groups[0].major_line, "18");
         assert_eq!(groups[1].major_line, "17");
         assert_eq!(groups[0].versions[0].version, "18.7.0");
+    }
+
+    fn entry(version: &str, line: &str, installed: bool, eol: bool) -> VersionEntry {
+        VersionEntry {
+            version: version.to_owned(),
+            line: line.to_owned(),
+            eol,
+            status: None,
+            installed,
+            size_bytes: 1,
+        }
+    }
+
+    fn tags(versions: &[VersionEntry]) -> Vec<&str> {
+        versions.iter().map(|v| v.version.as_str()).collect()
+    }
+
+    #[test]
+    fn latest_only_keeps_one_patch_per_line_and_keeps_eol_lines() {
+        let versions = vec![
+            entry("19.0.0", "19", false, false),
+            entry("18.7.0", "18", false, false),
+            entry("18.6.0", "18", false, false),
+            entry("17.12.0", "17", false, false),
+            entry("14.25.0", "14", false, true),
+        ];
+        let filtered = filter_versions(&versions, VersionFilter::LatestOnly);
+        assert_eq!(tags(&filtered), ["19.0.0", "18.7.0", "17.12.0", "14.25.0"]);
+        // EOL stays visible whatever the checkbox says.
+        assert!(filtered.iter().any(|v| v.version == "14.25.0" && v.eol));
+    }
+
+    #[test]
+    fn all_keeps_at_most_three_patches_per_line() {
+        let versions = vec![
+            entry("8.4.13", "8.4", false, false),
+            entry("8.4.12", "8.4", false, false),
+            entry("8.4.11", "8.4", false, false),
+            entry("8.4.10", "8.4", false, false),
+            entry("8.0.46", "8.0", false, true),
+        ];
+        let filtered = filter_versions(&versions, VersionFilter::All);
+        assert_eq!(tags(&filtered), ["8.4.13", "8.4.12", "8.4.11", "8.0.46"]);
+        assert_eq!(MAX_PATCHES_PER_LINE, 3);
+    }
+
+    #[test]
+    fn installed_versions_stay_visible_under_either_filter() {
+        let versions = vec![
+            entry("8.4.13", "8.4", false, false),
+            entry("8.4.12", "8.4", false, false),
+            entry("8.4.11", "8.4", false, false),
+            entry("8.4.9", "8.4", true, false),
+        ];
+        for filter in [VersionFilter::LatestOnly, VersionFilter::All] {
+            let filtered = filter_versions(&versions, filter);
+            assert!(
+                filtered.iter().any(|v| v.version == "8.4.9" && v.installed),
+                "installed 8.4.9 dropped by {filter:?}"
+            );
+        }
+        // Outside the cap but installed: still there, in place, newest first.
+        let filtered = filter_versions(&versions, VersionFilter::All);
+        assert_eq!(tags(&filtered), ["8.4.13", "8.4.12", "8.4.11", "8.4.9"]);
     }
 
     #[test]

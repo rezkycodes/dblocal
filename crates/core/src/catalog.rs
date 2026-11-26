@@ -9,7 +9,11 @@ mod validate;
 mod view;
 
 /// Bundled catalog JSON snapshot, compiled into the binary.
-pub const BUNDLED_CATALOG_JSON: &str = include_str!("../../../catalog/engines.json");
+///
+/// Lives in `engines-v2.json` (`schema_version: 2`) so released v0.1.x clients
+/// keep reading `engines.json` (`schema_version: 1`) without seeing unbadged
+/// EOL, Innovation or Rolling entries.
+pub const BUNDLED_CATALOG_JSON: &str = include_str!("../../../catalog/engines-v2.json");
 
 pub use cache::catalog_cache_path;
 pub use dto::{CATALOG_SCHEMA_VERSION, CatalogArtifact, CatalogDocument, CatalogVersion};
@@ -21,6 +25,6 @@ pub use load::{
 pub use select::select_artifact;
 pub use validate::validate_document;
 pub use view::{
-    InstalledVersions, MajorLineGroup, UNAVAILABLE_ON_PLATFORM, banner_for, build_catalog_view,
-    major_line_groups,
+    InstalledVersions, MAX_PATCHES_PER_LINE, MajorLineGroup, UNAVAILABLE_ON_PLATFORM,
+    VersionFilter, banner_for, build_catalog_view, filter_versions, major_line_groups,
 };

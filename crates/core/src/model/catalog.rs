@@ -2,9 +2,79 @@
 
 use std::time::{Duration, SystemTime};
 
+use std::fmt;
+
 use crate::model::artifact::Artifact;
 use crate::model::{EngineKey, major_line_of};
 use crate::platform::{Arch, Os};
+
+/// Support status a version line advertises in the picker.
+///
+/// EOL is not a variant here: it stays the `eol` boolean every existing reader
+/// already understands, so a version can be both `Lts` and `Eol` only through
+/// the two separate fields.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum VersionStatus {
+    /// Long-term support line.
+    Lts,
+    /// MySQL Innovation release.
+    Innovation,
+    /// MariaDB rolling stable release.
+    Rolling,
+}
+
+impl VersionStatus {
+    /// Stable identifier used in the catalog JSON and the UI badge.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Lts => "lts",
+            Self::Innovation => "innovation",
+            Self::Rolling => "rolling",
+        }
+    }
+}
+
+impl fmt::Display for VersionStatus {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl std::str::FromStr for VersionStatus {
+    type Err = crate::DblError;
+
+    fn from_str(value: &str) -> crate::Result<Self> {
+        match value {
+            "lts" => Ok(Self::Lts),
+            "innovation" => Ok(Self::Innovation),
+            "rolling" => Ok(Self::Rolling),
+            other => Err(crate::DblError::InvalidInput {
+                field: "status",
+                reason: format!(
+                    "unknown version status {other:?}, expected lts, innovation or rolling"
+                ),
+            }),
+        }
+    }
+}
+
+/// The release line a version belongs to, for grouping in the picker.
+///
+/// PostgreSQL tags are `MAJOR.MINOR.PATCH` where `MAJOR` is the release line
+/// (`18.7.0` belongs to `18`); MySQL, MariaDB and Valkey use `MAJOR.MINOR` as
+/// the line and the last component as the patch (`8.4.13` belongs to `8.4`).
+pub fn version_line(engine: EngineKey, tag: &str) -> String {
+    let mut parts = tag.split('.');
+    let major = parts.next().unwrap_or(tag);
+    match engine {
+        EngineKey::Postgresql => major.to_owned(),
+        _ => match parts.next() {
+            Some(minor) => format!("{major}.{minor}"),
+            None => major.to_owned(),
+        },
+    }
+}
 
 /// One released version of one engine.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -12,8 +82,10 @@ pub struct EngineVersion {
     engine: EngineKey,
     version: String,
     major_line: String,
+    line: String,
     release_date: Option<String>,
     eol: bool,
+    status: Option<VersionStatus>,
 }
 
 impl EngineVersion {
@@ -27,12 +99,15 @@ impl EngineVersion {
         let version = version.into();
         super::validate_version_tag("version", &version)?;
         let major_line = major_line_of(&version);
+        let line = version_line(engine, &version);
         Ok(Self {
             engine,
             version,
             major_line,
+            line,
             release_date,
             eol,
+            status: None,
         })
     }
 
@@ -45,9 +120,29 @@ impl EngineVersion {
         &self.version
     }
     /// Major line, for example `18`.
+    ///
+    /// Kept as the first tag component so existing catalog readers (v0.1.x)
+    /// keep matching it; see [`EngineVersion::line`] for the picker grouping.
     pub fn major_line(&self) -> &str {
         &self.major_line
     }
+
+    /// Release line the picker groups by, for example `18` or `8.4`.
+    pub fn line(&self) -> &str {
+        &self.line
+    }
+
+    /// Advertised support status, if the catalog names one.
+    pub const fn status(&self) -> Option<VersionStatus> {
+        self.status
+    }
+
+    /// Returns a copy carrying a support status.
+    pub fn with_status(mut self, status: Option<VersionStatus>) -> Self {
+        self.status = status;
+        self
+    }
+
     /// Upstream release date, if known.
     pub fn release_date(&self) -> Option<&str> {
         self.release_date.as_deref()
@@ -201,6 +296,45 @@ mod tests {
         assert_eq!(version.major_line(), "18");
         assert!(!version.is_eol());
         assert!(version.clone().with_eol(true).is_eol());
+    }
+
+    #[test]
+    fn line_is_the_major_for_postgres_and_major_minor_for_the_others() {
+        // PostgreSQL: MAJOR.MINOR.PATCH, line is the major.
+        assert_eq!(version_line(EngineKey::Postgresql, "18.7.0"), "18");
+        assert_eq!(version_line(EngineKey::Postgresql, "19.0.0"), "19");
+        assert_eq!(version_line(EngineKey::Postgresql, "14.25.0"), "14");
+        // MySQL/MariaDB/Valkey: MAJOR.MINOR.PATCH, line keeps both.
+        assert_eq!(version_line(EngineKey::Mysql, "8.4.13"), "8.4");
+        assert_eq!(version_line(EngineKey::Mysql, "26.10.0"), "26.10");
+        assert_eq!(version_line(EngineKey::Mariadb, "12.3.4"), "12.3");
+        assert_eq!(version_line(EngineKey::Valkey, "9.2.0"), "9.2");
+        // A bare line is its own line.
+        assert_eq!(version_line(EngineKey::Mysql, "8.4"), "8.4");
+    }
+
+    #[test]
+    fn engine_version_carries_line_and_status() {
+        let version = EngineVersion::new(EngineKey::Mysql, "9.7.4", None, false)
+            .expect("version")
+            .with_status(Some(VersionStatus::Lts));
+        assert_eq!(version.line(), "9.7");
+        assert_eq!(version.major_line(), "9");
+        assert_eq!(version.status(), Some(VersionStatus::Lts));
+    }
+
+    #[test]
+    fn status_strings_round_trip() {
+        for status in [
+            VersionStatus::Lts,
+            VersionStatus::Innovation,
+            VersionStatus::Rolling,
+        ] {
+            assert_eq!(status.as_str().parse::<VersionStatus>().ok(), Some(status));
+            assert_eq!(status.to_string(), status.as_str());
+        }
+        assert!("".parse::<VersionStatus>().is_err());
+        assert!("beta".parse::<VersionStatus>().is_err());
     }
 
     #[test]

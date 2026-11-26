@@ -227,6 +227,8 @@ mod tests {
             major_line: "19".to_owned(),
             release_date: None,
             eol: false,
+            line: Some("19".to_owned()),
+            status: None,
         });
         let err = validate_document(&document).expect_err("out of order");
         assert!(err.to_string().contains("not ordered newest first"));

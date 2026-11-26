@@ -2,7 +2,7 @@
 
 use crate::model::{
     AuthMode, CatalogStatus, CredentialBackend, EngineKey, Instance, InstanceId, InstanceStatus,
-    Port, StartFailure,
+    Port, StartFailure, VersionStatus,
 };
 
 /// Everything a UI needs to explain a failed start (PRD `F-INS-03` AC4, `F-LOG-02`).
@@ -97,8 +97,12 @@ pub struct EngineEntry {
 pub struct VersionEntry {
     /// Version tag, for example `18.7.0`.
     pub version: String,
+    /// Release line the picker groups by, for example `18` or `8.4`.
+    pub line: String,
     /// Whether upstream no longer supports this version.
     pub eol: bool,
+    /// Advertised support status (`LTS`, `Innovation`, `Rolling`), if any.
+    pub status: Option<VersionStatus>,
     /// Whether a runtime for this version is already installed locally.
     pub installed: bool,
     /// Download size in bytes, so the UI can show "260 MB" before a click.
@@ -174,7 +178,9 @@ mod tests {
                 unavailable_reason: Some("not on windows".to_owned()),
                 versions: vec![VersionEntry {
                     version: "8.0.0".to_owned(),
+                    line: "8.0".to_owned(),
                     eol: false,
+                    status: None,
                     installed: false,
                     size_bytes: 12,
                 }],
@@ -182,6 +188,7 @@ mod tests {
         };
         assert_eq!(view.status, CatalogStatus::Stale);
         assert_eq!(view.engines[0].versions[0].size_bytes, 12);
+        assert_eq!(view.engines[0].versions[0].line, "8.0");
         assert!(!view.engines[0].available);
     }
 }

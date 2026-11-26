@@ -12,7 +12,7 @@ mod scalar;
 mod state;
 
 pub use artifact::{ArchiveFormat, Artifact};
-pub use catalog::{CatalogSnapshot, CatalogStatus, EngineVersion};
+pub use catalog::{CatalogSnapshot, CatalogStatus, EngineVersion, VersionStatus, version_line};
 pub use entity::{
     ArchivedData, CredentialBackend, CredentialRef, DeleteMode, Instance, InstanceSpec,
     PortAllocation,

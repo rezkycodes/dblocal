@@ -188,6 +188,14 @@ mod tests {
         wrong_schema.schema_version = CATALOG_SCHEMA_VERSION + 1;
         std::fs::write(&path, serde_json::to_vec(&wrong_schema).expect("encode")).expect("write");
         assert!(read_cache(&path).is_none());
+
+        // Upgrading from v0.1.x leaves a schema_version 1 cache on disk; v2
+        // rejects it silently so the user immediately sees the bundled v2
+        // catalog instead of waiting for the old TTL to expire.
+        let mut old_schema = cached();
+        old_schema.schema_version = 1;
+        std::fs::write(&path, serde_json::to_vec(&old_schema).expect("encode")).expect("write");
+        assert!(read_cache(&path).is_none());
     }
 
     #[test]

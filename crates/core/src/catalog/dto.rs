@@ -20,7 +20,12 @@ use crate::platform::{Arch, Os};
 ///
 /// A payload advertising anything else is rejected: a higher version may carry
 /// semantics we do not know, a lower one is no longer produced (F-CAT-01 AC4).
-pub const CATALOG_SCHEMA_VERSION: u32 = 1;
+///
+/// Bumped to 2 alongside the move to `catalog/engines-v2.json`: released
+/// v0.1.x clients read `catalog/engines.json` (`schema_version: 1`) and do not
+/// render EOL/status badges or the "latest only" filter, while upgraded clients
+/// automatically discard any cached v1 catalog and switch to v2.
+pub const CATALOG_SCHEMA_VERSION: u32 = 2;
 
 /// One released engine version.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -30,6 +35,9 @@ pub struct CatalogVersion {
     /// Version tag, for example `18.7.0`.
     pub version: String,
     /// Major line, for example `18`.
+    ///
+    /// Kept as the first tag component: v0.1.x readers derive the same value and
+    /// cross-check it, so changing it would make them reject the catalog.
     pub major_line: String,
     /// Upstream release date, `YYYY-MM-DD`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -37,6 +45,18 @@ pub struct CatalogVersion {
     /// Whether upstream no longer supports this version.
     #[serde(default)]
     pub eol: bool,
+    /// Release line the picker groups by, for example `18` or `8.4`.
+    ///
+    /// Additive: an older reader without this field ignores it (no
+    /// `deny_unknown_fields`), and a missing value falls back to
+    /// [`version_line`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line: Option<String>,
+    /// Advertised support status: `lts`, `innovation` or `rolling`.
+    ///
+    /// Additive and optional, as `line` is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
 }
 
 /// One downloadable build for one `(os, arch)` pair.
@@ -104,12 +124,17 @@ impl CatalogDocument {
         let mut versions = Vec::with_capacity(self.versions.len());
         for entry in &self.versions {
             let engine = parse_engine(&entry.engine)?;
+            let status = match &entry.status {
+                Some(value) => Some(value.parse::<crate::model::VersionStatus>()?),
+                None => None,
+            };
             let version = EngineVersion::new(
                 engine,
                 entry.version.clone(),
                 entry.release_date.clone(),
                 entry.eol,
-            )?;
+            )?
+            .with_status(status);
             if version.major_line() != entry.major_line {
                 return Err(invalid(
                     "major_line",
@@ -119,6 +144,22 @@ impl CatalogDocument {
                         entry.version,
                         entry.major_line,
                         version.major_line()
+                    ),
+                ));
+            }
+            if entry
+                .line
+                .as_deref()
+                .is_some_and(|line| line != version.line())
+            {
+                return Err(invalid(
+                    "line",
+                    format!(
+                        "{} {} declares line {:?} but belongs to {}",
+                        entry.engine,
+                        entry.version,
+                        entry.line.as_deref().unwrap_or_default(),
+                        version.line()
                     ),
                 ));
             }
@@ -213,6 +254,8 @@ pub(crate) mod tests {
                 major_line: "18".to_owned(),
                 release_date: Some("2026-11-12".to_owned()),
                 eol: false,
+                line: Some("18".to_owned()),
+                status: None,
             }],
             artifacts: vec![CatalogArtifact {
                 id: "postgresql-18.7.0-linux-x86_64".to_owned(),
@@ -237,6 +280,81 @@ pub(crate) mod tests {
         let text = serde_json::to_string(&document).expect("serialize");
         let parsed: CatalogDocument = serde_json::from_str(&text).expect("deserialize");
         assert_eq!(parsed, document);
+    }
+
+    /// The v0.1.x shape of one version: no `line`, no `status`.
+    #[derive(serde::Deserialize)]
+    struct V01Version {
+        version: String,
+        major_line: String,
+        #[serde(default)]
+        eol: bool,
+    }
+
+    #[derive(serde::Deserialize)]
+    struct V01Document {
+        schema_version: u32,
+        versions: Vec<V01Version>,
+    }
+
+    #[test]
+    fn a_v01_reader_ignores_the_new_fields() {
+        // What a released v0.1.x client does: deserialize with its own structs,
+        // which have no `line`/`status` and no `deny_unknown_fields`. The new
+        // catalog must still parse and keep `major_line` matching its derive.
+        let mut document = sample_document();
+        document.versions.push(CatalogVersion {
+            engine: "postgresql".to_owned(),
+            version: "19.0.0".to_owned(),
+            major_line: "19".to_owned(),
+            release_date: None,
+            eol: false,
+            line: Some("19".to_owned()),
+            status: Some("innovation".to_owned()),
+        });
+        let text = serde_json::to_string(&document).expect("serialize");
+
+        let parsed: V01Document = serde_json::from_str(&text).expect("v0.1.x reader parses it");
+        assert_eq!(parsed.schema_version, CATALOG_SCHEMA_VERSION);
+        assert_eq!(parsed.versions.len(), 2);
+        let new = parsed
+            .versions
+            .iter()
+            .find(|v| v.version == "19.0.0")
+            .expect("new version present");
+        assert_eq!(new.major_line, "19");
+        assert!(!new.eol);
+    }
+
+    #[test]
+    fn line_and_status_are_validated_when_present() {
+        let mut document = sample_document();
+        document.versions[0].line = Some("19".to_owned());
+        let err = document
+            .into_snapshot(std::time::SystemTime::UNIX_EPOCH, CatalogStatus::Fresh)
+            .expect_err("wrong line");
+        assert!(err.to_string().contains("line"));
+
+        let mut document = sample_document();
+        document.versions[0].status = Some("beta".to_owned());
+        assert!(
+            document
+                .into_snapshot(std::time::SystemTime::UNIX_EPOCH, CatalogStatus::Fresh)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn missing_line_and_status_are_accepted() {
+        // Bundled/cached catalogs written before these fields existed.
+        let mut document = sample_document();
+        document.versions[0].line = None;
+        document.versions[0].status = None;
+        let snapshot = document
+            .into_snapshot(std::time::SystemTime::UNIX_EPOCH, CatalogStatus::Fresh)
+            .expect("valid");
+        assert_eq!(snapshot.versions()[0].line(), "18");
+        assert_eq!(snapshot.versions()[0].status(), None);
     }
 
     #[test]

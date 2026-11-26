@@ -194,6 +194,14 @@ pub const UI_CREATE_SUBMIT: &str = "Create instance";
 pub const UI_VERSION_INSTALLED: &str = "Installed";
 /// Version badge: end of life.
 pub const UI_VERSION_EOL: &str = "EOL";
+/// Version badge: long-term support line.
+pub const UI_VERSION_LTS: &str = "LTS";
+/// Version badge: MySQL Innovation release.
+pub const UI_VERSION_INNOVATION: &str = "Innovation";
+/// Version badge: MariaDB rolling stable release.
+pub const UI_VERSION_ROLLING: &str = "Rolling";
+/// Create dialog: the "latest only" version-list checkbox.
+pub const UI_CREATE_LATEST_ONLY: &str = "Hanya versi terbaru";
 
 // --- Delete dialog (D-18) ---------------------------------------------------
 

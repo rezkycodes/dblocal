@@ -14,6 +14,19 @@ struct VersionRow {
     size_bytes: u64,
 }
 
+impl VersionRow {
+    fn entry(&self, engine: EngineKey, installed: bool) -> VersionEntry {
+        VersionEntry {
+            version: self.version.to_owned(),
+            line: crate::model::version_line(engine, self.version),
+            eol: self.eol,
+            status: None,
+            installed,
+            size_bytes: self.size_bytes,
+        }
+    }
+}
+
 fn rows(engine: EngineKey) -> Vec<VersionRow> {
     match engine {
         EngineKey::Postgresql => vec![
@@ -104,11 +117,9 @@ pub(crate) fn view(
             let reason = unavailable_reason(engine, os, arch);
             let versions = rows(engine)
                 .into_iter()
-                .map(|row| VersionEntry {
-                    version: row.version.to_owned(),
-                    eol: row.eol,
-                    installed: installed.contains(&(engine, row.version.to_owned())),
-                    size_bytes: row.size_bytes,
+                .map(|row| {
+                    let is_installed = installed.contains(&(engine, row.version.to_owned()));
+                    row.entry(engine, is_installed)
                 })
                 .collect();
             EngineEntry {
