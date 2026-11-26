@@ -1589,7 +1589,7 @@ checksum = "be1e0bca6c3637f992fc1cc7cbc52a78c1ef6db076dbf1059c4323d6a2048376"
 
 [[package]]
 name = "dblocal-cli"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "anyhow",
  "clap",
@@ -1604,7 +1604,7 @@ dependencies = [
 
 [[package]]
 name = "dblocal-core"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "directories",
  "flate2",
@@ -1640,7 +1640,7 @@ dependencies = [
 
 [[package]]
 name = "dblocal-gui"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "anyhow",
  "dblocal-core",
@@ -10075,7 +10075,7 @@ checksum = "ec7a2a501ed189703dba8b08142f057e887dfc4b2cc4db2d343ac6376ba3e0b9"
 
 [[package]]
 name = "xtask"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "clap",
  "dblocal-core",
