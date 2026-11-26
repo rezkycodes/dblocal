@@ -5,10 +5,14 @@
 > is published.
 
 DBLocal is a Rust desktop app (GPUI) that installs and runs **PostgreSQL, MySQL, MariaDB,
-Valkey and Redis** servers **on your own machine**, several versions side by side, with no containers and no
+Valkey, Redis and RustFS** servers **on your own machine**, several versions side by side, with no containers and no
 `sudo`. Pick a version, press Create, get a working connection string you can paste into `.env`.
 
 > **Redis note:** Redis `7.4.12` is available on **Linux only** (`x86_64` and `aarch64`, downloaded directly from Redis's official APT repository `packages.redis.io/deb`, requiring `libssl3`/`openssl-libs` and `libsystemd0`/`systemd-libs`). Redis 7.4 is dual-licensed **RSALv2 / SSPLv1**; DBLocal does not host or redistribute Redis binaries.
+
+> **RustFS & Storage tab note:** RustFS (Apache-2.0, S3-compatible object storage) lives under the **Storage** tab in the New instance dialog (alongside **Database** and **Cache & Queue**). The optional RustFS web console is **off by default**; check **Enable web console** in the dialog (or pass `--console` to `dblocal create --engine rustfs`) to bind the console on a second loopback port (default `9001` when free) and show an **Open console** button on the instance page.
+>
+> **RustFS security posture:** RustFS recorded 43 security advisories (4 critical) over 10 months prior to `1.0.6` (with `1.0.7` now pinned as the latest stable release). DBLocal enforces a `>= 1.0.6` minimum version, pins explicit versioned archives (never `-latest`), binds both the S3 API and web console strictly to `127.0.0.1`, generates random per-instance access and 24-character secret keys passed only via environment variables (refusing empty or default `rustfsadmin` credentials), and refreshes the catalog daily so new security patches propagate promptly.
 
 It manages **servers**, not **data**: no table browser, no SQL editor. For that, DBLocal has an
 "Open in…" button for DBDelve, TablePlus, DBeaver or `psql`.
@@ -109,6 +113,8 @@ only; macOS is not in the first release.
 | MySQL | ✅ | — | ✅ | ✅ |
 | MariaDB | ✅ | — | ✅ | — |
 | Valkey | ✅ | ✅ | **not available yet** | — |
+| Redis | ✅ | ✅ | — | — |
+| RustFS | ✅ | ✅ | ✅ | — |
 
 Dashes mean the upstream project publishes no binary for that target. **Valkey has no Windows
 build in this release** (deferred together with its CI job); on Windows the engine card and

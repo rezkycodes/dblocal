@@ -10,14 +10,22 @@ frozen so already-released clients never break:
   filter.
 - `engines-v2.json` (`schema_version: 2`) continues to be refreshed daily for
   released `v0.1.3` and `v0.1.4` clients, derived automatically from
-  `engines-v3.json` with every `redis` entry, `deb` artifact, and `license`
-  field stripped. Empirically verified against an archived `v0.1.4` tree
-  (`cargo xtask catalog validate`): a `v0.1.4` client rejects the entire file on
-  either an unknown engine (`unknown engine "redis"`) or an unknown archive
-  format (`unknown archive format: deb`), causing daily refresh to degrade to
-  `Stale`/`Offline`. Deriving v2 from v3 keeps released `v0.1.3`/`v0.1.4`
-  clients receiving PostgreSQL, MySQL, MariaDB, and Valkey patch updates without
-  seeing Redis or `.deb` entries (guarded by regression tests in `xtask`).
+  `engines-v3.json` with every v3-only engine (`redis`, `rustfs`), `deb`
+  artifact, and `license` field stripped. Empirically verified against an
+  archived `v0.1.4` tree (`cargo xtask catalog validate`): a `v0.1.4` client
+  rejects the entire file on either an unknown engine (`unknown engine "redis"`)
+  or an unknown archive format (`unknown archive format: deb`), causing daily
+  refresh to degrade to `Stale`/`Offline`. Deriving v2 from v3 keeps released
+  `v0.1.3`/`v0.1.4` clients receiving PostgreSQL, MySQL, MariaDB, and Valkey
+  patch updates without seeing Redis, RustFS, or `.deb` entries (guarded by
+  regression tests in `xtask`).
+- **Tolerant schema-3 runtime parser:** starting in `v0.2.0`, runtime clients
+  reading `schema_version: 3` skip entries whose engine key or archive format
+  they do not recognise (plus artifacts belonging to a skipped version), count
+  and log the skips via `tracing::warn!`, and load all known entries normally.
+  Malformed entries belonging to *known* engines remain hard errors, and
+  `cargo xtask catalog validate` (used in CI) remains strict so typos still fail
+  CI.
 
 None of these files is edited by hand.
 
@@ -54,6 +62,10 @@ that fails validation is never published and never replaces a good cache.
   tarball), macOS and Windows `x86_64`.
 - **MariaDB** 13.1.2, 12.3.4, 11.8.10, 11.4.14 and 10.11.20, Linux `x86_64` and
   Windows `x86_64` only.
+- **RustFS** 1.0.7 (Apache-2.0, minimum allowed `>= 1.0.6`, stable releases
+  only, never `-latest`) from `https://github.com/rustfs/rustfs/releases`:
+  Linux `x86_64` and `aarch64` static musl `.zip` builds (no shared-library
+  preflight needed) and Windows `x86_64` `.zip`.
 
 ### Why some targets are absent (never faked)
 
@@ -104,6 +116,23 @@ change to `WAVE_ONE_VARIANTS` in `sources/valkey.rs` once the objects agree.
   and size are unchanged). Residual trust assumption: `InRelease` is verified
   via HTTPS/CA trust rather than offline OpenPGP signature verification, to
   avoid adding a heavy OpenPGP dependency.
+
+- **RustFS**: the builder queries `rustfs/rustfs` GitHub releases over HTTPS,
+  selects the latest stable release `>= 1.0.6` (excluding drafts, prereleases,
+  `-preview` tags, and `-latest.zip` assets), reads `SHA256SUMS`, and
+  cross-checks each target `.zip` by downloading and hashing it (reusing
+  unchanged verified entries from the existing catalog). Because RustFS had 43
+  security advisories (4 critical) in 10 months prior to `1.0.6`, DBLocal pins
+  `>= 1.0.6`, runs loopback-only with random per-instance credentials, and relies
+  on the daily catalog refresh workflow to pick up new patches promptly.
+
+### RustFS 1.0.7 (`rustfs/rustfs` GitHub Releases, 2026-11-26)
+
+| Target | URL | Size | SHA-256 |
+|---|---|---|---|
+| `linux-x86_64` (musl) | `https://github.com/rustfs/rustfs/releases/download/1.0.7/rustfs-linux-x86_64-musl-v1.0.7.zip` | 112 388 130 bytes | `c90a40ba8cdc1468c71029a4d65fdd13449720183d3a8e00bc61ab09fcd448a5` |
+| `linux-aarch64` (musl) | `https://github.com/rustfs/rustfs/releases/download/1.0.7/rustfs-linux-aarch64-musl-v1.0.7.zip` | 103 469 869 bytes | `e2c6d45105dd05df2f35547fbebfacf40dfba6ec4f8c31b86e30934faea79e76` |
+| `windows-x86_64` | `https://github.com/rustfs/rustfs/releases/download/1.0.7/rustfs-windows-x86_64-v1.0.7.zip` | 121 635 959 bytes | `d8f58a799836d964bd16440a042028d870130288b7c0c0924471983027d8dce8` |
 
 ### Redis 7.4.12 Linux (`jammy` APT `redis-tools`, 2026-11-26)
 
