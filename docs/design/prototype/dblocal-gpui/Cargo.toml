@@ -14,7 +14,7 @@ path = "src/main.rs"
 gpui-kit = "=0.10.0"
 anyhow = "1"
 
-# GPUI berat di mode debug; optimalkan crate UI agar `cargo run` tetap mulus.
+# GPUI is heavy in debug mode; optimize UI crates so `cargo run` stays smooth.
 [profile.dev.package]
 gpui-pre = { opt-level = 3 }
 gpui-component = { opt-level = 3 }

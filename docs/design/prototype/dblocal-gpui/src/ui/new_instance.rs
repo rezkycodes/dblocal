@@ -253,7 +253,7 @@ impl Render for NewInstanceForm {
                             .gap_1p5()
                             .child(div().font_weight(gpui_kit::FontWeight::MEDIUM).child("Port"))
                             .child(Input::new(&self.port))
-                            .child(div().text_xs().text_color(tokens::text_muted()).child("port bebas berikutnya")),
+                            .child(div().text_xs().text_color(tokens::text_muted()).child("next free port")),
                     )
                     .child(
                         v_flex()
@@ -313,7 +313,7 @@ impl Render for NewInstanceForm {
                     )
                     .child(
                         Button::new("ni-cancel")
-                            .label("Batal")
+                            .label("Cancel")
                             .on_click(|_, window, cx| window.close_dialog(cx)),
                     )
                     .child(

@@ -72,18 +72,18 @@ impl EngineKind {
     pub fn catalog(self) -> &'static [(&'static str, &'static str, bool)] {
         match self {
             Self::Postgres => &[
-                ("18.7.0", "Terbaru", true),
-                ("17.7", "Didukung · ≈ 34 MB", false),
-                ("16.11", "Didukung", true),
-                ("14.20", "Didukung", true),
+                ("18.7.0", "Latest", true),
+                ("17.7", "Supported · ≈ 34 MB", false),
+                ("16.11", "Supported", true),
+                ("14.20", "Supported", true),
             ],
             Self::Valkey => &[
-                ("9.0.1", "Terbaru · kompatibel Redis", true),
-                ("8.1.4", "Didukung · ≈ 6 MB", false),
+                ("9.0.1", "Latest · Redis-compatible", true),
+                ("8.1.4", "Supported · ≈ 6 MB", false),
             ],
             Self::MySql => &[("8.4.11", "LTS · tarball minimal ≈ 80 MB", false)],
             Self::MariaDb => &[
-                ("11.8.10", "LTS terbaru · ≈ 95 MB", false),
+                ("11.8.10", "Latest LTS · ≈ 95 MB", false),
                 ("11.4.14", "LTS · ≈ 92 MB", false),
             ],
         }
@@ -254,16 +254,16 @@ pub fn demo_instances() -> Vec<Instance> {
         LogLine::new("21:14:02.120", LogLevel::Log, "listening on IPv4 address \"127.0.0.1\", port 5432"),
         LogLine::new("21:14:02.121", LogLevel::Log, "listening on IPv6 address \"::1\", port 5432"),
         LogLine::new("21:14:02.164", LogLevel::Log, "database system is ready to accept connections"),
-        LogLine::new("21:14:02.402", LogLevel::Dbl, "health check pg_isready OK (284 ms sejak spawn)"),
+        LogLine::new("21:14:02.402", LogLevel::Dbl, "health check pg_isready OK (284 ms since spawn)"),
     ];
     let shop_logs = vec![
         LogLine::new("20:02:41.006", LogLevel::Log, "received fast shutdown request"),
         LogLine::new("20:02:41.214", LogLevel::Log, "database system is shut down"),
         LogLine::new("20:02:41.220", LogLevel::Dbl, "stop finished: clean shutdown in 0.21 s"),
         LogLine::new("", LogLevel::Separator, "new session · 22:39:12"),
-        LogLine::new("22:39:12.031", LogLevel::Dbl, "start diminta oleh GUI"),
-        LogLine::new("22:39:12.033", LogLevel::Dbl, "uji bind 127.0.0.1:5434 … EADDRINUSE"),
-        LogLine::new("22:39:12.034", LogLevel::Dbl, "uji bind [::1]:5434 … EADDRINUSE"),
+        LogLine::new("22:39:12.031", LogLevel::Dbl, "start requested by GUI"),
+        LogLine::new("22:39:12.033", LogLevel::Dbl, "bind test 127.0.0.1:5434 … EADDRINUSE"),
+        LogLine::new("22:39:12.034", LogLevel::Dbl, "bind test [::1]:5434 … EADDRINUSE"),
         LogLine::new("22:39:12.034", LogLevel::Error, "port 5434 is used by another process; the engine was not started (DBL-1302)"),
         LogLine::new("22:39:12.035", LogLevel::Dbl, "status: starting → failed"),
     ];

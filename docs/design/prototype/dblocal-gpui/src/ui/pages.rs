@@ -1,4 +1,4 @@
-//! Isi tab per instance: Overview, Logs, Databases, Config.
+//! Per-instance tab contents: Overview, Logs, Databases, Config.
 
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::checkbox::Checkbox;
@@ -53,7 +53,7 @@ impl Workspace {
                             .text_color(tokens::text_muted())
                             .child(svg().path("icons/key-round.svg").size(px(14.)).text_color(tokens::text_muted()))
                             .child(if inst.no_auth {
-                                "Tanpa password (No auth)"
+                                "No password (No auth)"
                             } else {
                                 "Password di Keychain"
                             }),
@@ -82,7 +82,7 @@ impl Workspace {
                     .child(
                         Button::new("reveal")
                             .icon(if self.reveal { IconName::EyeOff } else { IconName::Eye })
-                            .label(if self.reveal { "Sembunyikan" } else { "Tampilkan" })
+                            .label(if self.reveal { "Hide" } else { "Show" })
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.reveal = !this.reveal;
                                 cx.notify();
@@ -127,7 +127,7 @@ impl Workspace {
                     .text_xs()
                     .text_color(tokens::text_muted())
                     .child(svg().path("icons/shield-check.svg").size(px(14.)).text_color(tokens::text_muted()))
-                    .child("Hanya mendengarkan 127.0.0.1 dan ::1"),
+                    .child("Listens only on 127.0.0.1 and ::1"),
             );
 
         let idx = self.selected;
@@ -214,7 +214,7 @@ impl Workspace {
         let steps = [
             ("Downloading the runtime", pct < 100.),
             ("Verifikasi SHA-256", false),
-            ("Ekstrak ke ~/.dblocal/runtimes", false),
+            ("Extract to ~/.dblocal/runtimes", false),
             ("Inisialisasi data (initdb)", false),
         ];
         card(None)
@@ -243,8 +243,8 @@ impl Workspace {
                     .child(mono(format!("{:.1} MB / {total_mb:.1} MB", total_mb * pct / 100.), cx))
                     .child(div().text_color(tokens::text_muted()).child("2,4 MB/dtk"))
                     .child(div().flex_1())
-                    .child(Button::new("pause").label("Jeda").small())
-                    .child(Button::new("cancel-dl").label("Batal").small()),
+                    .child(Button::new("pause").label("Pause").small())
+                    .child(Button::new("cancel-dl").label("Cancel").small()),
             )
             .child(v_flex().gap_2().children(steps.iter().enumerate().map(|(i, (label, active))| {
                 h_flex()
@@ -335,7 +335,7 @@ impl Workspace {
                                     .label("Report an issue")
                                     .on_click(cx.listener(|_, _, window, cx| {
                                         window.push_notification(
-                                            Notification::info("Template issue disiapkan tanpa password & path home"),
+                                            Notification::info("Issue template prepared without passwords or home path"),
                                             cx,
                                         )
                                     })),
@@ -380,7 +380,7 @@ impl Workspace {
                     .child(mono(format!("~/.dblocal/instances/{}/logs/engine.log", inst.name), cx))
                     .child("rotasi maks 3 × 10 MB")
                     .child(div().flex_1())
-                    .child(format!("{} baris", inst.logs.len())),
+                    .child(format!("{} lines", inst.logs.len())),
             );
 
         page().children(diagnosis).child(viewer).into_any_element()
@@ -548,21 +548,21 @@ impl Workspace {
         let mono_font = cx.theme().mono_font_family.clone();
         let params: Vec<(&str, String, &str, &str)> = match inst.engine {
             EngineKind::Postgres => vec![
-                ("port", inst.port.to_string(), "5432", "Diuji bind sebelum disimpan"),
+                ("port", inst.port.to_string(), "5432", "Bind-tested before saving"),
                 ("max_connections", "200".into(), "100", "Butuh restart"),
                 ("shared_buffers", "512MB".into(), "128MB", "Butuh restart"),
-                ("work_mem", "4MB".into(), "4MB", "Berlaku setelah reload"),
+                ("work_mem", "4MB".into(), "4MB", "Takes effect after reload"),
                 ("timezone", "Asia/Makassar".into(), "Etc/UTC", "Default session time zone"),
-                ("password_encryption", "scram-sha-256".into(), "scram-sha-256", "Hanya 127.0.0.1 dan ::1"),
+                ("password_encryption", "scram-sha-256".into(), "scram-sha-256", "Only 127.0.0.1 and ::1"),
             ],
             EngineKind::Valkey => vec![
-                ("port", inst.port.to_string(), "6379", "Diuji bind sebelum disimpan"),
-                ("maxmemory", "256mb".into(), "0", "0 = tanpa batas"),
+                ("port", inst.port.to_string(), "6379", "Bind-tested before saving"),
+                ("maxmemory", "256mb".into(), "0", "0 = unlimited"),
                 ("appendonly", "no".into(), "no", "Persistensi AOF"),
-                ("protected-mode", "yes".into(), "yes", "Selalu aktif"),
+                ("protected-mode", "yes".into(), "yes", "Always enabled"),
             ],
             EngineKind::MySql | EngineKind::MariaDb => vec![
-                ("port", inst.port.to_string(), "3306", "Diuji bind sebelum disimpan"),
+                ("port", inst.port.to_string(), "3306", "Bind-tested before saving"),
                 ("max_connections", "151".into(), "151", "Butuh restart"),
                 ("innodb_buffer_pool_size", "256M".into(), "128M", "Butuh restart"),
                 ("character_set_server", "utf8mb4".into(), "utf8mb4", "Collation utf8mb4_unicode_ci"),
@@ -594,7 +594,7 @@ impl Workspace {
                                             .border_color(tokens::tint(tokens::accent(), 0.5))
                                             .text_color(tokens::accent())
                                             .text_size(px(11.))
-                                            .child("diubah"),
+                                            .child("modified"),
                                     )
                                 }),
                         )
@@ -623,11 +623,11 @@ impl Workspace {
                     .items_center()
                     .child(svg().path("icons/refresh-cw.svg").flex_none().size(px(18.)).text_color(tokens::warn()))
                     .child(div().flex_1().child("Saved. A restart is required for the changes to take effect."))
-                    .child(Button::new("later").label("Nanti"))
+                    .child(Button::new("later").label("Later"))
                     .child(
                         Button::new("restart-now")
                             .primary()
-                            .label("Restart sekarang")
+                            .label("Restart now")
                             .on_click(cx.listener(|this, _, window, cx| {
                                 let idx = this.selected;
                                 if this.instances[idx].status == Status::Running {
@@ -660,7 +660,7 @@ impl Workspace {
                             .child(Button::new("open-conf").icon(IconName::ExternalLink).label("Open config file"))
                             .child(Button::new("revert").label("Restore the previous configuration"))
                             .child(div().flex_1())
-                            .child(Button::new("discard").label("Buang perubahan"))
+                            .child(Button::new("discard").label("Discard changes"))
                             .child(Button::new("save").primary().label("Save")),
                     ),
             )

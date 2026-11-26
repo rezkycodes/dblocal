@@ -129,7 +129,7 @@ impl Workspace {
         let inst = self.current();
         cx.write_to_clipboard(ClipboardItem::new_string(inst.uri(true)));
         let note = if inst.status == Status::Running {
-            "Connection URI disalin ke clipboard".to_string()
+            "Connection URI copied to clipboard".to_string()
         } else {
             format!("URI copied — {} is not running yet", inst.name)
         };
@@ -138,7 +138,7 @@ impl Workspace {
 
     pub(crate) fn copy_env(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         cx.write_to_clipboard(ClipboardItem::new_string(self.current().env_block(true)));
-        window.push_notification(Notification::success("Blok .env disalin ke clipboard"), cx);
+        window.push_notification(Notification::success(".env block copied to clipboard"), cx);
     }
 
     pub(crate) fn copy_logs(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -153,7 +153,7 @@ impl Workspace {
             .collect::<Vec<_>>()
             .join("\n");
         cx.write_to_clipboard(ClipboardItem::new_string(text));
-        window.push_notification(Notification::info("500 baris log terakhir disalin"), cx);
+        window.push_notification(Notification::info("Last 500 log lines copied"), cx);
     }
 
     /// Start/Stop with a simulated status transition.
@@ -162,11 +162,11 @@ impl Workspace {
         match inst.status {
             Status::Running => {
                 inst.status = Status::Stopping;
-                inst.logs.push(LogLine::new(&now(), LogLevel::Dbl, "stop diminta: pg_ctl stop -m fast"));
+                inst.logs.push(LogLine::new(&now(), LogLevel::Dbl, "stop requested: pg_ctl stop -m fast"));
                 self.after(idx, 700, cx, |i| {
                     i.status = Status::Stopped;
                     i.pid = None;
-                    i.logs.push(LogLine::new(&now(), LogLevel::Dbl, "shutdown bersih selesai"));
+                    i.logs.push(LogLine::new(&now(), LogLevel::Dbl, "clean shutdown finished"));
                 });
             }
             Status::Stopped | Status::Failed => {
@@ -182,7 +182,7 @@ impl Workspace {
                 inst.status = Status::Starting;
                 inst.failure = None;
                 let port = inst.port;
-                inst.logs.push(LogLine::new(&now(), LogLevel::Dbl, format!("uji bind 127.0.0.1:{port} … OK")));
+                inst.logs.push(LogLine::new(&now(), LogLevel::Dbl, format!("bind test 127.0.0.1:{port} … OK")));
                 self.after(idx, 900, cx, move |i| {
                     i.status = Status::Running;
                     i.pid = Some(48_213 + port as u32);
@@ -203,7 +203,7 @@ impl Workspace {
         self.after(idx, 600, cx, |i| i.status = Status::Starting);
         self.after(idx, 1300, cx, |i| {
             i.status = Status::Running;
-            i.logs.push(LogLine::new(&now(), LogLevel::Dbl, "restart selesai · health check OK"));
+            i.logs.push(LogLine::new(&now(), LogLevel::Dbl, "restart finished · health check OK"));
         });
         cx.notify();
     }
@@ -277,7 +277,7 @@ impl Workspace {
             autostart: false,
             progress: 0.,
             failure: None,
-            logs: vec![LogLine::new(&now(), LogLevel::Dbl, format!("instance {} dibuat", spec.name))],
+            logs: vec![LogLine::new(&now(), LogLevel::Dbl, format!("instance {} created", spec.name))],
             databases: Vec::new(),
         };
         self.instances.push(inst);
@@ -300,7 +300,7 @@ impl Workspace {
                             if step == 20 {
                                 inst.status = Status::Stopped;
                                 inst.data_size = "39,8 MB".into();
-                                inst.logs.push(LogLine::new(&now(), LogLevel::Dbl, "SHA-256 cocok · runtime diekstrak · initdb OK"));
+                                inst.logs.push(LogLine::new(&now(), LogLevel::Dbl, "SHA-256 matched · runtime extracted · initdb OK"));
                             }
                             cx.notify();
                             step == 20

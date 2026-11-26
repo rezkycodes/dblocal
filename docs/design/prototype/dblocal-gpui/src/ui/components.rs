@@ -8,7 +8,7 @@ use crate::model::{EngineKind, Status};
 use crate::theme::tokens;
 
 /// A status dot. The shape also differs (not just the colour) per F-PLH-02:
-/// ● running · ○ stopped · ▲ failed · ◐ sibuk.
+/// ● running · ○ stopped · ▲ failed · ◐ busy.
 pub fn status_dot(status: Status, size: f32) -> AnyElement {
     let color = status.color();
     let s = px(size);
@@ -35,7 +35,7 @@ pub fn status_dot(status: Status, size: f32) -> AnyElement {
     }
 }
 
-/// Monogram engine berwarna (PG, VK, MY, MA).
+/// Colored engine monogram (PG, VK, MY, MA).
 pub fn engine_badge(engine: EngineKind, size: f32) -> Div {
     let color = engine.color();
     div()
@@ -68,7 +68,7 @@ pub fn status_pill(status: Status) -> Div {
         .child(status.label())
 }
 
-/// Label seksi huruf kapital kecil.
+/// Small uppercase section label.
 pub fn section_label(text: impl Into<SharedString>) -> Div {
     div()
         .text_size(px(11.))
@@ -118,7 +118,7 @@ pub fn mono(text: impl Into<SharedString>, cx: &App) -> Div {
         .child(text.into())
 }
 
-/// Banner berwarna (peringatan / error / info).
+/// Colored banner (warning / error / info).
 pub fn banner(color: Rgba) -> Div {
     h_flex()
         .flex_wrap()

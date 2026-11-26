@@ -2,7 +2,7 @@
 //!
 //! Struktur:
 //! - `theme`  : the #15161d theme from `themes/dblocal.json` + colour tokens
-//! - `assets` : ikon gpui-kit + ikon Lucide tambahan
+//! - `assets` : gpui-kit icons + extra Lucide icons
 //! - `model`  : domain types + sample data (later replaced by `dblocal-core`)
 //! - `ui`     : workspace (dock, tab, overview/logs/databases/config), dialog
 
