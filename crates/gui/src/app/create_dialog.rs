@@ -146,7 +146,10 @@ fn render_category_tabs(
             .find(|(cat, _)| *cat == category)
             .map(|(_, handle)| handle.clone());
         let tab = div()
-            .id(SharedString::from(format!("category-tab-{}", category.slug())))
+            .id(SharedString::from(format!(
+                "category-tab-{}",
+                category.slug()
+            )))
             .px(px(12.))
             .py(px(6.))
             .rounded(px(6.))
@@ -496,10 +499,7 @@ fn render_fields(
             v_flex()
                 .w(px(140.))
                 .gap_1p5()
-                .child(
-                    Label::new(superuser_label)
-                        .font_weight(gpui_kit::FontWeight::MEDIUM),
-                )
+                .child(Label::new(superuser_label).font_weight(gpui_kit::FontWeight::MEDIUM))
                 .child(
                     div()
                         .h(px(32.))

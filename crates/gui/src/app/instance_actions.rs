@@ -462,8 +462,8 @@ impl Workspace {
         if let Some(form) = self.create.as_mut() {
             form.category = category;
         }
-        let already_in_category = current_engine
-            .is_some_and(|engine| category.engines().contains(&engine));
+        let already_in_category =
+            current_engine.is_some_and(|engine| category.engines().contains(&engine));
         if !already_in_category {
             // Prefer the first available engine in the category; if none are
             // available on this platform (e.g. Cache & Queue on Windows), still

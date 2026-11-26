@@ -265,7 +265,12 @@ mod tests {
         }
     }
 
-    fn release(tag: &str, prerelease: bool, draft: bool, payloads: &[(&str, &[u8])]) -> RustfsRelease {
+    fn release(
+        tag: &str,
+        prerelease: bool,
+        draft: bool,
+        payloads: &[(&str, &[u8])],
+    ) -> RustfsRelease {
         let mut assets = Vec::new();
         for (name, data) in payloads {
             assets.push(GithubAsset {

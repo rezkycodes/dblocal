@@ -101,9 +101,7 @@ mod tests {
                 .expect("load")
                 .expect("embedded bytes");
             assert!(
-                std::str::from_utf8(&bytes)
-                    .expect("utf8")
-                    .contains("<svg"),
+                std::str::from_utf8(&bytes).expect("utf8").contains("<svg"),
                 "{path} must be valid SVG"
             );
         }

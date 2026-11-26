@@ -128,7 +128,8 @@ fn check_artifacts(document: &CatalogDocument, tolerant: bool) -> Result<()> {
     for artifact in &document.artifacts {
         if tolerant
             && (artifact.engine.parse::<EngineKey>().is_err()
-                || skipped_versions.contains(&(artifact.engine.as_str(), artifact.version.as_str()))
+                || skipped_versions
+                    .contains(&(artifact.engine.as_str(), artifact.version.as_str()))
                 || artifact.format.parse::<ArchiveFormat>().is_err())
         {
             continue;
@@ -361,7 +362,10 @@ mod tests {
         assert_eq!(snapshot.versions().len(), 1);
         assert_eq!(snapshot.versions()[0].engine(), EngineKey::Postgresql);
         assert_eq!(snapshot.artifacts().len(), 1);
-        assert_eq!(snapshot.artifacts()[0].id(), "postgresql-18.7.0-linux-x86_64");
+        assert_eq!(
+            snapshot.artifacts()[0].id(),
+            "postgresql-18.7.0-linux-x86_64"
+        );
     }
 
     #[test]

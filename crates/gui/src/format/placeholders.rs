@@ -192,8 +192,16 @@ mod tests {
         );
 
         let cache = category_engine_cards(&entries, EngineCategory::CacheAndQueue);
-        assert_eq!(cache.len(), 2, "Cache & Queue tab must never be empty on Windows");
-        assert!(cache.iter().all(|e| !e.available && e.unavailable_reason.is_some()));
+        assert_eq!(
+            cache.len(),
+            2,
+            "Cache & Queue tab must never be empty on Windows"
+        );
+        assert!(
+            cache
+                .iter()
+                .all(|e| !e.available && e.unavailable_reason.is_some())
+        );
 
         let storage: Vec<EngineKey> = category_engine_cards(&entries, EngineCategory::Storage)
             .into_iter()

@@ -556,8 +556,9 @@ pub(crate) fn validate_spec_boundary(spec: &crate::model::InstanceSpec) -> Resul
     if spec.engine() == EngineKey::Rustfs && spec.auth() == AuthMode::None {
         return Err(DblError::InvalidInput {
             field: "auth",
-            reason: "RustFS requires per-instance credentials and cannot run without authentication"
-                .to_owned(),
+            reason:
+                "RustFS requires per-instance credentials and cannot run without authentication"
+                    .to_owned(),
         });
     }
     if let (Some(port), Some(extra)) = (spec.port(), spec.extra_port())

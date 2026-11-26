@@ -248,11 +248,9 @@ impl DblService for MockService {
                 && spec.extra_port().is_none()
             {
                 let mut candidate = crate::consts::PORT_RUSTFS_CONSOLE;
-                while g
-                    .instances
-                    .values()
-                    .any(|i| i.port().get() == candidate || i.extra_port().map(Port::get) == Some(candidate))
-                    || spec.port().map(Port::get) == Some(candidate)
+                while g.instances.values().any(|i| {
+                    i.port().get() == candidate || i.extra_port().map(Port::get) == Some(candidate)
+                }) || spec.port().map(Port::get) == Some(candidate)
                 {
                     candidate = candidate.saturating_add(1);
                 }

@@ -717,7 +717,10 @@ fn rustfs_create_start_stop_status_and_uri_with_and_without_console() {
         .into_iter()
         .find(|v| v.name == "s3-ui")
         .expect("s3-ui");
-    assert_eq!(with_ui.extra_port.map(dblocal_core::model::Port::get), Some(9001));
+    assert_eq!(
+        with_ui.extra_port.map(dblocal_core::model::Port::get),
+        Some(9001)
+    );
 
     // Start, status, uri (--env), stop.
     let (code, _, err) = run_cmd(
@@ -749,7 +752,10 @@ fn rustfs_create_start_stop_status_and_uri_with_and_without_console() {
         false,
     );
     assert_eq!(code, EXIT_OK);
-    assert!(out.contains("AWS_ENDPOINT_URL=http://127.0.0.1:29000"), "{out}");
+    assert!(
+        out.contains("AWS_ENDPOINT_URL=http://127.0.0.1:29000"),
+        "{out}"
+    );
     assert!(out.contains("AWS_ACCESS_KEY_ID="), "{out}");
     assert!(out.contains("AWS_SECRET_ACCESS_KEY="), "{out}");
 

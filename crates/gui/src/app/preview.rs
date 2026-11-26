@@ -653,15 +653,25 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) -> Self {
         let mut workspace = Self::preview(service, window, cx);
-        let spec = dblocal_core::model::InstanceSpec::new(
-            dblocal_core::model::InstanceName::new("s3-local").expect("name"),
+        let Ok(name) = dblocal_core::model::InstanceName::new("s3-local") else {
+            return workspace;
+        };
+        let Ok(port) = dblocal_core::model::Port::new(9000) else {
+            return workspace;
+        };
+        let Ok(console_port) = dblocal_core::model::Port::new(9001) else {
+            return workspace;
+        };
+        let Ok(spec) = dblocal_core::model::InstanceSpec::new(
+            name,
             dblocal_core::model::EngineKey::Rustfs,
             "1.0.7",
-            Some(dblocal_core::model::Port::new(9000).expect("port")),
+            Some(port),
             dblocal_core::model::AuthMode::Password,
-        )
-        .expect("spec")
-        .with_extra_port(Some(dblocal_core::model::Port::new(9001).expect("console")));
+        ) else {
+            return workspace;
+        };
+        let spec = spec.with_extra_port(Some(console_port));
         let inst = dblocal_core::model::Instance::new(
             &spec,
             dblocal_core::model::InstanceId::new(),

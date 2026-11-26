@@ -15,13 +15,13 @@ use std::time::Duration;
 
 use rand::RngExt;
 
+use crate::DblError;
 use crate::consts;
 use crate::engine::{AdminOps, Credential, EngineAdapter, Health, InitContext, RunContext, uri};
 use crate::error::Result;
 use crate::model::{AuthMode, EngineKey, StartFailure};
 use crate::secret::SecretString;
 use crate::service::UriFormat;
-use crate::DblError;
 
 /// Default upstream credentials that DBLocal must always refuse to use.
 const FORBIDDEN_DEFAULT_CREDENTIAL: &str = "rustfsadmin";
@@ -43,14 +43,18 @@ impl EngineAdapter for RustfsAdapter {
         if ctx.auth != AuthMode::Password {
             return Err(DblError::InvalidInput {
                 field: "auth",
-                reason: "RustFS requires generated credentials and cannot run without authentication"
-                    .to_owned(),
+                reason:
+                    "RustFS requires generated credentials and cannot run without authentication"
+                        .to_owned(),
             });
         }
-        let secret = ctx.password.as_ref().ok_or_else(|| DblError::InvalidInput {
-            field: "password",
-            reason: "RustFS requires a non-empty secret key".to_owned(),
-        })?;
+        let secret = ctx
+            .password
+            .as_ref()
+            .ok_or_else(|| DblError::InvalidInput {
+                field: "password",
+                reason: "RustFS requires a non-empty secret key".to_owned(),
+            })?;
         validate_credentials(&ctx.superuser, secret.expose())?;
         crate::fsutil::ensure_private_dir(&ctx.data_dir)
             .map_err(|source| DblError::Io { source })?;
@@ -137,10 +141,13 @@ impl EngineAdapter for RustfsAdapter {
 /// No Linux shared-library preflight is needed because DBLocal ships the static
 /// musl build (`rustfs-linux-*-musl`) with zero dynamic library dependencies.
 pub fn prepare_run(ctx: &RunContext) -> Result<()> {
-    let cred = ctx.credential.as_ref().ok_or_else(|| DblError::InvalidInput {
-        field: "credential",
-        reason: "RustFS refuses to start without per-instance credentials".to_owned(),
-    })?;
+    let cred = ctx
+        .credential
+        .as_ref()
+        .ok_or_else(|| DblError::InvalidInput {
+            field: "credential",
+            reason: "RustFS refuses to start without per-instance credentials".to_owned(),
+        })?;
     validate_credentials(&cred.username, cred.password.expose())?;
     for dir in [&ctx.data_dir, &ctx.logs_dir, &ctx.run_dir] {
         crate::fsutil::ensure_private_dir(dir).map_err(|source| DblError::Io { source })?;
@@ -401,7 +408,10 @@ mod tests {
         assert_eq!(k1.len(), consts::ACCESS_KEY_LEN);
         assert_ne!(k1, k2);
         assert!(k1.starts_with("DBL"));
-        assert!(k1.bytes().all(|b| b.is_ascii_uppercase() || b.is_ascii_digit()));
+        assert!(
+            k1.bytes()
+                .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit())
+        );
     }
 
     #[test]
