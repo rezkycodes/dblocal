@@ -497,6 +497,21 @@ impl Drop for SyncServer {
 }
 
 #[cfg(unix)]
+fn sign_ed25519_for_test(payload: &[u8]) -> (Arc<dyn ReleaseVerifier>, Vec<u8>) {
+    use ring::rand::SystemRandom;
+    use ring::signature::{Ed25519KeyPair, KeyPair};
+    let rng = SystemRandom::new();
+    let pkcs8 = Ed25519KeyPair::generate_pkcs8(&rng).unwrap();
+    let pair = Ed25519KeyPair::from_pkcs8(pkcs8.as_ref()).unwrap();
+    let sig = pair.sign(payload).as_ref().to_vec();
+    let mut pub_key = [0u8; ED25519_PUBLIC_KEY_LEN];
+    pub_key.copy_from_slice(pair.public_key().as_ref());
+    let verifier: Arc<dyn ReleaseVerifier> =
+        Arc::new(Ed25519ReleaseVerifier::from_raw_keys(vec![pub_key]));
+    (verifier, sig)
+}
+
+#[cfg(unix)]
 #[test]
 fn end_to_end_service_tarball_update_with_progress_desktop_icons_and_cache() {
     let tmp = tempdir().unwrap();
@@ -511,6 +526,7 @@ fn end_to_end_service_tarball_update_with_progress_desktop_icons_and_cache() {
     let tarball_hash = sha256_hex(&tarball);
     let asset_name = "dblocal-v0.2.0-linux-x86_64.tar.gz";
     let checksums = format!("{tarball_hash}  {asset_name}\n").into_bytes();
+    let (verifier, sig) = sign_ed25519_for_test(&checksums);
 
     let hits = Arc::new(AtomicUsize::new(0));
     let rt = tokio::runtime::Builder::new_multi_thread()
@@ -531,7 +547,8 @@ fn end_to_end_service_tarball_update_with_progress_desktop_icons_and_cache() {
             "body": "Release 0.2.0",
             "assets": [
                 {"name": asset_name, "browser_download_url": format!("{base_url}/{asset_name}"), "size": tarball.len()},
-                {"name": "checksums.txt", "browser_download_url": format!("{base_url}/checksums.txt"), "size": checksums.len()}
+                {"name": "checksums.txt", "browser_download_url": format!("{base_url}/checksums.txt"), "size": checksums.len()},
+                {"name": "checksums.txt.sig", "browser_download_url": format!("{base_url}/checksums.txt.sig"), "size": sig.len()}
             ]
         }])
         .to_string()
@@ -544,6 +561,7 @@ fn end_to_end_service_tarball_update_with_progress_desktop_icons_and_cache() {
         );
         routes.insert(format!("/{asset_name}"), (200, tarball));
         routes.insert("/checksums.txt".to_owned(), (200, checksums));
+        routes.insert("/checksums.txt.sig".to_owned(), (200, sig));
 
         let listener = TcpListener::from_std(std_listener).unwrap();
         let routes = Arc::new(routes);
@@ -597,6 +615,7 @@ fn end_to_end_service_tarball_update_with_progress_desktop_icons_and_cache() {
         update_api_base_url: Some(base),
         update_download_options: Some(UpdateDownloadOptions::loopback_for_tests()),
         update_data_home_override: Some(data_home.clone()),
+        update_verifier: Some(verifier),
         ..ServiceOptions::default()
     };
     let svc = LocalService::new(DblPaths::with_root(&home), options).expect("service");
@@ -775,6 +794,7 @@ fn end_to_end_cancellation_during_download_cleans_up() {
         )),
         update_api_base_url: Some(base),
         update_download_options: Some(UpdateDownloadOptions::loopback_for_tests()),
+        update_verifier: Some(Arc::new(Sha256ReleaseVerifier)),
         ..ServiceOptions::default()
     };
     let svc = LocalService::new(DblPaths::with_root(&home), options).expect("service");
@@ -866,6 +886,7 @@ fn end_to_end_appimage_atomic_replace_and_rollback_on_bad_binary() {
     let good_hash = sha256_hex(&good_bytes);
     let asset_name = "dblocal-v0.2.0-linux-x86_64.AppImage";
     let checksums = format!("{good_hash}  {asset_name}\n").into_bytes();
+    let (verifier, sig) = sign_ed25519_for_test(&checksums);
 
     let hits = Arc::new(AtomicUsize::new(0));
     let rt = tokio::runtime::Builder::new_multi_thread()
@@ -886,7 +907,8 @@ fn end_to_end_appimage_atomic_replace_and_rollback_on_bad_binary() {
             "body": "AppImage 0.2.0",
             "assets": [
                 {"name": asset_name, "browser_download_url": format!("{base}/{asset_name}"), "size": good_bytes.len()},
-                {"name": "checksums.txt", "browser_download_url": format!("{base}/checksums.txt"), "size": checksums.len()}
+                {"name": "checksums.txt", "browser_download_url": format!("{base}/checksums.txt"), "size": checksums.len()},
+                {"name": "checksums.txt.sig", "browser_download_url": format!("{base}/checksums.txt.sig"), "size": sig.len()}
             ]
         }])
         .to_string()
@@ -899,6 +921,7 @@ fn end_to_end_appimage_atomic_replace_and_rollback_on_bad_binary() {
         );
         routes.insert(format!("/{asset_name}"), (200, good_bytes));
         routes.insert("/checksums.txt".to_owned(), (200, checksums));
+        routes.insert("/checksums.txt.sig".to_owned(), (200, sig));
         let listener = TcpListener::from_std(std_listener).unwrap();
         let routes = Arc::new(routes);
         let server = tokio::spawn(async move {
@@ -949,6 +972,7 @@ fn end_to_end_appimage_atomic_replace_and_rollback_on_bad_binary() {
         )),
         update_api_base_url: Some(base),
         update_download_options: Some(UpdateDownloadOptions::loopback_for_tests()),
+        update_verifier: Some(verifier),
         ..ServiceOptions::default()
     };
     let svc = LocalService::new(DblPaths::with_root(&home), options).unwrap();
@@ -1025,4 +1049,322 @@ fn windows_zip_extraction_accepts_valid_and_rejects_unexpected_or_traversal() {
     let err = extract_windows_zip(&extra_zip, &dir.path().join("out_extra"))
         .expect_err("extra dll rejected");
     assert_eq!(err.code(), CODE_UPDATE_UNSAFE_ARCHIVE);
+}
+
+#[test]
+fn advisory_lock_ignores_empty_or_garbled_lockfile_and_releases_on_drop() {
+    let dir = tempdir().unwrap();
+    let lock_path = dir.path().join(crate::consts::UPDATE_LOCK_FILE);
+
+    // Pre-create an empty lock file and a garbled lock file; OS advisory lock
+    // must still acquire cleanly instead of deadlocking forever.
+    std::fs::write(&lock_path, b"").unwrap();
+    let guard = UpdateLock::acquire(dir.path()).expect("empty lock file acquired");
+    let err = UpdateLock::acquire(dir.path()).expect_err("second acquire blocked");
+    assert_eq!(err.code(), CODE_UPDATE_IN_PROGRESS);
+    drop(guard);
+
+    std::fs::write(&lock_path, b"not-a-pid-garbled!!!\n").unwrap();
+    let _guard2 = UpdateLock::acquire(dir.path()).expect("garbled lock file acquired");
+}
+
+#[test]
+fn windows_msi_helper_runs_from_staging_copy_not_install_target_and_cleans_up_later() {
+    let tmp = tempdir().unwrap();
+    let install_dir = tmp.path().join("AppData/Local/DBLocal");
+    std::fs::create_dir_all(&install_dir).unwrap();
+    let target_exe = install_dir.join("dblocal.exe");
+    std::fs::write(&target_exe, b"MZ-installed-exe").unwrap();
+
+    let staging_root = tmp.path().join("update");
+    let run_dir = staging_root.join("run-123-abcdef");
+    std::fs::create_dir_all(&run_dir).unwrap();
+    let msi_file = run_dir.join("dblocal-update.bin");
+    std::fs::write(&msi_file, b"MSI-BYTES").unwrap();
+
+    let staged = StagedUpdate::new_for_test_any(
+        Version::parse("0.2.0").unwrap(),
+        msi_file.clone(),
+        run_dir.clone(),
+        "dblocal-0.2.0-windows-x86_64.msi".to_owned(),
+        UpdateAssetKind::Msi,
+    );
+    let action = apply_staged_update(
+        &InstallKind::WindowsMsi {
+            exe_path: target_exe.clone(),
+        },
+        &staged,
+        &target_exe,
+        None,
+    )
+    .expect("msi apply stages helper");
+
+    match action {
+        RestartAction::RunWindowsMsi {
+            helper_exe,
+            msi_path,
+            relaunch_exe,
+        } => {
+            assert_ne!(
+                helper_exe, target_exe,
+                "helper must never run from the installed target"
+            );
+            assert!(
+                helper_exe.starts_with(&run_dir),
+                "helper must live inside private staging dir: {}",
+                helper_exe.display()
+            );
+            assert!(helper_exe.is_file());
+            assert_eq!(msi_path, msi_file);
+            assert_eq!(relaunch_exe, target_exe);
+        }
+        other => panic!("expected RunWindowsMsi, got {other:?}"),
+    }
+
+    // Later startup cleanup removes the stale run-* staging directory.
+    cleanup_stale_staging(&staging_root);
+    assert!(!run_dir.exists(), "stale run-* dir must be cleaned up");
+}
+
+#[test]
+fn windows_helper_handles_timeout_3010_and_failure_relaunch_with_persisted_error() {
+    use std::sync::atomic::AtomicBool;
+    let tmp = tempdir().unwrap();
+    let target = tmp.path().join("dblocal.exe");
+    std::fs::write(&target, b"MZ-old").unwrap();
+    let msi = tmp.path().join("update.msi");
+    std::fs::write(&msi, b"MSI").unwrap();
+    let err_file = tmp.path().join("last-error.txt");
+
+    // 1. Parent timeout -> aborts without running msiexec, persists error.
+    let msi_called = AtomicBool::new(false);
+    let relaunched = AtomicBool::new(false);
+    let args = WindowsHelperArgs {
+        pid: 99999,
+        msi: Some(msi.clone()),
+        staged: None,
+        target: target.clone(),
+        version: None,
+        error_file: Some(err_file.clone()),
+    };
+    let err = super::install::run_windows_apply_helper_with(
+        &args,
+        |_| false,
+        |_| {
+            msi_called.store(true, Ordering::SeqCst);
+            Ok(Some(0))
+        },
+        |_| {
+            relaunched.store(true, Ordering::SeqCst);
+            Ok(())
+        },
+    )
+    .expect_err("timeout must abort");
+    assert_eq!(err.code(), CODE_UPDATE_APPLY_FAILED);
+    assert!(!msi_called.load(Ordering::SeqCst), "must not run msiexec");
+    assert!(!relaunched.load(Ordering::SeqCst));
+    let persisted = take_last_update_failure(tmp.path()).expect("error persisted");
+    assert!(persisted.contains("did not exit"), "{persisted}");
+
+    // 2. Exit 3010 (reboot required) -> treated as success, relaunches app, no error persisted.
+    let relaunched = AtomicBool::new(false);
+    super::install::run_windows_apply_helper_with(
+        &args,
+        |_| true,
+        |_| Ok(Some(MSI_EXIT_REBOOT_REQUIRED)),
+        |_| {
+            relaunched.store(true, Ordering::SeqCst);
+            Ok(())
+        },
+    )
+    .expect("3010 is success");
+    assert!(relaunched.load(Ordering::SeqCst));
+    assert!(take_last_update_failure(tmp.path()).is_none());
+
+    // 3. Exit 1603 (MSI failure) -> persists error AND relaunches previous app!
+    let relaunched = AtomicBool::new(false);
+    let err = super::install::run_windows_apply_helper_with(
+        &args,
+        |_| true,
+        |_| Ok(Some(1603)),
+        |_| {
+            relaunched.store(true, Ordering::SeqCst);
+            Ok(())
+        },
+    )
+    .expect_err("1603 is failure");
+    assert_eq!(err.code(), CODE_UPDATE_APPLY_FAILED);
+    assert!(
+        relaunched.load(Ordering::SeqCst),
+        "must relaunch previous app on failure"
+    );
+    let persisted = take_last_update_failure(tmp.path()).expect("failure persisted");
+    assert!(persisted.contains("1603"), "{persisted}");
+}
+
+#[cfg(unix)]
+#[test]
+fn linux_tarball_desktop_sync_is_non_fatal_and_respects_ownership() {
+    let tmp = tempdir().unwrap();
+    let bin_dir = tmp.path().join("bin");
+    let exe_path = bin_dir.join("dblocal");
+    write_fake_exe(&exe_path, "0.1.3", true);
+
+    let tarball_path = tmp.path().join("update.tar.gz");
+    std::fs::write(
+        &tarball_path,
+        build_linux_tarball(&fake_binary_bytes("0.2.0", true), true),
+    )
+    .unwrap();
+    let staged = StagedUpdate::new_for_test_any(
+        Version::parse("0.2.0").unwrap(),
+        tarball_path,
+        tmp.path().to_path_buf(),
+        "dblocal-v0.2.0-linux-x86_64.tar.gz".to_owned(),
+        UpdateAssetKind::TarGz,
+    );
+
+    // Case A: existing desktop entry points at a DIFFERENT binary -> must not be hijacked.
+    let data_home_other = tmp.path().join("share-other");
+    let apps_other = data_home_other.join("applications");
+    std::fs::create_dir_all(&apps_other).unwrap();
+    let existing_desktop = apps_other.join("dev.dblocal.DBLocal.desktop");
+    let original_desktop = "[Desktop Entry]\nName=DBLocal\nExec=/some/other/dblocal\n";
+    std::fs::write(&existing_desktop, original_desktop).unwrap();
+
+    apply_staged_update(
+        &InstallKind::PortableTarball {
+            exe_path: exe_path.clone(),
+        },
+        &staged,
+        &exe_path,
+        Some(&data_home_other),
+    )
+    .expect("update succeeds");
+    assert_eq!(
+        std::fs::read_to_string(&existing_desktop).unwrap(),
+        original_desktop,
+        "must not hijack desktop entry owned by another copy"
+    );
+
+    // Case B: unwritable/broken data_home -> desktop sync failure is NON-FATAL after binary swap.
+    let broken_data_home = tmp.path().join("share-broken");
+    std::fs::create_dir_all(&broken_data_home).unwrap();
+    // Place a regular file where `applications/` directory should be so mkdir fails.
+    std::fs::write(broken_data_home.join("applications"), b"not-a-dir").unwrap();
+
+    write_fake_exe(&exe_path, "0.1.3", true);
+    apply_staged_update(
+        &InstallKind::PortableTarball {
+            exe_path: exe_path.clone(),
+        },
+        &staged,
+        &exe_path,
+        Some(&broken_data_home),
+    )
+    .expect("desktop sync failure must be non-fatal once binary is swapped");
+    let out = std::process::Command::new(&exe_path)
+        .arg("--version")
+        .output()
+        .unwrap();
+    assert!(String::from_utf8_lossy(&out.stdout).contains("0.2.0"));
+}
+
+#[cfg(unix)]
+#[test]
+fn ed25519_verifier_verifies_exact_openssl_release_yml_signature_and_fails_closed() {
+    let tmp = tempdir().unwrap();
+    let priv_pem = tmp.path().join("key.pem");
+    let pub_der = tmp.path().join("pub.der");
+    let sums_file = tmp.path().join("checksums.txt");
+    let sig_file = tmp.path().join("checksums.txt.sig");
+
+    let checksums_body = format!("{}  dblocal-v0.2.0-linux-x86_64.tar.gz\n", "a".repeat(64));
+    std::fs::write(&sums_file, &checksums_body).unwrap();
+
+    // Exact OpenSSL commands used by generate-key.sh and release.yml:
+    let st = std::process::Command::new("openssl")
+        .args(["genpkey", "-algorithm", "ED25519", "-out"])
+        .arg(&priv_pem)
+        .status()
+        .expect("openssl genpkey");
+    assert!(st.success());
+
+    let st = std::process::Command::new("openssl")
+        .args(["pkey", "-in"])
+        .arg(&priv_pem)
+        .args(["-pubout", "-outform", "DER", "-out"])
+        .arg(&pub_der)
+        .status()
+        .expect("openssl pkey pubout");
+    assert!(st.success());
+
+    let st = std::process::Command::new("openssl")
+        .args(["pkeyutl", "-sign", "-inkey"])
+        .arg(&priv_pem)
+        .args(["-rawin", "-in"])
+        .arg(&sums_file)
+        .arg("-out")
+        .arg(&sig_file)
+        .status()
+        .expect("openssl pkeyutl -sign");
+    assert!(st.success());
+
+    let der_bytes = std::fs::read(&pub_der).unwrap();
+    assert!(der_bytes.len() >= ED25519_PUBLIC_KEY_LEN);
+    let raw_pub = &der_bytes[der_bytes.len() - ED25519_PUBLIC_KEY_LEN..];
+    let mut pub_hex = String::with_capacity(64);
+    for b in raw_pub {
+        use std::fmt::Write as _;
+        let _ = write!(pub_hex, "{b:02x}");
+    }
+    let sig_bytes = std::fs::read(&sig_file).unwrap();
+    assert_eq!(sig_bytes.len(), ED25519_SIGNATURE_LEN);
+
+    // 1. Valid OpenSSL signature verifies in Rust (including alongside a second rotated key).
+    let dummy_old_key = "0".repeat(64);
+    let verifier =
+        Ed25519ReleaseVerifier::from_hex_keys(&[&dummy_old_key, &pub_hex]).expect("hex keys");
+    let parsed = verifier
+        .verify_manifest(checksums_body.as_bytes(), Some(&sig_bytes))
+        .expect("OpenSSL Ed25519 signature must verify");
+    assert_eq!(parsed.len(), 1);
+
+    // 2. Fail closed: missing signature.
+    let err = verifier
+        .verify_manifest(checksums_body.as_bytes(), None)
+        .expect_err("missing sig");
+    assert_eq!(err.code(), CODE_UPDATE_VERIFY_FAILED);
+
+    // 3. Fail closed: tampered checksums.txt.
+    let mut tampered_body = checksums_body.into_bytes();
+    tampered_body[0] ^= 0x01;
+    let err = verifier
+        .verify_manifest(&tampered_body, Some(&sig_bytes))
+        .expect_err("tampered body");
+    assert_eq!(err.code(), CODE_UPDATE_VERIFY_FAILED);
+
+    // 4. Fail closed: tampered signature.
+    let mut tampered_sig = sig_bytes.clone();
+    tampered_sig[0] ^= 0xff;
+    let err = verifier
+        .verify_manifest(
+            format!("{}  dblocal-v0.2.0-linux-x86_64.tar.gz\n", "a".repeat(64)).as_bytes(),
+            Some(&tampered_sig),
+        )
+        .expect_err("tampered sig");
+    assert_eq!(err.code(), CODE_UPDATE_VERIFY_FAILED);
+
+    // 5. Fail closed: truncated/malformed signature.
+    let err = verifier
+        .verify_manifest(b"anything", Some(&sig_bytes[..32]))
+        .expect_err("short sig");
+    assert_eq!(err.code(), CODE_UPDATE_VERIFY_FAILED);
+
+    // 6. Fail closed: empty production TRUSTED_PUBLIC_KEYS refuses everything.
+    let empty_prod = Ed25519ReleaseVerifier::from_raw_keys(Vec::new());
+    let err = empty_prod
+        .verify_manifest(b"anything", Some(&sig_bytes))
+        .expect_err("empty keys must fail closed");
+    assert_eq!(err.code(), CODE_UPDATE_VERIFY_FAILED);
 }
