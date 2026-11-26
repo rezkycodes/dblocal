@@ -87,6 +87,11 @@ mod title_bar;
 #[path = "app/tray_latency.rs"]
 mod tray_latency;
 mod tray_paths;
+mod update_actions;
+mod update_dialog;
+mod update_state;
+#[cfg(test)]
+mod update_tests;
 mod workspace_api;
 
 use std::collections::{HashMap, HashSet};
@@ -245,6 +250,14 @@ pub struct Workspace {
     opening: Option<InstanceId>,
     /// The Settings dialog's data (`F-PKG-05`, `F-AUT-01`).
     settings: settings_state::SettingsState,
+    /// The in-app update read model (`F-PKG-05`): the title-bar icon and dialog.
+    update: update_state::UpdateState,
+    /// Whether an automatic update check is already in flight.
+    update_check_in_flight: bool,
+    /// The startup + 6-hour check loop, kept so it is not dropped.
+    _update_check_task: Option<Task<()>>,
+    /// Whether `restart_for_update` already ran, so the restart fires once.
+    update_restart_started: bool,
     /// The login-item seam; `Err` when this host has no usable backend.
     login: Option<Result<Arc<dyn login_item::LoginItemControl>, UserFacingError>>,
     palette_open: bool,
@@ -345,6 +358,9 @@ impl Workspace {
             delete_mode_focus,
         });
         workspace.startup_load(cx);
+        // `F-PKG-05` AC1: one check at startup, then about every 6 hours. It
+        // runs off the GPUI thread and is quiet when offline or rate limited.
+        workspace.start_update_check_loop(cx);
         // `F7a`: the external editor DBLocal launches, the CLI and a second
         // window all write the file without an in-process `ConfigChanged`. On
         // the way back to this window the visible Config tab re-reads, so the
@@ -472,6 +488,10 @@ impl Workspace {
             clients: None,
             opening: None,
             settings: settings_state::SettingsState::default(),
+            update: update_state::UpdateState::default(),
+            update_check_in_flight: false,
+            _update_check_task: None,
+            update_restart_started: false,
             login: None,
             palette_open: false,
             last_failure_mirror: None,
@@ -718,6 +738,9 @@ impl Render for Workspace {
             })
             .when(self.settings.open, |this| {
                 this.child(settings_dialog::render(self, window, cx))
+            })
+            .when(self.update.dialog_visible(), |this| {
+                this.child(update_dialog::render(self, window, cx))
             })
             .when(self.drop_dialog.is_some(), |this| {
                 this.child(admin_dialogs::render_drop(self, window, cx))

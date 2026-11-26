@@ -73,6 +73,10 @@ pub(super) fn render(workspace: &Workspace, cx: &mut Context<Workspace>) -> impl
                     .text_xs()
                     .text_color(theme.muted_foreground),
             )
+            .when_some(
+                super::update_dialog::title_bar_button(workspace, cx),
+                |this, button| this.child(button),
+            )
             .child(
                 // The Settings dialog's title-bar entry point (`F-PKG-05`,
                 // `F-AUT-01`); `Ctrl/Cmd+,` fires the same action.

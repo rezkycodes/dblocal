@@ -84,6 +84,11 @@ impl Workspace {
                 // that poll nothing, and a stray one must not overwrite a check
                 // the dialog is showing with a partial answer.
             }
+            UiEvent::UpdateProgress { id, progress } => {
+                // Fold the stage into the update read model. A sample for an
+                // operation this workspace does not own is ignored by the state.
+                self.update.apply_progress(&id, &progress);
+            }
             UiEvent::Resync => {}
             UiEvent::Closed => {}
         }
@@ -147,7 +152,21 @@ impl Workspace {
         }
         let finished = quit_stop_finished.is_some();
         let removed = removed_id.is_some();
+        // `F-PKG-05`: an installed update restarts into the new version on its
+        // own. Detected before the fold, then fired after it, so the dialog
+        // never shows "ready" without the restart starting.
+        let reached_ready = matches!(
+            &event,
+            UiEvent::UpdateProgress {
+                progress: dblocal_core::update::UpdateProgress::ReadyToRestart { .. },
+                ..
+            }
+        );
         self.apply_event(event);
+        if reached_ready && !self.update_restart_started {
+            self.update_restart_started = true;
+            self.restart_into_update(cx);
+        }
         if self.tray_needs_refresh {
             self.tray_needs_refresh = false;
             self.refresh_tray(cx);

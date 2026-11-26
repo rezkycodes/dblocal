@@ -369,6 +369,136 @@ impl Workspace {
         workspace
     }
 
+    /// Preview with the Settings dialog open on an available update.
+    pub fn preview_settings_update(
+        service: Arc<dyn DblService>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let mut workspace = Self::preview(service, window, cx);
+        workspace.settings.open();
+        workspace.update.auto_check = Some(true);
+        workspace
+            .update
+            .apply_check(Some(&sample_update_status(true)));
+        workspace
+    }
+
+    /// Preview with a newer release but no update running (icon in the title bar).
+    pub fn preview_update_available(
+        service: Arc<dyn DblService>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let mut workspace = Self::preview(service, window, cx);
+        workspace
+            .update
+            .apply_check(Some(&sample_update_status(true)));
+        workspace
+    }
+
+    /// Preview with the update downloading at 41%.
+    pub fn preview_update_downloading(
+        service: Arc<dyn DblService>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let mut workspace = Self::preview_update_available(service, window, cx);
+        workspace.update.begin_operation(sample_operation());
+        workspace.update.apply_progress(
+            &sample_operation(),
+            &dblocal_core::update::UpdateProgress::Downloading {
+                received_bytes: 17 * 1024 * 1024,
+                total_bytes: Some(42 * 1024 * 1024),
+            },
+        );
+        workspace
+    }
+
+    /// Preview with the update verifying.
+    pub fn preview_update_verifying(
+        service: Arc<dyn DblService>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let mut workspace = Self::preview_update_available(service, window, cx);
+        workspace.update.begin_operation(sample_operation());
+        workspace.update.apply_progress(
+            &sample_operation(),
+            &dblocal_core::update::UpdateProgress::Verifying,
+        );
+        workspace
+    }
+
+    /// Preview with the update installing.
+    pub fn preview_update_installing(
+        service: Arc<dyn DblService>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let mut workspace = Self::preview_update_available(service, window, cx);
+        workspace.update.begin_operation(sample_operation());
+        workspace
+            .apply_update_progress_for_preview(dblocal_core::update::UpdateProgress::Installing);
+        workspace
+    }
+
+    /// Preview with the update ready to restart.
+    pub fn preview_update_ready(
+        service: Arc<dyn DblService>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let mut workspace = Self::preview_update_available(service, window, cx);
+        workspace.update.begin_operation(sample_operation());
+        workspace.apply_update_progress_for_preview(
+            dblocal_core::update::UpdateProgress::ReadyToRestart {
+                version: "0.9.0".to_owned(),
+                restart_target: "/home/u/.local/bin/dblocal".into(),
+            },
+        );
+        workspace
+    }
+
+    /// Preview with a failed update.
+    pub fn preview_update_failed(
+        service: Arc<dyn DblService>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let mut workspace = Self::preview_update_available(service, window, cx);
+        workspace.update.begin_operation(sample_operation());
+        workspace.apply_update_progress_for_preview(dblocal_core::update::UpdateProgress::Failed {
+            code: "DBL-8005".to_owned(),
+            message:
+                "The download is corrupt or does not match its checksum. Try downloading again."
+                    .to_owned(),
+        });
+        workspace
+    }
+
+    /// Preview with a newer release this install cannot apply (a distro package).
+    pub fn preview_update_cannot(
+        service: Arc<dyn DblService>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let mut workspace = Self::preview(service, window, cx);
+        workspace
+            .update
+            .apply_check(Some(&sample_update_status(false)));
+        workspace.update.dialog_open = true;
+        workspace
+    }
+
+    /// Folds a progress sample into the update state, as the event pump does.
+    fn apply_update_progress_for_preview(
+        &mut self,
+        progress: dblocal_core::update::UpdateProgress,
+    ) {
+        self.update.apply_progress(&sample_operation(), &progress);
+    }
+
     /// Preview with the one-time secret dialog open (a created user password).
     pub fn preview_secret_dialog(
         service: Arc<dyn DblService>,
@@ -671,5 +801,46 @@ impl Workspace {
         if let Some(input) = self.filter_input.clone() {
             input.update(cx, |state, cx| state.set_value(text.to_owned(), window, cx));
         }
+    }
+}
+
+/// The operation id the update previews use, so their progress samples land.
+fn sample_operation() -> dblocal_core::service::OperationId {
+    dblocal_core::service::OperationId::new("preview-update")
+}
+
+/// The sample newer release the update previews render (`0.9.0`).
+fn sample_update_status(can_self_update: bool) -> dblocal_core::service::UpdateStatus {
+    let install_kind = if can_self_update {
+        dblocal_core::update::InstallKind::PortableTarball {
+            exe_path: "/home/u/.local/bin/dblocal".into(),
+        }
+    } else {
+        dblocal_core::update::InstallKind::DistPackage {
+            exe_path: "/usr/bin/dblocal".into(),
+            hint: dblocal_core::update::PackageManagerHint::Rpm,
+        }
+    };
+    let release_url = "https://github.com/rezkycodes/dblocal/releases/tag/v0.9.0".to_owned();
+    let asset_name = if can_self_update {
+        "dblocal-0.9.0-linux-x86_64.tar.gz".to_owned()
+    } else {
+        "dblocal-0.9.0-1.x86_64.rpm".to_owned()
+    };
+    dblocal_core::service::UpdateStatus {
+        current: "0.8.0".to_owned(),
+        available: Some(dblocal_core::service::AvailableUpdateView {
+            version: "0.9.0".to_owned(),
+            tag: "v0.9.0".to_owned(),
+            release_notes: "Sample release notes.".to_owned(),
+            release_url: release_url.clone(),
+            asset_name: asset_name.clone(),
+            size_bytes: 42 * 1024 * 1024,
+            can_self_update,
+        }),
+        cannot_update_reason: install_kind
+            .cannot_update_reason_with(Some(&release_url), Some(&asset_name)),
+        install_kind,
+        package_manager_hint: None,
     }
 }

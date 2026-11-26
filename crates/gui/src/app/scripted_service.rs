@@ -47,6 +47,16 @@ pub(crate) struct CallCounts {
     pub check_update: usize,
     /// `apply_update`.
     pub apply_update: usize,
+    /// `check_update_if_due`.
+    pub check_due: usize,
+    /// `start_update`.
+    pub start_update: usize,
+    /// `cancel_operation`.
+    pub cancel_operation: usize,
+    /// `restart_for_update`.
+    pub restart_for_update: usize,
+    /// `set_auto_update_check`.
+    pub set_auto_check: usize,
     /// `config_view`.
     pub config_view: usize,
     /// `config_apply`.
@@ -89,6 +99,16 @@ pub(crate) struct Script {
     pub update: ServiceResult<UpdateStatus>,
     /// `apply_update` answer.
     pub apply_update: ServiceResult<()>,
+    /// `check_update_if_due` answer: `Ok(None)` is a quiet check.
+    pub check_due: ServiceResult<Option<UpdateStatus>>,
+    /// `start_update` answer.
+    pub start_update: ServiceResult<OperationId>,
+    /// `restart_for_update` answer.
+    pub restart: ServiceResult<()>,
+    /// `auto_update_check_enabled` answer.
+    pub auto_check: bool,
+    /// Whether `cancel_operation` fails.
+    pub cancel_fails: bool,
     /// `config_view` answer (the read model the Config tab renders).
     pub config_view: ServiceResult<dblocal_core::config::ConfigView>,
     /// `config_apply` answer.
@@ -151,6 +171,11 @@ impl Default for Script {
             )),
             update: Ok(update_available()),
             apply_update: Ok(()),
+            check_due: Ok(Some(update_available())),
+            start_update: Ok(OperationId::new("op-update")),
+            restart: Ok(()),
+            auto_check: true,
+            cancel_fails: false,
             config_view: Ok(sample_config_view()),
             config_apply: Ok(sample_config_applied()),
             config_restore: Ok(()),
@@ -396,6 +421,13 @@ impl DblService for ScriptedService {
         Ok(())
     }
     fn cancel_operation(&self, _id: &OperationId) -> Result<()> {
+        self.bump(|counts| counts.cancel_operation += 1);
+        let fails = self.script.lock().expect("script lock").cancel_fails;
+        if fails {
+            return Err(dblocal_core::DblError::Cancelled {
+                operation: "op".to_owned(),
+            });
+        }
         Ok(())
     }
     fn connection_uri(&self, _id: &InstanceId, _format: UriFormat) -> Result<SecretString> {
@@ -521,6 +553,34 @@ impl DblService for ScriptedService {
             .as_ref()
             .map(|_| ())
             .map_err(clone_error)
+    }
+    fn check_update_if_due(&self) -> ServiceResult<Option<UpdateStatus>> {
+        self.bump(|counts| counts.check_due += 1);
+        let script = self.script.lock().expect("script lock");
+        match &script.check_due {
+            Ok(status) => Ok(status.clone()),
+            Err(err) => Err(clone_error(err)),
+        }
+    }
+    fn auto_update_check_enabled(&self) -> Result<bool> {
+        Ok(self.script.lock().expect("script lock").auto_check)
+    }
+    fn set_auto_update_check(&self, _enabled: bool) -> Result<()> {
+        self.bump(|counts| counts.set_auto_check += 1);
+        Ok(())
+    }
+    fn start_update(&self) -> ServiceResult<OperationId> {
+        self.bump(|counts| counts.start_update += 1);
+        let script = self.script.lock().expect("script lock");
+        match &script.start_update {
+            Ok(op) => Ok(op.clone()),
+            Err(err) => Err(clone_error(err)),
+        }
+    }
+    fn restart_for_update(&self) -> ServiceResult<()> {
+        self.bump(|counts| counts.restart_for_update += 1);
+        let script = self.script.lock().expect("script lock");
+        script.restart.as_ref().map(|_| ()).map_err(clone_error)
     }
 
     // --- W4-B: open in -------------------------------------------------------

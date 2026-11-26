@@ -1,13 +1,13 @@
 //! Action handlers for the Settings dialog (`F-PKG-05`, `F-AUT-01`).
 //!
-//! Every call that can block — the GitHub release check, the install, the
+//! Every call that can block — the GitHub release check, the update, the
 //! login-item backend (`systemctl --user` / `launchctl` / `reg`) — runs on the
 //! GPUI background executor through [`Workspace::bg`](super::background), so a
 //! slow network or a hung helper never freezes a frame.
 //!
-//! There is no timer and no check at startup: `open_settings` reads the login
-//! item (local, instant) and leaves the update section in `Idle` until the user
-//! presses "Check now" (`F-PKG-05` AC1).
+//! The Updates section renders the one in-app update read model
+//! ([`super::update_state::UpdateState`]); its check and update actions live in
+//! `update_actions`, so the title-bar icon and Settings share one source.
 
 use std::sync::Arc;
 
@@ -17,7 +17,7 @@ use gpui_kit::{Context, Window};
 
 use super::Workspace;
 use super::login_item::{HostLoginItem, LoginItemControl};
-use super::settings_state::{InstallState, LoginState, SettingsState, UpdateCheckState};
+use super::settings_state::{LoginState, SettingsState};
 
 impl Workspace {
     /// Opens the dialog and reads the login-item state (never the network).
@@ -29,6 +29,7 @@ impl Workspace {
         self.begin_modal(window, cx);
         self.focus_modal_root();
         self.read_login_status(cx);
+        self.read_auto_update_check(cx);
         cx.notify();
     }
 
@@ -116,52 +117,6 @@ impl Workspace {
                         this.report_user_facing_error(&err);
                     }
                 }
-                cx.notify();
-            }
-        });
-    }
-
-    /// Runs one manual update check (`F-PKG-05` AC1).
-    pub(crate) fn check_updates(&mut self, cx: &mut Context<Self>) {
-        if self.settings.is_checking() {
-            return;
-        }
-        self.settings.check = UpdateCheckState::Checking;
-        self.settings.install = InstallState::Idle;
-        let service = self.service.clone();
-        self.bg(cx, move || {
-            let result = service.check_update();
-            move |this: &mut Workspace, cx: &mut Context<Workspace>| {
-                this.settings.check = match result {
-                    Ok(status) => UpdateCheckState::Checked(status),
-                    Err(err) => UpdateCheckState::Failed(err),
-                };
-                cx.notify();
-            }
-        });
-    }
-
-    /// Applies the update the last check found (`F-PKG-05`).
-    pub(crate) fn install_update(&mut self, cx: &mut Context<Self>) {
-        if self.settings.is_installing() || !super::settings_state::can_install(&self.settings) {
-            return;
-        }
-        self.settings.install = InstallState::Installing;
-        let service = self.service.clone();
-        self.bg(cx, move || {
-            let result = service.apply_update();
-            move |this: &mut Workspace, cx: &mut Context<Workspace>| {
-                this.settings.install = match result {
-                    Ok(()) => {
-                        this.toast =
-                            Some(gpui_kit::SharedString::from(strings::UI_SETTINGS_INSTALLED));
-                        InstallState::Installed
-                    }
-                    Err(err) => {
-                        this.report_user_facing_error(&err);
-                        InstallState::Failed(err)
-                    }
-                };
                 cx.notify();
             }
         });

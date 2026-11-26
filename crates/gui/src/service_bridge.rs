@@ -64,6 +64,13 @@ pub enum UiEvent {
         /// Whether this install may self-update.
         can_self_update: bool,
     },
+    /// Progress while downloading, verifying or installing an app update.
+    UpdateProgress {
+        /// Operation that is updating.
+        id: OperationId,
+        /// Current stage.
+        progress: dblocal_core::update::UpdateProgress,
+    },
     /// A stop escalated to a forced kill; tell the user it was forced.
     StopForced(InstanceId),
     /// The service stream lagged and the UI may have missed changes.
@@ -161,6 +168,9 @@ pub fn translate(event: ServiceEvent) -> Option<UiEvent> {
             version,
             can_self_update,
         }),
+        ServiceEvent::UpdateProgress { id, progress } => {
+            Some(UiEvent::UpdateProgress { id, progress })
+        }
         _ => None,
     }
 }

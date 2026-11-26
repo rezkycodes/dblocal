@@ -48,6 +48,13 @@ impl Workspace {
             self.restore_dialog_focus_after_close();
             return;
         }
+        // The update dialog is drawn after Settings, so it is the top overlay
+        // when both are open: Escape closes it and Settings stays.
+        if self.update.dialog_visible() {
+            self.update.dialog_open = false;
+            self.restore_dialog_focus_after_close();
+            return;
+        }
         if self.settings.open {
             self.settings.close();
             self.restore_dialog_focus_after_close();
@@ -62,6 +69,7 @@ impl Workspace {
             || self.create.is_some()
             || self.delete_target.is_some()
             || self.settings.open
+            || self.update.dialog_visible()
             || self.drop_dialog.is_some()
             || self.reset_confirm.is_some()
             || self.secret_dialog.is_some()

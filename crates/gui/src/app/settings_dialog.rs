@@ -3,10 +3,12 @@
 //!
 //! Two sections, both reading only confirmed state:
 //!
-//! - **Updates**: the running version, how the app was installed, a manual
-//!   "Check now", the result, and "Install" only when this install may
-//!   self-update — otherwise the package-manager hint the service returned
-//!   (`F-PKG-05` AC2). No timer, no check at startup.
+//! - **Updates**: the running version, how the app was installed, the automatic
+//!   check switch, a manual "Check for updates", and the result — the newer
+//!   version with a one-press update, or the package-manager reason why this
+//!   install cannot replace itself (`F-PKG-05` AC2). It renders the same
+//!   [`UpdateState`](super::update_state::UpdateState) the title-bar icon and
+//!   the update dialog use.
 //! - **Run at login**: the W4-D login-item state read on open, a switch,
 //!   the location of the item, and a typed error when a write fails — the
 //!   switch never shows enabled after a failed enable.
@@ -24,9 +26,8 @@ use gpui_kit::{
 
 use super::Workspace;
 use super::create_dialog::overlay;
-use super::settings_state::{
-    InstallState, LoginState, can_install, check_headline, install_kind_label, package_manager_hint,
-};
+use super::settings_state::{LoginState, install_kind_label};
+use super::update_state::UpdateState;
 use crate::app::components::{icon, section_label};
 
 /// Renders the Settings dialog.
@@ -36,6 +37,7 @@ pub(super) fn render(
     cx: &mut Context<Workspace>,
 ) -> AnyElement {
     let theme = cx.theme().clone();
+    let update = workspace.update_state();
 
     let updates = v_flex()
         .id("settings-updates")
@@ -51,7 +53,19 @@ pub(super) fn render(
                 )
                 .child(Label::new(workspace.version()).text_xs()),
         )
-        .child(render_check_result(workspace, &theme, cx));
+        .when_some(update.install_kind.clone(), |this, kind| {
+            this.child(
+                h_flex()
+                    .gap_2()
+                    .child(
+                        Label::new(strings::UI_SETTINGS_INSTALL_KIND)
+                            .text_xs()
+                            .text_color(theme.muted_foreground),
+                    )
+                    .child(Label::new(install_kind_label(&kind)).text_xs()),
+            )
+        })
+        .child(render_update_result(update, workspace, &theme, cx));
 
     let login = v_flex()
         .id("settings-login")
@@ -113,38 +127,69 @@ pub(super) fn render(
     )
 }
 
-/// The update check's current answer and the actions it allows.
-fn render_check_result(
+/// The update check's answer, its automatic switch, and the actions it allows.
+fn render_update_result(
+    update: &UpdateState,
     workspace: &Workspace,
     theme: &gpui_kit::component::Theme,
     cx: &mut Context<Workspace>,
 ) -> AnyElement {
-    let state = workspace.settings_state();
     let mut column = v_flex().id("settings-check").gap_2();
 
-    if let Some(status) = state.checked() {
+    // The automatic-check switch, with its own explanation.
+    column = column.child(
+        Switch::new("settings-auto-check-switch")
+            .label(strings::UI_SETTINGS_AUTO_CHECK)
+            .checked(update.auto_check.unwrap_or(true))
+            .disabled(update.auto_check_busy)
+            .on_click(cx.listener(|this, checked: &bool, _, cx| {
+                this.set_auto_update_check(*checked, cx);
+            })),
+    );
+    column = column.child(
+        Label::new(strings::UI_SETTINGS_AUTO_CHECK_BODY)
+            .id(SharedString::from("settings-auto-check-body"))
+            .text_xs()
+            .text_color(theme.muted_foreground),
+    );
+    if let Some(error) = &update.auto_check_error {
         column = column.child(
-            h_flex()
-                .gap_2()
-                .child(
-                    Label::new(strings::UI_SETTINGS_INSTALL_KIND)
-                        .text_xs()
-                        .text_color(theme.muted_foreground),
-                )
-                .child(Label::new(install_kind_label(&status.install_kind)).text_xs()),
+            Label::new(error.clone())
+                .id(SharedString::from("settings-auto-check-error"))
+                .text_xs()
+                .text_color(theme.danger),
         );
-        if let Some(headline) = check_headline(state) {
-            column = column.child(Label::new(headline).text_sm());
-        }
     }
 
-    if let Some(err) = state.check_error() {
+    if update.icon_visible() {
+        column = column.child(
+            Label::new(update.headline())
+                .id(SharedString::from("settings-update-headline"))
+                .text_sm(),
+        );
+    } else if update.checked_once {
+        column = column.child(
+            Label::new(strings::UI_SETTINGS_UP_TO_DATE)
+                .id(SharedString::from("settings-up-to-date"))
+                .text_sm(),
+        );
+    }
+
+    if let Some(err) = &update.check_error {
         column = column.child(error_line(&err.code, &err.message, theme));
     }
 
-    let checking = state.is_checking();
-    let installable = can_install(state);
-    let installing = state.is_installing();
+    if let Some(reason) = update.cannot_update_reason() {
+        column = column.child(
+            Label::new(reason.to_owned())
+                .id(SharedString::from("settings-package-hint"))
+                .text_xs()
+                .text_color(theme.warning),
+        );
+    }
+
+    let checking = update.checking;
+    let running = update.running();
     column = column.child(
         h_flex()
             .gap_2()
@@ -154,56 +199,40 @@ fn render_check_result(
                     .label(if checking {
                         strings::UI_SETTINGS_CHECKING
                     } else {
-                        strings::UI_SETTINGS_CHECK_NOW
+                        strings::UI_SETTINGS_CHECK_UPDATES
                     })
                     .small()
                     .loading(checking)
-                    .disabled(checking || installing)
+                    .disabled(checking || running)
                     .on_click(cx.listener(|this, _, _, cx| {
-                        this.check_updates(cx);
+                        this.check_update_now(cx);
                     })),
             )
-            .when(installable || installing, |this| {
+            .when(update.icon_visible() && !running, |this| {
                 this.child(
-                    Button::new("settings-install")
-                        .label(if installing {
-                            strings::UI_SETTINGS_INSTALLING
-                        } else {
-                            strings::UI_SETTINGS_INSTALL
-                        })
+                    Button::new("settings-update")
+                        .label(strings::UI_SETTINGS_INSTALL)
                         .small()
                         .primary()
-                        .loading(installing)
-                        .disabled(installing)
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.press_update_button(window, cx);
+                        })),
+                )
+            })
+            .when_some(update.release_url().map(str::to_owned), |this, _url| {
+                this.child(
+                    Button::new("settings-release-page")
+                        .ghost()
+                        .small()
+                        .label(strings::UI_UPDATE_RELEASE_PAGE)
                         .on_click(cx.listener(|this, _, _, cx| {
-                            this.install_update(cx);
+                            this.open_update_release_page(cx);
                         })),
                 )
             }),
     );
 
-    if let Some(hint) = package_manager_hint(state) {
-        // F-PKG-05 AC2: a package-manager install is pointed at its manager
-        // instead of being offered a self-update.
-        column = column.child(
-            Label::new(hint.to_owned())
-                .id(SharedString::from("settings-package-hint"))
-                .text_xs()
-                .text_color(theme.warning),
-        );
-    }
-
-    if let Some(err) = state.install_error() {
-        column = column.child(error_line(&err.code, &err.message, theme));
-    } else if state.install == InstallState::Installed {
-        column = column.child(
-            Label::new(strings::UI_SETTINGS_INSTALLED)
-                .id(SharedString::from("settings-installed"))
-                .text_xs()
-                .text_color(theme.success),
-        );
-    }
-
+    let _ = workspace;
     column.into_any_element()
 }
 

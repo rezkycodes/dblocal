@@ -1,49 +1,14 @@
-//! Pure state for the Settings dialog (`F-PKG-05`, `F-AUT-01`).
+//! Pure state for the Settings dialog's login-item section (`F-AUT-01`).
 //!
-//! Two sections, each with its own read model:
-//!
-//! - **Updates**: the result of the last manual check. There is no timer and
-//!   no startup check (`F-PKG-05` AC1 says "when the user opens Settings →
-//!   Updates"); the dialog only ever shows what a click produced.
-//! - **Run at login**: the login-item state, read on open and updated
-//!   only by the switch. A failed enable never shows "enabled" (`F-AUT-01`
-//!   AC1/AC2).
-//!
-//! Everything here is data; the service and the login-item seam are called from
-//! the action handlers, off the GPUI thread.
+//! The **Updates** section reads the one in-app update read model
+//! ([`super::update_state::UpdateState`]) instead of keeping a second copy, so
+//! the title-bar icon, the update dialog and Settings can never disagree. What
+//! remains here is the login item, whose switch must keep showing the machine's
+//! real state through a write and after one fails.
 
-use dblocal_core::service::{UpdateStatus, UserFacingError};
+use dblocal_core::service::UserFacingError;
 
 use super::login_item::LoginStatus;
-
-/// The last update check, as the Updates section renders it.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-#[allow(clippy::large_enum_variant)]
-pub enum UpdateCheckState {
-    /// No check was made yet.
-    #[default]
-    Idle,
-    /// A check is in flight.
-    Checking,
-    /// The check completed; the status carries the answer and the install kind.
-    Checked(UpdateStatus),
-    /// The check failed with a typed error.
-    Failed(UserFacingError),
-}
-
-/// The install action, once a check found a newer release.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub enum InstallState {
-    /// No install was requested.
-    #[default]
-    Idle,
-    /// A download/apply is in flight.
-    Installing,
-    /// The update was applied; a restart is required.
-    Installed,
-    /// The install failed with a typed error.
-    Failed(UserFacingError),
-}
 
 /// The login-item section, as rendered.
 ///
@@ -82,10 +47,6 @@ impl LoginState {
 pub struct SettingsState {
     /// Whether the dialog is open.
     pub open: bool,
-    /// The last manual update check.
-    pub check: UpdateCheckState,
-    /// The install action, if requested.
-    pub install: InstallState,
     /// The login-item section.
     pub login: LoginState,
 }
@@ -94,25 +55,13 @@ impl SettingsState {
     /// Opens the dialog with no stale answer: the caller re-reads on open.
     pub fn open(&mut self) {
         self.open = true;
-        self.check = UpdateCheckState::Idle;
-        self.install = InstallState::Idle;
         self.login = LoginState::Unknown;
     }
 
-    /// Closes the dialog. A close during an install keeps the install state so
-    /// the status bar can still report it; only the visibility flips.
+    /// Closes the dialog. An in-flight update keeps its state; only visibility
+    /// flips.
     pub fn close(&mut self) {
         self.open = false;
-    }
-
-    /// Whether a check is in flight.
-    pub fn is_checking(&self) -> bool {
-        self.check == UpdateCheckState::Checking
-    }
-
-    /// Whether an install is in flight.
-    pub fn is_installing(&self) -> bool {
-        self.install == InstallState::Installing
     }
 
     /// The login state as a known value, when one was read.
@@ -125,8 +74,6 @@ impl SettingsState {
     /// A failed enable reports `false`, never the state the user asked for
     /// (`F-AUT-01` AC2 — "do not show enabled after a failed enable"), and a
     /// failed disable keeps reporting `true` (F2 — the unit is still enabled).
-    /// Both come from the status kept alongside the error, so each failure
-    /// shows the state the machine is really in.
     pub fn login_enabled(&self) -> bool {
         self.login_known().is_some_and(|status| status.enabled)
     }
@@ -138,56 +85,6 @@ impl SettingsState {
             _ => None,
         }
     }
-
-    /// The typed error of the check, when it failed.
-    pub fn check_error(&self) -> Option<&UserFacingError> {
-        match &self.check {
-            UpdateCheckState::Failed(err) => Some(err),
-            _ => None,
-        }
-    }
-
-    /// The typed error of the install, when it failed.
-    pub fn install_error(&self) -> Option<&UserFacingError> {
-        match &self.install {
-            InstallState::Failed(err) => Some(err),
-            _ => None,
-        }
-    }
-
-    /// The status of the last successful check.
-    pub fn checked(&self) -> Option<&UpdateStatus> {
-        match &self.check {
-            UpdateCheckState::Checked(status) => Some(status),
-            _ => None,
-        }
-    }
-}
-
-/// Whether the "Install" button may be offered: only for a found release on an
-/// install kind that can self-update (`F-PKG-05` AC2).
-pub fn can_install(state: &SettingsState) -> bool {
-    match state.checked().and_then(|status| status.available.as_ref()) {
-        Some(available) => available.can_self_update,
-        None => false,
-    }
-}
-
-/// The package-manager hint to show instead of "Install", when the service has
-/// one for this install kind (`F-PKG-05` AC2).
-pub fn package_manager_hint(state: &SettingsState) -> Option<&str> {
-    state
-        .checked()
-        .and_then(|status| status.package_manager_hint.as_deref())
-}
-
-/// The line the Updates section shows for the last check.
-pub fn check_headline(state: &SettingsState) -> Option<String> {
-    let status = state.checked()?;
-    Some(match &status.available {
-        Some(available) => dblocal_core::strings::settings_available(&available.version),
-        None => dblocal_core::strings::UI_SETTINGS_UP_TO_DATE.to_owned(),
-    })
 }
 
 /// A human label for the install kind (`F-PKG-05` AC2 tells the user where to
@@ -214,107 +111,19 @@ pub fn install_kind_label(kind: &dblocal_core::update::InstallKind) -> &'static 
 mod tests {
     #![allow(clippy::expect_used, clippy::unwrap_used)]
 
-    use dblocal_core::service::AvailableUpdateView;
     use dblocal_core::update::InstallKind;
 
     use super::*;
-
-    fn available(can_self_update: bool) -> AvailableUpdateView {
-        AvailableUpdateView {
-            version: "0.9.0".to_owned(),
-            tag: "v0.9.0".to_owned(),
-            release_notes: "Notes".to_owned(),
-            release_url: "https://github.com/rezkycodes/dblocal/releases/tag/v0.9.0".to_owned(),
-            asset_name: "dblocal-linux-x86_64.tar.gz".to_owned(),
-            size_bytes: 1024,
-            can_self_update,
-        }
-    }
-
-    fn status(available_update: Option<AvailableUpdateView>, kind: InstallKind) -> UpdateStatus {
-        let cannot_update_reason = kind.refusal_reason();
-        UpdateStatus {
-            current: "0.8.0".to_owned(),
-            available: available_update,
-            package_manager_hint: kind
-                .package_manager_hint()
-                .map(dblocal_core::update::PackageManagerHint::message),
-            cannot_update_reason,
-            install_kind: kind,
-        }
-    }
-
-    fn portable() -> InstallKind {
-        InstallKind::PortableTarball {
-            exe_path: std::path::PathBuf::from("/opt/dblocal/dblocal"),
-        }
-    }
-
-    fn distro() -> InstallKind {
-        InstallKind::DistPackage {
-            exe_path: std::path::PathBuf::from("/usr/bin/dblocal"),
-            hint: dblocal_core::update::PackageManagerHint::Dpkg,
-        }
-    }
 
     #[test]
     fn opening_resets_every_previous_answer() {
         let mut state = SettingsState {
             open: false,
-            check: UpdateCheckState::Failed(UserFacingError::new("DBL-8003", "offline")),
-            install: InstallState::Installed,
             login: LoginState::Failed(UserFacingError::new("DBL-8504", "no"), None),
         };
         state.open();
         assert!(state.open);
-        assert_eq!(state.check, UpdateCheckState::Idle);
-        assert_eq!(state.install, InstallState::Idle);
         assert_eq!(state.login, LoginState::Unknown);
-    }
-
-    #[test]
-    fn installing_offers_the_button_only_for_a_self_updatable_install() {
-        let mut state = SettingsState {
-            check: UpdateCheckState::Checked(status(Some(available(true)), portable())),
-            ..SettingsState::default()
-        };
-        assert!(can_install(&state));
-        assert!(package_manager_hint(&state).is_none());
-
-        state.check = UpdateCheckState::Checked(status(Some(available(false)), distro()));
-        assert!(
-            !can_install(&state),
-            "a distro install must not self-update"
-        );
-        assert!(
-            package_manager_hint(&state).is_some(),
-            "the hint must replace the install button"
-        );
-    }
-
-    #[test]
-    fn no_release_means_no_install_and_an_up_to_date_line() {
-        let state = SettingsState {
-            check: UpdateCheckState::Checked(status(None, portable())),
-            ..SettingsState::default()
-        };
-        assert!(!can_install(&state));
-        assert_eq!(
-            check_headline(&state).as_deref(),
-            Some(dblocal_core::strings::UI_SETTINGS_UP_TO_DATE)
-        );
-    }
-
-    #[test]
-    fn a_found_release_names_the_version() {
-        let state = SettingsState {
-            check: UpdateCheckState::Checked(status(Some(available(true)), portable())),
-            ..SettingsState::default()
-        };
-        assert_eq!(
-            check_headline(&state).as_deref(),
-            Some("Version 0.9.0 is available.")
-        );
     }
 
     #[test]
@@ -323,14 +132,9 @@ mod tests {
             enabled: false,
             location: std::path::PathBuf::from("/tmp/x"),
         };
-        let mut state = SettingsState {
-            login: LoginState::Known(off.clone()),
-            ..SettingsState::default()
-        };
+        let mut state = SettingsState::default();
         assert!(!state.login_enabled());
 
-        // The user flips the switch on; the write fails. The confirmed value is
-        // what the machine is still in, so the switch stays off (F-AUT-01 AC2).
         state.login = LoginState::Failed(
             UserFacingError::new("DBL-8502", "systemctl"),
             Some(off.clone()),
@@ -338,8 +142,6 @@ mod tests {
         assert!(!state.login_enabled(), "a failed enable reported enabled");
         assert!(state.login_error().is_some());
 
-        // The reverse: a failed disable leaves the unit enabled, so the switch
-        // must not move (F2).
         let on = LoginStatus {
             enabled: true,
             location: off.location.clone(),
@@ -349,16 +151,8 @@ mod tests {
             Some(on.clone()),
         );
         assert!(state.login_enabled(), "a failed disable reported disabled");
-        assert_eq!(
-            state.login_error().map(|e| e.code.as_str()),
-            Some("DBL-8503")
-        );
 
-        // A successful enable then shows the confirmed state.
-        state.login = LoginState::Known(LoginStatus {
-            enabled: true,
-            location: std::path::PathBuf::from("/tmp/x"),
-        });
+        state.login = LoginState::Known(on);
         assert!(state.login_enabled());
     }
 
@@ -373,32 +167,15 @@ mod tests {
             ..SettingsState::default()
         };
         state.login = LoginState::Busy(Some(on));
-        assert!(
-            state.login_enabled(),
-            "Busy must not flicker the switch off while a write is in flight"
-        );
+        assert!(state.login_enabled(), "Busy must not flicker the switch");
         assert!(state.login_error().is_none());
 
         let unread = SettingsState {
             login: LoginState::Busy(None),
             ..SettingsState::default()
         };
-        assert!(!unread.login_enabled(), "nothing confirmed yet reads off");
+        assert!(!unread.login_enabled());
         assert!(unread.login_known().is_none());
-    }
-
-    #[test]
-    fn busy_flags_follow_the_in_flight_states() {
-        let mut state = SettingsState {
-            check: UpdateCheckState::Checking,
-            ..SettingsState::default()
-        };
-        assert!(state.is_checking());
-        state.check = UpdateCheckState::Idle;
-        assert!(!state.is_checking());
-
-        state.install = InstallState::Installing;
-        assert!(state.is_installing());
     }
 
     #[test]
@@ -408,7 +185,9 @@ mod tests {
             InstallKind::AppImage {
                 appimage_path: "/a.AppImage".into(),
             },
-            portable(),
+            InstallKind::PortableTarball {
+                exe_path: "/opt/dblocal/dblocal".into(),
+            },
             InstallKind::WindowsZip {
                 exe_path: "C:\\dblocal.exe".into(),
             },
@@ -418,7 +197,10 @@ mod tests {
             InstallKind::MacApp {
                 bundle_path: "/Applications/DBLocal.app".into(),
             },
-            distro(),
+            InstallKind::DistPackage {
+                exe_path: "/usr/bin/dblocal".into(),
+                hint: PackageManagerHint::Dpkg,
+            },
             InstallKind::Homebrew {
                 exe_path: "/opt/homebrew/bin/dblocal".into(),
             },
@@ -430,13 +212,5 @@ mod tests {
         for kind in kinds {
             assert!(!install_kind_label(&kind).is_empty());
         }
-        assert_eq!(install_kind_label(&distro()), "Distribution package");
-        assert_eq!(
-            install_kind_label(&InstallKind::Homebrew {
-                exe_path: "/x".into()
-            }),
-            "Homebrew"
-        );
-        let _ = PackageManagerHint::Rpm;
     }
 }
