@@ -220,6 +220,9 @@ pub struct ServiceOptions {
     /// Test/debug-only override for Linux XDG data home during update apply.
     #[cfg(any(test, debug_assertions))]
     pub update_data_home_override: Option<std::path::PathBuf>,
+    /// Test/debug-only override for the release verifier (e.g. throwaway Ed25519 key in tests).
+    #[cfg(any(test, debug_assertions))]
+    pub update_verifier: Option<Arc<dyn crate::update::ReleaseVerifier>>,
     /// Builds the admin executor (production: `PgAdmin`; tests: a fake).
     pub admin_factory: Option<admin_ops::AdminFactory>,
     /// OS default-handler launcher for "open the raw config" (`F-CFG-02`).
@@ -611,8 +614,12 @@ impl LocalService {
                             Some(dl) => installer.with_download_options(dl),
                             None => installer,
                         };
-                        match options.update_data_home_override.clone() {
+                        let installer = match options.update_data_home_override.clone() {
                             Some(dir) => installer.with_data_home_override(dir),
+                            None => installer,
+                        };
+                        match options.update_verifier.clone() {
+                            Some(v) => installer.with_verifier(v),
                             None => installer,
                         }
                     };
@@ -643,6 +650,9 @@ impl LocalService {
         if options.auto_start.unwrap_or(true) {
             service.start_background();
         }
+        // Clean up any stale update staging directories left by a previous
+        // Windows helper once no update lock is held.
+        update_ops::cleanup_stale_update_staging(&service.inner.paths);
         Ok(service)
     }
 
@@ -995,6 +1005,10 @@ impl DblService for LocalService {
 
     fn restart_for_update(&self) -> crate::service::ServiceResult<()> {
         update_ops::restart_for_update(&self.inner)
+    }
+
+    fn take_pending_update_failure(&self) -> Result<Option<String>> {
+        update_ops::take_pending_update_failure(&self.inner)
     }
 
     fn detect_clients(

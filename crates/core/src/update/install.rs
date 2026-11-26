@@ -24,6 +24,15 @@ const EXEC_BUSY_RETRY_WINDOW: Duration = Duration::from_secs(5);
 const EXEC_BUSY_RETRY_DELAY: Duration = Duration::from_millis(20);
 /// Maximum time the detached Windows helper waits for the parent process to exit.
 const WINDOWS_HELPER_WAIT_TIMEOUT: Duration = Duration::from_secs(60);
+/// `msiexec.exe` exit code indicating success with a reboot required
+/// (`ERROR_SUCCESS_REBOOT_REQUIRED`).
+pub const MSI_EXIT_REBOOT_REQUIRED: i32 = 3010;
+/// File inside the update staging root where the detached Windows helper
+/// persists a failure message so the relaunched app or CLI can display it.
+pub const LAST_UPDATE_ERROR_FILE: &str = "last-error.txt";
+/// File name of the copied updater binary placed inside the private staging
+/// directory so Windows never executes the helper from the target being replaced.
+const STAGED_HELPER_EXE_NAME: &str = "dblocal-updater.exe";
 
 /// A pure, serializable-ish description of how to apply an update.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -301,11 +310,14 @@ pub fn apply_staged_update(
         }
         InstallKind::AppImage { appimage_path } => apply_linux_appimage(appimage_path, staged),
         InstallKind::WindowsZip { exe_path } => apply_windows_zip(exe_path, current_exe, staged),
-        InstallKind::WindowsMsi { exe_path } => Ok(RestartAction::RunWindowsMsi {
-            helper_exe: current_exe.to_path_buf(),
-            msi_path: staged.staged_path().to_path_buf(),
-            relaunch_exe: exe_path.clone(),
-        }),
+        InstallKind::WindowsMsi { exe_path } => {
+            let helper_exe = stage_windows_helper_copy(current_exe, staged.run_dir())?;
+            Ok(RestartAction::RunWindowsMsi {
+                helper_exe,
+                msi_path: staged.staged_path().to_path_buf(),
+                relaunch_exe: exe_path.clone(),
+            })
+        }
         _ => Err(UpdateError::UnsupportedInstallKind {
             reason: "this install kind does not support self-update".to_owned(),
         }),
@@ -350,8 +362,21 @@ fn apply_linux_tarball(
         apply_linux(&plan)?;
 
         // Atomically update desktop entry and hicolor icons if shipped in the tarball.
-        if let Some(data_home) = resolve_linux_data_home(data_home_override) {
-            install_desktop_and_icons(&extracted, &target, &data_home)?;
+        // Non-fatal: the new binary is already installed and verified, so a
+        // desktop/icon failure must log a visible warning rather than report the
+        // whole update as failed in a half state.
+        if let Some(data_home) = resolve_linux_data_home(data_home_override)
+            && let Err(err) = install_desktop_and_icons(
+                &extracted,
+                &target,
+                &data_home,
+                data_home_override.is_some(),
+            )
+        {
+            tracing::warn!(
+                error = %err,
+                "binary updated successfully, but updating the desktop entry/icons failed"
+            );
         }
 
         Ok(RestartAction::Relaunch { exe_path: target })
@@ -428,12 +453,77 @@ fn apply_windows_zip(
         }
     }
 
+    let helper_exe = stage_windows_helper_copy(current_exe, staged.run_dir())?;
     Ok(RestartAction::RunWindowsZipHelper {
-        helper_exe: current_exe.to_path_buf(),
+        helper_exe,
         staged_exe: extracted_exe,
         target_exe: target,
         version: staged.version().clone(),
     })
+}
+
+/// Copies `current_exe` into `run_dir/dblocal-updater.exe` so the detached
+/// Windows helper runs from the private staging directory rather than from the
+/// installed target binary being replaced by `msiexec` or zip swap.
+fn stage_windows_helper_copy(current_exe: &Path, run_dir: &Path) -> UpdateResult<PathBuf> {
+    let helper_dest = run_dir.join(STAGED_HELPER_EXE_NAME);
+    std::fs::copy(current_exe, &helper_dest).map_err(|source| UpdateError::ApplyFailed {
+        reason: format!(
+            "could not copy updater helper to staging directory ({}): {source}",
+            helper_dest.display()
+        ),
+    })?;
+    Ok(helper_dest)
+}
+
+/// Removes leftover `run-*` staging directories on a later startup when no
+/// update lock is held and the current process is not executing from inside one.
+pub fn cleanup_stale_staging(staging_dir: &Path) {
+    let Ok(entries) = std::fs::read_dir(staging_dir) else {
+        return;
+    };
+    let current_exe = std::env::current_exe()
+        .ok()
+        .and_then(|p| std::fs::canonicalize(&p).ok().or(Some(p)));
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        if !name.to_string_lossy().starts_with("run-") {
+            continue;
+        }
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let canon = std::fs::canonicalize(&path).unwrap_or_else(|_| path.clone());
+        if current_exe
+            .as_ref()
+            .is_some_and(|exe| exe.starts_with(&canon))
+        {
+            continue;
+        }
+        let _ = std::fs::remove_dir_all(&path);
+    }
+}
+
+/// Persists an update failure message in `staging_dir/last-error.txt` so the
+/// next start (GUI or CLI) can surface it.
+pub fn record_update_failure(staging_dir: &Path, message: &str) {
+    let _ = std::fs::create_dir_all(staging_dir);
+    let _ = std::fs::write(staging_dir.join(LAST_UPDATE_ERROR_FILE), message);
+}
+
+/// Reads and clears any persisted update failure message written by the detached
+/// Windows helper.
+pub fn take_last_update_failure(staging_dir: &Path) -> Option<String> {
+    let path = staging_dir.join(LAST_UPDATE_ERROR_FILE);
+    let contents = std::fs::read_to_string(&path).ok()?;
+    let _ = std::fs::remove_file(&path);
+    let trimmed = contents.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_owned())
+    }
 }
 
 fn resolve_linux_data_home(override_dir: Option<&Path>) -> Option<PathBuf> {
@@ -457,6 +547,7 @@ fn install_desktop_and_icons(
     extracted: &ExtractedLinuxTarball,
     installed_bin: &Path,
     data_home: &Path,
+    allow_create_for_override: bool,
 ) -> UpdateResult<()> {
     let Some(desktop_src) = &extracted.desktop_entry else {
         return Ok(());
@@ -470,6 +561,32 @@ fn install_desktop_and_icons(
         tracing::warn!(
             path = %abs_bin,
             "skipping desktop entry update: binary path contains characters outside [A-Za-z0-9._/+@~-]"
+        );
+        return Ok(());
+    }
+
+    let apps_dir = data_home.join("applications");
+    let desktop_dest = apps_dir.join("dev.dblocal.DBLocal.desktop");
+
+    // Ownership guard:
+    // - If a desktop entry already exists, only rewrite it when its Exec= points
+    //   at THIS binary, so a second portable copy never hijacks the menu entry.
+    // - If no desktop entry exists yet, only create one when installed where
+    //   `packaging/install.sh` installs by default (`$HOME/.local/bin/dblocal`,
+    //   or an explicit test override).
+    if desktop_dest.is_file() {
+        if !desktop_entry_points_to(&desktop_dest, installed_bin) {
+            tracing::info!(
+                desktop = %desktop_dest.display(),
+                binary = %installed_bin.display(),
+                "existing desktop entry points at a different binary; leaving it untouched"
+            );
+            return Ok(());
+        }
+    } else if !allow_create_for_override && !is_default_install_sh_location(installed_bin) {
+        tracing::info!(
+            binary = %installed_bin.display(),
+            "portable copy is outside ~/.local/bin and no desktop entry exists; skipping menu entry creation"
         );
         return Ok(());
     }
@@ -492,12 +609,7 @@ fn install_desktop_and_icons(
         rewritten.push('\n');
     }
 
-    let apps_dir = data_home.join("applications");
-    atomic_write_file(
-        &apps_dir.join("dev.dblocal.DBLocal.desktop"),
-        rewritten.as_bytes(),
-        0o644,
-    )?;
+    atomic_write_file(&desktop_dest, rewritten.as_bytes(), 0o644)?;
 
     if let Some(svg_src) = &extracted.svg_icon {
         let bytes = std::fs::read(svg_src).map_err(|source| UpdateError::ApplyFailed {
@@ -520,6 +632,45 @@ fn install_desktop_and_icons(
 
     refresh_linux_desktop_caches(data_home, &apps_dir);
     Ok(())
+}
+
+fn desktop_entry_points_to(desktop_path: &Path, installed_bin: &Path) -> bool {
+    let Ok(contents) = std::fs::read_to_string(desktop_path) else {
+        return false;
+    };
+    let expected =
+        std::fs::canonicalize(installed_bin).unwrap_or_else(|_| installed_bin.to_path_buf());
+    for line in contents.lines() {
+        if let Some(exec_val) = line.strip_prefix("Exec=") {
+            let token = exec_val
+                .split_whitespace()
+                .next()
+                .unwrap_or_default()
+                .trim_matches('"');
+            if token.is_empty() {
+                return false;
+            }
+            let exec_path = Path::new(token);
+            let actual =
+                std::fs::canonicalize(exec_path).unwrap_or_else(|_| exec_path.to_path_buf());
+            return actual == expected;
+        }
+    }
+    false
+}
+
+fn is_default_install_sh_location(installed_bin: &Path) -> bool {
+    let Ok(home) = std::env::var("HOME") else {
+        return false;
+    };
+    if home.is_empty() {
+        return false;
+    }
+    let default_bin = PathBuf::from(home).join(".local/bin/dblocal");
+    let expected = std::fs::canonicalize(&default_bin).unwrap_or(default_bin);
+    let actual =
+        std::fs::canonicalize(installed_bin).unwrap_or_else(|_| installed_bin.to_path_buf());
+    actual == expected
 }
 
 fn atomic_write_file(dest: &Path, bytes: &[u8], mode: u32) -> UpdateResult<()> {
@@ -828,6 +979,9 @@ pub fn execute_restart(action: &RestartAction) -> UpdateResult<()> {
             .arg(msi_path)
             .arg("--target")
             .arg(relaunch_exe);
+            if let Some(error_file) = helper_error_file_for(helper_exe) {
+                c.arg("--error-file").arg(error_file);
+            }
             c
         }
         RestartAction::RunWindowsZipHelper {
@@ -848,6 +1002,9 @@ pub fn execute_restart(action: &RestartAction) -> UpdateResult<()> {
             .arg(target_exe)
             .arg("--version")
             .arg(version.to_string());
+            if let Some(error_file) = helper_error_file_for(helper_exe) {
+                c.arg("--error-file").arg(error_file);
+            }
             c
         }
     };
@@ -870,6 +1027,14 @@ pub fn execute_restart(action: &RestartAction) -> UpdateResult<()> {
     Ok(())
 }
 
+/// Derives `<staging_dir>/last-error.txt` from a staged helper path
+/// `<staging_dir>/run-.../dblocal-updater.exe`.
+fn helper_error_file_for(helper_exe: &Path) -> Option<PathBuf> {
+    let run_dir = helper_exe.parent()?;
+    let staging_dir = run_dir.parent()?;
+    Some(staging_dir.join(LAST_UPDATE_ERROR_FILE))
+}
+
 /// Parsed arguments for the detached Windows `--apply-update` helper mode.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WindowsHelperArgs {
@@ -883,73 +1048,137 @@ pub struct WindowsHelperArgs {
     pub target: PathBuf,
     /// Expected version string (for zip swap smoke check).
     pub version: Option<String>,
+    /// Optional path where a failure message is persisted for the next start.
+    pub error_file: Option<PathBuf>,
 }
 
 /// Executes the detached post-exit helper (`dblocal --apply-update ...`).
 ///
-/// Waits up to 60 seconds for `args.pid` to exit, then either runs
-/// `msiexec.exe /i <msi> /passive` (per-user, no elevation) or swaps `staged`
-/// over `target` with backup + rollback, and finally relaunches `target`.
+/// Waits up to 60 seconds for `args.pid` to exit; if it does not exit in time,
+/// aborts without modifying files and persists the error. Otherwise runs
+/// `msiexec.exe /i <msi> /passive` (accepting exit 0 and 3010 reboot-required)
+/// or swaps `staged` over `target` with backup + rollback. On failure, persists
+/// the error and relaunches the previous app so the user is never left without
+/// DBLocal or feedback.
 pub fn run_windows_apply_helper(args: &WindowsHelperArgs) -> UpdateResult<()> {
-    wait_for_pid_exit(args.pid, WINDOWS_HELPER_WAIT_TIMEOUT);
+    run_windows_apply_helper_with(
+        args,
+        |pid| wait_for_pid_exit(pid, WINDOWS_HELPER_WAIT_TIMEOUT),
+        run_msiexec_command,
+        |target| {
+            execute_restart(&RestartAction::Relaunch {
+                exe_path: target.to_path_buf(),
+            })
+        },
+    )
+}
 
-    if let Some(msi) = &args.msi {
-        let status = std::process::Command::new("msiexec.exe")
-            .arg("/i")
-            .arg(msi)
-            .arg("/passive")
-            .status()
-            .map_err(|source| UpdateError::ApplyFailed {
-                reason: format!("could not run msiexec.exe: {source}"),
-            })?;
-        if !status.success() {
-            return Err(UpdateError::ApplyFailed {
-                reason: format!("msiexec.exe exited with {status}"),
-            });
+fn run_msiexec_command(msi: &Path) -> UpdateResult<Option<i32>> {
+    let status = std::process::Command::new("msiexec.exe")
+        .arg("/i")
+        .arg(msi)
+        .arg("/passive")
+        .status()
+        .map_err(|source| UpdateError::ApplyFailed {
+            reason: format!("could not run msiexec.exe: {source}"),
+        })?;
+    Ok(status.code())
+}
+
+pub(crate) fn run_windows_apply_helper_with(
+    args: &WindowsHelperArgs,
+    wait_fn: impl FnOnce(u32) -> bool,
+    msi_runner: impl FnOnce(&Path) -> UpdateResult<Option<i32>>,
+    relaunch_fn: impl Fn(&Path) -> UpdateResult<()>,
+) -> UpdateResult<()> {
+    if !wait_fn(args.pid) {
+        let reason = format!(
+            "previous DBLocal process (PID {}) did not exit within {}s; update aborted",
+            args.pid,
+            WINDOWS_HELPER_WAIT_TIMEOUT.as_secs()
+        );
+        persist_helper_error(args, &reason);
+        return Err(UpdateError::ApplyFailed { reason });
+    }
+
+    let apply_result = if let Some(msi) = &args.msi {
+        match msi_runner(msi) {
+            Ok(Some(0)) => Ok(()),
+            Ok(Some(MSI_EXIT_REBOOT_REQUIRED)) => {
+                tracing::info!("msiexec exited with 3010 (success, reboot required)");
+                Ok(())
+            }
+            Ok(code) => Err(UpdateError::ApplyFailed {
+                reason: format!("MSI installer failed with exit code {code:?}"),
+            }),
+            Err(err) => Err(err),
         }
     } else if let Some(staged) = &args.staged {
-        let backup = backup_path(&args.target);
-        create_backup(&args.target, &backup)?;
-        if let Err(err) = copy_with_mode(staged, &args.target, &args.target) {
-            let _ = restore_backup(&backup, &args.target);
-            return Err(err);
-        }
-        if let Some(ver_str) = &args.version {
-            let ver = Version::parse(ver_str).map_err(|err| UpdateError::Malformed {
-                reason: format!("invalid expected version '{ver_str}': {err}"),
-            })?;
-            smoke_or_rollback(&args.target, &backup, &ver)?;
-        }
+        apply_windows_zip_swap(staged, &args.target, args.version.as_deref())
     } else {
-        return Err(UpdateError::Malformed {
+        Err(UpdateError::Malformed {
             reason: "--apply-update requires either --msi or --staged".to_owned(),
-        });
+        })
+    };
+
+    if let Err(err) = apply_result {
+        persist_helper_error(args, &err.to_string());
+        if args.target.is_file() {
+            let _ = relaunch_fn(&args.target);
+        }
+        return Err(err);
     }
 
     if args.target.is_file() {
-        let _ = execute_restart(&RestartAction::Relaunch {
-            exe_path: args.target.clone(),
-        });
+        let _ = relaunch_fn(&args.target);
     }
     Ok(())
 }
 
-fn wait_for_pid_exit(pid: u32, timeout: Duration) {
+fn apply_windows_zip_swap(staged: &Path, target: &Path, version: Option<&str>) -> UpdateResult<()> {
+    let backup = backup_path(target);
+    create_backup(target, &backup)?;
+    if let Err(err) = copy_with_mode(staged, target, target) {
+        let _ = restore_backup(&backup, target);
+        return Err(err);
+    }
+    if let Some(ver_str) = version {
+        let ver = Version::parse(ver_str).map_err(|err| UpdateError::Malformed {
+            reason: format!("invalid expected version '{ver_str}': {err}"),
+        })?;
+        smoke_or_rollback(target, &backup, &ver)?;
+    }
+    Ok(())
+}
+
+fn persist_helper_error(args: &WindowsHelperArgs, message: &str) {
+    if let Some(error_file) = &args.error_file {
+        if let Some(parent) = error_file.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let _ = std::fs::write(error_file, message);
+    }
+}
+
+/// Waits up to `timeout` for `pid` to disappear from the process table.
+/// Returns `true` if `pid` exited (or `pid == 0`), `false` if it is still running.
+fn wait_for_pid_exit(pid: u32, timeout: Duration) -> bool {
     if pid == 0 {
-        return;
+        return true;
     }
     let start = std::time::Instant::now();
     let target = sysinfo::Pid::from_u32(pid);
     let Ok(mut sys) = sysinfo::System::new() else {
-        return;
+        return false;
     };
     while start.elapsed() < timeout {
         sys.refresh_processes(sysinfo::ProcessesToUpdate::Some(&[target]), true);
         if sys.process(target).is_none() {
-            return;
+            return true;
         }
         std::thread::sleep(Duration::from_millis(100));
     }
+    false
 }
 
 /// Runs `--version` on the installed binary and checks it reports expected version.

@@ -349,6 +349,7 @@ fn parse_windows_helper_args(
     let mut staged: Option<std::path::PathBuf> = None;
     let mut target: Option<std::path::PathBuf> = None;
     let mut version: Option<String> = None;
+    let mut error_file: Option<std::path::PathBuf> = None;
 
     let mut i = 0;
     while i < args.len() {
@@ -370,6 +371,7 @@ fn parse_windows_helper_args(
             "--version" => {
                 version = Some(next.to_string_lossy().into_owned());
             }
+            "--error-file" => error_file = Some(std::path::PathBuf::from(next)),
             other => return Err(format!("unknown --apply-update argument: {other}")),
         }
         i += 2;
@@ -386,6 +388,7 @@ fn parse_windows_helper_args(
         staged,
         target,
         version,
+        error_file,
     })
 }
 

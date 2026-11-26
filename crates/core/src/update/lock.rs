@@ -1,51 +1,82 @@
-//! Exclusive lock ensuring only one self-update runs at a time across GUI and CLI.
+//! Exclusive OS advisory lock ensuring only one self-update runs at a time
+//! across GUI and CLI processes.
 //!
-//! Uses an atomic `create_new` lock file under `~/.dblocal/update/update.lock`
-//! containing the owning PID, combined with an in-process guard. If a previous
-//! updater crashed, a stale lock whose PID is no longer alive is reclaimed once.
+//! Uses `std::fs::File::try_lock()` (flock on Unix, LockFileEx on Windows),
+//! which the OS kernel releases automatically when the owning process exits or
+//! crashes — avoiding stale PID files, empty/corrupt lock files, and
+//! two-process reclaim races. An in-process set guards against same-process
+//! re-entrancy.
 
-use std::io::Write as _;
+use std::collections::HashSet;
+use std::fs::{File, OpenOptions, TryLockError};
 use std::path::{Path, PathBuf};
-
-use sysinfo::{Pid, ProcessesToUpdate, System};
+use std::sync::{Mutex, OnceLock};
 
 use crate::consts;
 
 use super::error::{UpdateError, UpdateResult};
 
-/// RAII guard for the exclusive update lock. Removes the lock file on drop.
+fn in_process_locks() -> &'static Mutex<HashSet<PathBuf>> {
+    static LOCKS: OnceLock<Mutex<HashSet<PathBuf>>> = OnceLock::new();
+    LOCKS.get_or_init(|| Mutex::new(HashSet::new()))
+}
+
+/// RAII guard for the exclusive update lock. Releases the OS advisory lock on drop.
 #[derive(Debug)]
 pub struct UpdateLock {
     path: PathBuf,
+    canonical: PathBuf,
+    _file: File,
 }
 
 impl UpdateLock {
     /// Acquires the exclusive update lock inside `staging_dir`.
     ///
-    /// Fails with [`UpdateError::InProgress`] if another live process (or task)
+    /// Fails with [`UpdateError::InProgress`] if another live process or task
     /// already holds the lock.
     pub fn acquire(staging_dir: &Path) -> UpdateResult<Self> {
         std::fs::create_dir_all(staging_dir).map_err(|source| UpdateError::ApplyFailed {
             reason: format!("could not create update staging directory: {source}"),
         })?;
         let lock_path = staging_dir.join(consts::UPDATE_LOCK_FILE);
-        match try_create_lock(&lock_path) {
-            Ok(()) => Ok(Self { path: lock_path }),
-            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {
-                if is_stale_lock(&lock_path) {
-                    let _ = std::fs::remove_file(&lock_path);
-                    try_create_lock(&lock_path).map_err(|_| UpdateError::InProgress {
-                        reason: "another update is already in progress".to_owned(),
-                    })?;
-                    return Ok(Self { path: lock_path });
-                }
+        let file = OpenOptions::new()
+            .create(true)
+            .read(true)
+            .write(true)
+            .truncate(false)
+            .open(&lock_path)
+            .map_err(|source| UpdateError::ApplyFailed {
+                reason: format!("could not open update lock file: {source}"),
+            })?;
+
+        let canonical = std::fs::canonicalize(&lock_path).unwrap_or_else(|_| lock_path.clone());
+        {
+            let mut held = in_process_locks().lock().unwrap_or_else(|e| e.into_inner());
+            if !held.insert(canonical.clone()) {
+                return Err(UpdateError::InProgress {
+                    reason: "another update is already in progress".to_owned(),
+                });
+            }
+        }
+
+        match file.try_lock() {
+            Ok(()) => Ok(Self {
+                path: lock_path,
+                canonical,
+                _file: file,
+            }),
+            Err(TryLockError::WouldBlock) => {
+                release_in_process(&canonical);
                 Err(UpdateError::InProgress {
                     reason: "another update is already in progress".to_owned(),
                 })
             }
-            Err(source) => Err(UpdateError::ApplyFailed {
-                reason: format!("could not acquire update lock: {source}"),
-            }),
+            Err(TryLockError::Error(source)) => {
+                release_in_process(&canonical);
+                Err(UpdateError::ApplyFailed {
+                    reason: format!("could not acquire update lock: {source}"),
+                })
+            }
         }
     }
 
@@ -57,40 +88,13 @@ impl UpdateLock {
 
 impl Drop for UpdateLock {
     fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.path);
+        let _ = self._file.unlock();
+        release_in_process(&self.canonical);
     }
 }
 
-fn try_create_lock(path: &Path) -> std::io::Result<()> {
-    let mut file = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(path)?;
-    writeln!(file, "{}", std::process::id())?;
-    file.sync_all()?;
-    Ok(())
-}
-
-/// Returns true only when the lock file records a PID that is definitely not
-/// alive in the process table (and not our own PID).
-fn is_stale_lock(path: &Path) -> bool {
-    let Ok(contents) = std::fs::read_to_string(path) else {
-        return false;
-    };
-    let Ok(pid) = contents.trim().parse::<u32>() else {
-        return false;
-    };
-    if pid == 0 {
-        return false;
+fn release_in_process(canonical: &Path) {
+    if let Ok(mut held) = in_process_locks().lock() {
+        held.remove(canonical);
     }
-    if pid == std::process::id() {
-        // Same process already holds the lock.
-        return false;
-    }
-    let Ok(mut sys) = System::new() else {
-        return false;
-    };
-    let target = Pid::from_u32(pid);
-    sys.refresh_processes(ProcessesToUpdate::Some(&[target]), true);
-    sys.process(target).is_none()
 }

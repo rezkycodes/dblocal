@@ -40,9 +40,10 @@ pub use extract::{
     MAX_UPDATE_EXTRACTED_BYTES, SVG_ICON_REL, extract_linux_tarball, extract_windows_zip,
 };
 pub use install::{
-    InstallPlan, InstallStep, WindowsHelperArgs, apply, apply_staged_update, cleanup_backup,
-    execute_restart, plan_install, restore_backup, run_windows_apply_helper, smoke_check,
-    windows_helper_command, windows_msi_helper_command,
+    InstallPlan, InstallStep, LAST_UPDATE_ERROR_FILE, MSI_EXIT_REBOOT_REQUIRED, WindowsHelperArgs,
+    apply, apply_staged_update, cleanup_backup, cleanup_stale_staging, execute_restart,
+    plan_install, record_update_failure, restore_backup, run_windows_apply_helper, smoke_check,
+    take_last_update_failure, windows_helper_command, windows_msi_helper_command,
 };
 pub use kind::{
     InstallKind, PackageManagerHint, PackageOwnership, detect_for_os, detect_install_kind,
@@ -54,6 +55,7 @@ pub use model::{
     UpdateProgress, platform_asset_tokens,
 };
 pub use verify::{
-    Checksums, ReleaseVerifier, Sha256ReleaseVerifier, constant_time_eq_hex, sha256_file_hex,
-    verify_sha256_file,
+    Checksums, ED25519_PUBLIC_KEY_LEN, ED25519_SIGNATURE_LEN, Ed25519ReleaseVerifier,
+    ReleaseVerifier, Sha256ReleaseVerifier, TRUSTED_PUBLIC_KEYS, constant_time_eq_hex,
+    decode_hex_32, has_trusted_signing_keys, sha256_file_hex, verify_sha256_file,
 };

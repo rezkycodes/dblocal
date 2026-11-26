@@ -20,10 +20,11 @@ use crate::service::{
     AvailableUpdateView, OperationId, ServiceEvent, ServiceResult, UpdateStatus, UserFacingError,
 };
 use crate::update::{
-    AvailableUpdate, InstallKind, InstallPlan, InstallStep, ReleaseVerifier, RestartAction,
-    Sha256ReleaseVerifier, UpdateCheck, UpdateCheckOptions, UpdateDownloadOptions, UpdateError,
-    UpdateLock, UpdateProgress, UpdateProgressSink, UpdateResult, apply_staged_update, check,
-    download_update_with_progress, execute_restart, plan_install,
+    AvailableUpdate, Ed25519ReleaseVerifier, InstallKind, InstallPlan, InstallStep,
+    ReleaseVerifier, RestartAction, UpdateCheck, UpdateCheckOptions, UpdateDownloadOptions,
+    UpdateError, UpdateLock, UpdateProgress, UpdateProgressSink, UpdateResult, apply_staged_update,
+    check, cleanup_stale_staging, download_update_with_progress, execute_restart,
+    has_trusted_signing_keys, plan_install, take_last_update_failure,
 };
 
 use super::service::Inner;
@@ -49,11 +50,25 @@ fn now_unix_secs() -> u64 {
         .unwrap_or(0)
 }
 
+fn signing_key_refusal_reason() -> Option<&'static str> {
+    #[cfg(not(any(test, debug_assertions)))]
+    if !has_trusted_signing_keys() {
+        return Some(
+            "Release signing public key is not configured in this build; automatic self-update is disabled.",
+        );
+    }
+    #[cfg(any(test, debug_assertions))]
+    let _ = has_trusted_signing_keys;
+    None
+}
+
 fn build_status(
     current: &Version,
     available: Option<&AvailableUpdate>,
     kind: InstallKind,
 ) -> UpdateStatus {
+    let signing_block = signing_key_refusal_reason();
+    let can_update = kind.can_self_update() && signing_block.is_none();
     let view = available.map(|update| AvailableUpdateView {
         version: update.version().to_string(),
         tag: update.tag().to_owned(),
@@ -61,12 +76,14 @@ fn build_status(
         release_url: update.release_url().to_owned(),
         asset_name: update.asset().name().to_owned(),
         size_bytes: update.asset().size_bytes(),
-        can_self_update: kind.can_self_update(),
+        can_self_update: can_update,
     });
-    let cannot_update_reason = kind.cannot_update_reason_with(
-        available.map(AvailableUpdate::release_url),
-        available.map(|u| u.asset().name()),
-    );
+    let cannot_update_reason = kind
+        .cannot_update_reason_with(
+            available.map(AvailableUpdate::release_url),
+            available.map(|u| u.asset().name()),
+        )
+        .or_else(|| signing_block.map(str::to_owned));
     UpdateStatus {
         current: current.to_string(),
         available: view,
@@ -212,11 +229,12 @@ fn emit_checked(inner: &Inner, status: &UpdateStatus) {
 pub(crate) fn start_update(inner: &Arc<Inner>) -> ServiceResult<OperationId> {
     let checked = resolve_for_apply(inner)?;
     let kind = checked.status.install_kind.clone();
-    if !kind.can_self_update() {
+    if !kind.can_self_update() || signing_key_refusal_reason().is_some() {
         let reason = checked
             .status
             .cannot_update_reason
             .or_else(|| kind.refusal_reason())
+            .or_else(|| signing_key_refusal_reason().map(str::to_owned))
             .unwrap_or_else(|| {
                 "Automatic updates are not available for this install method.".to_owned()
             });
@@ -321,11 +339,12 @@ pub(crate) fn start_update(inner: &Arc<Inner>) -> ServiceResult<OperationId> {
 pub(crate) fn apply_update(inner: &Inner) -> ServiceResult<()> {
     let checked = run_fresh_check(inner).map_err(to_facing)?;
     let kind = &checked.status.install_kind;
-    if !kind.can_self_update() {
+    if !kind.can_self_update() || signing_key_refusal_reason().is_some() {
         let reason = checked
             .status
             .cannot_update_reason
             .or_else(|| kind.refusal_reason())
+            .or_else(|| signing_key_refusal_reason().map(str::to_owned))
             .unwrap_or_else(|| {
                 "Automatic updates are not available for this install method.".to_owned()
             });
@@ -350,6 +369,24 @@ pub(crate) fn apply_update(inner: &Inner) -> ServiceResult<()> {
         *slot = Some(action);
     }
     Ok(())
+}
+
+/// Reads and clears any failure message persisted by the detached Windows helper.
+pub(crate) fn take_pending_update_failure(inner: &Inner) -> Result<Option<String>> {
+    let staging = inner.paths.root().join(consts::DIR_UPDATE_STAGING);
+    Ok(take_last_update_failure(&staging))
+}
+
+/// Cleans up leftover `run-*` staging dirs from previous updates when no update
+/// lock is currently held.
+pub(crate) fn cleanup_stale_update_staging(paths: &DblPaths) {
+    let staging = paths.root().join(consts::DIR_UPDATE_STAGING);
+    if !staging.is_dir() {
+        return;
+    }
+    if let Ok(_lock) = UpdateLock::acquire(&staging) {
+        cleanup_stale_staging(&staging);
+    }
 }
 
 /// Spawns the updated binary (or Windows helper) so the caller can exit cleanly.
@@ -428,7 +465,8 @@ pub struct DownloadInstaller {
 }
 
 impl DownloadInstaller {
-    /// Builds an installer that stages under `paths`.
+    /// Builds an installer that stages under `paths`, enforcing Ed25519 release
+    /// signature verification by default.
     pub fn new(paths: DblPaths, handle: tokio::runtime::Handle, current_exe: PathBuf) -> Self {
         let staging = paths.root().join(consts::DIR_UPDATE_STAGING);
         Self {
@@ -436,9 +474,16 @@ impl DownloadInstaller {
             current_exe,
             staging,
             download_options: UpdateDownloadOptions::default(),
-            verifier: Arc::new(Sha256ReleaseVerifier),
+            verifier: Arc::new(Ed25519ReleaseVerifier::production()),
             data_home_override: None,
         }
+    }
+
+    /// Configures a custom [`ReleaseVerifier`] (for tests injecting throwaway Ed25519 keys).
+    #[cfg(any(test, debug_assertions))]
+    pub fn with_verifier(mut self, verifier: Arc<dyn ReleaseVerifier>) -> Self {
+        self.verifier = verifier;
+        self
     }
 
     /// Configures download options (used by debug/test harnesses for loopback servers).

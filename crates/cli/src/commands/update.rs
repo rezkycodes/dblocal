@@ -24,6 +24,9 @@ pub fn dispatch(ctx: &mut Ctx<'_>, command: &UpdateCommand) -> u8 {
 }
 
 fn check(ctx: &mut Ctx<'_>, json: bool) -> u8 {
+    if let Ok(Some(prev_err)) = ctx.service.take_pending_update_failure() {
+        output::stderr_line(ctx.err, &format!("Previous update failed: {prev_err}"));
+    }
     let status = match ctx.service.check_update() {
         Ok(status) => status,
         Err(err) => return output::report_facing(ctx.err, &err),

@@ -31,6 +31,10 @@ const READ_TIMEOUT: Duration = Duration::from_secs(60);
 const STAGED_ASSET_NAME: &str = "dblocal-update.bin";
 /// Fixed staged checksums file name.
 const STAGED_CHECKSUMS_NAME: &str = "checksums.txt";
+/// Fixed staged signature file name.
+const STAGED_SIGNATURE_NAME: &str = "checksums.txt.sig";
+/// Maximum signature file size accepted (raw 64-byte Ed25519 signature + slack).
+const MAX_SIGNATURE_BODY_BYTES: u64 = 256;
 
 /// Callback receiving [`UpdateProgress`] updates during download and verification.
 pub type UpdateProgressSink = Arc<dyn Fn(UpdateProgress) + Send + Sync>;
@@ -145,6 +149,23 @@ impl StagedUpdate {
     /// Removes the private staging directory for this attempt.
     pub fn cleanup(&self) {
         let _ = std::fs::remove_dir_all(&self.run_dir);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn new_for_test_any(
+        version: semver::Version,
+        staged_path: PathBuf,
+        run_dir: PathBuf,
+        asset_name: String,
+        asset_kind: UpdateAssetKind,
+    ) -> Self {
+        Self {
+            version,
+            staged_path,
+            run_dir,
+            asset_name,
+            asset_kind,
+        }
     }
 
     #[cfg(all(test, unix))]
@@ -322,7 +343,34 @@ async fn fetch_checksums(
     .await?;
     let bytes = read_bounded_bytes(&checksums_path, hard_cap).await?;
     let _ = tokio::fs::remove_file(&checksums_path).await;
-    verifier.verify_manifest(&bytes, None)
+
+    let sig_bytes = if let Some(sig_asset) = update.signature_asset() {
+        let sig_path = run_dir.join(STAGED_SIGNATURE_NAME);
+        let sig_url = parse_and_validate_url(sig_asset.url(), options)?;
+        let sig_declared = sig_asset.size_bytes();
+        if sig_declared == 0 || sig_declared > MAX_SIGNATURE_BODY_BYTES {
+            return Err(UpdateError::VerifyFailed {
+                reason: format!("invalid checksums.txt.sig size: {sig_declared}"),
+            });
+        }
+        download_to_file_with_progress(
+            &sig_url,
+            &sig_path,
+            MAX_SIGNATURE_BODY_BYTES,
+            Some(sig_declared),
+            options,
+            cancel,
+            None,
+        )
+        .await?;
+        let data = read_bounded_bytes(&sig_path, MAX_SIGNATURE_BODY_BYTES).await?;
+        let _ = tokio::fs::remove_file(&sig_path).await;
+        Some(data)
+    } else {
+        None
+    };
+
+    verifier.verify_manifest(&bytes, sig_bytes.as_deref())
 }
 
 async fn read_bounded_bytes(path: &Path, max_bytes: u64) -> UpdateResult<Vec<u8>> {

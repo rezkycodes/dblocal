@@ -1,31 +1,51 @@
-//! Integrity verification seam for update artifacts.
+//! Integrity and Ed25519 signature verification seam for update artifacts.
 //!
-//! All release verification goes through [`ReleaseVerifier`]. Today the
-//! production verifier ([`Sha256ReleaseVerifier`]) validates `checksums.txt`
-//! syntax and verifies the downloaded artifact's SHA-256 in constant time,
-//! deleting the file on mismatch.
-//!
-//! Keeping manifest verification behind [`ReleaseVerifier::verify_manifest`]
-//! allows a future `Ed25519ReleaseVerifier` to require and check a detached
-//! `checksums.txt.sig` signature over `checksums.txt` without changing any
-//! caller above this module.
+//! All release verification goes through [`ReleaseVerifier`]. In production,
+//! [`Ed25519ReleaseVerifier`] verifies a detached 64-byte Ed25519 signature
+//! (`checksums.txt.sig`) over `checksums.txt` against [`TRUSTED_PUBLIC_KEYS`]
+//! **before** parsing any SHA-256 digest. It fails closed: missing, malformed,
+//! or unverified signatures — or an empty trusted-key list — reject the update
+//! before any artifact is extracted or installed.
 
 use std::future::Future;
 use std::path::Path;
 use std::pin::Pin;
 
+use ring::signature::{ED25519, UnparsedPublicKey};
 use sha2::{Digest, Sha256};
 use tokio::io::AsyncReadExt;
 
 use super::error::{UpdateError, UpdateResult};
 
-/// Verification seam for release manifests (`checksums.txt`) and downloaded
-/// artifacts.
+/// Expected raw byte length of an Ed25519 public key.
+pub const ED25519_PUBLIC_KEY_LEN: usize = 32;
+/// Expected raw byte length of an Ed25519 signature (`checksums.txt.sig`).
+pub const ED25519_SIGNATURE_LEN: usize = 64;
+
+/// Trusted Ed25519 release-signing public keys (64-character lowercase hex,
+/// representing the 32-byte raw Ed25519 public key).
+///
+/// Multiple keys may be listed to support seamless key rotation. While this
+/// list is empty (before the owner runs `packaging/release-signing/generate-key.sh`
+/// and commits the public key), release builds fail closed and refuse self-update.
+pub const TRUSTED_PUBLIC_KEYS: &[&str] = &[];
+
+/// Returns true when at least one valid Ed25519 public key is committed in
+/// [`TRUSTED_PUBLIC_KEYS`].
+pub fn has_trusted_signing_keys() -> bool {
+    TRUSTED_PUBLIC_KEYS
+        .iter()
+        .any(|hex| decode_hex_32(hex).is_ok())
+}
+
+/// Verification seam for release manifests (`checksums.txt` + `checksums.txt.sig`)
+/// and downloaded artifacts.
 pub trait ReleaseVerifier: Send + Sync {
     /// Verifies and parses `checksums.txt`.
     ///
-    /// `signature_bytes` is reserved for future detached signature verification
-    /// (e.g. Ed25519 over `checksums.txt`).
+    /// Production implementations verify `signature_bytes` (Ed25519 over
+    /// `checksums_bytes`) before parsing any digest and fail closed on missing
+    /// or invalid signatures.
     fn verify_manifest(
         &self,
         checksums_bytes: &[u8],
@@ -42,7 +62,102 @@ pub trait ReleaseVerifier: Send + Sync {
     ) -> Pin<Box<dyn Future<Output = UpdateResult<()>> + Send + 'a>>;
 }
 
-/// Default release verifier: parses `checksums.txt` and checks SHA-256 digests.
+/// Production release verifier: requires a valid Ed25519 signature over
+/// `checksums.txt` from one of the trusted public keys before parsing digests,
+/// then checks the artifact's SHA-256 in constant time.
+#[derive(Debug, Clone)]
+pub struct Ed25519ReleaseVerifier {
+    trusted_keys: Vec<[u8; ED25519_PUBLIC_KEY_LEN]>,
+}
+
+impl Ed25519ReleaseVerifier {
+    /// Builds a verifier from the compiled-in [`TRUSTED_PUBLIC_KEYS`].
+    pub fn production() -> Self {
+        let trusted_keys = TRUSTED_PUBLIC_KEYS
+            .iter()
+            .filter_map(|hex| decode_hex_32(hex).ok())
+            .collect();
+        Self { trusted_keys }
+    }
+
+    /// Builds a verifier from explicit hex-encoded 32-byte Ed25519 public keys.
+    pub fn from_hex_keys(keys: &[&str]) -> UpdateResult<Self> {
+        let mut decoded = Vec::with_capacity(keys.len());
+        for hex in keys {
+            decoded.push(decode_hex_32(hex)?);
+        }
+        Ok(Self {
+            trusted_keys: decoded,
+        })
+    }
+
+    /// Builds a verifier from raw 32-byte Ed25519 public keys.
+    pub fn from_raw_keys(keys: Vec<[u8; ED25519_PUBLIC_KEY_LEN]>) -> Self {
+        Self { trusted_keys: keys }
+    }
+
+    /// Number of trusted public keys loaded.
+    pub fn key_count(&self) -> usize {
+        self.trusted_keys.len()
+    }
+}
+
+impl ReleaseVerifier for Ed25519ReleaseVerifier {
+    fn verify_manifest(
+        &self,
+        checksums_bytes: &[u8],
+        signature_bytes: Option<&[u8]>,
+    ) -> UpdateResult<Checksums> {
+        if self.trusted_keys.is_empty() {
+            return Err(UpdateError::VerifyFailed {
+                reason: "no trusted release signing public key is configured in this build"
+                    .to_owned(),
+            });
+        }
+        let sig = signature_bytes.ok_or_else(|| UpdateError::VerifyFailed {
+            reason: "release is missing checksums.txt.sig signature".to_owned(),
+        })?;
+        if sig.len() != ED25519_SIGNATURE_LEN {
+            return Err(UpdateError::VerifyFailed {
+                reason: format!(
+                    "malformed release signature: expected {} bytes, got {}",
+                    ED25519_SIGNATURE_LEN,
+                    sig.len()
+                ),
+            });
+        }
+        let verified = self.trusted_keys.iter().any(|key| {
+            UnparsedPublicKey::new(&ED25519, key)
+                .verify(checksums_bytes, sig)
+                .is_ok()
+        });
+        if !verified {
+            return Err(UpdateError::VerifyFailed {
+                reason: "release signature verification failed against trusted signing keys"
+                    .to_owned(),
+            });
+        }
+
+        let text =
+            std::str::from_utf8(checksums_bytes).map_err(|_| UpdateError::ChecksumMetadata {
+                reason: "checksums.txt is not valid UTF-8".to_owned(),
+            })?;
+        Checksums::parse(text)
+    }
+
+    fn verify_artifact<'a>(
+        &'a self,
+        path: &'a Path,
+        expected_hex: &'a str,
+        label: &'a str,
+    ) -> Pin<Box<dyn Future<Output = UpdateResult<()>> + Send + 'a>> {
+        Box::pin(verify_sha256_file(path, expected_hex, label))
+    }
+}
+
+/// SHA-256-only verifier (used by unit tests that exercise download/checksum
+/// logic without generating a signing keypair). Production uses
+/// [`Ed25519ReleaseVerifier`].
 #[derive(Debug, Default, Clone, Copy)]
 pub struct Sha256ReleaseVerifier;
 
@@ -66,6 +181,39 @@ impl ReleaseVerifier for Sha256ReleaseVerifier {
         label: &'a str,
     ) -> Pin<Box<dyn Future<Output = UpdateResult<()>> + Send + 'a>> {
         Box::pin(verify_sha256_file(path, expected_hex, label))
+    }
+}
+
+/// Decodes a 64-character hex string into a 32-byte Ed25519 public key.
+pub fn decode_hex_32(hex: &str) -> UpdateResult<[u8; ED25519_PUBLIC_KEY_LEN]> {
+    let trimmed = hex.trim();
+    if trimmed.len() != ED25519_PUBLIC_KEY_LEN * 2 {
+        return Err(UpdateError::VerifyFailed {
+            reason: format!(
+                "invalid Ed25519 public key hex length: expected {}, got {}",
+                ED25519_PUBLIC_KEY_LEN * 2,
+                trimmed.len()
+            ),
+        });
+    }
+    let mut out = [0u8; ED25519_PUBLIC_KEY_LEN];
+    let bytes = trimmed.as_bytes();
+    for i in 0..ED25519_PUBLIC_KEY_LEN {
+        let hi = hex_nibble(bytes[i * 2])?;
+        let lo = hex_nibble(bytes[i * 2 + 1])?;
+        out[i] = (hi << 4) | lo;
+    }
+    Ok(out)
+}
+
+fn hex_nibble(b: u8) -> UpdateResult<u8> {
+    match b {
+        b'0'..=b'9' => Ok(b - b'0'),
+        b'a'..=b'f' => Ok(b - b'a' + 10),
+        b'A'..=b'F' => Ok(b - b'A' + 10),
+        _ => Err(UpdateError::VerifyFailed {
+            reason: "invalid hex character in Ed25519 public key".to_owned(),
+        }),
     }
 }
 

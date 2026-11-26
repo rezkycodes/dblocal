@@ -22,6 +22,7 @@ pub enum ReleaseChannel {
 /// Result of checking for updates.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
+#[allow(clippy::large_enum_variant)]
 pub enum UpdateCheck {
     /// Current version is the newest applicable release.
     UpToDate {
@@ -52,6 +53,8 @@ pub struct AvailableUpdate {
     release_url: String,
     asset: ReleaseAsset,
     checksums_asset: ReleaseAsset,
+    #[serde(default)]
+    signature_asset: Option<ReleaseAsset>,
 }
 
 impl AvailableUpdate {
@@ -76,12 +79,19 @@ impl AvailableUpdate {
             release_url,
             asset,
             checksums_asset,
+            signature_asset: None,
         }
     }
 
     /// Returns a copy with an explicit release notes page URL.
     pub fn with_release_url(mut self, url: impl Into<String>) -> Self {
         self.release_url = url.into();
+        self
+    }
+
+    /// Returns a copy carrying the detached `checksums.txt.sig` asset.
+    pub fn with_signature_asset(mut self, sig: ReleaseAsset) -> Self {
+        self.signature_asset = Some(sig);
         self
     }
 
@@ -113,6 +123,11 @@ impl AvailableUpdate {
     /// checksums.txt asset.
     pub fn checksums_asset(&self) -> &ReleaseAsset {
         &self.checksums_asset
+    }
+
+    /// Detached Ed25519 signature asset (`checksums.txt.sig`), when published.
+    pub fn signature_asset(&self) -> Option<&ReleaseAsset> {
+        self.signature_asset.as_ref()
     }
 }
 

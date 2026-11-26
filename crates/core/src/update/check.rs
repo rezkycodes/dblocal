@@ -404,6 +404,12 @@ fn release_to_update(
     let Some(checksums_asset) = checksums else {
         return Ok(None);
     };
+    let signature_asset = release
+        .assets
+        .iter()
+        .find(|a| is_signature_asset(&a.name))
+        .map(asset_from_gh)
+        .transpose()?;
     let preferred_kind = options
         .install_kind
         .as_ref()
@@ -419,16 +425,22 @@ fn release_to_update(
         &options.repo,
         &release.tag_name,
     );
-    Ok(Some(
-        AvailableUpdate::new(
-            version,
-            release.tag_name.clone(),
-            notes,
-            asset,
-            checksums_asset,
-        )
-        .with_release_url(release_url),
-    ))
+    let mut update = AvailableUpdate::new(
+        version,
+        release.tag_name.clone(),
+        notes,
+        asset,
+        checksums_asset,
+    )
+    .with_release_url(release_url);
+    if let Some(sig) = signature_asset {
+        update = update.with_signature_asset(sig);
+    }
+    Ok(Some(update))
+}
+
+fn is_signature_asset(name: &str) -> bool {
+    name.eq_ignore_ascii_case("checksums.txt.sig")
 }
 
 fn resolve_release_url(html_url: Option<&str>, repo: &str, tag: &str) -> String {

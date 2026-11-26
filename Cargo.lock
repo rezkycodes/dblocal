@@ -1618,6 +1618,7 @@ dependencies = [
  "rand 0.10.4",
  "redis",
  "reqwest",
+ "ring",
  "rusqlite",
  "semver",
  "serde",

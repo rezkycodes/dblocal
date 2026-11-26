@@ -428,6 +428,13 @@ pub trait DblService: Send + Sync + 'static {
         not_implemented()
     }
 
+    /// Reads and clears any failure message persisted by the detached Windows
+    /// update helper on a previous attempt, so the relaunched app or CLI can
+    /// display it to the user.
+    fn take_pending_update_failure(&self) -> Result<Option<String>> {
+        Ok(None)
+    }
+
     // --- Open in external client (F-OPN-01..02) -----------------------------
 
     /// The clients detected on this machine, cached for the process.
