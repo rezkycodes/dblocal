@@ -49,6 +49,17 @@ from the tagged commit, never on a developer machine (F-PKG business rule).
 
 Configure these under **Settings → Secrets and variables → Actions**.
 
+### Release signing (Ed25519, required for tag releases)
+
+| Secret | Purpose |
+|---|---|
+| `RELEASE_SIGNING_KEY` | Ed25519 private key in PEM format used by OpenSSL in the `release` job to sign `checksums.txt` -> `checksums.txt.sig` (raw 64-byte Ed25519 signature). |
+
+- **Initial setup**: Run `bash packaging/release-signing/generate-key.sh`. It creates the key pair in a private `0700` temp directory, uploads `RELEASE_SIGNING_KEY` via `gh secret set` over stdin without printing it, reminds you to keep a safe offline backup, prints only the 64-character hex public key, and deletes all temporary files even on error.
+- **Commit the public key**: Paste the 64-character hex public key into both `packaging/release-signing/public-keys.txt` and `TRUSTED_PUBLIC_KEYS` in `crates/core/src/update/verify.rs`.
+- **Fail-closed**: While no public key is committed or `RELEASE_SIGNING_KEY` is missing, tag builds in `release.yml` fail and release builds of DBLocal refuse automatic self-update. Dry-run builds (`release-dry/**`) are unaffected.
+- **Key rotation**: Add the new public key alongside the existing one in both files, release a version trusting both keys, then update `RELEASE_SIGNING_KEY` to the new private key and retire the old public key in a later release.
+
 ### macOS signing and notarization (D-20, OPEN-04)
 
 | Secret | Purpose |

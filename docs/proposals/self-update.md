@@ -77,27 +77,25 @@ Before designing, we audited the existing codebase (`v0.1.3`, commit `04717bd`):
 | **macOS** (`MacApp`) | Inside `*.app` bundle on macOS | `false` | Deferred; report that macOS self-update is not supported yet and link to the release page. |
 | **Dev builds / Homebrew / Unknown / read-only** | `target/debug`, `target/release`, `dblocal-target*`, `.cargo/bin`, `/usr/`, `/opt/`, `/nix/store/`, `/snap/`, `/app/`, Homebrew, read-only dir | `false` | Refuse with clear reason explaining why self-update is unavailable. |
 
-### 2.3 Running Database Instances & Restart
+### 2.3 Running Database Instances, Restart & Process Overlap
 
 - Engine processes (PostgreSQL, MySQL, MariaDB, Valkey) are spawned **detached** via `crates/core/src/process/spawn.rs` (`setsid` on Unix, `CREATE_NEW_PROCESS_GROUP | DETACHED_PROCESS` on Windows).
 - Replacing the `dblocal` binary on disk and exiting/restarting DBLocal **never signals, stops, or touches any running database server** or `~/.dblocal/instances/*` data.
-- On Linux, `rename(2)` replaces the directory entry while the old binary stays mapped in memory; `dblocal` exits cleanly and spawns the new binary detached.
-- On startup of the new `dblocal` process:
-  1. `LocalService::new` runs `reconcile_on_startup`, which probes each instance's persisted `(pid, process_started_at, process_exe)` and adopts live database servers back into `Running` state without signalling them.
-  2. Any leftover `<exe>.old` backup from a successful update can be cleaned up via `cleanup_backup`.
-- Login items (`autostart`) point at the installed binary path; because per-user tarball and AppImage replace the file in place at the same path, autostart continues working without re-registration.
+- **Single-instance / restart overlap audit**: There is no single-instance lock or IPC handoff in `crates/cli/src/main.rs`, `crates/cli/src/cli.rs`, `crates/gui/src/lib.rs`, or `crates/gui/src/app/bootstrap.rs`. SQLite runs in WAL mode with `STORE_BUSY_TIMEOUT_MS = 5000` (`crates/core/src/store/api.rs:139-143`, `crates/core/src/store/migrations.rs:21-28`), Linux `ksni` registers a per-PID D-Bus tray name (`crates/gui/src/tray/linux.rs`), and `request_app_quit` tears down the tray before `cx.quit()` (`crates/gui/src/app/bootstrap.rs:46-58`). A newly spawned updated process therefore starts cleanly while the old process finishes exiting.
+- **Windows post-exit helper**: Copies the current `dblocal.exe` into `<staging>/run-.../dblocal-updater.exe` so it never executes from the installed target being replaced. If the parent PID does not exit within 60s, the helper aborts without touching files and persists the error to `last-error.txt`. For MSI, exit `0` and `3010` (reboot required) are treated as success; on any failure the helper persists the error to `last-error.txt` and relaunches the previous app. Leftover `run-*` staging dirs are cleaned up on a later startup (`cleanup_stale_staging`).
+- **Linux desktop/icon sync**: Runs after binary swap as non-fatal (logging a warning on error so a completed binary swap is never reported as failed). Rewrites an existing `dev.dblocal.DBLocal.desktop` only if its `Exec=` already points at this binary, and creates one only at the default `install.sh` location (`~/.local/bin/dblocal`), preventing a second portable copy from hijacking the menu entry.
 
-### 2.4 Security & Robustness
+### 2.4 Security, Locking & Release Signing (Ed25519)
 
 - **HTTPS-only & allowlisted hosts**: Only `api.github.com` for release metadata and `github.com`, `objects.githubusercontent.com`, `github-releases.githubusercontent.com`, `release-assets.githubusercontent.com` for assets and redirects (max 5 redirects).
 - **Test overrides compiled out in release**: Any loopback/base-URL override is gated behind `#[cfg(any(test, debug_assertions))]` and unavailable in `--release` builds.
-- **Verification seam (`ReleaseVerifier`)**:
-  - `verify_manifest(&self, checksums_bytes: &[u8], signature_bytes: Option<&[u8]>) -> UpdateResult<Checksums>`
-  - `verify_artifact(&self, path: &Path, expected_hex: &str, label: &str) -> ...`
-  - Current production implementation: `Sha256ReleaseVerifier`.
-  - **Future Ed25519 signature support**: When signing is enabled later, CI (`release.yml`) will sign `checksums.txt` with an offline/KMS Ed25519 signing key and upload `checksums.txt.sig` alongside `checksums.txt`. The public verifying key(s) (supporting key rotation with a key ID or multiple trusted keys) will be embedded in `crates/core/src/update/verify.rs`, and `Ed25519ReleaseVerifier` will implement `ReleaseVerifier::verify_manifest` to require and verify `checksums.txt.sig` before parsing any SHA-256 digests. No callers above `ReleaseVerifier` need to change.
-- **Safe archive extraction**: Strict entry allowlist for Linux `.tar.gz` (`dblocal`, `share/applications/dev.dblocal.DBLocal.desktop`, `share/icons/hicolor/scalable/apps/dblocal.svg`, `share/icons/hicolor/{16,24,32,48,64,128,256,512}x{size}/apps/dblocal.png`, and their parent directories) and Windows `.zip` (`dblocal.exe`). Rejects `..`, absolute paths, symlinks, hard links, special files, unexpected entries, and oversized extractions. Extracts into a fresh private (`0700`) temp directory on the same filesystem as the target so `rename(2)` is atomic.
-- **Exclusive lock**: A lockfile (`~/.dblocal/update/update.lock` via `O_CREAT | O_EXCL` with stale-PID detection + in-process atomic guard) guarantees only one update runs at a time across GUI and CLI processes.
+- **Ed25519 release signing (`Ed25519ReleaseVerifier`)**:
+  - Uses `ring` (`ring 0.17.14`, already in `Cargo.lock`, license `Apache-2.0 AND ISC`).
+  - CI (`.github/workflows/release.yml`, tag builds only; `release-dry/**` unchanged) signs `release/checksums.txt` -> `release/checksums.txt.sig` (raw 64-byte Ed25519 signature) with OpenSSL from GitHub Actions secret `RELEASE_SIGNING_KEY` (written only to a `0600` temp file, never logged, deleted on exit) and verifies it against `packaging/release-signing/public-keys.txt` before publishing.
+  - `Ed25519ReleaseVerifier::verify_manifest` verifies `checksums.txt.sig` over `checksums.txt` against `TRUSTED_PUBLIC_KEYS` in `crates/core/src/update/verify.rs` **before** parsing any SHA-256 digest. It fails closed on missing, malformed, or invalid signatures and when `TRUSTED_PUBLIC_KEYS` is empty (release builds refuse self-update until a real public key is committed).
+  - Key generation & rotation: the owner runs `bash packaging/release-signing/generate-key.sh`, which uploads the private key to `RELEASE_SIGNING_KEY` over stdin without printing it and prints only the 64-char hex public key to commit to `packaging/release-signing/public-keys.txt` and `TRUSTED_PUBLIC_KEYS`. Multiple keys are supported simultaneously for rotation.
+- **Safe archive extraction**: Strict entry allowlist for Linux `.tar.gz` and Windows `.zip`. Rejects `..`, absolute paths, symlinks, hard links, special files, unexpected entries, and oversized extractions.
+- **Exclusive OS advisory lock**: `UpdateLock` (`crates/core/src/update/lock.rs`) uses `std::fs::File::try_lock()` (`flock` on Unix, `LockFileEx` on Windows), which is automatically released by the OS kernel on exit/crash and immune to empty/garbled lock files or PID reuse.
 - **Disk space preflight**: Reuses `crate::download::space::check_disk_space` (`asset_size * 3`) before downloading.
 - **Partial download cleanup**: Every failed or cancelled attempt removes its private staging directory.
 
