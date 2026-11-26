@@ -10089,6 +10089,7 @@ version = "0.1.5"
 dependencies = [
  "clap",
  "dblocal-core",
+ "flate2",
  "reqwest",
  "serde",
  "serde_json",
