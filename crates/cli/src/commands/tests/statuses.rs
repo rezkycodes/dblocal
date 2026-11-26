@@ -219,10 +219,7 @@ fn start_of_a_stopping_instance_says_stopping_and_exits_1() {
         },
     );
     assert_eq!(code, EXIT_GENERAL, "err: {err}");
-    assert!(
-        err.contains("another process is stopping it"),
-        "err: {err}"
-    );
+    assert!(err.contains("another process is stopping it"), "err: {err}");
 }
 
 /// The same when the concrete `stopping` is only visible through the refused
@@ -245,10 +242,7 @@ fn start_refused_from_stopping_says_stopping_and_exits_1() {
         },
     );
     assert_eq!(code, EXIT_GENERAL, "err: {err}");
-    assert!(
-        err.contains("another process is stopping it"),
-        "err: {err}"
-    );
+    assert!(err.contains("another process is stopping it"), "err: {err}");
     assert!(!err.contains("already running"), "err: {err}");
 }
 
@@ -271,10 +265,7 @@ fn stop_of_a_stopping_instance_waits_then_exits_0() {
         },
         false,
     );
-    assert!(
-        err.contains("another process is stopping it"),
-        "err: {err}"
-    );
+    assert!(err.contains("another process is stopping it"), "err: {err}");
     assert_eq!(_code, EXIT_OK, "err: {err}");
     assert!(out.is_empty(), "out: {out}");
 }
@@ -319,10 +310,7 @@ fn stop_refused_from_stopping_waits_then_exits_0() {
         },
     );
     assert_eq!(code, EXIT_OK, "err: {err}");
-    assert!(
-        err.contains("another process is stopping it"),
-        "err: {err}"
-    );
+    assert!(err.contains("another process is stopping it"), "err: {err}");
 }
 
 /// A wait for another process's stop that ends in `Failed` is an error, and it

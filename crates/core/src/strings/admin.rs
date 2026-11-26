@@ -23,8 +23,7 @@ pub const UI_DATABASES_RETRY: &str = "Reload";
 /// Databases tab: delete dialog title.
 pub const UI_DATABASES_DROP_TITLE: &str = "Delete database";
 /// Databases tab: delete dialog explanation.
-pub const UI_DATABASES_DROP_PROMPT: &str =
-    "The database and all of its contents are permanently deleted. Type the database name to confirm.";
+pub const UI_DATABASES_DROP_PROMPT: &str = "The database and all of its contents are permanently deleted. Type the database name to confirm.";
 /// Databases tab: delete dialog short danger line under the explanation.
 pub const UI_DATABASES_DROP_WARNING: &str = "This cannot be undone.";
 /// Databases tab: delete dialog confirm action.
@@ -67,8 +66,7 @@ pub const UI_DATABASES_SECRET_COPIED: &str = "Copied to the clipboard";
 /// Databases tab: reset-password confirmation title.
 pub const UI_DATABASES_RESET_TITLE: &str = "Reset the superuser password";
 /// Databases tab: reset-password confirmation body.
-pub const UI_DATABASES_RESET_PROMPT: &str =
-    "A new password is generated, applied to the engine and saved in the keychain. The URI is updated.";
+pub const UI_DATABASES_RESET_PROMPT: &str = "A new password is generated, applied to the engine and saved in the keychain. The URI is updated.";
 /// Databases tab: reset confirmation action.
 pub const UI_DATABASES_RESET_CONFIRM: &str = "Reset password";
 /// Databases tab: shown next to a failed reset (F-DBU-03 AC2).

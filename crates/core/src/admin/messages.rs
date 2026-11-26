@@ -8,10 +8,10 @@
 pub const ERR_CONNECT: &str =
     "Could not connect to the database server. Make sure the server is running.";
 /// `DBL-8116`: the stored password was refused by the engine.
-pub const ERR_AUTH_FAILED: &str = "The stored password does not match. Check the server credentials.";
+pub const ERR_AUTH_FAILED: &str =
+    "The stored password does not match. Check the server credentials.";
 /// `DBL-8101`: a name or value failed validation.
-pub const ERR_INVALID_IDENTIFIER: &str =
-    "Invalid name. Use only letters, digits and underscores.";
+pub const ERR_INVALID_IDENTIFIER: &str = "Invalid name. Use only letters, digits and underscores.";
 /// `DBL-8102`: the target host is not loopback.
 pub const ERR_NON_LOOPBACK: &str = "Only connections to 127.0.0.1 or ::1 are allowed.";
 /// `DBL-8103`: the target description is incomplete.

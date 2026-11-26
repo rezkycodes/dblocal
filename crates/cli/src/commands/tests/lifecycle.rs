@@ -560,8 +560,5 @@ fn create_download_progress_goes_to_stderr_only() {
     assert_eq!(code, EXIT_OK, "stderr: {err}");
     // stdout carries the URI and nothing else.
     assert_eq!(out.trim().lines().count(), 1, "out: {out}");
-    assert!(
-        err.contains("downloading"),
-        "err: {err}"
-    );
+    assert!(err.contains("downloading"), "err: {err}");
 }

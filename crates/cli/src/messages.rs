@@ -130,8 +130,7 @@ pub const ERR_UPDATE_NEEDS_YES: &str =
 /// The `--confirm` value did not match the database name.
 pub const ERR_DB_CONFIRM_MISMATCH: &str = "Delete cancelled: the database name does not match.";
 /// `db drop` needs `--yes` or a matching `--confirm` on a non-interactive session.
-pub const ERR_DB_NEEDS_CONFIRM: &str =
-    "Dropping a database requires --yes or --confirm <name>.";
+pub const ERR_DB_NEEDS_CONFIRM: &str = "Dropping a database requires --yes or --confirm <name>.";
 /// The `--level` value was neither `ro` nor `rw`.
 pub const ERR_BAD_LEVEL: &str = "The privilege level must be `ro` or `rw`.";
 /// The `--client` value named no known client.

@@ -94,7 +94,8 @@ impl UpdateError {
                 "The update checksum file is missing or not valid.".to_owned()
             }
             Self::VerifyFailed { .. } => {
-                "The update checksum does not match. The download was removed for safety.".to_owned()
+                "The update checksum does not match. The download was removed for safety."
+                    .to_owned()
             }
             Self::DowngradeRefused { .. } => {
                 "The update version is not newer than the current version.".to_owned()
@@ -102,7 +103,9 @@ impl UpdateError {
             Self::UnsupportedInstallKind { .. } => {
                 "Automatic updates are not available for this install method.".to_owned()
             }
-            Self::AssetMissing { .. } => "The update is not available for this platform.".to_owned(),
+            Self::AssetMissing { .. } => {
+                "The update is not available for this platform.".to_owned()
+            }
             Self::ApplyFailed { .. } => {
                 "The update could not be installed. The previous version is restored when possible."
                     .to_owned()

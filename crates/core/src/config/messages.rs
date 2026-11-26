@@ -8,17 +8,16 @@
 pub const ERR_UNKNOWN_KEY: &str =
     "That setting is not in the list that can be changed for this engine.";
 /// `DBL-8602`: the key is managed by DBLocal.
-pub const ERR_MANAGED_KEY: &str =
-    "That setting is managed by DBLocal itself. Use the matching action instead (for example, change the port).";
+pub const ERR_MANAGED_KEY: &str = "That setting is managed by DBLocal itself. Use the matching action instead (for example, change the port).";
 /// `DBL-8603`: the file could not be read or written.
 pub const ERR_IO: &str = "The configuration file could not be read or written.";
 /// `DBL-8604`: a lifecycle operation owns the instance.
-pub const ERR_BUSY: &str = "The instance is busy with another operation. Try again when it finishes.";
+pub const ERR_BUSY: &str =
+    "The instance is busy with another operation. Try again when it finishes.";
 /// `DBL-8605`: nothing to restore.
 pub const ERR_NO_BACKUP: &str = "There is no configuration backup to restore yet.";
 /// `DBL-8606`: the whole call was refused.
-pub const ERR_REFUSED: &str =
-    "All changes were rejected because one setting is not allowed.";
+pub const ERR_REFUSED: &str = "All changes were rejected because one setting is not allowed.";
 /// `DBL-8607`: the config file to open does not exist.
 pub const ERR_MISSING_FILE: &str =
     "The configuration file does not exist yet. Start the instance once so the file is created.";

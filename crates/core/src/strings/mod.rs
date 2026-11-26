@@ -23,8 +23,7 @@ pub const ERR_PORT_IN_USE: &str = "That port is already used by another process.
 pub const ERR_CHECKSUM_MISMATCH: &str =
     "The download is corrupt or does not match its checksum. Try downloading again.";
 /// `DblError::UnsafeArchive`.
-pub const ERR_UNSAFE_ARCHIVE: &str =
-    "The archive was rejected because it contains an unsafe path.";
+pub const ERR_UNSAFE_ARCHIVE: &str = "The archive was rejected because it contains an unsafe path.";
 /// `DblError::Io`.
 pub const ERR_IO: &str = "Could not read or write the file.";
 /// `DblError::Network`.
@@ -271,8 +270,7 @@ pub const UI_PALETTE_REASON_BUSY: &str = "busy, wait for it to finish";
 pub const UI_VALIDATE_PORT_LOW: &str =
     "Ports below 1024 require privileges; DBLocal never asks for sudo.";
 /// Validation: instance name is invalid.
-pub const UI_VALIDATE_NAME: &str =
-    "The name must be 2-31 characters: lowercase letters, digits or hyphens, starting with a letter or digit.";
+pub const UI_VALIDATE_NAME: &str = "The name must be 2-31 characters: lowercase letters, digits or hyphens, starting with a letter or digit.";
 
 /// Validation: the typed port already belongs to another instance.
 ///
@@ -331,7 +329,8 @@ pub const DIAGNOSIS_UNKNOWN: &str = "Unrecognized cause, see the log";
 
 /// Toast shown when a stop had to escalate to a forced kill (F-INS-03 AC3):
 /// the engine ignored the graceful shutdown within the grace period.
-pub const UI_TOAST_STOP_FORCED: &str = "The instance ignored a normal stop, so it was force-stopped";
+pub const UI_TOAST_STOP_FORCED: &str =
+    "The instance ignored a normal stop, so it was force-stopped";
 
 // --- Workspace chrome (D-25 prototype port) ---------------------------------
 
@@ -491,13 +490,15 @@ pub const UI_DATABASES_NAME_PLACEHOLDER: &str = "database_name";
 /// Databases tab: delete action.
 pub const UI_DATABASES_DELETE: &str = "Delete database (type the name to confirm)";
 /// Databases tab: validation failure for a bad name (F-DBU-01 AC4).
-pub const UI_DATABASES_INVALID_NAME: &str = "The name may contain only letters, digits and underscores.";
+pub const UI_DATABASES_INVALID_NAME: &str =
+    "The name may contain only letters, digits and underscores.";
 /// Databases tab: heading above the user list.
 pub const UI_DATABASES_USERS: &str = "Users and privileges";
 /// Databases tab: new user action.
 pub const UI_DATABASES_NEW_USER: &str = "New user";
 /// Databases tab: the boundary note that DBLocal manages servers, not data.
-pub const UI_DATABASES_BOUNDARY: &str = "DBLocal manages the server, not the data. To browse tables, open the instance in your client.";
+pub const UI_DATABASES_BOUNDARY: &str =
+    "DBLocal manages the server, not the data. To browse tables, open the instance in your client.";
 /// Databases tab: superuser password card heading.
 pub const UI_DATABASES_PASSWORD_HEADING: &str = "Superuser password";
 /// Databases tab: superuser password card body.
@@ -578,7 +579,8 @@ pub const UI_THEME_LIGHT: &str = "DBLocal Light";
 // --- Delete dialog confirmations (D-18) -------------------------------------
 
 /// Delete dialog: archive mode keeps the data (the default).
-pub const UI_DELETE_ARCHIVE_HINT: &str = "Data is moved to the archive and the instance is deleted.";
+pub const UI_DELETE_ARCHIVE_HINT: &str =
+    "Data is moved to the archive and the instance is deleted.";
 /// Delete dialog: purge mode removes the data too.
 pub const UI_DELETE_PURGE_HINT: &str = "The instance and all of its data are permanently deleted.";
 
@@ -629,8 +631,7 @@ pub const UI_QUIT_STOP_ALL: &str = "Stop all, then quit";
 /// Quit dialog: a stop failed but the user can force quit anyway.
 pub const UI_QUIT_STOP_FAILED: &str = "Some instances could not be stopped.";
 /// Quit dialog: confirm quitting while stops are still pending.
-pub const UI_QUIT_FORCE_CONFIRM: &str =
-    "Some instances are still stopping. Quit now?";
+pub const UI_QUIT_FORCE_CONFIRM: &str = "Some instances are still stopping. Quit now?";
 /// Quit dialog: progress line while stopping all instances.
 pub const UI_QUIT_STOPPING: &str = "Stopping instances...";
 /// Neutral status-bar note while a background service call is in flight.
@@ -638,8 +639,7 @@ pub const UI_PENDING: &str = "Loading...";
 /// Startup failure window title.
 pub const UI_STARTUP_FAILED_TITLE: &str = "DBLocal could not start";
 /// Startup failure window fallback body.
-pub const UI_STARTUP_FAILED_BODY: &str =
-    "DBLocal could not read or prepare its local data.";
+pub const UI_STARTUP_FAILED_BODY: &str = "DBLocal could not read or prepare its local data.";
 
 mod admin;
 pub use admin::*;

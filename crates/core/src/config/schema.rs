@@ -461,7 +461,9 @@ pub fn format_size(bytes: u64) -> String {
 pub fn validate_value(spec: &SettingSpec, value: &str) -> Result<(), ConfigError> {
     // Reject control characters and a newline for every kind.
     if value.contains('\n') || value.contains('\r') || value.contains('\0') {
-        return Err(ConfigError::InvalidValue("the value contains a control character"));
+        return Err(ConfigError::InvalidValue(
+            "the value contains a control character",
+        ));
     }
     if is_comment_injection(value) {
         return Err(ConfigError::InvalidValue("the value contains a comment"));
@@ -503,7 +505,9 @@ pub fn validate_value(spec: &SettingSpec, value: &str) -> Result<(), ConfigError
         ValueKind::Token { min_len, max_len } => {
             let len = value.chars().count();
             if len < *min_len || len > *max_len {
-                return Err(ConfigError::InvalidValue("the value length is out of range"));
+                return Err(ConfigError::InvalidValue(
+                    "the value length is out of range",
+                ));
             }
             // A `save` schedule is pairs of integers; other tokens may not contain
             // whitespace-joined junk that would become extra arguments, but the

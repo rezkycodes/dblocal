@@ -121,9 +121,7 @@ pub async fn verify_sha256_file(path: &Path, expected_hex: &str, label: &str) ->
     }
     let _ = tokio::fs::remove_file(path).await;
     Err(UpdateError::VerifyFailed {
-        reason: format!(
-            "checksum mismatch for {label}: expected {expected_hex}, got {actual}"
-        ),
+        reason: format!("checksum mismatch for {label}: expected {expected_hex}, got {actual}"),
     })
 }
 

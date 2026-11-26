@@ -5,7 +5,8 @@
 //! path is shown only in the diagnostics the user asked for.
 
 /// The platform has no user-level login mechanism DBLocal can use.
-pub const ERR_UNSUPPORTED: &str = "Running automatically at login is not supported on this platform yet.";
+pub const ERR_UNSUPPORTED: &str =
+    "Running automatically at login is not supported on this platform yet.";
 /// Writing or removing the login item file failed.
 pub const ERR_WRITE_FAILED: &str = "Could not write the autostart file for this user.";
 /// A helper command (`systemctl --user`, `launchctl`, `reg`) failed.
