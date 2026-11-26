@@ -741,7 +741,7 @@ fn renders_quit_dialog_with_both_buttons_and_the_default_marked() {
     eprintln!("QUIT panel={panel} primary={primary} text={text}");
     assert!(panel > 3000, "quit panel not painted ({panel})");
     assert!(text > 800, "quit dialog body text missing ({text})");
-    // Exactly one button is primary: "Biarkan tetap berjalan" is the default.
+    // Exactly one button is primary: "Leave them running" is the default.
     assert!(primary > 150, "default button not marked ({primary})");
 }
 

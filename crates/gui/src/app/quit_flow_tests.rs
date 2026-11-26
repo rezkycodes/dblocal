@@ -56,7 +56,7 @@ fn quit_with_a_running_instance_opens_the_dialog(cx: &mut TestAppContext) {
     ));
 }
 
-/// "Biarkan tetap berjalan" marks the machine done without stopping anything.
+/// "Leave them running" marks the machine done without stopping anything.
 #[gpui_kit::test]
 fn keep_running_does_not_call_stop(cx: &mut TestAppContext) {
     let (view, service, cx) = fixture(cx);

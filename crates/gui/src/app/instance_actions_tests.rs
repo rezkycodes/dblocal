@@ -621,7 +621,7 @@ fn palette_actions_with_bad_ids_are_ignored(cx: &mut TestAppContext) {
     // rows to confirm.
     let items = view.read_with(cx, |this, _| this.palette_items());
     assert!(
-        crate::format::filter_palette(&items, "zzz-tidak-ada").is_empty(),
+        crate::format::filter_palette(&items, "zzz-does-not-exist").is_empty(),
         "no instance matches the query"
     );
     view.update(cx, |this, _| this.palette_open = true);

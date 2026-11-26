@@ -113,7 +113,7 @@ pub struct VersionEntry {
 pub struct CatalogView {
     /// Freshness of the snapshot in use.
     pub status: CatalogStatus,
-    /// Banner to show, for example "Katalog mungkin tidak terbaru".
+    /// Banner to show, for example "The catalog may be out of date".
     pub banner: Option<String>,
     /// Engines in display order, including unavailable ones.
     pub engines: Vec<EngineEntry>,

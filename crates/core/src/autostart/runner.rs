@@ -143,7 +143,7 @@ mod tests {
         let targets = vec![target("a"), target("b"), target("c")];
         let summary = run_start_targets(&targets, |t| {
             if t.name == "b" {
-                Err("DBL-1005 port dipakai".to_owned())
+                Err("DBL-1005 port in use".to_owned())
             } else {
                 Ok(())
             }
@@ -158,7 +158,7 @@ mod tests {
             .expect("b present");
         assert_eq!(
             failed.result.as_ref().err().map(String::as_str),
-            Some("DBL-1005 port dipakai")
+            Some("DBL-1005 port in use")
         );
     }
 

@@ -212,7 +212,7 @@ fn restart_now_is_drawn_only_for_a_running_instance(cx: &mut TestAppContext) {
 }
 
 /// `M12`: the Overview of a Failed instance with `restore_available` draws
-/// "Pulihkan konfigurasi dan mulai ulang", and clicking it calls `config_restore`.
+/// "Restore the configuration and restart", and clicking it calls `config_restore`.
 #[gpui_kit::test]
 fn the_failed_overview_draws_the_restore_action_and_it_restores(cx: &mut TestAppContext) {
     cx.update(gpui_kit::init);
