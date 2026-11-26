@@ -3,6 +3,7 @@
 use serde::{Deserialize, Serialize};
 
 use super::helpers::{archive_format, archive_root, is_sha256_hex};
+use super::tracked::TrackedVersion;
 use super::{Arch, CatalogArtifact, CatalogVersion, Os, Source, SourceError};
 
 /// One file entry of the MariaDB REST API.
@@ -160,8 +161,9 @@ pub fn mariadb_https_url(url: &str) -> Result<String, SourceError> {
 /// Builds MariaDB versions and artifacts from a REST API release payload.
 pub fn mariadb_from_api(
     release: &MariadbRelease,
-    version: &str,
+    tracked: &TrackedVersion,
 ) -> Result<(Vec<CatalogVersion>, Vec<CatalogArtifact>), SourceError> {
+    let version = tracked.version;
     let mut artifacts = Vec::new();
     for file in &release.files {
         // The API also lists plugin and debug-symbol tarballs for the same
@@ -237,7 +239,9 @@ pub fn mariadb_from_api(
         version: version.to_owned(),
         major_line: version.split('.').next().unwrap_or(version).to_owned(),
         release_date: trimmed_non_empty(&release.date_of_release),
-        eol: false,
+        eol: tracked.eol,
+        line: Some(tracked.line.to_owned()),
+        status: tracked.status.map(|status| status.as_str().to_owned()),
     }];
     Ok((versions, artifacts))
 }

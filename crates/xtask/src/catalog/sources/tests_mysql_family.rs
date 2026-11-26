@@ -2,7 +2,7 @@
 //! each file under the size limit.
 
 use super::mariadb::mariadb_from_api;
-use super::tests::{MapSource, read_fixture};
+use super::tests::{MapSource, read_fixture, tv};
 use super::*;
 
 #[test]
@@ -23,7 +23,8 @@ fn mariadb_reads_sha256_from_the_rest_api() {
             linux_head,
         );
     let resolved = mariadb_release_from_api(&source, api_url, "11.8.10").expect("release");
-    let (versions, artifacts) = mariadb_from_api(&resolved, "11.8.10").expect("mariadb");
+    let (versions, artifacts) =
+        mariadb_from_api(&resolved, &tv("11.8.10", "11.8")).expect("mariadb");
     assert_eq!(versions.len(), 1);
     assert_eq!(artifacts.len(), 2, "one Linux and one Windows server build");
 
@@ -69,7 +70,8 @@ fn mariadb_reads_sha256_from_the_rest_api() {
             file.size = Some(424242);
         }
     }
-    let (_, artifacts) = mariadb_from_api(&given, "11.8.10").expect("mariadb with size");
+    let (_, artifacts) =
+        mariadb_from_api(&given, &tv("11.8.10", "11.8")).expect("mariadb with size");
     assert!(artifacts.iter().any(|a| a.size_bytes == 424242));
 }
 
@@ -81,7 +83,7 @@ fn mariadb_rejects_missing_checksum_or_size() {
         .files
         .retain(|file| file.file_name.contains("linux-systemd"));
     release.files[0].checksum.sha256sum = None;
-    assert!(mariadb_from_api(&release, "11.8.10").is_err());
+    assert!(mariadb_from_api(&release, &tv("11.8.10", "11.8")).is_err());
 
     let mut release: MariadbRelease =
         serde_json::from_str(&read_fixture("mariadb-release.json")).expect("mariadb");
@@ -90,7 +92,7 @@ fn mariadb_rejects_missing_checksum_or_size() {
         .retain(|file| file.file_name.contains("linux-systemd"));
     release.files[0].size = None;
     assert!(
-        mariadb_from_api(&release, "11.8.10").is_err(),
+        mariadb_from_api(&release, &tv("11.8.10", "11.8")).is_err(),
         "a null size must still be refused when nothing resolved it"
     );
 }
@@ -166,16 +168,16 @@ fn mysql_published_builds_use_the_real_strip_prefix_and_existing_urls() {
     // Failing-first for the builder defect: `strip_prefix` used to be
     // `mysql-{version}-minimal`, which no real archive contains, so `bin/` would
     // land one directory too deep after a genuine download.
-    let builds = super::mysql_wave_one_builds();
+    let builds = mysql_builds_for(&tv("8.4.13", "8.4"));
     assert!(!builds.is_empty());
     for build in &builds {
         let root = super::mysql::archive_root(&build.file_name).expect("root");
         assert!(
-            root.starts_with("mysql-8.4.11-"),
+            root.starts_with("mysql-8.4.13-"),
             "{}: root {root}",
             build.file_name
         );
-        assert_ne!(root, "mysql-8.4.11-minimal");
+        assert_ne!(root, "mysql-8.4.13-minimal");
         assert!(
             build.file_name.contains("linux-glibc2.28-x86_64-minimal")
                 || build.file_name.contains("macos15")
@@ -191,6 +193,58 @@ fn mysql_published_builds_use_the_real_strip_prefix_and_existing_urls() {
             .any(|b| b.os == Os::Linux && b.arch == Arch::Aarch64),
         "there is no linux arm64 minimal build to point at"
     );
+}
+
+#[test]
+fn mysql_builds_use_the_line_directory_and_the_right_glibc_tag() {
+    // The 8.0 minimal archive links glibc 2.17; 8.4 and newer link 2.28, and the
+    // CDN directory is the release line, not the tag.
+    let old = mysql_builds_for(&tv("8.0.46", "8.0"));
+    assert!(
+        old.iter()
+            .all(|b| b.base_url == "https://cdn.mysql.com/Downloads/MySQL-8.0"),
+        "{:?}",
+        old.iter().map(|b| &b.base_url).collect::<Vec<_>>()
+    );
+    assert!(
+        old.iter()
+            .any(|b| b.file_name == "mysql-8.0.46-linux-glibc2.17-x86_64-minimal.tar.xz"),
+        "8.0 minimal uses glibc 2.17"
+    );
+
+    let new = mysql_builds_for(&tv("9.7.4", "9.7"));
+    assert!(
+        new.iter()
+            .any(|b| b.file_name == "mysql-9.7.4-linux-glibc2.28-x86_64-minimal.tar.xz"),
+        "9.7 minimal uses glibc 2.28"
+    );
+
+    // macOS x86_64 is listed as a build even when Oracle drops it, so the build
+    // loop can probe it and skip on a 404; only that target is optional.
+    let numbered = mysql_builds_for(&tv("26.10.0", "26.10"));
+    assert!(
+        numbered
+            .iter()
+            .any(|b| b.file_name == "mysql-26.10.0-macos15-arm64.tar.gz")
+    );
+    let macos_x86 = numbered
+        .iter()
+        .find(|b| b.file_name == "mysql-26.10.0-macos15-x86_64.tar.gz")
+        .expect("macOS x86_64 is probed and may 404");
+    assert!(super::mysql_target_optional(macos_x86));
+    assert!(
+        numbered
+            .iter()
+            .filter(|b| !super::mysql_target_optional(b))
+            .all(|b| !b.file_name.contains("macos15-x86_64")),
+        "only macOS x86_64 may be optional"
+    );
+    // The Linux, Windows and macOS arm64 builds are never optional.
+    for build in &numbered {
+        if build.file_name.contains("linux") || build.file_name.contains("winx64") {
+            assert!(!super::mysql_target_optional(build), "{}", build.file_name);
+        }
+    }
 }
 
 #[test]

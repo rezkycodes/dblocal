@@ -6,30 +6,36 @@ use super::{
 };
 use dblocal_core::model::ArchiveFormat;
 
-/// Parses a `"<hex>  <filename>"` sidecar and checks the filename matches.
+/// Parses a SHA-256 out of a `.sha256` sidecar and checks the filename matches.
+///
+/// Upstream sidecars are not uniform. Most publish one line, `"<hex>  <file>"`;
+/// the `theseus-rs/postgresql-binaries` Windows assets publish Windows
+/// `CertUtil` output instead, with a `SHA256 hash of <file>:` header and the
+/// bare hash on the next line. The parser therefore takes the first 64-hex
+/// token anywhere in the text, and only cross-checks a trailing filename when
+/// the line actually carries one; a real hash never appears without them.
 pub fn parse_sha256_sidecar(text: &str, expected_name: &str) -> Result<String, SourceError> {
-    let line = text
-        .lines()
-        .find(|line| !line.trim().is_empty())
-        .ok_or_else(|| SourceError::new(format!("empty checksum sidecar for {expected_name}")))?;
-    let mut fields = line.split_whitespace();
-    let hash = fields
-        .next()
-        .ok_or_else(|| SourceError::new("checksum sidecar has no hash"))?;
-    if !is_sha256_hex(hash) {
-        return Err(SourceError::new(format!(
-            "checksum sidecar for {expected_name} is not a SHA-256: {hash:?}"
-        )));
-    }
-    if let Some(name) = fields.next() {
-        let name = name.trim_start_matches('*');
-        if name != expected_name {
-            return Err(SourceError::new(format!(
-                "checksum sidecar names {name:?}, expected {expected_name:?}"
-            )));
+    for line in text.lines() {
+        let mut fields = line.split_whitespace();
+        let Some(first) = fields.next() else {
+            continue;
+        };
+        if !is_sha256_hex(first) {
+            continue;
         }
+        if let Some(name) = fields.next() {
+            let name = name.trim_start_matches('*');
+            if name != expected_name {
+                return Err(SourceError::new(format!(
+                    "checksum sidecar names {name:?}, expected {expected_name:?}"
+                )));
+            }
+        }
+        return Ok(first.to_ascii_lowercase());
     }
-    Ok(hash.to_ascii_lowercase())
+    Err(SourceError::new(format!(
+        "checksum sidecar for {expected_name} has no SHA-256"
+    )))
 }
 
 /// Parses a `"<md5>  <filename>"` sidecar.

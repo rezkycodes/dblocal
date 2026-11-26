@@ -21,6 +21,75 @@ pub struct MysqlBuild {
     pub base_url: String,
 }
 
+/// Base URL of a MySQL CDN line (`8.4`, `9.7`, `26.10`, `8.0`).
+///
+/// Oracle names the directory after the release line, which is exactly
+/// [`dblocal_core::model::version_line`] for MySQL.
+pub fn mysql_base_url(line: &str) -> String {
+    format!("https://cdn.mysql.com/Downloads/MySQL-{line}")
+}
+
+/// The published builds for one tracked MySQL version.
+///
+/// Oracle publishes a `-minimal` Linux `x86_64` tarball, a `macos15` arm64
+/// tarball and a `winx64` zip for every line. macOS `x86_64` is the one target
+/// Oracle drops on some 8.4/26.10 releases (only arm64 exists), so it is
+/// optional: the picker then shows macOS x86_64 as unavailable rather than
+/// pointing at a 404. No line publishes a Linux `aarch64` minimal tarball, so
+/// that target is not claimed either, instead of a ~900 MB full tarball.
+pub fn mysql_builds_for(tracked: &super::tracked::TrackedVersion) -> Vec<MysqlBuild> {
+    let version = tracked.version;
+    let base_url = mysql_base_url(tracked.line);
+    let file = |name: String, os: Os, arch: Arch, format: ArchiveFormat| MysqlBuild {
+        file_name: name,
+        os,
+        arch,
+        format,
+        base_url: base_url.clone(),
+    };
+
+    // 8.0 minimal archives are linked against glibc 2.17; 8.4 and newer 2.28.
+    let glibc = if tracked.line == "8.0" {
+        "2.17"
+    } else {
+        "2.28"
+    };
+
+    vec![
+        file(
+            format!("mysql-{version}-linux-glibc{glibc}-x86_64-minimal.tar.xz"),
+            Os::Linux,
+            Arch::X86_64,
+            ArchiveFormat::TarXz,
+        ),
+        file(
+            format!("mysql-{version}-macos15-arm64.tar.gz"),
+            Os::Macos,
+            Arch::Aarch64,
+            ArchiveFormat::TarGz,
+        ),
+        file(
+            format!("mysql-{version}-macos15-x86_64.tar.gz"),
+            Os::Macos,
+            Arch::X86_64,
+            ArchiveFormat::TarGz,
+        ),
+        file(
+            format!("mysql-{version}-winx64.zip"),
+            Os::Windows,
+            Arch::X86_64,
+            ArchiveFormat::Zip,
+        ),
+    ]
+}
+
+/// Whether a MySQL build's 404 means "this target is not published".
+///
+/// Only macOS `x86_64` is dropped per release; every other target must exist.
+pub fn mysql_target_optional(build: &MysqlBuild) -> bool {
+    build.os == Os::Macos && build.arch == Arch::X86_64
+}
+
 /// Builds a MySQL artifact by downloading the archive once and hashing it.
 ///
 /// Oracle publishes no SHA-256 for MySQL, only `.md5` and a GPG signature. The

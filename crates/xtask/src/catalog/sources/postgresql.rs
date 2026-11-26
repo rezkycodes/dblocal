@@ -3,6 +3,7 @@
 use serde::Deserialize;
 
 use super::helpers::parse_sha256_sidecar;
+use super::tracked::TrackedVersion;
 use super::{Arch, ArchiveFormat, CatalogArtifact, CatalogVersion, Os, Source, SourceError};
 
 /// One release as reported by the GitHub Releases API.
@@ -41,19 +42,23 @@ const POSTGRES_TARGETS: [(Os, Arch, &str); 6] = [
 
 /// Builds PostgreSQL versions and artifacts from a Releases API response.
 ///
-/// Windows ships both `.tar.gz` and `.zip`; the `.zip` is preferred.
+/// Windows ships both `.tar.gz` and `.zip`; the `.zip` is preferred. Since
+/// PostgreSQL 14 and 15 publish no `windows-aarch64` asset, an unsupported
+/// target is skipped rather than failing the whole build: the picker then just
+/// shows that version as unavailable on Windows arm64.
 pub fn postgresql_from_releases(
     releases: &[GithubRelease],
-    wanted: &[&str],
+    wanted: &[TrackedVersion],
     source: &dyn Source,
 ) -> Result<(Vec<CatalogVersion>, Vec<CatalogArtifact>), SourceError> {
     let mut versions = Vec::new();
     let mut artifacts = Vec::new();
 
-    for version in wanted {
+    for tracked in wanted {
+        let version = tracked.version;
         let release = releases
             .iter()
-            .find(|release| release.tag_name == *version)
+            .find(|release| release.tag_name == version)
             .ok_or_else(|| {
                 SourceError::new(format!("upstream has no PostgreSQL release {version}"))
             })?;
@@ -64,10 +69,12 @@ pub fn postgresql_from_releases(
             .map(|stamp| stamp.split('T').next().unwrap_or(stamp).to_owned());
         versions.push(CatalogVersion {
             engine: "postgresql".to_owned(),
-            version: (*version).to_owned(),
+            version: version.to_owned(),
             major_line: version.split('.').next().unwrap_or(version).to_owned(),
             release_date,
-            eol: false,
+            eol: tracked.eol,
+            line: Some(tracked.line.to_owned()),
+            status: tracked.status.map(|status| status.as_str().to_owned()),
         });
 
         for (os, arch, triple) in POSTGRES_TARGETS {
@@ -78,12 +85,16 @@ pub fn postgresql_from_releases(
             } else {
                 pg_artifact(release, version, os, arch, triple, "tar.gz", source)?
             };
-            let artifact = artifact.ok_or_else(|| {
-                SourceError::new(format!(
-                    "PostgreSQL {version} has no asset for {os}-{arch} ({triple})"
-                ))
-            })?;
-            artifacts.push(artifact);
+            match artifact {
+                Some(artifact) => artifacts.push(artifact),
+                // Windows arm64 is the only target an older line may omit.
+                None if os == Os::Windows && arch == Arch::Aarch64 => continue,
+                None => {
+                    return Err(SourceError::new(format!(
+                        "PostgreSQL {version} has no asset for {os}-{arch} ({triple})"
+                    )));
+                }
+            }
         }
     }
 

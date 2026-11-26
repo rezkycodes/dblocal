@@ -87,6 +87,16 @@ pub(super) fn fixtures() -> String {
     format!("{}/tests/fixtures", env!("CARGO_MANIFEST_DIR"))
 }
 
+/// A bare tracked version for the fixture tests (no EOL, no status).
+pub(super) fn tv(version: &'static str, line: &'static str) -> TrackedVersion {
+    TrackedVersion {
+        version,
+        line,
+        eol: false,
+        status: None,
+    }
+}
+
 pub(super) fn read_fixture(name: &str) -> String {
     std::fs::read_to_string(format!("{}/{name}", fixtures())).expect("fixture")
 }
@@ -102,6 +112,16 @@ fn sidecars_are_parsed_and_checked() {
         "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
     );
     assert!(parse_sha256_sidecar("not-a-hash  file.tar.gz\n", "file.tar.gz").is_err());
+    // theseus-rs Windows assets publish Windows CertUtil output, not a sidecar
+    // line: a header, then the bare hash. The hash must still be found.
+    let certutil = "SHA256 hash of postgresql-18.6.0-x86_64-pc-windows-msvc.zip:\r\n\
+                    dd4bcd50b38bf5b9f8a6e0d6736bd4412a79a066639cb855479d4d58b1dd74ac\r\n\
+                    CertUtil: -hashfile command completed successfully.\r\n";
+    assert_eq!(
+        parse_sha256_sidecar(certutil, "postgresql-18.6.0-x86_64-pc-windows-msvc.zip")
+            .expect("certutil"),
+        "dd4bcd50b38bf5b9f8a6e0d6736bd4412a79a066639cb855479d4d58b1dd74ac"
+    );
     assert!(
         parse_sha256_sidecar(
             "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa  other.tar.gz\n",
@@ -141,8 +161,9 @@ fn postgresql_fixture_yields_six_targets_per_version() {
     for (path, body) in sidecars {
         source = source.with_text(&format!("https://example.test{path}"), body);
     }
+    let wanted = [tv("18.7.0", "18"), tv("17.12.0", "17"), tv("16.16.0", "16")];
     let (versions, artifacts) =
-        postgresql_from_releases(&releases, &WAVE_ONE_POSTGRESQL, &source).expect("postgres");
+        postgresql_from_releases(&releases, &wanted, &source).expect("postgres");
     assert_eq!(versions.len(), 3);
     assert_eq!(artifacts.len(), 18);
     for artifact in &artifacts {
@@ -185,7 +206,7 @@ fn valkey_maps_arm64_reads_size_from_head_and_records_glibc_floors() {
     // fetch, so it could not read or cross-check the real upstream size.
     let source = load_valkey_source();
     let (versions, artifacts) =
-        valkey_from_sidecars(WAVE_ONE_VALKEY, &WAVE_ONE_VARIANTS, &source).expect("valkey");
+        valkey_from_sidecars(&tv("9.2.0", "9.2"), &WAVE_ONE_VARIANTS, &source).expect("valkey");
     assert_eq!(versions.len(), 1);
     assert_eq!(artifacts.len(), 2);
     for artifact in &artifacts {
@@ -209,7 +230,7 @@ fn valkey_maps_arm64_reads_size_from_head_and_records_glibc_floors() {
 fn valkey_wave_one_selection_is_jammy_only() {
     let source = load_valkey_source();
     let (_, artifacts) =
-        valkey_from_sidecars(WAVE_ONE_VALKEY, &WAVE_ONE_VARIANTS, &source).expect("valkey");
+        valkey_from_sidecars(&tv("9.2.0", "9.2"), &WAVE_ONE_VARIANTS, &source).expect("valkey");
     assert_eq!(artifacts.len(), 2);
     assert!(
         artifacts
@@ -223,7 +244,7 @@ fn valkey_fails_when_identity_and_gzip_objects_differ() {
     // B2 failing-first: noble-x86_64 disagrees across encodings in the recorded
     // upstream fixture, so the builder must refuse to pin it.
     let source = load_valkey_source();
-    let err = valkey_from_sidecars(WAVE_ONE_VALKEY, &["noble"], &source)
+    let err = valkey_from_sidecars(&tv("9.2.0", "9.2"), &["noble"], &source)
         .expect_err("encoding mismatch must fail");
     assert!(
         err.to_string()
@@ -341,6 +362,8 @@ fn assemble_is_sorted_deterministically() {
             major_line: "9".to_owned(),
             release_date: None,
             eol: false,
+            line: None,
+            status: None,
         },
         CatalogVersion {
             engine: "postgresql".to_owned(),
@@ -348,6 +371,8 @@ fn assemble_is_sorted_deterministically() {
             major_line: "16".to_owned(),
             release_date: None,
             eol: false,
+            line: None,
+            status: None,
         },
         CatalogVersion {
             engine: "postgresql".to_owned(),
@@ -355,6 +380,8 @@ fn assemble_is_sorted_deterministically() {
             major_line: "18".to_owned(),
             release_date: None,
             eol: false,
+            line: None,
+            status: None,
         },
     ];
     let doc = assemble(
@@ -398,7 +425,8 @@ fn postgres_missing_release_or_asset_is_an_error() {
     for (path, body) in sidecars {
         source = source.with_text(&format!("https://example.test{path}"), body);
     }
-    let err = postgresql_from_releases(&releases, &["99.0.0"], &source).expect_err("missing");
+    let err =
+        postgresql_from_releases(&releases, &[tv("99.0.0", "99")], &source).expect_err("missing");
     assert!(err.to_string().contains("no PostgreSQL release"));
 
     // A release missing an expected asset.
@@ -408,7 +436,35 @@ fn postgres_missing_release_or_asset_is_an_error() {
             .assets
             .retain(|asset| !asset.name.contains("x86_64-unknown-linux-gnu.tar.gz"));
     }
-    assert!(postgresql_from_releases(&broken, &["18.7.0"], &source).is_err());
+    assert!(postgresql_from_releases(&broken, &[tv("18.7.0", "18")], &source).is_err());
+}
+
+#[test]
+fn postgres_skips_a_missing_windows_arm64_but_not_other_targets() {
+    // PostgreSQL 14/15 publish no `windows-aarch64` asset. A build that omits it
+    // must still succeed, with one fewer artifact, rather than failing the whole
+    // catalog; omitting a Linux asset still fails.
+    let mut releases: Vec<GithubRelease> =
+        serde_json::from_str(&read_fixture("postgres-releases.json")).expect("releases");
+    if let Some(release) = releases.iter_mut().find(|r| r.tag_name == "18.7.0") {
+        release
+            .assets
+            .retain(|asset| !asset.name.contains("aarch64-pc-windows-msvc"));
+    }
+    let sidecars: BTreeMap<String, String> =
+        serde_json::from_str(&read_fixture("postgres-sidecars.json")).expect("sidecars");
+    let mut source = MapSource::new();
+    for (path, body) in sidecars {
+        source = source.with_text(&format!("https://example.test{path}"), body);
+    }
+    let (_, artifacts) = postgresql_from_releases(&releases, &[tv("18.7.0", "18")], &source)
+        .expect("windows arm64 may be absent");
+    assert_eq!(artifacts.len(), 5, "one target fewer, the rest kept");
+    assert!(
+        !artifacts
+            .iter()
+            .any(|a| a.os == "windows" && a.arch == "aarch64")
+    );
 }
 
 #[test]
@@ -428,7 +484,7 @@ fn postgres_rejects_asset_without_sidecar() {
     for (path, body) in sidecars {
         source = source.with_text(&format!("https://example.test{path}"), body);
     }
-    assert!(postgresql_from_releases(&releases, &["18.7.0"], &source).is_err());
+    assert!(postgresql_from_releases(&releases, &[tv("18.7.0", "18")], &source).is_err());
 }
 
 #[test]
@@ -447,14 +503,14 @@ fn mariadb_rejects_empty_release_and_malformed_sha() {
             size: Some(100),
         }],
     };
-    assert!(mariadb_from_api(&release, "11.8.10").is_err());
+    assert!(mariadb_from_api(&release, &tv("11.8.10", "11.8")).is_err());
 
     let release = MariadbRelease {
         release_id: "11.8.10".to_owned(),
         date_of_release: "2026-11-17".to_owned(),
         files: vec![],
     };
-    assert!(mariadb_from_api(&release, "11.8.10").is_err());
+    assert!(mariadb_from_api(&release, &tv("11.8.10", "11.8")).is_err());
 
     let release = MariadbRelease {
         release_id: "11.8.10".to_owned(),
@@ -470,7 +526,7 @@ fn mariadb_rejects_empty_release_and_malformed_sha() {
             size: Some(100),
         }],
     };
-    assert!(mariadb_from_api(&release, "11.8.10").is_err());
+    assert!(mariadb_from_api(&release, &tv("11.8.10", "11.8")).is_err());
 }
 
 #[test]

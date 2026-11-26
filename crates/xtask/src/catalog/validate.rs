@@ -26,10 +26,10 @@ mod tests {
     fn validates_the_bundled_catalog() {
         let path = Path::new(concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/../../catalog/engines.json"
+            "/../../catalog/engines-v2.json"
         ));
         let summary = run(path).expect("bundled catalog must validate");
-        assert!(summary.starts_with("catalog valid: schema 1, "));
+        assert!(summary.starts_with("catalog valid: schema 2, "));
     }
 
     #[test]

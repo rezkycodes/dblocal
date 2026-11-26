@@ -228,8 +228,8 @@ fn build_reads_recorded_fixtures_from_a_local_server_on_port_0() {
     let base = serve_fixtures();
     let source = EphemeralSource::new(base);
     let selection = BuildSelection {
-        postgresql: vec!["18.7.0".to_owned()],
-        valkey: Some("9.2.0".to_owned()),
+        postgresql: vec![super::tests::fixture_tracked("18.7.0", "18")],
+        valkey: vec![super::tests::fixture_tracked("9.2.0", "9.2")],
         mariadb: Vec::new(),
         mysql: Vec::new(),
     };

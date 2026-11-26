@@ -3,46 +3,95 @@ use std::time::SystemTime;
 
 use dblocal_core::catalog::{CatalogArtifact, CatalogDocument, CatalogVersion, validate_document};
 
+#[cfg(test)]
+use super::sources::find_tracked;
 use super::sources::{
-    self, CATALOG_SOURCE_URL, HttpSource, MysqlBuild, Source, WAVE_ONE_MARIADB, WAVE_ONE_MYSQL,
-    WAVE_ONE_POSTGRESQL, WAVE_ONE_VALKEY, WAVE_ONE_VARIANTS, assemble, mariadb_api_url,
-    mysql_wave_one_builds,
+    self, CATALOG_SOURCE_URL, HttpSource, MysqlBuild, Source, TrackedVersion, WAVE_ONE_VARIANTS,
+    assemble, mariadb_api_url, mysql_builds_for,
 };
+use dblocal_core::model::EngineKey;
 
 /// Which engines to fetch from upstream.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BuildSelection {
-    /// PostgreSQL tags to include.
-    pub postgresql: Vec<String>,
-    /// Valkey tag to include.
-    pub valkey: Option<String>,
-    /// MariaDB REST API releases to include, as `(api_url, version)`.
-    pub mariadb: Vec<(String, String)>,
-    /// MySQL builds to download and hash, as `(build, version)`.
+    /// PostgreSQL versions to include, with their picker metadata.
+    pub postgresql: Vec<TrackedVersion>,
+    /// Valkey versions to include.
+    pub valkey: Vec<TrackedVersion>,
+    /// MariaDB releases to include, as `(api_url, tracked)`.
+    pub mariadb: Vec<(String, TrackedVersion)>,
+    /// MySQL builds to download and hash, as `(build, tracked)`.
     ///
     /// Upstream publishes no SHA-256 for MySQL, so the builder downloads each
     /// archive once and records the computed hash.
-    pub mysql: Vec<(MysqlBuild, String)>,
+    pub mysql: Vec<(MysqlBuild, TrackedVersion)>,
 }
 
 impl BuildSelection {
-    /// The scope this wave publishes: all four engines.
+    /// The full tracked catalog: every engine's [`sources::tracked`] table.
     pub fn wave_one() -> Self {
+        let postgresql = sources::tracked_for_engine(EngineKey::Postgresql).to_vec();
+        let valkey = sources::tracked_for_engine(EngineKey::Valkey).to_vec();
+        let mariadb = sources::tracked_for_engine(EngineKey::Mariadb)
+            .iter()
+            .map(|tracked| (mariadb_api_url(tracked.version), *tracked))
+            .collect();
+        let mysql = sources::tracked_for_engine(EngineKey::Mysql)
+            .iter()
+            .flat_map(|tracked| {
+                mysql_builds_for(tracked)
+                    .into_iter()
+                    .map(move |build| (build, *tracked))
+            })
+            .collect();
         Self {
-            postgresql: WAVE_ONE_POSTGRESQL
-                .iter()
-                .map(|tag| (*tag).to_owned())
-                .collect(),
-            valkey: Some(WAVE_ONE_VALKEY.to_owned()),
-            mariadb: WAVE_ONE_MARIADB
-                .iter()
-                .map(|version| (mariadb_api_url(version), (*version).to_owned()))
-                .collect(),
-            mysql: mysql_wave_one_builds()
-                .into_iter()
-                .map(|build| (build, WAVE_ONE_MYSQL.to_owned()))
-                .collect(),
+            postgresql,
+            valkey,
+            mariadb,
+            mysql,
         }
+    }
+
+    /// A narrower selection: the named tags only, for offline tests and patches.
+    ///
+    /// Unknown tags are a build error, so a typo never silently drops a version.
+    /// Only the tests narrow a selection today; the production build always
+    /// takes the whole tracked table.
+    #[cfg(test)]
+    pub fn for_tags(
+        postgresql: &[&str],
+        valkey: &[&str],
+        mariadb: &[&str],
+        mysql: &[&str],
+    ) -> Result<Self, String> {
+        let pick = |engine: EngineKey, tags: &[&str]| -> Result<Vec<TrackedVersion>, String> {
+            let table = sources::tracked_for_engine(engine);
+            tags.iter()
+                .map(|tag| {
+                    find_tracked(table, tag).copied().ok_or_else(|| {
+                        format!("{} is not a tracked version for {}", tag, engine.as_str())
+                    })
+                })
+                .collect()
+        };
+        let mariadb_tracked = pick(EngineKey::Mariadb, mariadb)?;
+        let mysql_tracked = pick(EngineKey::Mysql, mysql)?;
+        Ok(Self {
+            postgresql: pick(EngineKey::Postgresql, postgresql)?,
+            valkey: pick(EngineKey::Valkey, valkey)?,
+            mariadb: mariadb_tracked
+                .into_iter()
+                .map(|tracked| (mariadb_api_url(tracked.version), tracked))
+                .collect(),
+            mysql: mysql_tracked
+                .into_iter()
+                .flat_map(|tracked| {
+                    mysql_builds_for(&tracked)
+                        .into_iter()
+                        .map(move |build| (build, tracked))
+                })
+                .collect(),
+        })
     }
 }
 
@@ -151,42 +200,49 @@ pub fn build(
             .map_err(|err| err.to_string())?;
         let releases: Vec<sources::GithubRelease> = serde_json::from_str(&releases_text)
             .map_err(|err| format!("PostgreSQL releases JSON: {err}"))?;
-        let wanted: Vec<&str> = selection.postgresql.iter().map(String::as_str).collect();
-        let (v, a) = sources::postgresql_from_releases(&releases, &wanted, source)
+        let (v, a) = sources::postgresql_from_releases(&releases, &selection.postgresql, source)
             .map_err(|err| err.to_string())?;
         versions.extend(v);
         artifacts.extend(a);
     }
 
-    if let Some(version) = &selection.valkey {
-        let variants: Vec<&str> = WAVE_ONE_VARIANTS.to_vec();
-        let (v, a) = sources::valkey_from_sidecars(version, &variants, source)
+    let variants: Vec<&str> = WAVE_ONE_VARIANTS.to_vec();
+    for tracked in &selection.valkey {
+        let (v, a) = sources::valkey_from_sidecars(tracked, &variants, source)
             .map_err(|err| err.to_string())?;
         versions.extend(v);
         artifacts.extend(a);
     }
 
-    for (api_url, version) in &selection.mariadb {
-        let release = sources::mariadb_release_from_api(source, api_url, version)
+    for (api_url, tracked) in &selection.mariadb {
+        let release = sources::mariadb_release_from_api(source, api_url, tracked.version)
             .map_err(|err| err.to_string())?;
-        let (v, a) = sources::mariadb_from_api(&release, version).map_err(|err| err.to_string())?;
+        let (v, a) = sources::mariadb_from_api(&release, tracked).map_err(|err| err.to_string())?;
         versions.extend(v);
         artifacts.extend(a);
     }
 
-    for (spec, version) in &selection.mysql {
-        let artifact =
-            sources::mysql_artifact(spec, version, source).map_err(|err| err.to_string())?;
+    for (spec, tracked) in &selection.mysql {
+        let version = tracked.version;
+        let artifact = match sources::mysql_artifact(spec, version, source) {
+            Ok(artifact) => artifact,
+            // Oracle drops the macOS x86_64 tarball on some releases; that
+            // target is simply not offered for this version.
+            Err(_) if sources::mysql_target_optional(spec) => continue,
+            Err(err) => return Err(err.to_string()),
+        };
         if !versions
             .iter()
-            .any(|entry| entry.engine == "mysql" && entry.version == *version)
+            .any(|entry| entry.engine == "mysql" && entry.version == version)
         {
             versions.push(CatalogVersion {
                 engine: "mysql".to_owned(),
-                version: version.clone(),
+                version: version.to_owned(),
                 major_line: version.split('.').next().unwrap_or(version).to_owned(),
                 release_date: None,
-                eol: false,
+                eol: tracked.eol,
+                line: Some(tracked.line.to_owned()),
+                status: tracked.status.map(|status| status.as_str().to_owned()),
             });
         }
         artifacts.push(artifact);
@@ -238,9 +294,87 @@ fn write_atomic(path: &Path, document: &CatalogDocument) -> Result<(), std::io::
 #[cfg(test)]
 mod tests {
     use super::*;
+    use dblocal_core::model::VersionStatus;
     use serde_json::Value;
     use std::collections::BTreeMap;
     use std::time::Duration;
+
+    #[test]
+    fn for_tags_narrows_to_known_versions_and_rejects_typos() {
+        let selection =
+            BuildSelection::for_tags(&["18.7.0"], &["9.2.0"], &["11.8.10"], &["8.4.13"])
+                .expect("known tags");
+        assert_eq!(selection.postgresql.len(), 1);
+        assert_eq!(selection.postgresql[0].version, "18.7.0");
+        assert_eq!(selection.postgresql[0].line, "18");
+        assert_eq!(selection.valkey.len(), 1);
+        assert_eq!(selection.mariadb.len(), 1);
+        assert_eq!(selection.mariadb[0].1.line, "11.8");
+        assert_eq!(
+            selection.mysql.len(),
+            mysql_builds_for(&selection.mysql[0].1).len()
+        );
+
+        let err = BuildSelection::for_tags(&["99.0.0"], &[], &[], &[]).expect_err("unknown");
+        assert!(err.contains("99.0.0"), "{err}");
+    }
+
+    /// One bare tracked version, for the local-server test in the child module.
+    pub(super) fn fixture_tracked(version: &'static str, line: &'static str) -> TrackedVersion {
+        TrackedVersion {
+            version,
+            line,
+            eol: false,
+            status: None,
+        }
+    }
+
+    /// The versions the recorded fixtures cover: the old wave-one set, tagged
+    /// with picker metadata the way the real tracked table does.
+    fn fixture_selection() -> BuildSelection {
+        let pg = |version: &'static str, line: &'static str| TrackedVersion {
+            version,
+            line,
+            eol: false,
+            status: None,
+        };
+        let tracked = |version: &'static str, line: &'static str| TrackedVersion {
+            version,
+            line,
+            eol: false,
+            status: Some(VersionStatus::Lts),
+        };
+        let valkey = TrackedVersion {
+            version: "9.2.0",
+            line: "9.2",
+            eol: false,
+            status: None,
+        };
+        let mysql = TrackedVersion {
+            version: "8.4.11",
+            line: "8.4",
+            eol: false,
+            status: Some(VersionStatus::Lts),
+        };
+        BuildSelection {
+            postgresql: vec![pg("18.7.0", "18"), pg("17.12.0", "17"), pg("16.16.0", "16")],
+            valkey: vec![valkey],
+            mariadb: vec![
+                (
+                    sources::mariadb_api_url("11.8.10"),
+                    tracked("11.8.10", "11.8"),
+                ),
+                (
+                    sources::mariadb_api_url("11.4.14"),
+                    tracked("11.4.14", "11.4"),
+                ),
+            ],
+            mysql: mysql_builds_for(&mysql)
+                .into_iter()
+                .map(|build| (build, mysql))
+                .collect(),
+        }
+    }
 
     struct FixtureSource {
         text: BTreeMap<String, String>,
@@ -334,7 +468,7 @@ mod tests {
                 std::fs::read(format!("{base}/mysql-archive.bin")).expect("mysql archive fixture");
             let mysql_md5 = sources::mysql_md5_hex(&mysql_bytes);
             let mut mysql_bytes_map = BTreeMap::new();
-            for build in sources::mysql_wave_one_builds() {
+            for (build, _) in fixture_selection().mysql {
                 let url = format!("{}/{}", build.base_url, build.file_name);
                 text.insert(
                     format!("{url}.md5"),
@@ -394,7 +528,7 @@ mod tests {
         let output = dir.path().join("nested/catalog/engines.json");
         let summary = build_and_write(
             &source,
-            &BuildSelection::wave_one(),
+            &fixture_selection(),
             &output,
             SystemTime::UNIX_EPOCH + Duration::from_secs(1_795_132_800),
         )
@@ -425,14 +559,14 @@ mod tests {
         let now = SystemTime::UNIX_EPOCH + Duration::from_secs(1_800_000_000); // 2027-01-15
 
         // First write: no existing file, so today's UTC date is used.
-        build_and_write(&source, &BuildSelection::wave_one(), &output, now).expect("first");
+        build_and_write(&source, &fixture_selection(), &output, now).expect("first");
         let first: CatalogDocument =
             serde_json::from_str(&std::fs::read_to_string(&output).expect("read")).expect("parse");
         assert_eq!(first.generated_at.as_deref(), Some("2027-01-15T00:00:00Z"));
 
         // Same upstream data, later day: keep the original stamp, no churn.
         let later = now + Duration::from_secs(7 * 24 * 60 * 60);
-        build_and_write(&source, &BuildSelection::wave_one(), &output, later).expect("second");
+        build_and_write(&source, &fixture_selection(), &output, later).expect("second");
         let second: CatalogDocument =
             serde_json::from_str(&std::fs::read_to_string(&output).expect("read")).expect("parse");
         assert_eq!(second.generated_at.as_deref(), Some("2027-01-15T00:00:00Z"));
@@ -445,12 +579,17 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let output = dir.path().join("catalog/engines.json");
         let first_now = SystemTime::UNIX_EPOCH + Duration::from_secs(1_800_000_000); // 2027-01-15
-        build_and_write(&source, &BuildSelection::wave_one(), &output, first_now).expect("first");
+        build_and_write(&source, &fixture_selection(), &output, first_now).expect("first");
 
         // A different selection changes the document, so the stamp must move.
         let narrower = BuildSelection {
-            postgresql: vec!["18.7.0".to_owned()],
-            valkey: None,
+            postgresql: vec![TrackedVersion {
+                version: "18.7.0",
+                line: "18",
+                eol: false,
+                status: None,
+            }],
+            valkey: Vec::new(),
             mariadb: Vec::new(),
             mysql: Vec::new(),
         };
@@ -481,7 +620,7 @@ mod tests {
         let source = FixtureSource::wave_one();
         let document = build(
             &source,
-            &BuildSelection::wave_one(),
+            &fixture_selection(),
             Some("2026-11-20T00:00:00Z".to_owned()),
         )
         .expect("build wave one");
@@ -495,7 +634,7 @@ mod tests {
         let json = serde_json::to_string_pretty(&document).expect("encode");
         let again = build(
             &source,
-            &BuildSelection::wave_one(),
+            &fixture_selection(),
             Some("2026-11-20T00:00:00Z".to_owned()),
         )
         .expect("build again");
@@ -516,7 +655,7 @@ mod tests {
         let source = FixtureSource::wave_one();
         let document = build(
             &source,
-            &BuildSelection::wave_one(),
+            &fixture_selection(),
             Some("2026-11-20T00:00:00Z".to_owned()),
         )
         .expect("build");
@@ -540,13 +679,25 @@ mod tests {
         // from `mysql-archive.bin` with a matching `.md5`, so this proves the two
         // adapters reach the assembled document without hand-built URLs.
         let source = FixtureSource::wave_one();
+        let tracked = TrackedVersion {
+            version: "8.4.11",
+            line: "8.4",
+            eol: false,
+            status: Some(VersionStatus::Lts),
+        };
+        let mariadb = TrackedVersion {
+            version: "11.8.10",
+            line: "11.8",
+            eol: false,
+            status: Some(VersionStatus::Lts),
+        };
         let selection = BuildSelection {
             postgresql: Vec::new(),
-            valkey: None,
-            mariadb: vec![(sources::mariadb_api_url("11.8.10"), "11.8.10".to_owned())],
-            mysql: sources::mysql_wave_one_builds()
+            valkey: Vec::new(),
+            mariadb: vec![(sources::mariadb_api_url("11.8.10"), mariadb)],
+            mysql: mysql_builds_for(&tracked)
                 .into_iter()
-                .map(|build| (build, sources::WAVE_ONE_MYSQL.to_owned()))
+                .map(|build| (build, tracked))
                 .collect(),
         };
         let document = build(&source, &selection, None).expect("build");

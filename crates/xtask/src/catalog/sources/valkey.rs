@@ -9,6 +9,7 @@
 //! encodings and refuses to record an artifact when they disagree.
 
 use super::helpers::parse_sha256_sidecar;
+use super::tracked::TrackedVersion;
 use super::{
     Arch, CatalogArtifact, CatalogVersion, ENCODING_GZIP, ENCODING_IDENTITY, Os, Source,
     SourceError,
@@ -94,16 +95,19 @@ pub fn valkey_object(
 /// fails the build naming the artifact, instead of pinning a hash that will not
 /// verify later (finding B2).
 pub fn valkey_from_sidecars(
-    version: &str,
+    tracked: &TrackedVersion,
     variants: &[&str],
     source: &dyn Source,
 ) -> Result<(Vec<CatalogVersion>, Vec<CatalogArtifact>), SourceError> {
+    let version = tracked.version;
     let versions = vec![CatalogVersion {
         engine: "valkey".to_owned(),
         version: version.to_owned(),
         major_line: version.split('.').next().unwrap_or(version).to_owned(),
         release_date: None,
-        eol: false,
+        eol: tracked.eol,
+        line: Some(tracked.line.to_owned()),
+        status: tracked.status.map(|status| status.as_str().to_owned()),
     }];
 
     let mut artifacts = Vec::new();
