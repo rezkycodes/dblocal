@@ -74,6 +74,8 @@ mod frame;
 mod log_rows;
 #[path = "render/palette_panel.rs"]
 mod palette_panel;
+#[path = "render/update.rs"]
+mod update;
 #[path = "render/watchdog.rs"]
 mod watchdog;
 

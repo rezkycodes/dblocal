@@ -45,8 +45,16 @@ fn opening_settings_starts_with_no_answer(cx: &mut TestAppContext) {
     settle(cx);
     assert!(view.read_with(cx, |this, _| this.settings_state().open));
     assert!(
-        view.read_with(cx, |this, _| this.settings_state().checked().is_none()),
-        "opening must not run an update check (F-PKG-05 AC1)"
+        !view.read_with(cx, |this, _| this.update_state().checked_once),
+        "opening must not run an update check"
+    );
+    assert!(
+        !view.read_with(cx, |this, _| this.update_state().icon_visible()),
+        "no download icon before a check answers"
+    );
+    assert!(
+        view.read_with(cx, |this, _| this.update_state().auto_check.is_some()),
+        "the switch must read its confirmed value on open"
     );
 }
 
@@ -55,16 +63,14 @@ fn check_now_shows_the_available_version(cx: &mut TestAppContext) {
     let (view, service, cx) = fixture(cx);
     view.update_in(cx, |this, window, cx| {
         this.open_settings(window, cx);
-        this.check_updates(cx);
+        this.check_update_now(cx);
     });
     settle(cx);
     let (version, can_install) = view.read_with(cx, |this, _| {
-        let state = this.settings_state();
+        let state = this.update_state();
         (
-            state
-                .checked()
-                .and_then(|s| s.available.as_ref().map(|a| a.version.clone())),
-            crate::app::settings_state::can_install(state),
+            state.available_version().map(str::to_owned),
+            state.available.as_ref().is_some_and(|a| a.can_self_update),
         )
     });
     assert_eq!(version.as_deref(), Some("0.9.0"));
@@ -80,34 +86,27 @@ fn a_package_manager_install_shows_the_hint_not_the_install_button(cx: &mut Test
     });
     view.update_in(cx, |this, window, cx| {
         this.open_settings(window, cx);
-        this.check_updates(cx);
+        this.check_update_now(cx);
     });
     settle(cx);
-    let (can_install, hint) = view.read_with(cx, |this, _| {
-        let state = this.settings_state();
+    let (phase, hint) = view.read_with(cx, |this, _| {
+        let state = this.update_state();
         (
-            crate::app::settings_state::can_install(state),
-            crate::app::settings_state::package_manager_hint(state).map(str::to_owned),
+            state.phase.clone(),
+            state.cannot_update_reason().map(str::to_owned),
         )
     });
-    assert!(!can_install, "a distro install must not self-update");
-    assert!(hint.is_some(), "the manager hint replaces the button");
-}
-
-#[gpui_kit::test]
-fn install_applies_the_update(cx: &mut TestAppContext) {
-    let (view, service, cx) = fixture(cx);
-    view.update_in(cx, |this, window, cx| {
-        this.open_settings(window, cx);
-        this.check_updates(cx);
-    });
-    settle(cx);
-    view.update(cx, |this, cx| this.install_update(cx));
-    settle(cx);
-    assert_eq!(service.counts().apply_update, 1);
     assert_eq!(
-        view.read_with(cx, |this, _| this.settings_state().install.clone()),
-        crate::app::settings_state::InstallState::Installed
+        phase,
+        crate::app::update_state::UpdatePhase::CannotSelfUpdate
+    );
+    assert!(
+        hint.is_some(),
+        "the manager hint replaces the install button"
+    );
+    assert!(
+        view.read_with(cx, |this, _| this.update_state().icon_visible()),
+        "a managed install still shows the icon, so it can explain itself"
     );
 }
 
@@ -119,13 +118,20 @@ fn a_failed_check_is_a_typed_error(cx: &mut TestAppContext) {
     });
     view.update_in(cx, |this, window, cx| {
         this.open_settings(window, cx);
-        this.check_updates(cx);
+        this.check_update_now(cx);
     });
     settle(cx);
     let code = view.read_with(cx, |this, _| {
-        this.settings_state().check_error().map(|e| e.code.clone())
+        this.update_state()
+            .check_error
+            .as_ref()
+            .map(|e| e.code.clone())
     });
     assert_eq!(code.as_deref(), Some("DBL-8003"));
+    assert!(
+        !view.read_with(cx, |this, _| this.update_state().icon_visible()),
+        "a failed check must show no download icon"
+    );
 }
 
 #[gpui_kit::test]

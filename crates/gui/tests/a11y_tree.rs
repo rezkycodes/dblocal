@@ -166,6 +166,12 @@ case_tests! {
     reset_dialog_is_unique => "reset dialog", Workspace::preview_reset_dialog;
     secret_dialog_is_unique => "secret dialog", Workspace::preview_secret_dialog;
     settings_dialog_is_unique => "settings dialog", Workspace::preview_settings;
+    settings_update_is_unique => "settings update", Workspace::preview_settings_update;
+    update_available_is_unique => "update available", Workspace::preview_update_available;
+    update_downloading_is_unique => "update downloading", Workspace::preview_update_downloading;
+    update_ready_is_unique => "update ready", Workspace::preview_update_ready;
+    update_failed_is_unique => "update failed", Workspace::preview_update_failed;
+    update_cannot_is_unique => "update cannot self-update", Workspace::preview_update_cannot;
     same_database_name_two_instances_is_unique => "two instances, same database name", Workspace::preview_two_instances_same_db;
     config_product_is_unique => "config product", Workspace::preview_product_config;
     config_demo_is_unique => "config demo", Workspace::preview_config_demo;
