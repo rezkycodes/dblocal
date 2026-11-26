@@ -37,74 +37,88 @@ pub(super) fn render(workspace: &Workspace, cx: &mut Context<Workspace>) -> impl
     let hint = actions::palette_hint();
     let primary = theme.primary;
 
-    TitleBar::new().child(
-        h_flex()
-            .id("title-bar-content")
-            .w_full()
-            .gap_3()
-            .pr_2()
-            .items_center()
-            .child(app_mark(primary, theme.primary_foreground))
-            .child(
-                Label::new(strings::APP_NAME)
-                    .text_sm()
-                    .font_weight(gpui_kit::FontWeight::SEMIBOLD),
-            )
-            .when_some(selected, |this, view| {
-                let engine = view.engine.display_name();
-                this.child(breadcrumb(
-                    engine,
-                    &view.name,
-                    theme.muted_foreground,
-                    theme.foreground,
-                ))
-            })
-            .child(div().flex_1())
-            .child(
-                h_flex()
-                    .gap_1p5()
-                    .text_xs()
-                    .text_color(theme.muted_foreground)
-                    .child(icon(IconName::CircleCheck, 13.0, freshness_colour))
-                    .child(Label::new(freshness.to_owned())),
-            )
-            .child(
-                Label::new(hint)
-                    .text_xs()
-                    .text_color(theme.muted_foreground),
-            )
-            .when_some(
-                super::update_dialog::title_bar_button(workspace, cx),
-                |this, button| this.child(button),
-            )
-            .child(
-                // The Settings dialog's title-bar entry point (`F-PKG-05`,
-                // `F-AUT-01`); `Ctrl/Cmd+,` fires the same action.
-                Button::new("title-settings")
-                    .ghost()
-                    .small()
-                    .compact()
-                    .icon(IconName::Settings)
-                    .tooltip(strings::UI_SETTINGS)
-                    .accessibility_label(strings::UI_SETTINGS)
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        this.open_settings(window, cx);
-                        cx.notify();
-                    })),
-            )
-            .child(
-                Button::new("title-new")
-                    .ghost()
-                    .small()
-                    .compact()
-                    .icon(IconName::Plus)
-                    .tooltip(strings::UI_NEW_INSTANCE)
-                    .accessibility_label(strings::UI_NEW_INSTANCE)
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        this.open_new_instance(window, cx);
-                    })),
-            ),
-    )
+    TitleBar::new()
+        .on_close_window(|_, window, cx| {
+            let ws = cx
+                .try_global::<super::bootstrap::AppRuntime>()
+                .and_then(|r| r.workspace.clone());
+            match ws {
+                Some(workspace) => {
+                    if super::bootstrap::handle_window_should_close(workspace.downgrade(), cx) {
+                        window.remove_window();
+                    }
+                }
+                None => window.remove_window(),
+            }
+        })
+        .child(
+            h_flex()
+                .id("title-bar-content")
+                .w_full()
+                .gap_3()
+                .pr_2()
+                .items_center()
+                .child(app_mark(primary, theme.primary_foreground))
+                .child(
+                    Label::new(strings::APP_NAME)
+                        .text_sm()
+                        .font_weight(gpui_kit::FontWeight::SEMIBOLD),
+                )
+                .when_some(selected, |this, view| {
+                    let engine = view.engine.display_name();
+                    this.child(breadcrumb(
+                        engine,
+                        &view.name,
+                        theme.muted_foreground,
+                        theme.foreground,
+                    ))
+                })
+                .child(div().flex_1())
+                .child(
+                    h_flex()
+                        .gap_1p5()
+                        .text_xs()
+                        .text_color(theme.muted_foreground)
+                        .child(icon(IconName::CircleCheck, 13.0, freshness_colour))
+                        .child(Label::new(freshness.to_owned())),
+                )
+                .child(
+                    Label::new(hint)
+                        .text_xs()
+                        .text_color(theme.muted_foreground),
+                )
+                .when_some(
+                    super::update_dialog::title_bar_button(workspace, cx),
+                    |this, button| this.child(button),
+                )
+                .child(
+                    // The Settings dialog's title-bar entry point (`F-PKG-05`,
+                    // `F-AUT-01`); `Ctrl/Cmd+,` fires the same action.
+                    Button::new("title-settings")
+                        .ghost()
+                        .small()
+                        .compact()
+                        .icon(IconName::Settings)
+                        .tooltip(strings::UI_SETTINGS)
+                        .accessibility_label(strings::UI_SETTINGS)
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.open_settings(window, cx);
+                            cx.notify();
+                        })),
+                )
+                .child(
+                    Button::new("title-new")
+                        .ghost()
+                        .small()
+                        .compact()
+                        .icon(IconName::Plus)
+                        .tooltip(strings::UI_NEW_INSTANCE)
+                        .accessibility_label(strings::UI_NEW_INSTANCE)
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.open_new_instance(window, cx);
+                        })),
+                ),
+        )
 }
 
 /// The rounded app mark: a database glyph on the accent fill.

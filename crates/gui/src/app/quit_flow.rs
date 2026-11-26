@@ -28,16 +28,14 @@ impl Workspace {
                 self.open_or_focus_main_window(cx);
             }
             TrayAction::Quit => self.request_quit(cx),
-            TrayAction::Start(id) => {
-                if let Ok(id) = id.parse::<InstanceId>() {
-                    self.start_instance(id, cx);
-                }
-            }
-            TrayAction::Stop(id) => {
-                if let Ok(id) = id.parse::<InstanceId>() {
-                    self.stop_instance(id, cx);
-                }
-            }
+            TrayAction::Start(id) => match id.parse::<InstanceId>() {
+                Ok(id) => self.start_instance(id, cx),
+                Err(_) => tracing::warn!(id = %id, "tray start: invalid instance id"),
+            },
+            TrayAction::Stop(id) => match id.parse::<InstanceId>() {
+                Ok(id) => self.stop_instance(id, cx),
+                Err(_) => tracing::warn!(id = %id, "tray stop: invalid instance id"),
+            },
         }
     }
 
@@ -57,14 +55,35 @@ impl Workspace {
     /// Request quit with a precomputed running list (R1: tray quit without
     /// window loads instances from service before opening the window).
     pub(crate) fn request_quit_with(&mut self, running: Vec<InstanceId>, cx: &mut Context<Self>) {
+        let already_confirming = self.quit.is_confirming();
         let action = self.quit.apply(QuitEvent::QuitRequested { running });
+        if matches!(action, QuitAction::None) && already_confirming {
+            if cx
+                .try_global::<crate::app::bootstrap::AppRuntime>()
+                .is_some()
+            {
+                self.open_or_focus_main_window(cx);
+            }
+            cx.notify();
+            return;
+        }
         self.handle_quit_action(action, cx);
     }
 
     fn handle_quit_action(&mut self, action: QuitAction, cx: &mut Context<Self>) {
         match action {
-            QuitAction::None | QuitAction::ShowDialog => {
+            QuitAction::None => {
                 self.maybe_clear_quit_stops();
+                cx.notify();
+            }
+            QuitAction::ShowDialog => {
+                self.maybe_clear_quit_stops();
+                if cx
+                    .try_global::<crate::app::bootstrap::AppRuntime>()
+                    .is_some()
+                {
+                    self.open_or_focus_main_window(cx);
+                }
                 cx.notify();
             }
             QuitAction::StopInstances(ids) => {

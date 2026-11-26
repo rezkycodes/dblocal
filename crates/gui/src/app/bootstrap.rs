@@ -24,6 +24,7 @@ pub struct AppRuntime {
     pub events: flume::Receiver<crate::service_bridge::UiEvent>,
     pub main_window: Option<WindowHandle<Root>>,
     pub workspace: Option<gpui_kit::Entity<Workspace>>,
+    window_closed_sub: Option<gpui_kit::Subscription>,
 }
 
 impl Global for AppRuntime {}
@@ -76,6 +77,7 @@ impl AppRuntime {
             events,
             main_window: None,
             workspace: None,
+            window_closed_sub: None,
         }
     }
 
@@ -102,6 +104,7 @@ impl AppRuntime {
             events,
             main_window: None,
             workspace: None,
+            window_closed_sub: None,
         }
     }
 
@@ -302,6 +305,7 @@ pub fn start_tray_action_pump(cx: &mut App) {
                 handle_tray_action(action, cx);
             });
         }
+        tracing::debug!("tray action pump stopped: channel closed");
     })
     .detach();
 }
@@ -322,9 +326,18 @@ pub(crate) fn open_main_window(cx: &mut App) -> anyhow::Result<WindowHandle<Root
     if let Some(handle) = cx.try_global::<AppRuntime>().and_then(|r| r.main_window)
         && should_focus_existing_main_window(true)
     {
-        let _ = handle.update(cx, |_, window, _| window.activate_window());
-        return Ok(handle);
+        match handle.update(cx, |_, window, _| window.activate_window()) {
+            Ok(()) => return Ok(handle),
+            Err(err) => {
+                tracing::warn!(
+                    "main window handle was stale ({err:#}); clearing and opening a fresh window"
+                );
+                clear_main_window(cx);
+            }
+        }
     }
+
+    ensure_window_closed_observer(cx);
 
     let bounds = gpui_kit::Bounds::centered(None, size(px(1280.), px(820.)), cx);
     let options = WindowOptions {
@@ -379,6 +392,30 @@ pub(crate) fn clear_main_window(cx: &mut App) {
             runtime.workspace = None;
         });
     }
+}
+
+/// Ensures `AppRuntime` drops `main_window` and `workspace` whenever GPUI
+/// closes the main window — even when a close path calls `window.remove_window()`
+/// directly and bypasses `on_window_should_close`.
+fn ensure_window_closed_observer(cx: &mut App) {
+    let needs_sub = cx
+        .try_global::<AppRuntime>()
+        .is_some_and(|r| r.window_closed_sub.is_none());
+    if !needs_sub {
+        return;
+    }
+    let sub = cx.on_window_closed(|cx, window_id| {
+        let is_main = cx
+            .try_global::<AppRuntime>()
+            .and_then(|r| r.main_window)
+            .is_some_and(|h| h.window_id() == window_id);
+        if is_main {
+            clear_main_window(cx);
+        }
+    });
+    cx.update_global::<AppRuntime, _>(|runtime, _| {
+        runtime.window_closed_sub = Some(sub);
+    });
 }
 
 /// Returns whether a system appearance is dark.

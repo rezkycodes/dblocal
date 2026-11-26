@@ -62,7 +62,9 @@ impl Tray for DblocalTray {
                 enabled,
                 icon_data,
                 activate: Box::new(move |_| {
-                    let _ = tx.send(action.clone());
+                    if let Err(err) = tx.send(action.clone()) {
+                        tracing::warn!("tray action dropped (channel closed): {err}");
+                    }
                 }),
                 ..Default::default()
             }));
@@ -75,7 +77,9 @@ impl Tray for DblocalTray {
         items.push(MenuItem::Standard(StandardItem {
             label: model.open.label,
             activate: Box::new(move |_| {
-                let _ = tx_open.send(open_action.clone());
+                if let Err(err) = tx_open.send(open_action.clone()) {
+                    tracing::warn!("tray open action dropped (channel closed): {err}");
+                }
             }),
             ..Default::default()
         }));
@@ -84,7 +88,9 @@ impl Tray for DblocalTray {
         items.push(MenuItem::Standard(StandardItem {
             label: model.quit.label,
             activate: Box::new(move |_| {
-                let _ = tx_quit.send(quit_action.clone());
+                if let Err(err) = tx_quit.send(quit_action.clone()) {
+                    tracing::warn!("tray quit action dropped (channel closed): {err}");
+                }
             }),
             ..Default::default()
         }));
@@ -118,6 +124,13 @@ impl TrayBackend for KsniBackend {
     }
     fn subscribe_actions(&self) -> flume::Receiver<TrayAction> {
         self.actions.clone()
+    }
+    fn shutdown(&mut self) {
+        if !self.available {
+            return;
+        }
+        let _ = self.handle.shutdown();
+        self.available = false;
     }
 }
 

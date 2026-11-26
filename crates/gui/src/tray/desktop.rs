@@ -142,8 +142,10 @@ fn spawn_forwarder(tx: flume::Sender<TrayAction>, map: Arc<Mutex<BTreeMap<String
         .spawn(move || {
             while let Ok(event) = events.recv() {
                 let action = spec::resolve(&lock(&map), event.id.as_ref());
-                if let Some(action) = action {
-                    let _ = tx.send(action);
+                if let Some(action) = action
+                    && let Err(err) = tx.send(action)
+                {
+                    tracing::warn!("tray action dropped (channel closed): {err}");
                 }
             }
         });
