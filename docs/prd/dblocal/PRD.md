@@ -6,101 +6,101 @@ Version: 0.1 · Status: Draft · Date: 2026-11-20 · Owner: rezkycodes
 
 ## 1. Summary
 
-**DBLocal** adalah aplikasi desktop berbasis Rust yang memasang dan mengelola server database **di mesin lokal** developer: PostgreSQL, MySQL, MariaDB, dan Valkey (Redis-compatible). Targetnya adalah developer web yang memegang banyak project sekaligus dan hari ini terjebak antara dua pilihan buruk — memasang database lewat package manager OS (tidak bisa banyak versi berdampingan, butuh sudo, konflik port) atau menjalankan `docker compose` per project (berat di RAM/baterai, butuh YAML dan terminal).
+**DBLocal** is a Rust desktop app that installs and manages database servers **on the developer's local machine**: PostgreSQL, MySQL, MariaDB and Valkey (Redis-compatible). The target is a web developer juggling many projects at once, stuck today between two bad options — installing a database through the OS package manager (one version per machine, sudo required, port conflicts) or running `docker compose` per project (heavy on RAM and battery, a YAML file to maintain, a terminal to keep open).
 
-Core value-nya satu: **beberapa versi engine hidup berdampingan sebagai proses native, dinyalakan dan dimatikan dengan satu klik, tanpa container dan tanpa terminal.**
+The core value is one thing: **several engine versions running side by side as native processes, started and stopped with one click, with no containers and no terminal.**
 
-Aplikasi ini gratis dan open source di bawah **GPL-3.0-only**, tanpa telemetri, tanpa akun, dan tidak pernah meminta sudo saat runtime. Ia **tidak mendistribusikan biner engine**; ia mengunduhnya dari sumber upstream, memverifikasi SHA-256-nya, dan menjalankannya sebagai proses milik user di bawah `~/.dblocal/`.
+The app is free and open source under **GPL-3.0-only**, with no telemetry, no accounts, and it never asks for sudo at runtime. It **does not distribute engine binaries**; it downloads them from upstream sources, verifies their SHA-256, and runs them as user-owned processes under `~/.dblocal/`.
 
-Phase 1 memuat irisan vertikal yang utuh dan benar-benar bisa dipakai: katalog versi → unduh & verifikasi → buat instance PostgreSQL atau Valkey → jalan di port yang dijamin bebas → salin connection URI → kelola lewat tray, lengkap dengan log viewer untuk jalur kegagalan, dan artefak install (AppImage, .tar.gz, .dmg ter-notarisasi, .zip, plus `install.sh` untuk `curl`).
+Phase 1 ships an end-to-end vertical slice that really works: catalog of versions → download and verify → create a PostgreSQL or Valkey instance → run it on a port that is guaranteed free → copy the connection URI → manage it from the tray, complete with a log viewer for failure paths and install artifacts (AppImage, .tar.gz, notarized .dmg, .zip, plus `install.sh` for `curl`).
 
-DBLocal mengelola **server**, bukan **data**. Menjelajah tabel dan menjalankan query adalah non-goal permanen — itu pekerjaan DBDelve, TablePlus, atau DBeaver, dan DBLocal justru menyediakan tombol untuk membukanya di sana.
+DBLocal manages **servers**, not **data**. Browsing tables and running queries are permanent non-goals — that is the job of DBDelve, TablePlus or DBeaver, and DBLocal provides a button to open them there.
 
 ---
 
 ## 2. Problem & Jobs-to-be-Done
 
-### Situasi hari ini
+### Today's situation
 
-Pengguna utama: **developer web/full-stack (Laravel, Node/Next, Rails, Python) yang aktif memegang 3–10 project lokal sekaligus**, di Windows, macOS, maupun Linux.
+Primary user: **a web/full-stack developer (Laravel, Node/Next, Rails, Python) who actively holds 3–10 local projects at once**, on Windows, macOS or Linux.
 
-Yang mereka lakukan sekarang, dan apa yang gagal:
+What they do today, and what fails:
 
-| Cara sekarang | Yang gagal |
+| Current approach | What breaks |
 |---|---|
-| `dnf install postgresql-server` / `brew install mysql` / installer EDB | Satu versi mayor per mesin. Project lama butuh PG 14, project baru butuh PG 18 → salah satu harus mengalah. Butuh sudo, service sistem selalu menyala, uninstall meninggalkan jejak. |
-| `docker compose up` per project | Docker Desktop memakan RAM dan baterai bahkan saat idle; butuh file YAML yang dirawat; layer abstraksi tambahan saat debugging; di Windows butuh WSL2. |
-| XAMPP / Laragon | Terikat satu stack dan satu versi; Windows-only; menjalankan service sistem sebagai administrator. |
-| DBngin | Persis menyelesaikan masalah ini — tapi tidak ada untuk Linux, dan tidak punya CLI. |
+| `dnf install postgresql-server` / `brew install mysql` / EDB installer | One major version per machine. An old project needs PG 14, a new one needs PG 18 → one has to give. sudo required, a system service always running, uninstall leaves traces. |
+| `docker compose up` per project | Docker Desktop eats RAM and battery even at idle; needs a maintained YAML file; an extra abstraction layer when debugging; on Windows it needs WSL2. |
+| XAMPP / Laragon | Locked to one stack and one version; Windows-only; runs a system service as administrator. |
+| DBngin | Solves exactly this problem — but has no Linux build and no CLI. |
 
-### Primary job (sesi pertama)
+### Primary job (first session)
 
-> "Saya buka aplikasi, pilih PostgreSQL 18, klik Create, dan dalam waktu di bawah 2 menit saya punya server yang berjalan beserta connection string yang bisa saya tempel ke `.env` project saya — tanpa membuka terminal sekali pun."
+> "I open the app, pick PostgreSQL 18, click Create, and within under 2 minutes I have a running server with a connection string I can paste into my project's `.env` — without opening a terminal once."
 
-### Core value (satu, bukan tiga)
+### Core value (one, not three)
 
-**Multi-versi native, satu klik, tanpa container.**
-Atribut pendukung (bukan janji utama): lintas-OS, ringan, satu panel untuk semua engine.
+**Multi-version native, one click, no container.**
+Supporting attributes (not the main promise): cross-OS, lightweight, one panel for every engine.
 
 ### Retention trigger
 
-Ikon **tray/menubar permanen** dengan start/stop per instance tanpa membuka jendela, ditambah **autostart saat login**. Retensi datang dari utilitas harian: DBLocal menjadi bagian dari ritual "mulai kerja", bukan dari konten baru.
+A **permanent tray/menubar icon** with start/stop per instance without opening a window, plus **autostart at login**. Retention comes from daily utility: DBLocal becomes part of the "start work" ritual, not from new content.
 
 ---
 
 ## 3. Goals, Metrics & Non-goals
 
-Karena DBLocal **tidak punya telemetri** (D-05), tidak ada metrik yang mengandalkan pelaporan dari mesin user. Metrik produk diukur sebagai **test terotomasi di CI** pada runner tiap OS; metrik adopsi memakai **proksi publik**.
+Because DBLocal **has no telemetry** (D-05), no metric relies on reporting from the user's machine. Product metrics are measured as **automated tests in CI** on a runner per OS; adoption metrics use **public proxies**.
 
-| Goal | Metrik | Target | Cara verifikasi |
+| Goal | Metric | Target | How it is verified |
 |---|---|---|---|
-| Sesi pertama berhasil, cepat | TTFRI (time-to-first-running-instance), PostgreSQL | p50 < 120 s @ 20 Mbps | E2E test di CI, bandwidth di-throttle |
-| Sesi pertama berhasil, engine besar | TTFRI MySQL (artefak 80 MB Linux x86_64 minimal, 168 MB macOS, 281 MB Windows; Linux aarch64 penuh 832 MB ≈ 333 s dikecualikan, lihat D-24) | p50 < 300 s @ 20 Mbps | E2E test di CI |
-| Terasa native, bukan web | Cold start app sampai window interaktif | p95 < 1,5 s | Benchmark CI (NVMe, runner standar) |
-| Lebih ringan dari Docker | RSS aplikasi saat idle (tanpa instance jalan) | < 220 MB (OPEN-08, keputusan Rezky 2026-11-25) | Benchmark CI |
-| Mudah dipasang | Ukuran installer per platform | < 60 MB | Gate ukuran artefak di CI |
-| Jalan di semua target | Instalasi engine sukses di matrix OS | 100% (target rilis pertama: Linux x86_64/aarch64, Windows x86_64; macOS ditunda, D-26) | Job E2E per OS tiap rilis |
-| Start cepat | PostgreSQL stopped → menerima koneksi | p95 < 5 s | E2E |
-| Start cepat | Valkey stopped → menerima koneksi | p95 < 1 s | E2E |
-| Adopsi | Unduhan per rilis (GitHub Releases API) | tren naik antar rilis minor | Publik |
-| Kualitas rilis | Rasio issue berlabel `install-failure` ÷ unduhan rilis | < 2% | Publik, dihitung manual per rilis |
+| First session succeeds, quickly | TTFRI (time-to-first-running-instance), PostgreSQL | p50 < 120 s @ 20 Mbps | E2E test in CI, bandwidth throttled |
+| First session succeeds, large engine | TTFRI MySQL (80 MB Linux x86_64 minimal artifact, 168 MB macOS, 281 MB Windows; full 832 MB Linux aarch64 ≈ 333 s excluded, see D-24) | p50 < 300 s @ 20 Mbps | E2E test in CI |
+| Feels native, not web | Cold start from launch to interactive window | p95 < 1.5 s | CI benchmark (NVMe, standard runner) |
+| Lighter than Docker | App RSS at idle (no instance running) | < 220 MB (OPEN-08, Rezky's decision 2026-11-25) | CI benchmark |
+| Easy to install | Installer size per platform | < 60 MB | Artifact size gate in CI |
+| Runs on every target | Engine install success across the OS matrix | 100% (first release targets: Linux x86_64/aarch64, Windows x86_64; macOS deferred, D-26) | E2E job per OS on every release |
+| Fast start | PostgreSQL stopped → accepting connections | p95 < 5 s | E2E |
+| Fast start | Valkey stopped → accepting connections | p95 < 1 s | E2E |
+| Adoption | Downloads per release (GitHub Releases API) | rising trend between minor releases | Public |
+| Release quality | Ratio of issues labeled `install-failure` ÷ release downloads | < 2% | Public, counted by hand per release |
 
 ### Non-goals
 
-- **Browsing/query data di dalam app** (grid tabel, editor SQL, export CSV). Permanen di luar scope — DBLocal menyediakan tombol "Open in…" ke DBDelve/TablePlus/DBeaver/psql.
-- **Mode server/headless.** DBLocal adalah tool mesin developer, bukan manajer service produksi. Tidak ada systemd system unit, tidak ada Windows Service, tidak pernah minta sudo saat runtime.
-- **Auto-restart saat engine crash** (v1). Konsekuensi langsung dari arsitektur tanpa daemon supervisor (D-10). Crash ditampilkan sebagai status `failed` + log, bukan dihidupkan ulang diam-diam.
-- **Upgrade versi mayor dengan migrasi data** (`pg_upgrade`, `mysql_upgrade`). Pindah dari PG 17 ke 18 artinya membuat instance baru dan memindahkan data sendiri (dump/restore manual di luar app).
-- **Backup/restore terjadwal** dan **project profile/grup instance** — masuk Backlog, dievaluasi dari issue pengguna nyata.
-- **Mengadopsi instalasi database yang sudah ada di mesin** (service systemd/brew/EDB). Deteksi lintas-OS terlalu rapuh dan berisiko merusak setup kerja user.
-- **Manajemen user/akun di aplikasi.** Single-machine, single-user; tidak ada login, tidak ada sinkronisasi cloud.
-- **Dukungan arsitektur di luar x86_64 dan aarch64** (ppc64le, i386, riscv).
+- **In-app data browsing/query** (table grid, SQL editor, CSV export). Permanently out of scope — DBLocal provides an "Open in…" button to DBDelve/TablePlus/DBeaver/psql.
+- **Server/headless mode.** DBLocal is a developer-machine tool, not a production service manager. No systemd system unit, no Windows Service, never asks for sudo at runtime.
+- **Auto-restart on engine crash** (v1). A direct consequence of the daemon-free architecture (D-10). A crash shows as `failed` plus a log, not a silent restart.
+- **Major-version upgrade with data migration** (`pg_upgrade`, `mysql_upgrade`). Moving from PG 17 to 18 means creating a new instance and moving the data yourself (manual dump/restore outside the app).
+- **Scheduled backup/restore** and **project profiles / instance groups** — Backlog, evaluated from real user issues.
+- **Adopting an existing database install on the machine** (systemd/brew/EDB service). Cross-OS detection is too fragile and risks breaking the user's working setup.
+- **User/account management in the app.** Single-machine, single-user; no login, no cloud sync.
+- **Architecture support beyond x86_64 and aarch64** (ppc64le, i386, riscv).
 
 ---
 
 ## 4. Actors & Role Matrix
 
-Tidak ada sistem autentikasi: DBLocal berjalan sebagai proses milik user OS yang sedang login, dan otoritasnya adalah izin filesystem OS itu sendiri.
+There is no authentication system: DBLocal runs as a process owned by the logged-in OS user, and its authority is that user's filesystem permissions.
 
-| Aktor | Siapa | Masuk sejak |
+| Actor | Who | Enters at |
 |---|---|---|
-| **User-GUI** | Manusia yang memakai jendela DBLocal / menu tray | Phase 1 |
-| **User-CLI** | Manusia atau script (npm script, Makefile, CI lokal) lewat binary `dblocal` | Phase 2 |
-| **OS-Autostart** | Login item OS (systemd --user, LaunchAgent, Registry Run) yang menjalankan DBLocal dalam mode tray | Phase 3 |
-| **Engine process** | Proses database lepas (detached) yang dikendalikan, bukan dimiliki, oleh app | Phase 1 |
+| **User-GUI** | A person using the DBLocal window / tray menu | Phase 1 |
+| **User-CLI** | A person or script (npm script, Makefile, local CI) using the `dblocal` binary | Phase 2 |
+| **OS-Autostart** | The OS login item (systemd --user, LaunchAgent, Registry Run) that starts DBLocal in tray mode | Phase 3 |
+| **Engine process** | A detached database process that the app controls, not owns | Phase 1 |
 
-| Kapabilitas | User-GUI | User-CLI | OS-Autostart | Engine process |
+| Capability | User-GUI | User-CLI | OS-Autostart | Engine process |
 |---|---|---|---|---|
-| Lihat katalog versi | ✅ | ✅ (P2) | — | — |
-| Unduh & pasang runtime engine | ✅ | ✅ (P2) | — | — |
-| Buat / hapus instance | ✅ | ✅ (P2) | — | — |
-| Start / stop instance | ✅ | ✅ (P2) | ✅ (P3, hanya instance ber-flag autostart) | — |
-| Lihat & salin kredensial | ✅ | ✅ (P2, `uri`) | — | — |
-| Baca log instance | ✅ | ✅ (P2) | — | menulis |
-| Buat database & user di dalam instance | ✅ (P2) | ❌ | — | — |
-| Ubah konfigurasi engine | ✅ (P3) | ❌ | — | membaca |
-| Mengubah state di luar `~/.dblocal` | ❌ | ❌ | ❌ | ❌ |
-| Meminta sudo / elevasi | ❌ (tidak pernah, by design) | ❌ | ❌ | ❌ |
+| Browse the version catalog | ✅ | ✅ (P2) | — | — |
+| Download and install an engine runtime | ✅ | ✅ (P2) | — | — |
+| Create / delete an instance | ✅ | ✅ (P2) | — | — |
+| Start / stop an instance | ✅ | ✅ (P2) | ✅ (P3, only instances flagged for autostart) | — |
+| View and copy credentials | ✅ | ✅ (P2, `uri`) | — | — |
+| Read instance logs | ✅ | ✅ (P2) | — | writes |
+| Create databases and users inside an instance | ✅ (P2) | ❌ | — | — |
+| Change the engine configuration | ✅ (P3) | ❌ | — | reads |
+| Modify state outside `~/.dblocal` | ❌ | ❌ | ❌ | ❌ |
+| Request sudo / elevation | ❌ (never, by design) | ❌ | ❌ | ❌ |
 
 ---
 
@@ -111,7 +111,7 @@ graph TD
   ROOT[DBLocal]
 
   ROOT --> P0[Phase 0 · Spikes]
-  P0 --> SPK[F-SPK Spikes &amp; Fondasi]
+  P0 --> SPK[F-SPK Spikes &amp; Foundation]
 
   ROOT --> P1[Phase 1 · MVP vertical slice]
   P1 --> CAT[F-CAT Engine Catalog]
@@ -123,21 +123,21 @@ graph TD
   P1 --> TRY[F-TRY Tray &amp; Window]
   P1 --> PKG[F-PKG Packaging &amp; Install]
 
-  ROOT --> P2[Phase 2 · Keluarga MySQL, CLI, paket lengkap]
+  ROOT --> P2[Phase 2 · MySQL family, CLI, complete packages]
   P2 --> ENG[F-ENG MySQL &amp; MariaDB]
   P2 --> DBU[F-DBU Database &amp; User Mgmt]
   P2 --> OPN[F-OPN Open in External Client]
   P2 --> CLI[F-CLI Command Line Interface]
 
-  ROOT --> P3[Phase 3 · Konfigurasi &amp; polish]
+  ROOT --> P3[Phase 3 · Configuration &amp; polish]
   P3 --> CFG[F-CFG Config Editor]
   P3 --> AUT[F-AUT Autostart]
   P3 --> PLH[F-PLH Polish &amp; Accessibility]
 ```
 
-| ID | Fitur | Phase | Prioritas | Role | Depends on |
+| ID | Feature | Phase | Priority | Role | Depends on |
 |---|---|---|---|---|---|
-| F-SPK | Spikes & fondasi workspace | 0 | must | — | — |
+| F-SPK | Spikes & workspace foundation | 0 | must | — | — |
 | F-CAT | Engine Catalog | 1 | must | User-GUI | F-SPK |
 | F-RTM | Runtime Installer | 1 | must | User-GUI | F-CAT |
 | F-PRT | Port Manager | 1 | must | User-GUI | F-SPK |
@@ -158,481 +158,481 @@ graph TD
 
 ## 6. Feature Specifications
 
-### F-SPK — Spikes & Fondasi (Phase 0)
+### F-SPK — Spikes & Foundation (Phase 0)
 
-- **Goal:** membayar risiko teknis terbesar di depan, sebelum ada kode produk yang mahal untuk dibuang.
+- **Goal:** pay down the biggest technical risks up front, before there is expensive product code to throw away.
 - **Roles:** —
 - **Sub-features:**
 
-  **F-SPK-01 — GPUI berjalan di tiga OS**
-  - AC1: Given runner CI Linux dengan driver Vulkan, When binary spike dijalankan, Then jendela GPUI terbuka dan merender daftar + tombol dari `gpui-component`, lalu keluar dengan kode 0.
-  - AC2: Given mesin Linux **tanpa** Vulkan, When binary dijalankan, Then aplikasi keluar dengan pesan yang bisa ditindaklanjuti (menyebut paket driver yang dibutuhkan + link dokumentasi), **bukan** panic atau layar hitam.
-  - AC3: Given Windows 11 x86_64 dan macOS 14+ (arm64), When binary dijalankan, Then jendela terbuka dan merender komponen yang sama.
+  **F-SPK-01 — GPUI runs on three OSes**
+  - AC1: Given a Linux CI runner with a Vulkan driver, When the spike binary runs, Then a GPUI window opens and renders a list plus buttons from `gpui-component`, then exits with code 0.
+  - AC2: Given a Linux machine **without** Vulkan, When the binary runs, Then the app exits with an actionable message (naming the driver packages needed plus a documentation link), **not** a panic or a black screen.
+  - AC3: Given Windows 11 x86_64 and macOS 14+ (arm64), When the binary runs, Then a window opens and renders the same components.
   - Entities: — · Output: `docs/spikes/gpui-platform.md`
 
-  **F-SPK-02 — Build Valkey untuk Windows & macOS**
-  - AC1: Given source Valkey 8.x/9.x, When job CI menjalankan build CMake di `windows-latest`, Then dihasilkan `valkey-server.exe` yang bisa start, melayani `PING` → `PONG`, dan shutdown bersih.
-  - AC2: Given runner `macos-latest` (arm64) dan `macos-13` (x86_64), When build dijalankan, Then dihasilkan biner untuk kedua arsitektur dengan hasil uji `PING` yang sama.
-  - AC3: Given salah satu target gagal setelah upaya yang wajar, Then keputusan fallback D-13 diaktifkan: Valkey ditandai `unsupported` untuk platform itu di katalog, UI menampilkan alasan + saran, dan PRD ini diperbarui.
+  **F-SPK-02 — Valkey build for Windows & macOS**
+  - AC1: Given Valkey 8.x/9.x source, When a CI job runs the CMake build on `windows-latest`, Then it produces `valkey-server.exe` that starts, serves `PING` → `PONG`, and shuts down cleanly.
+  - AC2: Given the `macos-latest` runner (arm64) and `macos-13` (x86_64), When the build runs, Then it produces a binary for both architectures with the same `PING` result.
+  - AC3: Given one target fails after a reasonable effort, Then the D-13 fallback decision is triggered: Valkey is marked `unsupported` for that platform in the catalog, the UI shows the reason plus a suggestion, and this PRD is updated.
   - Entities: — · Output: `docs/spikes/valkey-build.md`
 
-  **F-SPK-03 — Siklus hidup PostgreSQL dari tarball upstream**
-  - AC1: Given artefak `theseus-rs/postgresql-binaries` 18.x untuk platform runner, When spike mengunduh, memverifikasi SHA-256, mengekstrak, menjalankan `initdb`, lalu `pg_ctl start`, Then koneksi TCP ke `127.0.0.1:<port>` berhasil melakukan `SELECT 1`.
-  - AC2: Given siklus di AC1 selesai, When `pg_ctl stop -m fast` dipanggil, Then proses berakhir < 5 detik dan tidak ada proses postgres yatim yang tersisa.
+  **F-SPK-03 — PostgreSQL lifecycle from the upstream tarball**
+  - AC1: Given a `theseus-rs/postgresql-binaries` 18.x artifact for the runner's platform, When the spike downloads it, verifies SHA-256, extracts, runs `initdb`, then `pg_ctl start`, Then a TCP connection to `127.0.0.1:<port>` succeeds with `SELECT 1`.
+  - AC2: Given the cycle in AC1 is complete, When `pg_ctl stop -m fast` is called, Then the process ends in under 5 seconds and no orphaned postgres process remains.
   - Entities: — · Output: `docs/spikes/postgres-lifecycle.md`
 
-  **F-SPK-04 — Tray icon di tiga OS bersama GPUI**
-  - AC1: Given GPUI memiliki event loop-nya sendiri, When ikon tray dipasang (crate pihak ketiga atau API platform langsung), Then ikon muncul di Windows, macOS, dan setidaknya satu desktop environment Linux (GNOME via ekstensi AppIndicator, dan KDE).
-  - AC2: Given menu tray diklik, Then aksi sampai ke state aplikasi tanpa memblokir atau merusak event loop GPUI.
-  - AC3: Given tray tidak tersedia di lingkungan desktop user, Then aplikasi tetap berfungsi penuh lewat jendela, dan ketiadaan tray ditampilkan sebagai catatan, bukan error.
+  **F-SPK-04 — Tray icon on three OSes alongside GPUI**
+  - AC1: Given GPUI has its own event loop, When the tray icon is installed (third-party crate or direct platform API), Then the icon appears on Windows, macOS, and at least one Linux desktop environment (GNOME via the AppIndicator extension, and KDE).
+  - AC2: Given the tray menu is clicked, Then the action reaches app state without blocking or breaking the GPUI event loop.
+  - AC3: Given the tray is unavailable in the user's desktop environment, Then the app still works fully through the window, and the missing tray is shown as a note, not an error.
   - Entities: — · Output: `docs/spikes/tray-icon.md`
-  - Catatan risiko: GPUI tidak dirancang dengan tray sebagai warga kelas satu; ini spike dengan ketidakpastian tertinggi kedua setelah F-SPK-02, dan retention trigger (D-04) bergantung padanya.
+  - Risk note: GPUI was not designed with the tray as a first-class citizen; this spike carries the second-highest uncertainty after F-SPK-02, and the retention trigger (D-04) depends on it.
 
-  **F-SPK-05 — Skeleton workspace & CI matrix**
-  - AC1: Given repo kosong, When `cargo xtask ci` dijalankan lokal, Then workspace (`core`, `gui`, `cli`, `xtask`) terkompilasi, clippy bersih, dan test lulus.
-  - AC2: Given push ke `main`, When workflow berjalan, Then matrix `linux-x86_64`, `linux-aarch64`, `macos-universal`, `windows-x86_64` semuanya menghasilkan artefak dan `checksums.txt`.
+  **F-SPK-05 — Workspace skeleton & CI matrix**
+  - AC1: Given an empty repo, When `cargo xtask ci` runs locally, Then the workspace (`core`, `gui`, `cli`, `xtask`) compiles, clippy is clean, and the tests pass.
+  - AC2: Given a push to `main`, When the workflow runs, Then the `linux-x86_64`, `linux-aarch64`, `macos-universal` and `windows-x86_64` matrix all produce artifacts and `checksums.txt`.
   - Entities: —
 
-- **Definition of done Phase 0:** kelima spike menghasilkan jawaban YA/TIDAK yang terdokumentasi. Jika F-SPK-02 gagal, fallback D-13 dijalankan **sebelum** Phase 1 dimulai.
+- **Definition of done Phase 0:** all five spikes produce a documented YES/NO answer. If F-SPK-02 fails, the D-13 fallback runs **before** Phase 1 starts.
 
 ---
 
 ### F-CAT — Engine Catalog (Phase 1)
 
-- **Goal:** menjadi satu-satunya sumber kebenaran tentang "versi apa yang ada, untuk platform apa, dari URL mana, dengan checksum apa" — tanpa scraping HTML saat runtime.
-- **Roles:** User-GUI (baca), job CI (tulis).
+- **Goal:** be the single source of truth about "which versions exist, for which platform, from which URL, with which checksum" — without scraping HTML at runtime.
+- **Roles:** User-GUI (read), CI job (write).
 - **Business rules:**
-  - Katalog adalah file JSON ber-skema versi (`schema_version`), dibundel di dalam app saat rilis **dan** di-refresh dari GitHub raw.
-  - Setiap entri artefak **wajib** punya `sha256`, `size_bytes`, dan `url`. Entri tanpa checksum tidak pernah ditampilkan sebagai bisa dipasang.
-  - Katalog hanya mendaftar versi yang **didukung upstream**; versi EOL ditandai `eol: true` dan disembunyikan di balik toggle "Tampilkan versi lama".
+  - The catalog is a versioned-schema JSON file (`schema_version`), bundled in the app at release time **and** refreshed from GitHub raw.
+  - Every artifact entry **must** have `sha256`, `size_bytes` and `url`. An entry without a checksum is never shown as installable.
+  - The catalog lists only versions **supported upstream**; EOL versions are flagged `eol: true` and hidden behind a "Show old versions" toggle.
 - **Sub-features:**
 
-  **F-CAT-01 — Snapshot bundled + refresh berkala**
-  - AC1: Given app pertama kali dibuka tanpa koneksi internet, When halaman katalog dibuka, Then daftar versi dari snapshot bundled tetap tampil, disertai banner "Katalog mungkin tidak terbaru".
-  - AC2: Given snapshot terakhir di-refresh lebih dari 24 jam lalu dan ada koneksi, When app dibuka, Then refresh berjalan di background dan UI diperbarui tanpa memblokir interaksi.
-  - AC3: Given refresh gagal (timeout, 404, atau rate limit GitHub), Then kegagalan tidak menampilkan dialog error; hanya banner status katalog yang berubah, dan snapshot lama tetap dipakai.
-  - AC4: Given payload katalog punya `schema_version` yang lebih tinggi dari yang dipahami app, Then app menolak payload tersebut, tetap memakai snapshot bundled, dan menyarankan update aplikasi.
+  **F-CAT-01 — Bundled snapshot + periodic refresh**
+  - AC1: Given the app is opened for the first time without an internet connection, When the catalog page is opened, Then the version list from the bundled snapshot still shows, with a "The catalog may be out of date" banner.
+  - AC2: Given the last snapshot was refreshed more than 24 hours ago and a connection exists, When the app opens, Then the refresh runs in the background and the UI updates without blocking interaction.
+  - AC3: Given the refresh fails (timeout, 404, or GitHub rate limit), Then the failure shows no error dialog; only the catalog status banner changes, and the old snapshot stays in use.
+  - AC4: Given the catalog payload has a `schema_version` higher than the app understands, Then the app rejects that payload, keeps using the bundled snapshot, and suggests updating the app.
   - Entities: CatalogSnapshot, EngineVersion, Artifact
 
-  **F-CAT-02 — Daftar & filter versi**
-  - AC1: Given katalog termuat, When user membuka "New Instance", Then hanya versi yang punya artefak untuk OS+arch mesin ini yang ditampilkan.
-  - AC2: Given sebuah engine tidak punya artefak sama sekali untuk platform ini (mis. Valkey di Windows bila F-SPK-02 gagal), Then engine itu tetap terlihat tapi dinonaktifkan dengan alasan tekstual, bukan disembunyikan diam-diam.
-  - AC3: Given sebuah versi sudah terpasang sebagai runtime lokal, Then versi itu ditandai "Terpasang" dan pembuatan instance darinya melewati seluruh langkah unduh.
+  **F-CAT-02 — Version list & filter**
+  - AC1: Given the catalog loads, When the user opens "New Instance", Then only versions with an artifact for this machine's OS+arch are shown.
+  - AC2: Given an engine has no artifact at all for this platform (e.g. Valkey on Windows if F-SPK-02 fails), Then that engine stays visible but disabled with a textual reason, not silently hidden.
+  - AC3: Given a version is already installed as a local runtime, Then that version is marked "Installed" and creating an instance from it skips the whole download step.
   - Entities: EngineVersion, Artifact, Runtime
 
-  **F-CAT-03 — Pipeline pembangun katalog (CI)**
-  - AC1: Given job terjadwal harian, When job berjalan, Then ia menanyakan sumber upstream tiap engine (GitHub Releases untuk PostgreSQL, `downloads.mariadb.org/rest-api` untuk MariaDB, endpoint unduhan resmi MySQL, `download.valkey.io` untuk Valkey) dan menghasilkan `catalog/engines.json`.
-  - AC2: Given sebuah artefak baru ditemukan, When job memproses, Then ia mengunduh file `.sha256` upstream bila ada, atau menghitung checksum sendiri, dan menolak menulis entri tanpa checksum.
-  - AC3: Given hasil berbeda dari katalog saat ini, Then job membuka pull request (bukan push langsung) agar perubahan katalog selalu bisa ditinjau manusia.
+  **F-CAT-03 — Catalog builder pipeline (CI)**
+  - AC1: Given a daily scheduled job, When the job runs, Then it queries each engine's upstream source (GitHub Releases for PostgreSQL, `downloads.mariadb.org/rest-api` for MariaDB, the official MySQL download endpoint, `download.valkey.io` for Valkey) and produces `catalog/engines.json`.
+  - AC2: Given a new artifact is found, When the job processes it, Then it downloads the upstream `.sha256` file when one exists, or computes the checksum itself, and refuses to write an entry without a checksum.
+  - AC3: Given the result differs from the current catalog, Then the job opens a pull request (not a direct push) so catalog changes can always be reviewed by a human.
   - Entities: EngineVersion, Artifact
 
-- **Edge cases:** rate limit GitHub API (gunakan `If-None-Match`/ETag dan autentikasi token di CI) · upstream mengubah pola URL (job gagal keras dan memberi notifikasi, katalog lama tetap sah) · jam sistem user salah sehingga TTL tidak pernah kedaluwarsa (TTL dihitung dengan `max(0, now - fetched_at)`; nilai negatif dianggap kedaluwarsa).
+- **Edge cases:** GitHub API rate limit (use `If-None-Match`/ETag and token auth in CI) · upstream changes its URL pattern (the job fails hard and notifies, the old catalog stays valid) · the user's system clock is wrong so the TTL never expires (the TTL is computed as `max(0, now - fetched_at)`; a negative value is treated as expired).
 
 ---
 
 ### F-RTM — Runtime Installer (Phase 1)
 
-- **Goal:** mengubah entri katalog menjadi direktori biner yang siap pakai di `~/.dblocal/runtimes/<engine>/<version>/`, dengan integritas yang terbukti.
+- **Goal:** turn a catalog entry into a ready-to-use binary directory under `~/.dblocal/runtimes/<engine>/<version>/`, with proven integrity.
 - **Roles:** User-GUI
 - **Business rules:**
-  - Verifikasi SHA-256 **wajib** dan dilakukan sebelum ekstraksi. Tidak ada opsi "lewati verifikasi".
-  - Unduhan ditulis ke file sementara `*.part` di direktori yang sama dengan tujuan akhir (agar `rename` bersifat atomik, satu filesystem).
-  - Satu runtime dipakai bersama oleh banyak instance; runtime tidak pernah dihapus otomatis.
+  - SHA-256 verification is **mandatory** and happens before extraction. There is no "skip verification" option.
+  - The download is written to a temporary `*.part` file in the same directory as the final destination (so the `rename` is atomic and on one filesystem).
+  - One runtime is shared by many instances; a runtime is never removed automatically.
 - **Sub-features:**
 
-  **F-RTM-01 — Unduhan resumable dengan progres**
-  - AC1: Given unduhan besar (mis. 281 MB) sedang berjalan, When koneksi putus lalu user menekan "Lanjutkan", Then unduhan dilanjutkan dengan header HTTP `Range` dari byte terakhir, bukan diulang dari nol.
-  - AC2: Given unduhan sedang berjalan, Then UI menampilkan persen, byte terunduh/total, kecepatan, dan ETA, serta diperbarui minimal 2×/detik.
-  - AC3: Given server tidak mendukung `Range` (merespons 200 dan bukan 206), Then app mengulang dari awal secara transparan tanpa menampilkan error.
-  - AC4: Given user menekan "Batal", Then unduhan berhenti < 1 detik dan file `.part` dihapus.
+  **F-RTM-01 — Resumable download with progress**
+  - AC1: Given a large download (e.g. 281 MB) is running, When the connection drops and the user presses "Resume", Then the download continues with an HTTP `Range` header from the last byte, not from zero.
+  - AC2: Given a download is running, Then the UI shows percent, bytes downloaded/total, speed and ETA, updated at least twice per second.
+  - AC3: Given the server does not support `Range` (responds 200 rather than 206), Then the app restarts from the beginning transparently, without showing an error.
+  - AC4: Given the user presses "Cancel", Then the download stops in under 1 second and the `.part` file is deleted.
   - Entities: DownloadJob, Artifact
 
-  **F-RTM-02 — Verifikasi & kegagalan yang bersih**
-  - AC1: Given unduhan selesai, When SHA-256 yang dihitung tidak sama dengan nilai katalog, Then file dihapus, instalasi dibatalkan, dan pesan menyebut checksum yang diharapkan vs yang didapat beserta tombol "Coba lagi".
-  - AC2: Given ekstraksi gagal di tengah (disk penuh, arsip korup), Then direktori runtime yang setengah jadi dihapus seluruhnya sehingga tidak pernah ada runtime dalam keadaan setengah terpasang.
-  - AC3: Given arsip berisi path yang keluar dari direktori tujuan (`../`) atau symlink absolut, Then ekstraksi ditolak sebagai arsip tidak aman (proteksi zip-slip).
+  **F-RTM-02 — Verification & clean failure**
+  - AC1: Given the download finishes, When the computed SHA-256 differs from the catalog value, Then the file is deleted, the install is cancelled, and the message names the expected vs. actual checksum with a "Retry" button.
+  - AC2: Given extraction fails midway (disk full, corrupt archive), Then the half-built runtime directory is removed entirely so a runtime is never left half-installed.
+  - AC3: Given the archive contains a path that escapes the destination directory (`../`) or an absolute symlink, Then extraction is refused as an unsafe archive (zip-slip protection).
   - Entities: Runtime, DownloadJob
 
-  **F-RTM-03 — Ekstraksi & layout runtime**
-  - AC1: Given arsip `.tar.gz`, `.tar.xz`, atau `.zip`, When diekstrak, Then isinya mendarat di `~/.dblocal/runtimes/<engine>/<version>-<arch>/` dengan `strip_prefix` dari katalog diterapkan sehingga `bin/` berada tepat satu tingkat di dalamnya.
-  - AC2: Given platform Unix, When ekstraksi selesai, Then bit executable pada file di `bin/` dipastikan menyala.
-  - AC3: Given runtime sudah ada untuk versi+arch yang sama, Then unduhan dilewati dan status langsung `installed`.
+  **F-RTM-03 — Extraction & runtime layout**
+  - AC1: Given a `.tar.gz`, `.tar.xz` or `.zip` archive, When it is extracted, Then its contents land in `~/.dblocal/runtimes/<engine>/<version>-<arch>/` with the catalog's `strip_prefix` applied so `bin/` sits exactly one level inside.
+  - AC2: Given a Unix platform, When extraction finishes, Then the executable bit on each file in `bin/` is set.
+  - AC3: Given a runtime already exists for the same version+arch, Then the download is skipped and the status is immediately `installed`.
   - Entities: Runtime
 
   **F-RTM-04 — Reclaim disk**
-  - AC1: Given sebuah runtime tidak lagi dirujuk instance mana pun, When user membuka Settings → Storage, Then runtime itu terdaftar sebagai "Tidak terpakai" beserta ukurannya dan bisa dihapus.
-  - AC2: Given runtime masih dirujuk minimal satu instance, Then tombol hapusnya nonaktif dengan daftar instance yang memakainya.
+  - AC1: Given a runtime is no longer referenced by any instance, When the user opens Settings → Storage, Then that runtime is listed as "Unused" with its size and can be deleted.
+  - AC2: Given a runtime is still referenced by at least one instance, Then its delete button is disabled with the list of instances using it.
   - Entities: Runtime, Instance
 
-- **Edge cases:** disk tidak cukup (cek ruang bebas ≥ `size_bytes × 3` sebelum mulai, bukan saat gagal) · antivirus Windows mengunci file saat ekstraksi (retry dengan backoff, lalu pesan yang menyebut antivirus) · path panjang > 260 karakter di Windows (gunakan path `\\?\` verbatim).
+- **Edge cases:** not enough disk (check free space ≥ `size_bytes × 3` before starting, not after failing) · Windows antivirus locks a file during extraction (retry with backoff, then a message naming antivirus) · paths longer than 260 characters on Windows (use `\\?\` verbatim paths).
 
 ---
 
 ### F-PRT — Port Manager (Phase 1)
 
-- **Goal:** menjamin instance baru tidak pernah gagal start karena port, dan membuat `.env` project yang sudah ada tetap jalan tanpa diubah.
+- **Goal:** guarantee a new instance never fails to start because of a port, and keep an existing project's `.env` working unchanged.
 - **Roles:** User-GUI
 - **Business rules:**
-  - Port kanonik per engine: PostgreSQL 5432, MySQL 3306, MariaDB 3307, Valkey 6379.
-  - Instance pertama suatu engine mendapat port kanonik; berikutnya naik ke port bebas berikutnya.
-  - Kepemilikan port dicatat di tabel dengan **unique constraint**, dan selalu diverifikasi ulang dengan uji bind nyata sebelum start.
+  - Canonical port per engine: PostgreSQL 5432, MySQL 3306, MariaDB 3307, Valkey 6379.
+  - The first instance of an engine gets the canonical port; the next ones take the next free port.
+  - Port ownership is recorded in a table with a **unique constraint**, and is always re-verified with a real bind test before start.
 - **Sub-features:**
 
-  **F-PRT-01 — Alokasi otomatis**
-  - AC1: Given belum ada instance PostgreSQL, When user membuat instance PostgreSQL, Then port yang diusulkan adalah 5432.
-  - AC2: Given sudah ada instance di 5432, When user membuat instance PostgreSQL kedua, Then port yang diusulkan adalah 5433 (port bebas berikutnya, melompati yang sudah dialokasikan di dalam app).
-  - AC3: Given user mengetik port manual yang sudah dialokasikan instance DBLocal lain, Then form menolak submit dengan menyebut nama instance pemiliknya.
+  **F-PRT-01 — Automatic allocation**
+  - AC1: Given there is no PostgreSQL instance yet, When the user creates a PostgreSQL instance, Then the proposed port is 5432.
+  - AC2: Given an instance already uses 5432, When the user creates a second PostgreSQL instance, Then the proposed port is 5433 (the next free port, skipping those already allocated inside the app).
+  - AC3: Given the user types a port already allocated to another DBLocal instance, Then the form refuses to submit and names the owning instance.
   - Entities: PortAllocation, Instance
 
-  **F-PRT-02 — Uji bind sebelum start**
-  - AC1: Given port instance ditempati proses di luar DBLocal (mis. PostgreSQL bawaan sistem atau container), When user menekan Start, Then app mendeteksinya lewat percobaan bind nyata ke `127.0.0.1:<port>` **sebelum** menjalankan engine, dan menampilkan dialog "Port 5432 sedang dipakai" dengan aksi 1-klik "Pindah ke 5433".
-  - AC2: Given user memilih pindah port, Then konfigurasi instance diperbarui, alokasi port lama dilepas, dan start dilanjutkan tanpa langkah tambahan.
-  - AC3: Given uji bind berhasil, Then socket uji ditutup sebelum engine dijalankan sehingga tidak ada balapan dengan proses engine itu sendiri.
+  **F-PRT-02 — Bind test before start**
+  - AC1: Given the instance's port is taken by a process outside DBLocal (e.g. a system PostgreSQL or a container), When the user presses Start, Then the app detects it through a real bind attempt to `127.0.0.1:<port>` **before** running the engine, and shows a "Port 5432 is already in use" dialog with a one-click "Move to 5433" action.
+  - AC2: Given the user chooses to move the port, Then the instance configuration is updated, the old port allocation is released, and the start continues with no extra steps.
+  - AC3: Given the bind test succeeds, Then the test socket is closed before the engine runs, so there is no race with the engine process itself.
   - Entities: PortAllocation, Instance
 
-- **Edge cases:** port < 1024 diketik manual (ditolak dengan penjelasan "butuh privilese, DBLocal tidak pernah meminta sudo") · `SO_REUSEADDR` membuat bind seolah berhasil padahal ada listener lain (uji bind memakai opsi default tanpa reuse, dan pada Windows memakai `SO_EXCLUSIVEADDRUSE`) · IPv6 `::1` ditempati sementara `127.0.0.1` bebas (uji kedua stack, laporkan jika salah satunya tidak bisa).
+- **Edge cases:** a manually typed port below 1024 (rejected with the explanation "needs privileges; DBLocal never asks for sudo") · `SO_REUSEADDR` makes a bind look successful even when another listener exists (the bind test uses default options without reuse, and on Windows uses `SO_EXCLUSIVEADDRUSE`) · IPv6 `::1` is taken while `127.0.0.1` is free (test both stacks, report if either fails).
 
 ---
 
 ### F-INS — Instance Lifecycle (Phase 1)
 
-- **Goal:** inti produk — membuat, menjalankan, menghentikan, dan menghapus instance database, serta tetap benar meskipun aplikasi ditutup di tengah jalan.
+- **Goal:** the core of the product — create, start, stop and delete database instances, staying correct even when the app is closed midway.
 - **Roles:** User-GUI
 - **State machine:**
 
 ```mermaid
 stateDiagram-v2
-    [*] --> draft: user isi form
-    draft --> provisioning: Create (runtime belum ada)
-    draft --> initializing: Create (runtime sudah ada)
-    provisioning --> initializing: unduh + verifikasi OK
-    provisioning --> failed: unduh/checksum gagal
-    initializing --> stopped: initdb / gen config OK
-    initializing --> failed: initdb gagal
+    [*] --> draft: user fills the form
+    draft --> provisioning: Create (runtime missing)
+    draft --> initializing: Create (runtime present)
+    provisioning --> initializing: download + verification OK
+    provisioning --> failed: download/checksum failed
+    initializing --> stopped: initdb / config generation OK
+    initializing --> failed: initdb failed
     stopped --> starting: Start
     starting --> running: health check OK
-    starting --> failed: port bentrok / proses mati / timeout
-    running --> stopping: Stop / Quit app (opsional)
-    running --> failed: proses mati tanpa diminta
-    stopping --> stopped: shutdown bersih
-    stopping --> failed: timeout, perlu kill paksa
+    starting --> failed: port conflict / process died / timeout
+    running --> stopping: Stop / Quit app (optional)
+    running --> failed: process died unrequested
+    stopping --> stopped: clean shutdown
+    stopping --> failed: timeout, forced kill needed
     failed --> starting: Retry
     stopped --> deleting: Delete
     failed --> deleting: Delete
-    deleting --> [*]: data dihapus atau diarsipkan
+    deleting --> [*]: data deleted or archived
 ```
 
-  Pemicu transisi: semua transisi dipicu **User-GUI** (atau User-CLI sejak Phase 2), kecuali `running → failed` yang dipicu **Engine process** yang mati, dan `starting → failed` oleh timeout health check.
+  Transition triggers: all transitions are triggered by **User-GUI** (or User-CLI from Phase 2), except `running → failed`, which is triggered by the **Engine process** dying, and `starting → failed` by the health-check timeout.
 
 - **Business rules:**
-  - Nama instance unik, `^[a-z0-9][a-z0-9-]{1,30}$`, dipakai sebagai nama direktori data.
-  - Data dir: `~/.dblocal/instances/<nama>/data`, log: `~/.dblocal/instances/<nama>/logs/`, pidfile: `~/.dblocal/instances/<nama>/run/`.
-  - Engine di-spawn **detached** (`setsid` + `prctl`-free di Unix, `DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP` di Windows) sehingga tidak ikut mati saat app di-quit.
-  - Health check adalah **koneksi protokol sungguhan** (PostgreSQL: `pg_isready`/handshake; Valkey: `PING`; MySQL/MariaDB: handshake), bukan sekadar "proses masih hidup".
-  - Timeout start: 30 detik (PostgreSQL/MySQL/MariaDB), 10 detik (Valkey). Lewat itu → `failed` + log ditampilkan otomatis.
-  - Stop memakai shutdown bersih engine lebih dulu (`pg_ctl stop -m fast`, `mysqladmin shutdown`, `SHUTDOWN NOSAVE`/SIGTERM); SIGKILL hanya setelah 20 detik dan dicatat di log sebagai kill paksa.
+  - Instance names are unique, `^[a-z0-9][a-z0-9-]{1,30}$`, and used as the data directory name.
+  - Data dir: `~/.dblocal/instances/<name>/data`, logs: `~/.dblocal/instances/<name>/logs/`, pidfile: `~/.dblocal/instances/<name>/run/`.
+  - The engine is spawned **detached** (`setsid` on Unix, `DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP` on Windows) so it does not die when the app quits.
+  - The health check is a **real protocol connection** (PostgreSQL: `pg_isready`/handshake; Valkey: `PING`; MySQL/MariaDB: handshake), not just "the process is alive".
+  - Start timeout: 30 seconds (PostgreSQL/MySQL/MariaDB), 10 seconds (Valkey). Past that → `failed` plus the log shown automatically.
+  - Stop uses the engine's clean shutdown first (`pg_ctl stop -m fast`, `mysqladmin shutdown`, `SHUTDOWN NOSAVE`/SIGTERM); SIGKILL only after 20 seconds and is recorded in the log as a forced kill.
 - **Sub-features:**
 
-  **F-INS-01 — Buat instance**
-  - AC1: Given user memilih engine + versi dan menekan Create, When runtime yang dibutuhkan sudah terpasang, Then instance tercipta dengan status `stopped` dalam < 10 detik tanpa pertanyaan tambahan selain nama (terisi default).
-  - AC2: Given runtime belum terpasang, Then alur berlanjut otomatis ke F-RTM dengan progres yang terlihat, lalu kembali ke inisialisasi tanpa interaksi user.
-  - AC3: Given nama instance sudah dipakai, Then form menolak dengan saran nama alternatif.
+  **F-INS-01 — Create an instance**
+  - AC1: Given the user picks an engine + version and presses Create, When the required runtime is already installed, Then the instance is created in status `stopped` in under 10 seconds with no question beyond the name (pre-filled with a default).
+  - AC2: Given the runtime is not installed, Then the flow continues automatically to F-RTM with visible progress, then returns to initialization without user interaction.
+  - AC3: Given the instance name is taken, Then the form refuses and suggests an alternative name.
   - Entities: Instance, Runtime, PortAllocation, CredentialRef
 
-  **F-INS-02 — Inisialisasi data directory**
-  - AC1: Given instance PostgreSQL baru, When inisialisasi berjalan, Then `initdb` dipanggil dengan encoding UTF-8, locale `C.UTF-8` (atau padanan platform), dan metode autentikasi sesuai mode auth yang dipilih (`scram-sha-256` atau `trust`).
-  - AC2: Given instance Valkey baru, Then sebuah `valkey.conf` dibuat berisi `bind 127.0.0.1`, `port <port>`, `dir <data_dir>`, dan `requirepass` bila mode auth berpassword.
-  - AC3: Given inisialisasi gagal, Then direktori data dibersihkan seluruhnya dan output mentah dari tool engine ditampilkan di panel log, bukan diringkas menjadi "terjadi kesalahan".
-  - AC4: Given platform mana pun, Then semua engine dikonfigurasi untuk **hanya** mendengarkan `127.0.0.1` (dan `::1`), tidak pernah `0.0.0.0`.
+  **F-INS-02 — Initialize the data directory**
+  - AC1: Given a new PostgreSQL instance, When initialization runs, Then `initdb` is called with UTF-8 encoding, `C.UTF-8` locale (or platform equivalent), and the authentication method matching the chosen auth mode (`scram-sha-256` or `trust`).
+  - AC2: Given a new Valkey instance, Then a `valkey.conf` is written containing `bind 127.0.0.1`, `port <port>`, `dir <data_dir>`, and `requirepass` when the auth mode has a password.
+  - AC3: Given initialization fails, Then the data directory is cleaned up entirely and the raw output from the engine tool is shown in the log panel, not summarized into "an error occurred".
+  - AC4: Given any platform, Then every engine is configured to listen on `127.0.0.1` (and `::1`) **only**, never `0.0.0.0`.
   - Entities: Instance, Runtime
 
   **F-INS-03 — Start / Stop**
-  - AC1: Given instance `stopped`, When user menekan Start, Then uji bind F-PRT-02 berjalan, engine di-spawn detached, dan status berubah ke `running` setelah health check lulus.
-  - AC2: Given instance `running` dan user menutup jendela app lalu keluar sepenuhnya, When app dibuka lagi, Then instance masih `running` dan masih bisa dikendalikan.
-  - AC3: Given instance `running`, When user menekan Stop, Then shutdown bersih dipanggil dan status menjadi `stopped` dalam < 20 detik; bila lewat, kill paksa dijalankan dan dicatat.
-  - AC4: Given proses engine mati sendiri, When app mendeteksinya (poll ≤ 2 detik), Then status menjadi `failed` dan 20 baris log terakhir ditampilkan tanpa diminta.
+  - AC1: Given a `stopped` instance, When the user presses Start, Then the F-PRT-02 bind test runs, the engine is spawned detached, and the status becomes `running` after the health check passes.
+  - AC2: Given a `running` instance and the user closes the app window and quits fully, When the app is opened again, Then the instance is still `running` and still controllable.
+  - AC3: Given a `running` instance, When the user presses Stop, Then clean shutdown is called and the status becomes `stopped` in under 20 seconds; past that, a forced kill runs and is recorded.
+  - AC4: Given the engine process dies on its own, When the app detects it (poll ≤ 2 seconds), Then the status becomes `failed` and the last 20 log lines are shown without being asked.
   - Entities: Instance, PortAllocation
 
-  **F-INS-04 — Rekonsiliasi proses yatim**
-  - AC1: Given app dijalankan dan ada pidfile dari sesi sebelumnya, When rekonsiliasi berjalan, Then setiap PID diverifikasi bukan hanya "ada", tapi **benar proses engine milik kita** dengan mencocokkan nama executable dan waktu mulai proses terhadap yang tercatat.
-  - AC2: Given PID sudah dipakai ulang oleh proses lain yang tidak cocok, Then pidfile dianggap basi, dihapus, dan instance ditandai `stopped` — app tidak pernah mengirim sinyal ke proses asing.
-  - AC3: Given rekonsiliasi untuk 20 instance, Then seluruhnya selesai < 2 detik dan tidak memblokir render jendela.
+  **F-INS-04 — Reconcile orphaned processes**
+  - AC1: Given the app starts and a pidfile exists from a previous session, When reconciliation runs, Then each PID is verified not just as "present" but as **really our engine process**, by matching the executable name and process start time against the recorded values.
+  - AC2: Given a PID has been reused by another process that does not match, Then the pidfile is treated as stale, deleted, and the instance marked `stopped` — the app never signals a foreign process.
+  - AC3: Given reconciliation for 20 instances, Then it all finishes in under 2 seconds and does not block the window render.
   - Entities: Instance
 
-  **F-INS-05 — Hapus instance**
-  - AC1: Given user menekan Delete, Then dialog menampilkan ukuran data dir saat ini dan dua aksi: "Hapus instance & data" dan "Hapus instance, simpan data".
-  - AC2: Given user memilih "Hapus instance & data", Then tombol konfirmasi baru aktif setelah user mengetik nama instance dengan tepat.
-  - AC3: Given user memilih "Hapus instance, simpan data", Then direktori data dipindahkan ke `~/.dblocal/archive/<nama>-<YYYYMMDD-HHMM>/`, entri instance dihapus, alokasi port dilepas, dan kredensial di keychain dihapus.
-  - AC4: Given instance sedang `running`, Then Delete menghentikannya lebih dulu dan gagal bersih bila penghentian gagal.
+  **F-INS-05 — Delete an instance**
+  - AC1: Given the user presses Delete, Then the dialog shows the current data dir size and two actions: "Delete instance and data" and "Delete instance, keep data".
+  - AC2: Given the user chooses "Delete instance and data", Then the confirm button becomes enabled only after the user types the instance name exactly.
+  - AC3: Given the user chooses "Delete instance, keep data", Then the data directory is moved to `~/.dblocal/archive/<name>-<YYYYMMDD-HHMM>/`, the instance entry is deleted, the port allocation is released, and the keychain credential is deleted.
+  - AC4: Given the instance is `running`, Then Delete stops it first and fails cleanly if the stop fails.
   - Entities: Instance, ArchivedData, PortAllocation, CredentialRef
 
-- **Edge cases:** data dir ada tapi tidak dikenali app (instance dibuat ulang dengan nama sama → tolak, minta nama lain atau pulihkan dari arsip) · jam sistem mundur sehingga perbandingan waktu mulai proses meleset (toleransi ±2 detik, jika ragu → anggap basi) · home directory di filesystem jaringan (peringatkan: engine butuh locking POSIX yang benar) · nama user OS mengandung spasi/karakter non-ASCII (path dikutip di semua pemanggilan proses; diuji di CI).
+- **Edge cases:** a data dir exists but the app does not recognize it (instance recreated with the same name → refuse, ask for another name or restore from archive) · the system clock moves backward so process start-time comparison misses (tolerance ±2 seconds; when in doubt → treat as stale) · home directory on a network filesystem (warn: the engine needs correct POSIX locking) · the OS user name contains spaces/non-ASCII (paths are quoted in every process call; tested in CI).
 
 ---
 
 ### F-CRD — Credentials & Connection (Phase 1)
 
-- **Goal:** membuat langkah terakhir sesi pertama — "tempel ke `.env`" — menjadi satu klik, tanpa menyimpan password sembarangan.
+- **Goal:** make the last step of the first session — "paste into `.env`" — a single click, without storing passwords carelessly.
 - **Roles:** User-GUI
 - **Business rules:**
-  - Default: superuser bernama kanonik (`postgres`, `root`, `default` untuk Valkey) dengan password acak **24 karakter** dari CSPRNG.
-  - Password disimpan di OS keychain (Secret Service/libsecret di Linux, Keychain di macOS, Credential Manager di Windows). Fallback bila keychain tidak tersedia: `~/.dblocal/secrets/<instance>.key` dengan mode `0600` — dan fakta fallback ini ditampilkan di UI.
-  - **Password tidak pernah ditulis ke `state.db`, ke log, atau ke pesan error.**
-  - Mode "tanpa password" hanya bisa dipilih saat create, ditandai permanen di UI instance, dan disertai peringatan yang menyebut risikonya.
+  - Default: a canonical superuser (`postgres`, `root`, `default` for Valkey) with a random **24-character** password from a CSPRNG.
+  - The password is stored in the OS keychain (Secret Service/libsecret on Linux, Keychain on macOS, Credential Manager on Windows). Fallback when the keychain is unavailable: `~/.dblocal/secrets/<instance>.key` with mode `0600` — and the fact that the fallback is in use is shown in the UI.
+  - **A password is never written to `state.db`, to logs, or to error messages.**
+  - The "no password" mode can only be chosen at create time, is permanently marked in the instance UI, and carries a warning that names the risk.
 - **Sub-features:**
 
-  **F-CRD-01 — Generate & simpan kredensial**
-  - AC1: Given instance baru dengan mode auth berpassword, When dibuat, Then password 24 karakter dihasilkan dari CSPRNG OS dan disimpan di keychain dengan kunci `dblocal:<instance-id>`.
-  - AC2: Given keychain tidak tersedia (mis. Linux headless tanpa Secret Service), Then fallback file `0600` dipakai dan UI menampilkan catatan "Disimpan di file, bukan keychain" beserta path-nya.
-  - AC3: Given instance dihapus, Then entri keychain/file-nya ikut terhapus.
+  **F-CRD-01 — Generate & store credentials**
+  - AC1: Given a new instance with the password auth mode, When it is created, Then a 24-character password is generated from the OS CSPRNG and stored in the keychain under the key `dblocal:<instance-id>`.
+  - AC2: Given the keychain is unavailable (e.g. headless Linux without Secret Service), Then the `0600` file fallback is used and the UI shows the note "Stored in a file, not the keychain" with its path.
+  - AC3: Given an instance is deleted, Then its keychain/file entry is deleted too.
   - Entities: CredentialRef, Instance
 
-  **F-CRD-02 — Salin connection URI**
-  - AC1: Given instance `running`, When user menekan "Copy URI", Then clipboard berisi URI lengkap dan valid, mis. `postgresql://postgres:<password>@127.0.0.1:5432/postgres`, dan toast konfirmasi muncul.
-  - AC2: Given instance Valkey, Then URI berbentuk `redis://default:<password>@127.0.0.1:6379` (skema `redis://` dipakai karena itulah yang dipahami klien).
-  - AC3: Given user menekan "Copy .env", Then clipboard berisi blok variabel lingkungan bergaya framework (`DB_CONNECTION`, `DB_HOST`, `DB_PORT`, `DB_DATABASE`, `DB_USERNAME`, `DB_PASSWORD`).
-  - AC4: Given password berisi karakter yang perlu di-escape pada URI, Then password di-percent-encode dengan benar sehingga URI selalu bisa di-parse.
+  **F-CRD-02 — Copy the connection URI**
+  - AC1: Given a `running` instance, When the user presses "Copy URI", Then the clipboard holds a complete, valid URI, e.g. `postgresql://postgres:<password>@127.0.0.1:5432/postgres`, and a confirmation toast appears.
+  - AC2: Given a Valkey instance, Then the URI is `redis://default:<password>@127.0.0.1:6379` (the `redis://` scheme is used because that is what clients understand).
+  - AC3: Given the user presses "Copy .env", Then the clipboard holds a framework-style environment variable block (`DB_CONNECTION`, `DB_HOST`, `DB_PORT`, `DB_DATABASE`, `DB_USERNAME`, `DB_PASSWORD`).
+  - AC4: Given the password contains characters that need escaping in a URI, Then the password is percent-encoded correctly so the URI can always be parsed.
   - Entities: Instance, CredentialRef
 
-  **F-CRD-03 — Mode tanpa password**
-  - AC1: Given user mencentang "Izinkan koneksi tanpa password" saat create, Then dialog peringatan menjelaskan bahwa proses dan user lain di mesin ini bisa terhubung tanpa kredensial, dan user harus mengonfirmasi sekali lagi.
-  - AC2: Given mode ini aktif, Then kartu instance menampilkan badge "No auth" permanen.
-  - AC3: Given engine Valkey dengan mode ini, Then `protected-mode yes` tetap dipertahankan di config sebagai lapisan pertahanan terakhir.
+  **F-CRD-03 — No-password mode**
+  - AC1: Given the user checks "Allow connections without a password" at create time, Then a warning dialog explains that other processes and users on this machine can connect without credentials, and the user must confirm once more.
+  - AC2: Given this mode is active, Then the instance card shows a permanent "No auth" badge.
+  - AC3: Given a Valkey engine with this mode, Then `protected-mode yes` is still kept in the config as the last line of defense.
   - Entities: Instance
 
-- **Edge cases:** keychain terkunci saat app jalan (minta unlock lewat API OS; jika gagal, tampilkan instruksi dan jangan crash) · user menyalin URI saat instance `stopped` (URI tetap diberikan, dengan catatan bahwa instance belum jalan).
+- **Edge cases:** the keychain is locked while the app runs (ask for an unlock through the OS API; if that fails, show instructions and do not crash) · the user copies the URI while the instance is `stopped` (the URI is still provided, with a note that the instance is not running).
 
 ---
 
 ### F-LOG — Logs & Diagnostics (Phase 1)
 
-- **Goal:** saat sesuatu gagal, user harus bisa melihat sebabnya tanpa membuka terminal. Ini jalur kegagalan dari core value, jadi ia wajib ada di Phase 1.
+- **Goal:** when something fails, the user must be able to see the cause without opening a terminal. This is the failure path of the core value, so it is mandatory in Phase 1.
 - **Roles:** User-GUI
 - **Sub-features:**
 
-  **F-LOG-01 — Panel log per instance**
-  - AC1: Given instance pernah dijalankan, When user membuka tab Logs, Then 1.000 baris terakhir tampil dan log baru mengalir secara live selama instance `running`.
-  - AC2: Given file log melebihi 10 MB, Then log dirotasi (`.1`, `.2`, maksimal 3 berkas) sehingga disk tidak tumbuh tanpa batas.
-  - AC3: Given user menekan "Salin log", Then 500 baris terakhir masuk clipboard untuk ditempel ke issue GitHub.
+  **F-LOG-01 — Per-instance log panel**
+  - AC1: Given an instance has been started, When the user opens the Logs tab, Then the last 1,000 lines are shown and new lines stream live while the instance is `running`.
+  - AC2: Given the log file exceeds 10 MB, Then the log is rotated (`.1`, `.2`, at most 3 files) so the disk does not grow without bound.
+  - AC3: Given the user presses "Copy logs", Then the last 500 lines go to the clipboard, to paste into a GitHub issue.
   - Entities: Instance
 
-  **F-LOG-02 — Diagnosa gagal start**
-  - AC1: Given start gagal, When app menampilkan kegagalan, Then pesannya memetakan penyebab yang dikenal menjadi aksi: port dipakai → "Pindah port"; data dir dibuat oleh versi engine berbeda → "Versi tidak cocok, butuh instance baru"; izin ditolak → path yang bermasalah; biner hilang/korup → "Pasang ulang runtime".
-  - AC2: Given penyebab tidak dikenali, Then app menampilkan baris log mentah terakhir yang relevan + tombol "Laporkan issue" yang membuka GitHub dengan template terisi (OS, arsitektur, versi app, engine, versi engine) — **tanpa** menyertakan password atau path home yang teridentifikasi.
+  **F-LOG-02 — Start-failure diagnosis**
+  - AC1: Given a start failed, When the app shows the failure, Then the message maps a known cause to an action: port in use → "Change port"; data dir created by another engine version → "Version mismatch, a new instance is required"; permission denied → the offending path; binary missing/corrupt → "Reinstall the runtime".
+  - AC2: Given an unrecognized cause, Then the app shows the last relevant raw log line plus a "Report an issue" button that opens GitHub with a filled-in template (OS, architecture, app version, engine, engine version) — **without** including the password or an identifying home path.
   - Entities: Instance
 
 ---
 
 ### F-TRY — Tray & Window (Phase 1)
 
-- **Goal:** mewujudkan retention trigger (D-04): mengendalikan database tanpa membuka jendela.
+- **Goal:** realize the retention trigger (D-04): control the database without opening a window.
 - **Roles:** User-GUI
 - **Sub-features:**
 
-  **F-TRY-01 — Menu tray**
-  - AC1: Given app berjalan, Then ikon tray/menubar menampilkan daftar instance beserta titik status (hijau `running`, abu `stopped`, merah `failed`) dan memungkinkan start/stop langsung dari menu.
-  - AC2: Given sebuah instance diubah dari menu tray, Then jendela utama (bila terbuka) mencerminkan perubahan itu dalam ≤ 1 detik.
-  - AC3: Given tray tidak didukung lingkungan desktop user, Then app tetap berfungsi penuh lewat jendela dan menampilkan catatan sekali saja.
+  **F-TRY-01 — Tray menu**
+  - AC1: Given the app is running, Then the tray/menubar icon shows the list of instances with status dots (green `running`, grey `stopped`, red `failed`) and allows start/stop directly from the menu.
+  - AC2: Given an instance is changed from the tray menu, Then the main window (when open) reflects the change within ≤ 1 second.
+  - AC3: Given the tray is unsupported in the user's desktop environment, Then the app still works fully through the window and shows the note once.
   - Entities: Instance
 
-  **F-TRY-02 — Perilaku close & quit**
-  - AC1: Given user menutup jendela, Then app tetap hidup di tray dan instance tetap berjalan.
-  - AC2: Given user memilih Quit, When masih ada instance `running`, Then dialog menawarkan "Biarkan tetap berjalan" (default) atau "Hentikan semua lalu keluar".
-  - AC3: Given user memilih "Biarkan tetap berjalan", Then proses engine tetap hidup setelah app berhenti, dan saat app dibuka lagi F-INS-04 menyambungkannya kembali.
+  **F-TRY-02 — Close & quit behavior**
+  - AC1: Given the user closes the window, Then the app stays alive in the tray and instances keep running.
+  - AC2: Given the user chooses Quit, When instances are still `running`, Then the dialog offers "Leave them running" (default) or "Stop all, then quit".
+  - AC3: Given the user chooses "Leave them running", Then the engine processes stay alive after the app exits, and when the app is opened again F-INS-04 reconnects them.
   - Entities: Instance
 
 ---
 
 ### F-PKG — Packaging & Install (Phase 1 → Phase 2)
 
-- **Goal:** memenuhi permintaan distribusi: `.rpm`, `.deb`, `.AppImage`, `.zip`, `.dmg`, dan instalasi lewat `curl`.
+- **Goal:** meet the distribution requirement: `.rpm`, `.deb`, `.AppImage`, `.zip`, `.dmg`, and install through `curl`.
 - **Roles:** —
 - **Business rules:**
-  - Semua artefak dibangun di GitHub Actions dari tag; tidak ada build manual dari mesin pengembang.
-  - Setiap rilis menyertakan `checksums.txt` dan attestation/provenance bawaan GitHub.
-  - macOS **wajib** ditandatangani Developer ID + notarisasi. Windows dirilis tanpa tanda tangan di v1, disertai dokumentasi SmartScreen.
+  - All artifacts are built in GitHub Actions from a tag; no manual builds from a developer machine.
+  - Every release includes `checksums.txt` and GitHub's built-in attestation/provenance.
+  - macOS **must** be signed with a Developer ID + notarized. Windows ships unsigned in v1, accompanied by SmartScreen documentation.
 - **Sub-features:**
 
-  **F-PKG-01 — Matrix build & checksum (P1)**
-  - AC1: Given sebuah tag `v*` didorong, Then CI menghasilkan artefak untuk `linux-x86_64`, `linux-aarch64`, `macos-universal`, `windows-x86_64` beserta `checksums.txt`.
-  - AC2: Given artefak melebihi batas ukuran 60 MB, Then build gagal (gate ukuran), bukan lolos diam-diam.
+  **F-PKG-01 — Build matrix & checksum (P1)**
+  - AC1: Given a `v*` tag is pushed, Then CI produces artifacts for `linux-x86_64`, `linux-aarch64`, `macos-universal`, `windows-x86_64` plus `checksums.txt`.
+  - AC2: Given an artifact exceeds the 60 MB size limit, Then the build fails (size gate) rather than passing silently.
 
-  **F-PKG-02 — Artefak portabel (P1)**
-  - AC1: Given rilis Phase 1, Then tersedia `.AppImage` dan `.tar.gz` (Linux), `.dmg` ter-notarisasi (macOS universal), dan `.zip` (Windows).
-  - AC2: Given AppImage dijalankan di Fedora dan Ubuntu LTS terbaru, Then app terbuka tanpa dependensi tambahan selain driver Vulkan sistem.
-  - AC3: Given `.dmg` diunduh lewat browser di macOS, Then app terbuka tanpa perlu perintah terminal apa pun (bukti notarisasi berhasil).
+  **F-PKG-02 — Portable artifacts (P1)**
+  - AC1: Given a Phase 1 release, Then `.AppImage` and `.tar.gz` (Linux), a notarized `.dmg` (macOS universal), and `.zip` (Windows) are available.
+  - AC2: Given the AppImage runs on Fedora and the latest Ubuntu LTS, Then the app opens with no extra dependencies beyond the system Vulkan driver.
+  - AC3: Given the `.dmg` is downloaded through a browser on macOS, Then the app opens without any terminal command (proof that notarization succeeded).
 
-  **F-PKG-03 — install.sh untuk curl (P1)**
-  - AC1: Given `curl -fsSL https://dblocal.dev/install.sh | sh` (atau URL raw GitHub) dijalankan di Linux atau macOS, Then skrip mendeteksi OS+arch, mengunduh artefak yang tepat, memverifikasi checksum, memasang ke `~/.local/bin` (atau `/usr/local/bin` bila dapat ditulis), dan mencetak langkah berikutnya.
-  - AC2: Given arsitektur tidak didukung, Then skrip berhenti dengan pesan jelas dan **tidak** memasang apa pun.
-  - AC3: Given skrip dijalankan ulang, Then ia melakukan upgrade in-place secara idempoten.
-  - AC4: Skrip lulus `shellcheck` di CI dan tidak pernah memanggil `sudo` tanpa diminta eksplisit lewat flag.
+  **F-PKG-03 — install.sh for curl (P1)**
+  - AC1: Given `curl -fsSL https://dblocal.dev/install.sh | sh` (or the GitHub raw URL) runs on Linux or macOS, Then the script detects OS+arch, downloads the right artifact, verifies the checksum, installs to `~/.local/bin` (or `/usr/local/bin` when writable), and prints the next step.
+  - AC2: Given an unsupported architecture, Then the script stops with a clear message and installs **nothing**.
+  - AC3: Given the script is run again, Then it performs an idempotent in-place upgrade.
+  - AC4: The script passes `shellcheck` in CI and never calls `sudo` unless explicitly requested through a flag.
 
-  **F-PKG-04 — Paket native (P2)**
-  - AC1: Given rilis Phase 2, Then tersedia `.deb` (Debian/Ubuntu), `.rpm` (Fedora/RHEL), dan `.msi` (Windows).
-  - AC2: Given `.deb`/`.rpm` dipasang lalu dihapus, Then tidak ada berkas tertinggal di luar `~/.dblocal` (data user sengaja dipertahankan dan fakta ini disebut saat uninstall).
+  **F-PKG-04 — Native packages (P2)**
+  - AC1: Given a Phase 2 release, Then `.deb` (Debian/Ubuntu), `.rpm` (Fedora/RHEL), and `.msi` (Windows) are available.
+  - AC2: Given `.deb`/`.rpm` is installed and then removed, Then no files are left behind outside `~/.dblocal` (user data is intentionally kept, and this fact is stated at uninstall time).
 
   **F-PKG-05 — Self-update (P2)**
-  - AC1: Given versi lebih baru tersedia di GitHub Releases, When user membuka Settings → Updates (atau pemeriksaan berkala), Then versi baru + catatan rilis ditampilkan dengan tombol pasang.
-  - AC2: Given app dipasang lewat package manager OS (`.deb`/`.rpm`/Homebrew), Then self-update dinonaktifkan dan app mengarahkan user ke package manager-nya.
-  - AC3: Given platform Windows, Then update memakai proses helper yang mengganti binary setelah app keluar, karena binary yang sedang berjalan tidak bisa ditimpa.
-  - AC4: Given paket update, Then checksum diverifikasi sebelum dipasang.
+  - AC1: Given a newer version is available on GitHub Releases, When the user opens Settings → Updates (or a periodic check runs), Then the new version plus release notes are shown with an install button.
+  - AC2: Given the app was installed through the OS package manager (`.deb`/`.rpm`/Homebrew), Then self-update is disabled and the app points the user to their package manager.
+  - AC3: Given the Windows platform, Then the update uses a helper process that replaces the binary after the app exits, because the running binary cannot be overwritten.
+  - AC4: Given the update package, Then the checksum is verified before installing.
 
 ---
 
 ### F-ENG — MySQL & MariaDB (Phase 2)
 
-- **Goal:** memenuhi janji empat engine dengan memanfaatkan `EngineAdapter` yang sudah teruji oleh dua engine paling berbeda di Phase 1.
+- **Goal:** fulfill the four-engine promise by reusing the `EngineAdapter` already proven by the two most different engines in Phase 1.
 - **Roles:** User-GUI
 - **Sub-features:**
 
-  **F-ENG-01 — Adapter MySQL**
-  - AC1: Given artefak MySQL dari katalog, When instance dibuat, Then inisialisasi memakai `mysqld --initialize-insecure`, lalu password superuser di-set dan `my.cnf` ditulis dengan `bind-address=127.0.0.1`, `port`, dan `datadir` instance.
-  - AC2: Given instance `running`, Then health check memakai handshake protokol MySQL, bukan sekadar cek proses.
-  - AC3: Given unduhan besar (mis. 281 MB), Then progres dan ETA ditampilkan sejak byte pertama dan unduhan dapat dilanjutkan setelah putus.
+  **F-ENG-01 — MySQL adapter**
+  - AC1: Given a MySQL artifact from the catalog, When an instance is created, Then initialization uses `mysqld --initialize-insecure`, then the superuser password is set and `my.cnf` is written with `bind-address=127.0.0.1`, `port`, and the instance `datadir`.
+  - AC2: Given a `running` instance, Then the health check uses the MySQL protocol handshake, not just a process check.
+  - AC3: Given a large download (e.g. 281 MB), Then progress and ETA are shown from the first byte and the download can be resumed after a drop.
 
-  **F-ENG-02 — Adapter MariaDB**
-  - AC1: Given artefak MariaDB dari `downloads.mariadb.org/rest-api`, When instance dibuat, Then inisialisasi memakai `mariadb-install-db` dengan `--auth-root-authentication-method=normal`.
-  - AC2: Given MariaDB dan MySQL sama-sama terpasang, Then keduanya tampil sebagai engine berbeda dengan port kanonik berbeda (3306 vs 3307) dan tidak pernah berbagi data dir.
+  **F-ENG-02 — MariaDB adapter**
+  - AC1: Given a MariaDB artifact from `downloads.mariadb.org/rest-api`, When an instance is created, Then initialization uses `mariadb-install-db` with `--auth-root-authentication-method=normal`.
+  - AC2: Given MariaDB and MySQL are both installed, Then they appear as different engines with different canonical ports (3306 vs 3307) and never share a data dir.
 
-- **Edge cases:** MySQL di macOS membutuhkan dylib yang di-path-kan relatif (atur `DYLD_LIBRARY_PATH` atau perbaiki rpath saat ekstraksi) · tarball MySQL untuk Linux ditautkan ke glibc tertentu (katalog mencatat `min_glibc`; versi yang tidak cocok disembunyikan untuk platform itu).
+- **Edge cases:** MySQL on macOS needs a dylib resolved relative to the binary (set `DYLD_LIBRARY_PATH` or fix the rpath during extraction) · the MySQL tarball for Linux is linked against a particular glibc (the catalog records `min_glibc`; mismatched versions are hidden for that platform).
 
 ---
 
 ### F-DBU — Database & User Management (Phase 2)
 
-- **Goal:** menutup satu-satunya alasan tersisa untuk membuka terminal: membuat database untuk project baru.
+- **Goal:** close the last remaining reason to open a terminal: creating a database for a new project.
 - **Roles:** User-GUI
-- **Business rules:** semua perintah dijalankan lewat driver klien dengan **parameter/identifier quoting yang benar**, tidak pernah dengan menyambung string mentah. Nama database/user divalidasi terhadap allowlist karakter sebelum dikirim.
+- **Business rules:** every command runs through the client driver with **correct parameter/identifier quoting**, never by concatenating raw strings. Database/user names are validated against a character allowlist before being sent.
 - **Sub-features:**
 
-  **F-DBU-01 — Kelola database**
-  - AC1: Given instance `running`, When user membuka tab Databases, Then daftar database beserta ukurannya tampil.
-  - AC2: Given user membuat database baru dengan nama valid, Then database tercipta dengan encoding UTF-8 (`utf8mb4_unicode_ci` untuk keluarga MySQL) dan langsung muncul di daftar.
-  - AC3: Given user menghapus database, Then konfirmasi mengharuskan pengetikan nama database.
-  - AC4: Given nama mengandung karakter di luar `[A-Za-z0-9_]`, Then form menolaknya sebelum perintah apa pun dikirim ke engine.
+  **F-DBU-01 — Manage databases**
+  - AC1: Given a `running` instance, When the user opens the Databases tab, Then the database list with sizes is shown.
+  - AC2: Given the user creates a new database with a valid name, Then the database is created with UTF-8 encoding (`utf8mb4_unicode_ci` for the MySQL family) and appears in the list immediately.
+  - AC3: Given the user deletes a database, Then the confirmation requires typing the database name.
+  - AC4: Given a name contains characters outside `[A-Za-z0-9_]`, Then the form rejects it before any command is sent to the engine.
   - Entities: Instance
 
-  **F-DBU-02 — Kelola user & hak akses**
-  - AC1: Given user membuat database user baru, Then ia dapat memilih database dan tingkat hak (read-only atau read-write), dan perintah GRANT yang sesuai dijalankan.
-  - AC2: Given user dibuat, Then password-nya ditampilkan sekali dan disimpan di keychain seperti kredensial superuser. *(Penyimpangan v1 diterima, keputusan Rezky 2026-11-25: untuk v1, password user database baru hanya ditampilkan sekali dan tidak disimpan di keychain.)*
+  **F-DBU-02 — Manage users & privileges**
+  - AC1: Given the user creates a new database user, Then they can choose the database and the privilege level (read-only or read-write), and the matching GRANT command is run.
+  - AC2: Given the user is created, Then its password is shown once and stored in the keychain like the superuser credential. *(v1 deviation accepted, Rezky's decision 2026-11-25: for v1, a new database user's password is only shown once and is not stored in the keychain.)*
   - Entities: Instance, CredentialRef
 
-  **F-DBU-03 — Reset password superuser**
-  - AC1: Given user menekan "Reset password", Then password baru dihasilkan, diterapkan ke engine, disimpan ke keychain, dan URI yang ditampilkan ikut diperbarui.
-  - AC2: Given reset gagal di tengah, Then password lama tetap berlaku dan keychain tidak diubah.
+  **F-DBU-03 — Reset the superuser password**
+  - AC1: Given the user presses "Reset password", Then a new password is generated, applied to the engine, stored in the keychain, and the displayed URI is updated with it.
+  - AC2: Given the reset fails midway, Then the old password stays in effect and the keychain is unchanged.
   - Entities: Instance, CredentialRef
 
-- **Catatan:** tab ini tidak pernah menampilkan isi tabel. Batas itu yang memisahkan DBLocal dari DB client.
+- **Note:** this tab never shows table contents. That boundary is what separates DBLocal from a DB client.
 
 ---
 
 ### F-OPN — Open in External Client (Phase 2)
 
-- **Goal:** menghubungkan non-goal "browsing data" ke tool yang memang untuk itu, dengan biaya implementasi mendekati nol.
+- **Goal:** connect the "browsing data" non-goal to the tools meant for it, at near-zero implementation cost.
 - **Roles:** User-GUI
 - **Sub-features:**
 
-  **F-OPN-01 — Deteksi client terpasang**
-  - AC1: Given mesin memiliki DBDelve, TablePlus, DBeaver, atau CLI (`psql`, `mysql`, `valkey-cli`/`redis-cli`), When user membuka menu "Open in…", Then hanya client yang benar-benar terdeteksi yang ditampilkan.
-  - AC2: Given tidak ada satu pun terdeteksi, Then menu menampilkan "Salin URI" sebagai gantinya, bukan daftar kosong.
+  **F-OPN-01 — Detect installed clients**
+  - AC1: Given the machine has DBDelve, TablePlus, DBeaver, or a CLI (`psql`, `mysql`, `valkey-cli`/`redis-cli`), When the user opens the "Open in…" menu, Then only clients actually detected are shown.
+  - AC2: Given none is detected, Then the menu shows "Copy URI" instead, not an empty list.
   - Entities: Instance
 
-  **F-OPN-02 — Buka dengan koneksi instance**
-  - AC1: Given user memilih sebuah client GUI, Then client terbuka langsung pada koneksi instance tersebut (URL scheme bila tersedia, mis. `tableplus://`, atau argumen baris perintah).
-  - AC2: Given user memilih client CLI, Then terminal OS terbuka dengan perintah siap jalan, dan password diberikan lewat variabel lingkungan (`PGPASSWORD`, `MYSQL_PWD`) — **tidak** sebagai argumen yang terlihat di daftar proses.
+  **F-OPN-02 — Open with the instance connection**
+  - AC1: Given the user picks a GUI client, Then the client opens directly on that instance's connection (URL scheme when available, e.g. `tableplus://`, or command-line arguments).
+  - AC2: Given the user picks a CLI client, Then the OS terminal opens with a ready-to-run command, and the password is supplied through environment variables (`PGPASSWORD`, `MYSQL_PWD`) — **not** as an argument visible in the process list.
   - Entities: Instance, CredentialRef
 
 ---
 
 ### F-CLI — Command Line Interface (Phase 2)
 
-- **Goal:** membuat DBLocal bisa dipakai di `package.json`, `Makefile`, dan skrip onboarding tim.
+- **Goal:** make DBLocal usable from `package.json`, `Makefile`, and team onboarding scripts.
 - **Roles:** User-CLI
-- **Business rules:** binary yang sama dengan GUI; tanpa argumen → membuka GUI, dengan subcommand → mode CLI. Semua perintah punya exit code bermakna (0 sukses, 1 error umum, 2 argumen salah, 3 instance tidak ditemukan, 4 engine gagal start).
+- **Business rules:** the same binary as the GUI; with no arguments → opens the GUI, with a subcommand → CLI mode. Every command has a meaningful exit code (0 success, 1 general error, 2 bad arguments, 3 instance not found, 4 engine failed to start).
 - **Sub-features:**
 
-  **F-CLI-01 — Inspeksi**
-  - AC1: Given beberapa instance ada, When `dblocal list` dijalankan, Then tabel nama/engine/versi/port/status tercetak; `--json` menghasilkan JSON yang bisa dipipe.
-  - AC2: Given `dblocal status <nama>`, Then status instance dicetak dengan exit code 0 bila `running`, dan non-nol bila tidak.
+  **F-CLI-01 — Inspection**
+  - AC1: Given several instances exist, When `dblocal list` runs, Then a name/engine/version/port/status table is printed; `--json` produces pipeable JSON.
+  - AC2: Given `dblocal status <name>`, Then the instance status is printed with exit code 0 when `running`, and non-zero otherwise.
 
-  **F-CLI-02 — Kontrol**
-  - AC1: Given `dblocal start <nama>`, Then perintah memblokir sampai health check lulus atau timeout, lalu keluar dengan kode yang sesuai.
-  - AC2: Given GUI sedang terbuka saat CLI mengubah state, Then GUI mencerminkan perubahan dalam ≤ 2 detik (polling state SQLite).
-  - AC3: Given dua proses mencoba start instance yang sama bersamaan, Then satu menang dan yang lain keluar dengan pesan "sudah berjalan" — dijamin oleh transaksi SQLite, bukan oleh urutan waktu.
+  **F-CLI-02 — Control**
+  - AC1: Given `dblocal start <name>`, Then the command blocks until the health check passes or times out, then exits with the matching code.
+  - AC2: Given the GUI is open while the CLI changes state, Then the GUI reflects the change within ≤ 2 seconds (SQLite state polling).
+  - AC3: Given two processes try to start the same instance at once, Then one wins and the other exits with the message "already running" — guaranteed by the SQLite transaction, not by timing.
 
   **F-CLI-03 — Lifecycle & URI**
-  - AC1: Given `dblocal uri <nama>`, Then connection URI tercetak ke stdout tanpa hiasan apa pun sehingga bisa langsung di-pipe ke `.env`.
-  - AC2: Given `dblocal create --engine postgresql --version 18.7 --name app-dev`, Then instance dibuat non-interaktif, mengunduh runtime bila perlu, dan mencetak URI saat selesai.
-  - AC3: Given `dblocal delete <nama>`, Then penghapusan menolak berjalan tanpa `--yes` di sesi non-interaktif, dan default-nya **mengarsipkan** data, bukan menghapusnya.
+  - AC1: Given `dblocal uri <name>`, Then the connection URI is printed to stdout with no decoration, so it can be piped straight into `.env`.
+  - AC2: Given `dblocal create --engine postgresql --version 18.7 --name app-dev`, Then the instance is created non-interactively, downloading the runtime when needed, and the URI is printed when done.
+  - AC3: Given `dblocal delete <name>`, Then the delete refuses to run without `--yes` in a non-interactive session, and by default **archives** the data rather than deleting it.
 
 ---
 
 ### F-CFG — Config Editor (Phase 3)
 
-- **Goal:** menutup kebutuhan tuning yang sering muncul tanpa memaksa user mencari file konfigurasi.
+- **Goal:** close the common tuning need without forcing the user to hunt for a configuration file.
 - **Roles:** User-GUI
 - **Sub-features:**
 
-  **F-CFG-01 — Form setting penting**
-  - AC1: Given instance PostgreSQL, When user membuka tab Config, Then form menampilkan subset bernilai tinggi (`port`, `max_connections`, `shared_buffers`, `work_mem`, `timezone`, metode autentikasi) beserta nilai saat ini dan nilai default. *(Diterima untuk v1, keputusan Rezky 2026-11-25: metode autentikasi bersifat hanya-baca di tab Config.)*
-  - AC2: Given user menyimpan perubahan, Then app memberi tahu bahwa restart diperlukan dan menawarkan melakukannya sekarang.
-  - AC3: Given perubahan membuat engine gagal start, Then app menawarkan "Kembalikan konfigurasi sebelumnya" dari salinan yang disimpan sebelum perubahan.
+  **F-CFG-01 — Form for key settings**
+  - AC1: Given a PostgreSQL instance, When the user opens the Config tab, Then the form shows the high-value subset (`port`, `max_connections`, `shared_buffers`, `work_mem`, `timezone`, authentication method) with current and default values. *(Accepted for v1, Rezky's decision 2026-11-25: the authentication method is read-only in the Config tab.)*
+  - AC2: Given the user saves changes, Then the app states that a restart is required and offers to do it now.
+  - AC3: Given a change makes the engine fail to start, Then the app offers "Restore the previous configuration" from a copy saved before the change.
 
-  **F-CFG-02 — Edit berkas mentah**
-  - AC1: Given user memilih "Buka file konfigurasi", Then file dibuka di editor teks default OS, dan komentar serta baris yang tidak dikenal app tidak pernah ditulis ulang atau dihapus oleh app.
+  **F-CFG-02 — Edit the raw file**
+  - AC1: Given the user chooses "Open config file", Then the file opens in the OS default text editor, and comments and lines the app does not recognize are never rewritten or deleted by the app.
   - Entities: Instance
 
 ---
 
 ### F-AUT — Autostart (Phase 3)
 
-- **Goal:** menyempurnakan retention trigger: database yang dibutuhkan sudah siap sebelum user memintanya.
+- **Goal:** complete the retention trigger: the databases you need are ready before you ask for them.
 - **Roles:** OS-Autostart, User-GUI
 - **Sub-features:**
 
-  **F-AUT-01 — Autostart aplikasi saat login**
-  - AC1: Given user mengaktifkan "Jalankan saat login", Then login item terdaftar lewat mekanisme user-level yang sesuai: systemd `--user` unit (Linux), LaunchAgent (macOS), Registry `Run` (Windows) — tanpa sudo.
-  - AC2: Given opsi dimatikan, Then entri itu dihapus sepenuhnya.
-  - AC3: Given app dijalankan oleh login item, Then ia terbuka langsung ke tray tanpa memunculkan jendela.
+  **F-AUT-01 — App autostart at login**
+  - AC1: Given the user enables "Run at login", Then a login item is registered through the appropriate user-level mechanism: a systemd `--user` unit (Linux), a LaunchAgent (macOS), the Registry `Run` key (Windows) — without sudo.
+  - AC2: Given the option is turned off, Then that entry is removed entirely.
+  - AC3: Given the app is started by the login item, Then it opens straight to the tray without showing a window.
 
-  **F-AUT-02 — Autostart instance terpilih**
-  - AC1: Given sebuah instance ditandai autostart, When app dijalankan saat login, Then instance itu dinyalakan dan hasilnya (berhasil/gagal) terlihat di tray.
-  - AC2: Given autostart sebuah instance gagal, Then kegagalan tidak memblokir instance lain dan tidak memunculkan dialog modal; status `failed` cukup ditampilkan di tray dan jendela.
+  **F-AUT-02 — Autostart selected instances**
+  - AC1: Given an instance is flagged for autostart, When the app starts at login, Then that instance is started and the result (success/failure) is visible in the tray.
+  - AC2: Given one instance's autostart fails, Then the failure does not block other instances and shows no modal dialog; a `failed` status in the tray and window is enough.
   - Entities: Instance
 
 ---
 
 ### F-PLH — Polish & Accessibility (Phase 3)
 
-- **Goal:** membuat app layak dipakai setiap hari oleh orang yang tidak memakai mouse, dan di kedua tema sistem.
+- **Goal:** make the app good enough to use every day by someone who does not use a mouse, and in both system themes.
 - **Sub-features:**
 
-  **F-PLH-01 — Navigasi keyboard penuh**
-  - AC1: Given hanya keyboard, Then seluruh alur sesi pertama (pilih engine → create → start → copy URI) dapat diselesaikan, dengan fokus yang selalu terlihat.
-  - AC2: Given command palette (`Ctrl/Cmd+K`), Then user dapat mencari instance dan menjalankan start/stop/copy URI.
+  **F-PLH-01 — Full keyboard navigation**
+  - AC1: Given only a keyboard, Then the whole first-session flow (pick engine → create → start → copy URI) can be completed, with focus always visible.
+  - AC2: Given the command palette (`Ctrl/Cmd+K`), Then the user can search instances and run start/stop/copy URI.
 
-  **F-PLH-02 — Tema & kontras**
-  - AC1: Given tema sistem terang atau gelap, Then app mengikutinya, dan seluruh teks memenuhi rasio kontras minimal 4,5:1.
-  - AC2: Given status instance, Then status tidak pernah disampaikan hanya lewat warna (selalu ada label teks atau ikon pendamping).
+  **F-PLH-02 — Theme & contrast**
+  - AC1: Given a light or dark system theme, Then the app follows it, and all text meets a minimum contrast ratio of 4.5:1.
+  - AC2: Given an instance status, Then status is never conveyed by colour alone (there is always a text label or accompanying icon).
 
 ---
 
 ## 7. Data Model
 
-Seluruh state aplikasi berada di satu berkas SQLite `~/.dblocal/state.db` (mode WAL). Katalog adalah data turunan yang di-cache, bukan sumber kebenaran.
+All app state lives in one SQLite file `~/.dblocal/state.db` (WAL mode). The catalog is cached derived data, not a source of truth.
 
 ```mermaid
 erDiagram
-    ENGINE ||--o{ ENGINE_VERSION : "punya"
-    ENGINE_VERSION ||--o{ ARTIFACT : "didistribusikan sebagai"
-    ARTIFACT ||--o{ DOWNLOAD_JOB : "diunduh oleh"
-    ENGINE_VERSION ||--o{ RUNTIME : "terpasang sebagai"
-    RUNTIME ||--o{ INSTANCE : "menjalankan"
-    INSTANCE ||--|| PORT_ALLOCATION : "memesan"
-    INSTANCE ||--o| CREDENTIAL_REF : "memiliki"
-    INSTANCE ||--o{ ARCHIVED_DATA : "meninggalkan"
-    CATALOG_SNAPSHOT ||--o{ ENGINE_VERSION : "mengisi"
+    ENGINE ||--o{ ENGINE_VERSION : "has"
+    ENGINE_VERSION ||--o{ ARTIFACT : "distributed as"
+    ARTIFACT ||--o{ DOWNLOAD_JOB : "downloaded by"
+    ENGINE_VERSION ||--o{ RUNTIME : "installed as"
+    RUNTIME ||--o{ INSTANCE : "runs"
+    INSTANCE ||--|| PORT_ALLOCATION : "reserves"
+    INSTANCE ||--o| CREDENTIAL_REF : "has"
+    INSTANCE ||--o{ ARCHIVED_DATA : "leaves"
+    CATALOG_SNAPSHOT ||--o{ ENGINE_VERSION : "fills"
 
     ENGINE {
         string key PK "postgresql|mysql|mariadb|valkey"
@@ -681,8 +681,8 @@ erDiagram
         string superuser
         string status "stopped|starting|running|stopping|failed"
         int pid "nullable"
-        datetime process_started_at "nullable, untuk validasi PID"
-        string process_exe "nullable, untuk validasi PID"
+        datetime process_started_at "nullable, for PID validation"
+        string process_exe "nullable, for PID validation"
         bool autostart
         datetime created_at
     }
@@ -727,32 +727,32 @@ erDiagram
     }
 ```
 
-| Entitas | Field kunci | Pemilik data (yang membuat/mengubah) | Lifecycle |
+| Entity | Key fields | Data owner (who creates/updates it) | Lifecycle |
 |---|---|---|---|
-| Engine | `key`, `canonical_port` | Konstanta di dalam app | Statik, berubah hanya lewat rilis app |
-| EngineVersion | `engine_key`+`version` | Job CI katalog (F-CAT-03) | Di-refresh dari katalog; entri lama disimpan bila masih dipakai runtime |
-| Artifact | `sha256`, `url` | Job CI katalog | Sama dengan EngineVersion |
-| Runtime | `path`, `state` | F-RTM | Hard delete lewat F-RTM-04, hanya bila tidak dirujuk |
-| Instance | `name`, `port`, `status` | F-INS | Hard delete, dengan opsi mengarsipkan data dir |
-| PortAllocation | `port` (unik) | F-PRT | Dilepas saat instance dihapus atau port diubah |
-| CredentialRef | `key_ref` | F-CRD | Dihapus bersama instance; rahasianya ada di keychain, bukan di DB |
-| DownloadJob | `bytes_done`, `state` | F-RTM | Dibersihkan 7 hari setelah selesai |
-| ArchivedData | `path`, `size_bytes` | F-INS-05 | Hanya dihapus manual lewat Settings → Storage |
-| CatalogSnapshot | `fetched_at`, `etag` | F-CAT-01 | Hanya satu baris aktif; diganti saat refresh |
+| Engine | `key`, `canonical_port` | A constant inside the app | Static, changes only with an app release |
+| EngineVersion | `engine_key`+`version` | Catalog CI job (F-CAT-03) | Refreshed from the catalog; old entries kept while a runtime still uses them |
+| Artifact | `sha256`, `url` | Catalog CI job | Same as EngineVersion |
+| Runtime | `path`, `state` | F-RTM | Hard delete through F-RTM-04, only when unreferenced |
+| Instance | `name`, `port`, `status` | F-INS | Hard delete, with the option to archive the data dir |
+| PortAllocation | `port` (unique) | F-PRT | Released when an instance is deleted or its port changes |
+| CredentialRef | `key_ref` | F-CRD | Deleted with the instance; the secret lives in the keychain, not the DB |
+| DownloadJob | `bytes_done`, `state` | F-RTM | Cleaned up 7 days after finishing |
+| ArchivedData | `path`, `size_bytes` | F-INS-05 | Deleted only by hand through Settings → Storage |
+| CatalogSnapshot | `fetched_at`, `etag` | F-CAT-01 | Only one active row; replaced on refresh |
 
-### Data pribadi & retensi
+### Personal data & retention
 
-DBLocal **tidak mengumpulkan data pribadi** dan tidak mengirim apa pun ke server mana pun selain: (a) permintaan HTTP ke sumber unduhan engine dan katalog, (b) pemeriksaan versi ke GitHub Releases API. Tidak ada identifier, tidak ada data usage. Seluruh state tetap di mesin user. Password berada di keychain OS, bukan di `state.db`. Karena itu tidak ada kewajiban pemrosesan data pribadi menurut GDPR/UU PDP yang timbul dari aplikasi ini — dan fakta ini ditegaskan di README serta halaman Settings → Privacy.
+DBLocal **collects no personal data** and sends nothing to any server except: (a) HTTP requests to the engine download sources and the catalog, (b) version checks against the GitHub Releases API. No identifiers, no usage data. All state stays on the user's machine. Passwords live in the OS keychain, not in `state.db`. Therefore no personal-data-processing obligation under GDPR or Indonesia's PDP Law arises from this app — and this fact is stated in the README and on the Settings → Privacy page.
 
 ---
 
 ## 8. Command Surface
 
-Tidak ada API jaringan — DBLocal tidak punya server. Permukaan publiknya adalah **core API** (dipakai GUI dan CLI) dan **CLI**.
+There is no network API — DBLocal has no server. Its public surface is the **core API** (used by the GUI and the CLI) and the **CLI**.
 
 ### Core API (crate `dblocal-core`)
 
-| Operasi | Masuk sejak | Sub-fitur |
+| Operation | Lands in | Sub-feature |
 |---|---|---|
 | `catalog.refresh(force: bool)` | P1 | F-CAT-01 |
 | `catalog.list_versions(engine, os, arch)` | P1 | F-CAT-02 |
@@ -773,7 +773,7 @@ Tidak ada API jaringan — DBLocal tidak punya server. Permukaan publiknya adala
 
 ### CLI (Phase 2)
 
-| Perintah | Role | Sub-fitur |
+| Command | Role | Sub-feature |
 |---|---|---|
 | `dblocal list [--json]` | User-CLI | F-CLI-01 |
 | `dblocal status <name>` | User-CLI | F-CLI-01 |
@@ -788,79 +788,79 @@ Tidak ada API jaringan — DBLocal tidak punya server. Permukaan publiknya adala
 
 ## 9. Architecture & Stack
 
-Tech preference mode: **user** (Rust + GPUI dipilih user; sisanya AI dengan persetujuan)
+Tech preference mode: **user** (Rust + GPUI chosen by the user; the rest by AI with approval)
 
-| Layer | Pilihan | Source | Alasan (kebutuhan yang dipenuhi) |
+| Layer | Choice | Source | Reason (requirement it satisfies) |
 |---|---|---|---|
-| Bahasa & core | Rust (edition 2024) | user | Satu binary tanpa runtime, startup cepat (< 1,5 s), kontrol penuh atas proses anak dan FFI OS — syarat untuk mengelola proses engine lintas-OS |
-| UI | GPUI (`gpui-pre` 0.3.x) + `gpui-component` 0.10.x, Apache-2.0 | user | Tampilan yang diinginkan (gaya Zed IDE, lihat D-23 dan `docs/design/UI-DIRECTION.md`), GPU-accelerated, tanpa Electron/webview → mendukung target RAM < 220 MB (OPEN-08). Apache-2.0 kompatibel satu arah dengan GPL-3.0, jadi sah dipakai di dalam produk GPL. **Kode DBDelve tetap tidak disalin — keputusan rekayasa, bukan keterbatasan lisensi (lihat D-06).** |
-| State lokal | SQLite via `rusqlite` (bundled), mode WAL | ai | GUI dan CLI adalah dua proses; alokasi port dan transisi status butuh transaksi (F-CLI-02 AC3) |
-| HTTP | `reqwest` + `rustls` (tanpa OpenSSL sistem) | ai | Unduhan resumable (`Range`), dan TLS yang konsisten di 5 target tanpa dependensi sistem |
-| Arsip | `flate2`, `xz2`/`liblzma`, `zip` | ai | Format upstream: `.tar.gz`, `.tar.xz`, `.zip` |
-| Hash | `sha2` | ai | Verifikasi integritas wajib (F-RTM-02) |
-| Rahasia | `keyring` (Secret Service / Keychain / Credential Manager) + fallback file `0600` | ai | Password tidak boleh berada di `state.db` (F-CRD-01) |
-| Proses | `sysinfo` (validasi PID: nama exe + start time), `nix` (Unix), `windows-sys` (Windows) | ai | Rekonsiliasi proses yatim yang aman terhadap PID reuse (F-INS-04) |
-| Async | `tokio` (multi-thread) **di thread miliknya sendiri** | ai | Unduhan & I/O paralel tanpa menyentuh executor GPUI |
-| Driver DB | `tokio-postgres`, `mysql_async`, `redis` (protokol RESP) | ai | Health check protokol sungguhan + F-DBU |
-| CLI | `clap` (derive) | ai | Exit code & `--json` yang konsisten (F-CLI) |
-| Packaging | `cargo-dist` atau `xtask` kustom + `cargo-deb`, `cargo-generate-rpm`, `appimagetool`, `cargo-bundle`/`create-dmg`, WiX | ai | Memenuhi `.deb`/`.rpm`/`.AppImage`/`.dmg`/`.zip`/`.msi` dari satu matrix CI |
-| CI/CD & distribusi | GitHub Actions + GitHub Releases + `install.sh` | user/ai | Nol biaya infra, provenance bawaan, mendukung `curl \| sh` |
+| Language & core | Rust (edition 2024) | user | One binary with no runtime, fast startup (< 1.5 s), full control over child processes and OS FFI — required to manage engine processes across OSes |
+| UI | GPUI (`gpui-pre` 0.3.x) + `gpui-component` 0.10.x, Apache-2.0 | user | The desired look (Zed IDE style, see D-23 and `docs/design/UI-DIRECTION.md`), GPU-accelerated, no Electron/webview → supports the < 220 MB RAM target (OPEN-08). Apache-2.0 is one-way compatible with GPL-3.0, so it is valid inside a GPL product. **DBDelve code is still not copied — an engineering decision, not a licensing limitation (see D-06).** |
+| Local state | SQLite via `rusqlite` (bundled), WAL mode | ai | The GUI and CLI are two processes; port allocation and status transitions need transactions (F-CLI-02 AC3) |
+| HTTP | `reqwest` + `rustls` (no system OpenSSL) | ai | Resumable downloads (`Range`), and consistent TLS across 5 targets with no system dependency |
+| Archives | `flate2`, `xz2`/`liblzma`, `zip` | ai | Upstream formats: `.tar.gz`, `.tar.xz`, `.zip` |
+| Hash | `sha2` | ai | Mandatory integrity verification (F-RTM-02) |
+| Secrets | `keyring` (Secret Service / Keychain / Credential Manager) + `0600` file fallback | ai | A password must never be in `state.db` (F-CRD-01) |
+| Processes | `sysinfo` (PID validation: exe name + start time), `nix` (Unix), `windows-sys` (Windows) | ai | Reconciliation of orphaned processes that is safe against PID reuse (F-INS-04) |
+| Async | `tokio` (multi-thread) **on its own thread** | ai | Parallel downloads and I/O without touching the GPUI executor |
+| DB drivers | `tokio-postgres`, `mysql_async`, `redis` (RESP protocol) | ai | Real protocol health checks + F-DBU |
+| CLI | `clap` (derive) | ai | Consistent exit codes and `--json` (F-CLI) |
+| Packaging | `cargo-dist` or a custom `xtask` + `cargo-deb`, `cargo-generate-rpm`, `appimagetool`, `cargo-bundle`/`create-dmg`, WiX | ai | Produces `.deb`/`.rpm`/`.AppImage`/`.dmg`/`.zip`/`.msi` from one CI matrix |
+| CI/CD & distribution | GitHub Actions + GitHub Releases + `install.sh` | user/ai | Zero infrastructure cost, built-in provenance, supports `curl \| sh` |
 
-### Aturan arsitektur yang mengikat
+### Binding architecture rules
 
-1. **`core` tidak tahu apa-apa tentang UI.** Tidak ada tipe GPUI di `core`. GUI dan CLI sama-sama klien tipis. (Konsekuensi D-11.)
-2. **Tokio tidak pernah dijalankan di executor GPUI.** Runtime tokio hidup di thread terpisah milik `core`; hasil dikirim ke UI lewat channel dan diterapkan di `cx.spawn`/update GPUI. (Pelajaran langsung dari basis kode DBDelve.)
-3. **Proses engine adalah milik OS, bukan anak dari GUI.** Spawn detached, pidfile berisi PID + nama exe + waktu mulai, verifikasi ketiganya sebelum mengirim sinyal apa pun.
-4. **Setiap byte yang dieksekusi diverifikasi.** Tidak ada jalur kode yang menjalankan biner yang checksum-nya belum dicocokkan.
-5. **Tidak ada penulisan di luar `~/.dblocal`**, kecuali: login item saat F-AUT diaktifkan user, dan clipboard.
-6. **Engine ditambahkan hanya lewat trait `EngineAdapter`** — tidak boleh ada `match engine_key` yang tersebar di luar modul `engine/`.
+1. **`core` knows nothing about the UI.** There are no GPUI types in `core`. The GUI and CLI are both thin clients. (Consequence of D-11.)
+2. **Tokio never runs on the GPUI executor.** The tokio runtime lives on a separate thread owned by `core`; results are sent to the UI through a channel and applied in `cx.spawn`/GPUI updates. (A direct lesson from the DBDelve codebase.)
+3. **Engine processes belong to the OS, not to the GUI as children.** Spawn detached, pidfile with PID + exe name + start time, verify all three before sending any signal.
+4. **Every byte that is executed is verified.** There is no code path that runs a binary whose checksum has not been matched.
+5. **No writes outside `~/.dblocal`**, except: the login item when the user enables F-AUT, and the clipboard.
+6. **Engines are added only through the `EngineAdapter` trait** — no `match engine_key` scattered outside the `engine/` module.
 
 ```rust
-// crates/core/src/engine/mod.rs — kontrak yang harus cukup untuk 4 engine
+// crates/core/src/engine/mod.rs — the contract that must be enough for 4 engines
 pub trait EngineAdapter: Send + Sync {
     fn key(&self) -> &'static str;
     fn canonical_port(&self) -> u16;
-    fn initialize(&self, ctx: &InitContext) -> Result<()>;          // initdb / gen config
-    fn spawn_command(&self, ctx: &RunContext) -> Command;           // argumen start
-    fn health_check(&self, ctx: &RunContext) -> Result<Health>;     // handshake protokol
-    fn shutdown(&self, ctx: &RunContext) -> Result<()>;             // stop bersih
+    fn initialize(&self, ctx: &InitContext) -> Result<()>;          // initdb / config generation
+    fn spawn_command(&self, ctx: &RunContext) -> Command;           // start arguments
+    fn health_check(&self, ctx: &RunContext) -> Result<Health>;     // protocol handshake
+    fn shutdown(&self, ctx: &RunContext) -> Result<()>;             // clean stop
     fn connection_uri(&self, ctx: &RunContext, cred: &Credential) -> String;
-    fn admin_ops(&self) -> Option<&dyn AdminOps>;                   // F-DBU, None untuk Valkey v1
+    fn admin_ops(&self) -> Option<&dyn AdminOps>;                   // F-DBU, None for Valkey v1
 }
 ```
 
-### Diagram arsitektur
+### Architecture diagram
 
 ```mermaid
 graph TB
-  subgraph UI["Permukaan pengguna"]
+  subgraph UI["User-facing surface"]
     GUI["dblocal-gui<br/>GPUI + gpui-component"]
     CLI["dblocal-cli<br/>clap"]
     TRAY["Tray / menubar"]
   end
 
   subgraph CORE["dblocal-core (UI-agnostic)"]
-    CATM["catalog<br/>snapshot + refresh TTL"]
+    CATM["catalog<br/>snapshot + TTL refresh"]
     DL["download<br/>Range + SHA-256"]
-    ENGM["engine<br/>trait EngineAdapter"]
-    PROC["process<br/>spawn detached + reconcile"]
-    PORTS["ports<br/>alokasi + uji bind"]
-    SEC["secrets<br/>keyring + fallback 0600"]
-    STORE["store<br/>rusqlite WAL + migrasi"]
+    ENGM["engine<br/>EngineAdapter trait"]
+    PROC["process<br/>detached spawn + reconcile"]
+    PORTS["ports<br/>allocation + bind test"]
+    SEC["secrets<br/>keyring + 0600 fallback"]
+    STORE["store<br/>rusqlite WAL + migrations"]
   end
 
   subgraph FS["~/.dblocal"]
-    RUNT["runtimes/&lt;engine&gt;/&lt;versi&gt;/"]
-    INST["instances/&lt;nama&gt;/{data,logs,run}"]
+    RUNT["runtimes/&lt;engine&gt;/&lt;version&gt;/"]
+    INST["instances/&lt;name&gt;/{data,logs,run}"]
     ARCH["archive/"]
     DB["state.db"]
   end
 
-  subgraph EXT["Dunia luar"]
-    GH["GitHub Releases<br/>katalog + rilis app"]
-    UP["Upstream biner<br/>theseus-rs · MySQL · MariaDB · Valkey"]
+  subgraph EXT["Outside world"]
+    GH["GitHub Releases<br/>catalog + app releases"]
+    UP["Upstream binaries<br/>theseus-rs · MySQL · MariaDB · Valkey"]
     KC["OS keychain"]
-    PROCS["Proses engine<br/>(detached)"]
+    PROCS["Engine processes<br/>(detached)"]
   end
 
   GUI --> CORE
@@ -877,7 +877,7 @@ graph TB
   PROC --> INST
 ```
 
-### Struktur folder
+### Folder structure
 
 ```
 dblocal/
@@ -885,205 +885,205 @@ dblocal/
 ├─ crates/
 │  ├─ core/
 │  │  └─ src/
-│  │     ├─ catalog/           # skema, snapshot bundled, refresh TTL
-│  │     ├─ download/          # resumable, checksum, ekstraksi aman
+│  │     ├─ catalog/           # schema, bundled snapshot, TTL refresh
+│  │     ├─ download/          # resumable, checksum, safe extraction
 │  │     ├─ engine/            # trait + postgres.rs, mysql.rs, mariadb.rs, valkey.rs
 │  │     ├─ instance/          # state machine, create/start/stop/delete
-│  │     ├─ process/           # spawn detached, pidfile, rekonsiliasi
-│  │     ├─ ports/             # alokasi + uji bind
-│  │     ├─ secrets/           # keyring + fallback file
-│  │     ├─ store/             # rusqlite, migrasi skema
-│  │     └─ paths.rs           # satu-satunya sumber path ~/.dblocal
+│  │     ├─ process/           # detached spawn, pidfile, reconciliation
+│  │     ├─ ports/             # allocation + bind test
+│  │     ├─ secrets/           # keyring + file fallback
+│  │     ├─ store/             # rusqlite, schema migrations
+│  │     └─ paths.rs           # the single source of ~/.dblocal paths
 │  ├─ gui/
 │  │  └─ src/
-│  │     ├─ app.rs             # root GPUI
+│  │     ├─ app.rs             # GPUI root
 │  │     ├─ views/             # instances, new_instance, logs, settings
-│  │     ├─ tray/              # integrasi tray per-OS
+│  │     ├─ tray/              # per-OS tray integration
 │  │     └─ theme.rs
-│  ├─ cli/                     # clap, output human + --json
-│  └─ xtask/                   # build katalog, paket, rilis, benchmark
-├─ catalog/engines.json        # snapshot bundled
+│  ├─ cli/                     # clap, human output + --json
+│  └─ xtask/                   # catalog build, packages, release, benchmark
+├─ catalog/engines.json        # bundled snapshot
 ├─ packaging/
 │  ├─ appimage/ · deb/ · rpm/ · msi/ · dmg/
 │  └─ install.sh
 ├─ docs/
-│  ├─ prd/dblocal/             # dokumen ini
-│  └─ spikes/                  # keluaran Phase 0
+│  ├─ prd/dblocal/             # this document
+│  └─ spikes/                  # Phase 0 output
 └─ .github/workflows/          # ci.yml, release.yml, catalog.yml
 ```
 
-**Compatibility Check:** ✅ lolos. Konflik yang ditemukan dan sudah diselesaikan: (1) GPUI memaksa target ukuran installer naik dari < 25 MB ke < 60 MB — diterima di §3; (2) GPUI mewajibkan Vulkan di Linux — ditangani lewat NFR-SEC/NFR-COMPAT dan F-SPK-01 AC2; (3) self-update di Windows tidak bisa menimpa binary yang berjalan — ditangani F-PKG-05 AC3; (4) lisensi produk GPL-3.0-only — seluruh dependensi harus kompatibel GPL (Apache-2.0, MIT, ISC, dan SQLite public domain semuanya kompatibel satu arah; crate berlisensi proprietary atau Slint-style GPL-or-commercial ditolak), ditegakkan oleh allowlist `cargo deny`; (5) tokio vs executor GPUI — diselesaikan oleh aturan arsitektur #2.
+**Compatibility Check:** ✅ pass. Conflicts found and already resolved: (1) GPUI forces the installer size target up from < 25 MB to < 60 MB — accepted in §3; (2) GPUI requires Vulkan on Linux — handled by NFR-SEC/NFR-COMPAT and F-SPK-01 AC2; (3) self-update on Windows cannot overwrite the running binary — handled by F-PKG-05 AC3; (4) the product is GPL-3.0-only — every dependency must be GPL-compatible (Apache-2.0, MIT, ISC and the SQLite public domain are all one-way compatible; crates licensed proprietary or Slint-style GPL-or-commercial are rejected), enforced by a `cargo deny` allowlist; (5) tokio vs. the GPUI executor — resolved by architecture rule #2.
 
 ---
 
 ## 10. Non-functional Requirements
 
-| Kategori | Requirement | Cara verifikasi |
+| Category | Requirement | How it is verified |
 |---|---|---|
-| Performa | Cold start sampai jendela interaktif p95 < 1,5 s | Benchmark CI per OS, gate rilis |
-| Performa | RSS app idle < 220 MB; CPU idle <= 1,5% (OPEN-08, keputusan Rezky 2026-11-25) | Benchmark CI |
-| Performa | UI tetap responsif (tidak ada frame > 100 ms) selama unduhan besar (hingga 832 MB) berjalan | Uji manual terstruktur + profiling di CI |
-| Performa | Rekonsiliasi 20 instance < 2 s | Test integrasi |
-| Performa | PostgreSQL stopped → menerima koneksi p95 < 5 s; Valkey < 1 s | E2E per OS |
-| Skala | Didukung sampai 25 instance dan 15 runtime terpasang per mesin | Test integrasi dengan fixture |
-| Kompatibilitas | Linux: Fedora 41+, Ubuntu 22.04+, Debian 12+ (x86_64; aarch64 best-effort) | Job E2E per distro di container/VM |
-| Kompatibilitas | macOS 13+ universal (arm64 + x86_64); Windows 10 22H2+ / 11 x86_64 | Job E2E per OS (macOS ditunda untuk rilis pertama, D-26) |
-| Kompatibilitas | Tanpa driver Vulkan di Linux → dialog/pesan yang bisa ditindaklanjuti, bukan crash | F-SPK-01 AC2, test otomatis dengan `LIBGL`/ICD dikosongkan |
-| Kompatibilitas | Artefak Valkey `jammy` harus terbukti jalan di Fedora (kompatibilitas mundur glibc) | Job E2E Fedora |
-| Keamanan | Semua engine hanya mendengarkan `127.0.0.1`/`::1`; tidak pernah `0.0.0.0` | Test integrasi memverifikasi socket yang terbuka |
-| Keamanan | Tidak ada password di `state.db`, log, pesan error, atau argumen proses | Uji unit + grep otomatis pada artefak log di CI |
-| Keamanan | Verifikasi SHA-256 wajib sebelum ekstraksi; tidak ada opsi melewatinya | Test negatif: artefak dirusak → instalasi harus gagal |
-| Keamanan | Ekstraksi menolak path traversal dan symlink absolut (zip-slip) | Test dengan arsip jahat buatan |
-| Keamanan | Tidak pernah menjalankan `sudo`, `pkexec`, atau meminta elevasi saat runtime | Code review + grep CI pada seluruh crate |
-| Keamanan | TLS lewat rustls dengan verifikasi sertifikat; tidak ada opsi menonaktifkan | Code review + test |
-| Keamanan | `cargo audit` dan `cargo deny` bersih saat rilis | Gate CI |
-| Privasi | Nol permintaan jaringan selain unduhan engine, refresh katalog, dan pemeriksaan versi — semuanya terdokumentasi di Settings → Privacy | Uji dengan proxy perekam di CI; daftar host diverifikasi |
-| Keandalan | Kegagalan di tengah instalasi tidak pernah meninggalkan runtime atau instance setengah jadi | Test fault injection (putus koneksi, disk penuh, proses dibunuh) |
-| Keandalan | `state.db` tahan terhadap app yang dimatikan paksa (WAL + transaksi) | Test kill -9 lalu buka kembali |
-| Observability | Log aplikasi berputar di `~/.dblocal/logs/app.log` (maks 3 × 10 MB), level diatur `DBLOCAL_LOG` | Uji manual + test rotasi |
-| Observability | Setiap error yang ditampilkan punya kode stabil (`DBL-xxxx`) untuk dicari di dokumentasi | Review + test snapshot pesan |
-| Aksesibilitas | Seluruh alur sesi pertama bisa diselesaikan dengan keyboard; kontras ≥ 4,5:1; status tidak hanya lewat warna | Checklist manual per rilis (F-PLH) |
-| Lisensi | Seluruh dependensi (termasuk transitif) berlisensi kompatibel-GPL; allowlist dipaksakan `cargo deny` dan gagal membuat build merah | Gate CI |
-| Lisensi | Setiap rilis biner disertai tag source yang bersesuaian dan berkas `COPYING` (GPLv3 §6); halaman About menampilkan lisensi + daftar lisensi pihak ketiga | Gate CI + review rilis |
-| Distribusi | Semua artefak rilis punya checksum publik + attestation GitHub | Gate CI |
-| Distribusi | `.dmg` macOS ditandatangani Developer ID dan dinotarisasi | Verifikasi `spctl -a -vv` di CI |
-| Distribusi | `install.sh` lulus `shellcheck`, idempoten, dan tidak pernah memanggil `sudo` tanpa diminta | Gate CI |
-| Ukuran | Artefak per platform < 60 MB | Gate CI |
-| Pemeliharaan | Berkas kode < 800 baris; fungsi < 50 baris; tanpa nesting > 4 tingkat | `clippy` + lint kustom di CI |
+| Performance | Cold start to interactive window p95 < 1.5 s | CI benchmark per OS, release gate |
+| Performance | App idle RSS < 220 MB; idle CPU <= 1.5% (OPEN-08, Rezky's decision 2026-11-25) | CI benchmark |
+| Performance | UI stays responsive (no frame > 100 ms) during a large download (up to 832 MB) | Structured manual test + profiling in CI |
+| Performance | Reconcile 20 instances in < 2 s | Integration test |
+| Performance | PostgreSQL stopped → accepting connections p95 < 5 s; Valkey < 1 s | E2E per OS |
+| Scale | Supported up to 25 instances and 15 installed runtimes per machine | Integration test with fixtures |
+| Compatibility | Linux: Fedora 41+, Ubuntu 22.04+, Debian 12+ (x86_64; aarch64 best-effort) | E2E job per distro in a container/VM |
+| Compatibility | macOS 13+ universal (arm64 + x86_64); Windows 10 22H2+ / 11 x86_64 | E2E job per OS (macOS deferred for the first release, D-26) |
+| Compatibility | No Vulkan driver on Linux → an actionable dialog/message, not a crash | F-SPK-01 AC2, automated test with `LIBGL`/ICD emptied |
+| Compatibility | The Valkey `jammy` artifact must be proven to run on Fedora (glibc backward compatibility) | Fedora E2E job |
+| Security | Every engine listens only on `127.0.0.1`/`::1`; never `0.0.0.0` | Integration test verifies the open sockets |
+| Security | No password in `state.db`, logs, error messages, or process arguments | Unit tests + automated grep over log artifacts in CI |
+| Security | SHA-256 verification is mandatory before extraction; there is no option to skip it | Negative test: corrupt artifact → install must fail |
+| Security | Extraction rejects path traversal and absolute symlinks (zip-slip) | Test with a crafted malicious archive |
+| Security | Never runs `sudo`, `pkexec`, or requests elevation at runtime | Code review + CI grep across all crates |
+| Security | TLS through rustls with certificate verification; no option to disable | Code review + test |
+| Security | `cargo audit` and `cargo deny` are clean at release | CI gate |
+| Privacy | Zero network requests other than engine downloads, catalog refresh, and version checks — all documented in Settings → Privacy | Test with a recording proxy in CI; the host list is verified |
+| Reliability | A failure midway through an install never leaves a half-built runtime or instance | Fault-injection test (connection drop, disk full, process killed) |
+| Reliability | `state.db` survives an app killed forcibly (WAL + transactions) | `kill -9` test, then reopen |
+| Observability | The app log rotates at `~/.dblocal/logs/app.log` (max 3 × 10 MB), level set by `DBLOCAL_LOG` | Manual test + rotation test |
+| Observability | Every displayed error has a stable code (`DBL-xxxx`) to search in the docs | Review + message snapshot tests |
+| Accessibility | The whole first-session flow can be completed with a keyboard; contrast ≥ 4.5:1; status not conveyed by colour alone | Manual checklist per release (F-PLH) |
+| License | Every dependency (including transitive) is GPL-compatible; the allowlist is enforced by `cargo deny` and fails the build | CI gate |
+| License | Every binary release ships with the matching source tag and a `COPYING` file (GPLv3 §6); the About page shows the license + third-party license list | CI gate + release review |
+| Distribution | Every release artifact has a public checksum + GitHub attestation | CI gate |
+| Distribution | The macOS `.dmg` is signed with a Developer ID and notarized | `spctl -a -vv` verification in CI |
+| Distribution | `install.sh` passes `shellcheck`, is idempotent, and never calls `sudo` unless requested | CI gate |
+| Size | Artifact per platform < 60 MB | CI gate |
+| Maintainability | Source files < 800 lines; functions < 50 lines; no nesting beyond 4 levels | `clippy` + custom lint in CI |
 
 ---
 
 ## 11. Phase Plan
 
-| Phase | Goal | Fitur | Definition of done |
+| Phase | Goal | Features | Definition of done |
 |---|---|---|---|
-| **0 — Spikes & fondasi** | Membuktikan tiga asumsi paling berisiko sebelum menulis kode produk | F-SPK-01..05 | Lima spike terdokumentasi dengan jawaban YA/TIDAK. **Gate keputusan:** bila F-SPK-02 (Valkey Windows) gagal → fallback D-13 dijalankan dan PRD diperbarui sebelum Phase 1. Bila F-SPK-04 (tray) gagal → D-04 diganti dan dampaknya ke retensi dicatat. Workspace + CI matrix hijau. |
-| **1 — MVP vertical slice** | Seorang developer dapat memasang DBLocal, menjalankan PostgreSQL atau Valkey, dan memakainya untuk project nyata | F-CAT, F-RTM, F-PRT, F-INS, F-CRD, F-LOG, F-TRY, F-PKG-01..03 | Di target rilis pertama — **Linux x86_64/aarch64 dan Windows x86_64** (macOS ditunda, D-26): unduh → create → start → copy URI → connect berhasil, dengan engine yang tersedia per OS menurut katalog (Windows tanpa Valkey, D-26). TTFRI PostgreSQL p50 < 120 s terukur di CI. Instance bertahan hidup setelah app di-quit dan tersambung kembali saat dibuka. Artefak AppImage/.tar.gz (Linux) dan .zip (Windows) + `install.sh` terbit di GitHub Releases dengan checksum; `.dmg` macOS menyusul saat macOS dinyalakan kembali (D-26). |
-| **2 — Keluarga MySQL, CLI & paket native** | Janji empat engine terpenuhi, dan DBLocal bisa dipakai tanpa terminal **maupun** dari dalam terminal | F-ENG, F-DBU, F-OPN, F-CLI, F-PKG-04..05 | MySQL & MariaDB lulus E2E yang sama dengan Phase 1. Membuat database untuk project baru bisa dilakukan sepenuhnya dari GUI. `dblocal` subcommand lengkap dengan `--json` dan exit code. `.deb`/`.rpm`/`.msi` terbit; self-update bekerja di macOS & Windows dan dinonaktifkan untuk instalasi via package manager. |
-| **3 — Konfigurasi, autostart & polish** | DBLocal menjadi bagian dari rutinitas harian dan bisa di-tuning tanpa membuka file | F-CFG, F-AUT, F-PLH | Form konfigurasi untuk keempat engine dengan pemulihan otomatis saat salah konfigurasi. Autostart terpasang lewat mekanisme user-level di tiga OS dan bisa dicabut bersih. Checklist aksesibilitas lulus. |
+| **0 — Spikes & foundation** | Prove the three riskiest assumptions before writing product code | F-SPK-01..05 | Five spikes documented with YES/NO answers. **Decision gate:** if F-SPK-02 (Valkey Windows) fails → the D-13 fallback runs and the PRD is updated before Phase 1. If F-SPK-04 (tray) fails → D-04 is replaced and the retention impact is recorded. Workspace + CI matrix green. |
+| **1 — MVP vertical slice** | A developer can install DBLocal, run PostgreSQL or Valkey, and use it for a real project | F-CAT, F-RTM, F-PRT, F-INS, F-CRD, F-LOG, F-TRY, F-PKG-01..03 | On the first release targets — **Linux x86_64/aarch64 and Windows x86_64** (macOS deferred, D-26): download → create → start → copy URI → connect succeeds, with engines available per OS as the catalog says (no Valkey on Windows, D-26). TTFRI PostgreSQL p50 < 120 s measured in CI. An instance survives an app quit and reconnects when the app is opened. AppImage/.tar.gz (Linux) and .zip (Windows) + `install.sh` ship on GitHub Releases with checksums; the macOS `.dmg` follows when macOS is turned back on (D-26). |
+| **2 — MySQL family, CLI & native packages** | The four-engine promise is met, and DBLocal works without a terminal **and** from inside one | F-ENG, F-DBU, F-OPN, F-CLI, F-PKG-04..05 | MySQL & MariaDB pass the same E2E as Phase 1. Creating a database for a new project can be done entirely from the GUI. `dblocal` subcommands complete with `--json` and exit codes. `.deb`/`.rpm`/`.msi` ship; self-update works on macOS & Windows and is disabled for package-manager installs. |
+| **3 — Configuration, autostart & polish** | DBLocal becomes part of the daily routine and can be tuned without opening a file | F-CFG, F-AUT, F-PLH | A configuration form for all four engines with automatic recovery from a bad configuration. Autostart is installed through user-level mechanisms on three OSes and can be cleanly revoked. The accessibility checklist passes. |
 
 ### Phase Dependency Check ✅
 
-| Pemeriksaan | Hasil |
+| Check | Result |
 |---|---|
-| `phase(F) >= phase(dependsOn)` untuk seluruh fitur | ✅ lolos (lihat tabel §5) |
-| Fitur yang **menampilkan** data punya fitur yang **membuat**-nya di fase sama/lebih awal | ✅ F-CAT-02 (menampilkan versi) didahului F-CAT-03 (pipeline CI) dan snapshot bundled di Phase 1 |
-| Tidak ada fitur yang butuh login sebelum fitur auth | ✅ tidak berlaku — tidak ada autentikasi user (D-05, §4) |
-| Core value hadir di Phase 1 | ✅ "multi-versi native, 1 klik" dibuktikan Phase 1: dua versi PostgreSQL berbeda dapat berjalan bersamaan di port berbeda, dikendalikan satu klik |
-| Retention trigger punya fitur yang mewujudkannya | ✅ F-TRY (tray, Phase 1) + F-AUT (autostart, Phase 3). **Catatan:** autostart baru hadir di Phase 3 — retensi Phase 1–2 hanya bertumpu pada tray; ini pengecualian yang diterima secara sadar karena autostart butuh F-TRY yang stabil lebih dulu |
-| First-session job dapat diselesaikan di Phase 1 | ✅ create → start → copy URI, seluruhnya di Phase 1 |
-| Setiap fitur punya role, sumber data, dan kaitan ke job B1 | ✅ diverifikasi di §5 dan §6 |
+| `phase(F) >= phase(dependsOn)` for every feature | ✅ pass (see the table in §5) |
+| A feature that **displays** data has a feature that **creates** it in the same or an earlier phase | ✅ F-CAT-02 (displays versions) is preceded by F-CAT-03 (CI pipeline) and the bundled snapshot in Phase 1 |
+| No feature needs login before an auth feature | ✅ not applicable — there is no user authentication (D-05, §4) |
+| The core value is present in Phase 1 | ✅ "multi-version native, 1 click" is proven in Phase 1: two different PostgreSQL versions can run side by side on different ports, controlled with one click |
+| The retention trigger has a feature that realizes it | ✅ F-TRY (tray, Phase 1) + F-AUT (autostart, Phase 3). **Note:** autostart only arrives in Phase 3 — Phase 1–2 retention rests on the tray alone; this is a knowingly accepted exception because autostart needs a stable F-TRY first |
+| The first-session job can be completed in Phase 1 | ✅ create → start → copy URI, all in Phase 1 |
+| Every feature has a role, a data source, and a link to job B1 | ✅ verified in §5 and §6 |
 
 ---
 
 ## 12. Decision Log
 
-**D-01 | Pengguna utama: developer web multi-project yang menolak Docker**
-Konteks: perlu satu segmen konkret agar keputusan scope bisa diuji. Keputusan: developer Laravel/Node/Next/Rails/Python yang memegang 3–10 project lokal, hari ini memakai install manual atau `docker compose`. Konsekuensi: fitur dinilai dari "apakah membantu orang ini di hari kerja biasa"; pemula dan tim bukan target utama. Status: Approved.
+**D-01 | Primary user: a multi-project web developer who rejects Docker**
+Context: a concrete segment is needed so scope decisions can be tested. Decision: a Laravel/Node/Next/Rails/Python developer holding 3–10 local projects, who today uses a manual install or `docker compose`. Consequence: features are judged by "does this help this person on an ordinary workday"; beginners and teams are not the primary target. Status: Approved.
 
-**D-02 | First-session job: satu instance berjalan + connection URI tersalin**
-Konteks: butuh satu hasil tunggal yang membuktikan seluruh rantai. Keputusan: dari app dibuka sampai URI tersalin, target < 2 menit termasuk unduhan. Konsekuensi: menjadi acceptance utama Phase 1 dan metrik TTFRI di CI. Status: Approved.
+**D-02 | First-session job: one running instance + a copied connection URI**
+Context: one single outcome is needed to prove the whole chain. Decision: from app open to URI copied, target < 2 minutes including the download. Consequence: this becomes the primary Phase 1 acceptance and the TTFRI metric in CI. Status: Approved.
 
-**D-03 | Core value: multi-versi native, satu klik, tanpa container**
-Konteks: harus satu alasan tunggal untuk pindah. Keputusan: beberapa versi berdampingan sebagai proses native. Konsekuensi: multi-versi dan port manager wajib di Phase 1; "ringan" dan "lintas-OS" turun menjadi atribut pendukung. Status: Approved.
+**D-03 | Core value: multi-version native, one click, no container**
+Context: there must be a single reason to switch. Decision: several versions side by side as native processes. Consequence: multi-version support and the port manager are mandatory in Phase 1; "lightweight" and "cross-OS" drop to supporting attributes. Status: Approved.
 
-**D-04 | Retensi lewat tray + autostart**
-Konteks: produk utilitas tidak punya konten baru sebagai penarik. Keputusan: tray permanen dengan start/stop, plus autostart saat login. Konsekuensi: F-TRY wajib Phase 1, F-AUT Phase 3; keduanya bergantung pada hasil spike F-SPK-04. Status: Approved.
+**D-04 | Retention through tray + autostart**
+Context: a utility product has no new content to pull people back. Decision: a permanent tray with start/stop, plus autostart at login. Consequence: F-TRY is mandatory in Phase 1, F-AUT in Phase 3; both depend on the F-SPK-04 spike. Status: Approved.
 
-**D-05 | Gratis, open source, tanpa telemetri, tanpa license key**
-Konteks: kompetitor langsung (DBngin) gratis, dan distribusi lewat `curl | sh` hanya kredibel jika sumbernya terbuka. Keputusan: **GPL-3.0-only** di GitHub, tanpa akun, tanpa billing, tanpa telemetri. Konsekuensi: tidak ada fitur auth/billing di seluruh PRD; metrik produk harus diukur di CI, bukan dari pengguna; biaya signing ditanggung pemilik proyek; setiap distribusi biner wajib disertai source yang bersesuaian (dipenuhi oleh repo publik + tag rilis, GPLv3 §6); siapa pun yang mendistribusikan versi modifikasi wajib ikut GPL-3.0 — ini menutup kemungkinan fork tertutup/komersial; seluruh dependensi wajib berlisensi kompatibel-GPL dan ditegakkan `cargo deny`. Catatan: Mac App Store tetap tidak mungkin karena ketentuannya bertabrakan dengan GPL — tidak relevan di sini karena distribusi memakai .dmg langsung. Status: Approved (direvisi dari MIT/Apache-2.0 atas permintaan pemilik proyek).
+**D-05 | Free, open source, no telemetry, no license key**
+Context: the direct competitor (DBngin) is free, and distribution through `curl | sh` is only credible if the source is open. Decision: **GPL-3.0-only** on GitHub, no account, no billing, no telemetry. Consequence: no auth/billing features anywhere in the PRD; product metrics must be measured in CI, not from users; the signing cost is borne by the project owner; every binary distribution must ship with the matching source (satisfied by the public repo + release tag, GPLv3 §6); anyone distributing a modified version must also be GPL-3.0 — this closes off closed/commercial forks; every dependency must be GPL-compatible and is enforced by `cargo deny`. Note: the Mac App Store remains impossible because its terms conflict with the GPL — irrelevant here since distribution uses the direct .dmg. Status: Approved (revised from MIT/Apache-2.0 at the project owner's request).
 
-**D-06 | UI memakai GPUI + gpui-component**
-Konteks: user menginginkan tampilan seperti DBDelve ("no Electron, no JVM, no Tauri"); referensi tampilan kemudian diganti oleh D-23. Keputusan: `gpui-pre` 0.3.x + `gpui-component` 0.10.x, keduanya Apache-2.0. Konsekuensi: versi di-pin eksak karena pre-1.0; Linux mewajibkan Vulkan; target ukuran installer direvisi < 25 MB → < 60 MB. **Kode DBDelve tidak disalin.** Setelah D-05 direvisi ke GPL-3.0, larangan ini bukan lagi soal lisensi — DBDelve juga GPL-3.0, sehingga penggunaan ulang kodenya secara hukum sah selama atribusi dan lisensi dipertahankan. Larangan tetap berlaku sebagai keputusan rekayasa: DBDelve adalah DB *client* dengan model state, skema data, dan alur yang berbeda dari DB *server manager*; menyalin kodenya akan menyeret abstraksi yang tidak cocok. DBDelve dipakai sebagai contoh cara memakai GPUI (referensi tampilan diganti oleh D-23) (mis. aturan "tokio tidak di executor GPUI"), bukan sebagai sumber kode. Status: Approved.
+**D-06 | UI uses GPUI + gpui-component**
+Context: the user wanted a DBDelve-like look ("no Electron, no JVM, no Tauri"); the reference look was later replaced by D-23. Decision: `gpui-pre` 0.3.x + `gpui-component` 0.10.x, both Apache-2.0. Consequence: versions are pinned exactly because they are pre-1.0; Linux requires Vulkan; the installer size target is revised < 25 MB → < 60 MB. **DBDelve code is not copied.** After D-05 was revised to GPL-3.0, this prohibition is no longer about licensing — DBDelve is GPL-3.0 too, so reusing its code is legally fine as long as attribution and the license are kept. The prohibition remains as an engineering decision: DBDelve is a DB *client* with a different state model, data schema and flow from a DB *server manager*; copying its code would drag in abstractions that do not fit. DBDelve is used as an example of how to use GPUI (the reference look was replaced by D-23) (e.g. the rule "tokio not on the GPUI executor"), not as a code source. Status: Approved.
 
-**D-07 | State aplikasi di SQLite (WAL)**
-Konteks: GUI dan CLI adalah dua proses yang dapat berjalan bersamaan. Keputusan: `rusqlite` bundled, mode WAL. Konsekuensi: alokasi port dan transisi status aman lewat transaksi; menambah ±1,5 MB dan waktu kompilasi; migrasi skema harus dikelola sejak rilis pertama. Status: Approved.
+**D-07 | App state in SQLite (WAL)**
+Context: the GUI and CLI are two processes that can run at the same time. Decision: `rusqlite` bundled, WAL mode. Consequence: port allocation and status transitions are safe through transactions; adds ~1.5 MB and compile time; schema migrations must be managed from the first release. Status: Approved.
 
-**D-08 | Distribusi lewat GitHub Releases + install.sh + self-update**
-Konteks: tanpa pemasukan, infrastruktur harus nol biaya. Keputusan: CI membangun semua artefak; `install.sh` untuk `curl`; self-update membaca Releases API. Konsekuensi: bergantung pada ketersediaan GitHub dan harus menangani rate limit; repo apt/rpm sendiri menjadi backlog. Status: Approved.
+**D-08 | Distribution through GitHub Releases + install.sh + self-update**
+Context: with no revenue, infrastructure must cost zero. Decision: CI builds all artifacts; `install.sh` for `curl`; self-update reads the Releases API. Consequence: depends on GitHub availability and must handle rate limits; hosting our own apt/rpm repo becomes backlog. Status: Approved.
 
-**D-09 | Nol sudo saat runtime**
-Konteks: alur elevasi lintas-OS mahal dan berisiko. Keputusan: semua biner, data, socket, dan log di bawah home user; port default semuanya > 1024. Konsekuensi: database hanya hidup saat user login; mode service/headless menjadi non-goal permanen. Status: Approved.
+**D-09 | Zero sudo at runtime**
+Context: a cross-OS elevation flow is expensive and risky. Decision: all binaries, data, sockets and logs under the user's home; all default ports > 1024. Consequence: the database only lives while the user is logged in; service/headless mode becomes a permanent non-goal. Status: Approved.
 
-**D-10 | Proses engine detached; aplikasi hanya controller**
-Konteks: user mengharapkan database tetap hidup walau app ditutup, tetapi daemon supervisor menggandakan permukaan arsitektur. Keputusan: spawn detached + pidfile + rekonsiliasi saat app dijalankan. Konsekuensi: tidak ada auto-restart saat crash (non-goal v1); validasi PID wajib memeriksa nama exe dan waktu mulai untuk menghindari PID reuse. Status: Approved.
+**D-10 | Engine processes are detached; the app is only a controller**
+Context: users expect the database to stay up even when the app is closed, but a supervising daemon doubles the architecture surface. Decision: detached spawn + pidfile + reconciliation when the app starts. Consequence: no auto-restart on crash (v1 non-goal); PID validation must check the exe name and start time to avoid PID reuse. Status: Approved.
 
-**D-11 | CLI di Phase 2, dengan crate core UI-agnostic sejak Phase 1**
-Konteks: CLI bernilai tinggi bagi target user tapi melebarkan Phase 1. Keputusan: logika di `dblocal-core`; GUI Phase 1, subcommand CLI Phase 2 pada binary yang sama. Konsekuensi: batas modul yang benar dipaksa sejak awal; GUI harus mendeteksi perubahan state dari proses lain sejak Phase 2. Status: Approved.
+**D-11 | CLI in Phase 2, with a UI-agnostic core crate from Phase 1**
+Context: a CLI is high value for the target user but widens Phase 1. Decision: logic lives in `dblocal-core`; GUI in Phase 1, CLI subcommands in Phase 2 on the same binary. Consequence: correct module boundaries are forced from the start; the GUI must detect state changes from other processes from Phase 2 onward. Status: Approved.
 
-**D-12 | Biner engine diunduh dari upstream, dipandu katalog JSON sendiri**
-Konteks: tidak satu pun dari tiga engine punya biner resmi yang seragam untuk lima target OS. Keputusan: app tidak mendistribusikan biner; katalog JSON yang dihasilkan job CI menunjuk artefak upstream beserta checksum. Konsekuensi: bebas beban redistribusi lisensi dan installer tetap kecil; tetapi bergantung pada pihak ketiga, dan verifikasi checksum menjadi wajib mutlak. Status: Approved.
+**D-12 | Engine binaries are downloaded from upstream, guided by our own JSON catalog**
+Context: none of the three engines ships a uniform official binary across five OS targets. Decision: the app does not distribute binaries; a JSON catalog produced by a CI job points at upstream artifacts with checksums. Consequence: no redistribution/licensing burden and the installer stays small; but it depends on third parties, and checksum verification becomes absolutely mandatory. Status: Approved.
 
-**D-13 | Valkey sebagai engine Redis-compatible, dengan spike Windows wajib**
-Konteks: `redis/redis` 8.10.3 hanya merilis tarball source; Valkey 9.2.0 bahkan tanpa aset biner di GitHub, namun `download.valkey.io` menyediakan tarball Linux (jammy/noble, x86_64/arm64) ber-SHA-256, dan Valkey punya CMake sementara Redis hanya Makefile POSIX. Keputusan: pakai Valkey; Linux dari tarball resmi; macOS dan Windows dibangun sendiri di CI sebagai pengecualian terbatas dari D-12. Konsekuensi: label UI harus jujur ("Valkey — kompatibel Redis"); bila F-SPK-02 gagal, Valkey ditandai tidak didukung di Windows dan parity lima-OS resmi pecah. Status: Approved (bergantung pada hasil spike).
+**D-13 | Valkey as the Redis-compatible engine, with a mandatory Windows spike**
+Context: `redis/redis` 8.10.3 only publishes a source tarball; Valkey 9.2.0 does not even ship binary assets on GitHub, but `download.valkey.io` provides SHA-256'd Linux tarballs (jammy/noble, x86_64/arm64), and Valkey has a CMake build while Redis only has a POSIX Makefile. Decision: use Valkey; Linux from the official tarball; macOS and Windows built by us in CI as a limited exception to D-12. Consequence: the UI label must be honest ("Valkey — Redis compatible"); if F-SPK-02 fails, Valkey is marked unsupported on Windows and the official five-OS parity breaks. Status: Approved (depends on the spike result).
 
-**D-14 | Empat engine di v1: PostgreSQL, MySQL, MariaDB, Valkey**
-Konteks: user ingin MySQL dan MariaDB tersedia sejak rilis pertama, bukan bertahap. Keputusan: keduanya menjadi engine terpisah dengan port kanonik berbeda. Konsekuensi: matrix uji menjadi 4 engine × 5 target OS; dua prosedur inisialisasi berbeda (`mysqld --initialize-insecure` vs `mariadb-install-db`) harus benar sebelum Phase 2 selesai. Status: Approved.
+**D-14 | Four engines in v1: PostgreSQL, MySQL, MariaDB, Valkey**
+Context: the user wants MySQL and MariaDB available from the first release, not gradually. Decision: they are separate engines with different canonical ports. Consequence: the test matrix becomes 4 engines × 5 OS targets; two different initialization procedures (`mysqld --initialize-insecure` vs `mariadb-install-db`) must be correct before Phase 2 is done. Status: Approved.
 
-**D-15 | Scope v1 = core + kelola DB/user + open-in-client + config editor**
-Konteks: menjaga Phase 1 tetap tipis tanpa meninggalkan alasan untuk membuka terminal. Keputusan: kelola database & user (Phase 2), open-in-client (Phase 2), config editor (Phase 3). Backup/restore dan project profile masuk Backlog; browsing/query data menjadi non-goal permanen. Konsekuensi: app membutuhkan driver klien DB untuk operasi admin; batas terhadap DB client harus dijaga di setiap review fitur. Status: Approved.
+**D-15 | v1 scope = core + DB/user management + open-in-client + config editor**
+Context: keep Phase 1 thin without leaving a reason to open a terminal. Decision: database & user management (Phase 2), open-in-client (Phase 2), config editor (Phase 3). Backup/restore and project profiles go to Backlog; data browsing/query becomes a permanent non-goal. Consequence: the app needs DB client drivers for admin operations; the boundary with a DB client must be guarded at every feature review. Status: Approved.
 
-**D-16 | Port kanonik lalu auto-increment, dengan uji bind nyata**
-Konteks: `.env` project yang sudah ada mengharapkan 5432/3306, tetapi port bisa ditempati proses di luar app. Keputusan: port kanonik untuk instance pertama, naik untuk berikutnya, dan uji bind sungguhan sebelum setiap start. Konsekuensi: menutup penyebab kegagalan start paling umum; membutuhkan penanganan khusus IPv4/IPv6 dan `SO_EXCLUSIVEADDRUSE` di Windows. Status: Approved.
+**D-16 | Canonical port then auto-increment, with a real bind test**
+Context: existing project `.env` files expect 5432/3306, but a port can be taken by a process outside the app. Decision: canonical port for the first instance, incrementing for the next ones, and a real bind test before every start. Consequence: closes the most common start failure; needs special handling for IPv4/IPv6 and `SO_EXCLUSIVEADDRUSE` on Windows. Status: Approved.
 
-**D-17 | Password acak per instance di OS keychain; opsi tanpa password**
-Konteks: layanan lokal tanpa autentikasi adalah target serangan DNS-rebinding dan dapat diakses user lain di mesin yang sama; namun banyak `.env` lama mengharapkan root tanpa password. Keputusan: default password acak 24 karakter di keychain, bind hanya `127.0.0.1`, dengan opsi eksplisit "tanpa password" disertai peringatan. Konsekuensi: butuh integrasi keychain tiga OS + fallback file `0600`; password tidak boleh muncul di `state.db`, log, atau argumen proses. Status: Approved.
+**D-17 | Random per-instance password in the OS keychain; optional no-password mode**
+Context: a local service without authentication is a DNS-rebinding target and can be reached by other users on the same machine; yet many old `.env` files expect root without a password. Decision: default a random 24-character password in the keychain, bind only to `127.0.0.1`, with an explicit "no password" option that carries a warning. Consequence: needs keychain integration on three OSes + a `0600` file fallback; a password must never appear in `state.db`, logs, or process arguments. Status: Approved.
 
-**D-18 | Hapus instance menawarkan hapus-data atau arsip**
-Konteks: data dev sering sekali pakai, tetapi kehilangan tak sengaja tidak bisa dibatalkan. Keputusan: dialog dengan dua aksi; penghapusan data mewajibkan pengetikan nama instance; arsip dipindah ke `~/.dblocal/archive/`. Konsekuensi: butuh halaman Storage untuk membersihkan arsip agar disk tidak membengkak diam-diam. Status: Approved.
+**D-18 | Deleting an instance offers delete-data or archive**
+Context: dev data is often disposable, but accidental loss cannot be undone. Decision: a dialog with two actions; deleting the data requires typing the instance name; archive moves it to `~/.dblocal/archive/`. Consequence: needs a Storage page to clean up archives so the disk does not quietly bloat. Status: Approved.
 
-**D-19 | Katalog bundled + refresh TTL 24 jam; unduhan resumable**
-Konteks: unduhan engine yang bisa mencapai ratusan MB (MySQL 80 MB sampai 832 MB, lihat D-24) dan jaringan yang tidak andal. Keputusan: snapshot katalog dibundel, di-refresh di latar dengan TTL 24 jam; kegagalan refresh tidak memunculkan error; unduhan memakai HTTP Range dan wajib lolos SHA-256. Konsekuensi: app tetap berguna offline; rilis keamanan engine baru dapat menjangkau user tanpa update aplikasi. Status: Approved.
+**D-19 | Bundled catalog + 24-hour TTL refresh; resumable downloads**
+Context: engine downloads can reach hundreds of MB (MySQL 80 MB to 832 MB, see D-24) and networks are unreliable. Decision: the catalog snapshot is bundled, refreshed in the background with a 24-hour TTL; a failed refresh does not surface an error; downloads use HTTP Range and must pass SHA-256. Consequence: the app stays useful offline; new engine security releases can reach users without an app update. Status: Approved.
 
-**D-20 | macOS dinotarisasi; Windows unsigned di v1**
-Konteks: macOS memblokir aplikasi tak ter-notarisasi secara keras sehingga membutuhkan perintah terminal — bertentangan langsung dengan janji produk; Windows hanya menampilkan peringatan yang bisa dilewati. Keputusan: Apple Developer ID + notarisasi (±$99/th) wajib; Windows dirilis tanpa tanda tangan disertai dokumentasi SmartScreen dan checksum publik. Konsekuensi: satu biaya tetap tahunan; pengguna Windows melihat "Unknown publisher" — harus dinyatakan jujur di README dan halaman rilis. Status: Approved.
+**D-20 | macOS notarized; Windows unsigned in v1**
+Context: macOS blocks non-notarized apps hard, requiring a terminal command — in direct conflict with the product promise; Windows only shows a warning that can be bypassed. Decision: Apple Developer ID + notarization (~$99/yr) is mandatory; Windows ships unsigned with SmartScreen documentation and a public checksum. Consequence: one fixed annual cost; Windows users see "Unknown publisher" — this must be stated honestly in the README and the release page. Status: Approved.
 
-**D-21 | Urutan fase: P0 spike → P1 PostgreSQL + Valkey → P2 MySQL/MariaDB + CLI + paket → P3 konfigurasi + autostart**
-Konteks: `EngineAdapter` yang dirancang dari satu engine berisiko salah abstraksi. Keputusan: Phase 1 mengambil dua engine paling berbeda (PostgreSQL yang kompleks, Valkey yang sederhana). Konsekuensi: Phase 1 tetap irisan vertikal utuh; MySQL dan MariaDB menjadi murah setelah trait terbukti; risiko terbesar dibayar di Phase 0. Status: Approved.
+**D-21 | Phase order: P0 spikes → P1 PostgreSQL + Valkey → P2 MySQL/MariaDB + CLI + packages → P3 configuration + autostart**
+Context: an `EngineAdapter` designed from one engine risks the wrong abstraction. Decision: Phase 1 takes the two most different engines (complex PostgreSQL, simple Valkey). Consequence: Phase 1 stays a complete vertical slice; MySQL and MariaDB become cheap once the trait is proven; the biggest risk is paid down in Phase 0. Status: Approved.
 
-**D-22 | Nama produk: DBLocal, binary `dblocal`, data di `~/.dblocal/`**
-Konteks: nama menentukan binary, path, dan slug dokumentasi. Keputusan: DBLocal. Konsekuensi: path dan skema penamaan terkunci di seluruh PRD; perlu pemeriksaan ketersediaan nama di crates.io, Homebrew, dan domain sebelum rilis publik. Status: Approved.
+**D-22 | Product name: DBLocal, binary `dblocal`, data in `~/.dblocal/`**
+Context: the name determines the binary, paths and documentation slug. Decision: DBLocal. Consequence: paths and naming are locked across the PRD; name availability on crates.io, Homebrew, and a domain must be checked before the public release. Status: Approved.
 
-**D-23 | Tampilan UI bergaya Zed IDE**
-Konteks: user meminta tampilan seperti Zed IDE dengan rujukan contoh GPUI di repositori Zed (`crates/gpui/examples`). Zed adalah workspace berisi dock dan pane bertab, bukan jendela berhalaman. Keputusan: panel Instances (pohon per engine) di dock kiri, pane tengah bertab per instance (Overview, Logs, Databases, Config), status bar di bawah, command palette `Ctrl/Cmd+K`, toast dan modal; tema gelap dan terang berbasis palet Atom One Dark/Light (MIT), tanpa menyalin tema atau kode Zed. Konsekuensi: (a) crate `gpui` dan examples-nya Apache-2.0 sehingga boleh dirujuk dan potongan kecil boleh diadaptasi dengan atribusi, tetapi crate `ui` dan `theme` milik Zed IDE berlisensi GPL-3.0-or-later, berada di dalam workspace Zed, dan tidak tersedia di crates.io, jadi tidak bisa dijadikan dependensi; (b) abu redup khas One Dark gagal kontras 4,5:1 yang diwajibkan F-PLH-02 (mis. `#5c6370` hanya 2,32:1), sehingga token warna wajib lolos tes kontras otomatis dan warna yang gagal dilebihterangkan; (c) `gpui-component` menyediakan sistem tema JSON dan komponen dock/tab/sidebar, tetapi tidak menyertakan tema One Dark, sehingga tema dibuat sendiri; (d) pemilihan font (IBM Plex Sans, SIL OFL 1.1) bergantung pada biaya ukuran binary yang diukur di Phase 0. Rincian: `docs/design/UI-DIRECTION.md`. Status: Approved.
+**D-23 | Zed IDE-style UI**
+Context: the user asked for a Zed IDE-like look, referencing GPUI examples in the Zed repository (`crates/gpui/examples`). Zed is a workspace with a dock and tabbed panes, not a page-window app. Decision: an Instances panel (tree per engine) in the left dock, a centre pane tabbed per instance (Overview, Logs, Databases, Config), a status bar at the bottom, a `Ctrl/Cmd+K` command palette, toasts and modals; dark and light themes based on the Atom One Dark/Light palette (MIT), without copying any Zed theme or code. Consequence: (a) the `gpui` crate and its examples are Apache-2.0 so they may be referenced and small pieces adapted with attribution, but Zed IDE's own `ui` and `theme` crates are GPL-3.0-or-later, live inside the Zed workspace, and are not available on crates.io, so they cannot be a dependency; (b) One Dark's signature muted greys fail the 4.5:1 contrast required by F-PLH-02 (e.g. `#5c6370` is only 2.32:1), so colour tokens must pass an automated contrast test and failing colours must be lightened; (c) `gpui-component` provides a JSON theme system and dock/tab/sidebar components, but does not ship an One Dark theme, so the theme is written ourselves; (d) the font choice (IBM Plex Sans, SIL OFL 1.1) depends on the binary size cost measured in Phase 0. Details: `docs/design/UI-DIRECTION.md`. Status: Approved.
 
-**D-24 | Dukungan engine per platform mengikuti artefak upstream yang nyata; MySQL Linux x86_64 memakai tarball minimal; SHA-256 MySQL dihitung CI**
-Konteks: spike W0-B (2026-11-20, diverifikasi ulang oleh reviewer) memeriksa sumber upstream. Temuan: (a) tarball MySQL 8.4.11 untuk Linux berukuran 832 MB (794 MiB), bukan ±260 MB; Linux x86_64 memiliki varian `-minimal` 79,8 MB yang berisi `mysqld`, `mysql`, `mysqladmin`, `mysqldump`, dan `mysqld_safe` (isi arsip didaftar tanpa diekstrak); Linux aarch64 hanya tersedia penuh (822 MB); macOS 160-164 MiB dan hanya untuk `macos15`; Windows x64 zip 281 MB; tidak ada Windows arm64. (b) MySQL tidak menerbitkan SHA-256, hanya MD5 dan tanda tangan GPG `.asc`. (c) MariaDB 11.8.10 dan 11.4.14 hanya menerbitkan Linux x86_64 dan Windows x86_64. (d) Valkey hanya menerbitkan Linux (x86_64 dan `arm64`; token `aarch64` memberi 403). (e) PostgreSQL dari theseus-rs mencakup keenam kombinasi OS dan arsitektur.
-Keputusan: katalog hanya memuat kombinasi yang artefaknya benar-benar ada; kombinasi lain tampil sebagai "tidak tersedia di platform ini" (F-CAT-02 AC2), bukan error. Janji "empat engine" (D-14) berlaku per platform menurut matriks di `docs/spikes/engines/upstream-sources.md` bagian 5. Builder katalog menghitung sendiri SHA-256 MySQL dengan mengunduh sekali di CI dan memverifikasi tanda tangan GPG bila memungkinkan, lalu mem-pin hash itu di katalog; installer tetap wajib memverifikasi sebelum ekstraksi, hanya sumber kepercayaannya adalah katalog kita, bukan upstream. Valkey Linux memakai varian jammy secara default dengan preflight glibc dan soname (varian noble ditunda: pada 2026-11-20 `download.valkey.io` menyajikan dua objek berbeda untuk URL noble yang sama menurut header `Accept-Encoding` karena cache CloudFront basi, sehingga hash yang di-pin akan gagal saat cache kedaluwarsa); macOS dan Windows tetap lewat F-SPK-02. Konsekuensi: MariaDB tidak tersedia di macOS dan Linux aarch64 pada v1, kecuali kita membangunnya sendiri atau user memilih jalur lain.
-Status: Approved (keputusan Rezky 2026-11-25).
+**D-24 | Per-platform engine support follows the real upstream artifacts; MySQL Linux x86_64 uses the minimal tarball; MySQL SHA-256 is computed by CI**
+Context: spike W0-B (2026-11-20, re-verified by the reviewer) examined the upstream sources. Findings: (a) the MySQL 8.4.11 tarball for Linux is 832 MB (794 MiB), not ~260 MB; Linux x86_64 has a `-minimal` variant at 79.8 MB containing `mysqld`, `mysql`, `mysqladmin`, `mysqldump` and `mysqld_safe` (archive contents listed without extracting); Linux aarch64 is only available as the full build (822 MB); macOS is 160–164 MiB and only for `macos15`; the Windows x64 zip is 281 MB; there is no Windows arm64. (b) MySQL does not publish SHA-256, only MD5 and a GPG `.asc` signature. (c) MariaDB 11.8.10 and 11.4.14 only publish Linux x86_64 and Windows x86_64. (d) Valkey only publishes Linux (x86_64 and `arm64`; the `aarch64` token returns 403). (e) PostgreSQL from theseus-rs covers all six OS/architecture combinations.
+Decision: the catalog only contains combinations whose artifacts really exist; other combinations show as "not available on this platform" (F-CAT-02 AC2), not as an error. The "four engines" promise (D-14) applies per platform per the matrix in `docs/spikes/engines/upstream-sources.md` section 5. The catalog builder computes MySQL's SHA-256 itself by downloading once in CI and verifying the GPG signature when possible, then pins that hash in the catalog; the installer must still verify before extraction, only its trust source is our catalog rather than upstream. Valkey Linux uses the jammy variant by default with a glibc and soname preflight (the noble variant is deferred: on 2026-11-20 `download.valkey.io` served two different objects for the same noble URL depending on the `Accept-Encoding` header because of a stale CloudFront cache, so a pinned hash would fail when the cache expires); macOS and Windows still go through F-SPK-02. Consequence: MariaDB is not available on macOS and Linux aarch64 in v1, unless we build it ourselves or the user chooses another path.
+Status: Approved (Rezky's decision 2026-11-25).
 
-**D-25 | Tampilan UI mengikuti prototipe milik user (GPUI Kit), bukan shell W1-G**
-Konteks: setelah D-23, user meminta UI memakai GPUI Kit (https://gpui-kit.com/docs/) dan menyerahkan prototipe lengkap `dblocal-gpui` (disalin ke `docs/design/prototype/dblocal-gpui/`, termasuk tiga tangkapan layar): title bar dengan breadcrumb dan status katalog, dock Instances berbentuk pohon per engine dengan filter dan bagian Runtimes, tab per instance dengan glyph status, header instance (Start/Stop, Restart, Open in…), sub-tab Overview, Logs, Databases, Config, dialog Instance baru dengan kartu engine, daftar versi berlencana "Terpasang"/"Unduh", validasi nama dan port, opsi tanpa password, serta status bar. Palet dasarnya `#15161d` turunan One Dark, sehingga searah dengan D-23. Prototipe memakai data contoh di memori dan crate payung `gpui-kit = "=0.10.0"`, yaitu tumpukan yang sama dengan `gpui-pre =0.3.12` + `gpui-component =0.10.0` yang sudah dipakai. Keputusan: tata letak, tema gelap, komponen, dan perilaku visual prototipe menjadi acuan UI; lapisan data, bridge event, state, `strings.rs`, dan tes W1-G dipertahankan dan view-nya diganti. Isi prototipe yang belum punya backend (tab Databases = Phase 2, tab Config = Phase 3, Open in… = Phase 2) tampil sebagai keadaan "belum tersedia" yang jujur pada mode produksi dan tidak pernah menampilkan data karangan; data contoh prototipe hanya hidup di mock/demo. Fitur W1-G yang tidak ada di prototipe (command palette, hapus instance, toast, banner offline, progres unduhan) tetap ada dengan gaya prototipe. Tema terang dibuat dalam bahasa visual yang sama. Semua warna teks wajib lolos kontras 4,5:1 (F-PLH-02). Konsekuensi: crate payung `gpui-kit` menarik `x11rb` dan `xkbcommon`, sehingga membangunnya di Linux membutuhkan `libxkbcommon-x11-devel` (tidak ada di mesin pengembangan ini); keputusan memakai crate payung atau dependensi langsung ditentukan oleh hasil W2-D. Status: Approved (permintaan langsung user).
+**D-25 | UI follows the user's prototype (GPUI Kit), not the W1-G shell**
+Context: after D-23, the user asked the UI to use GPUI Kit (https://gpui-kit.com/docs/) and handed over a complete prototype `dblocal-gpui` (copied into `docs/design/prototype/dblocal-gpui/`, including three screenshots): a title bar with a breadcrumb and catalog status, an Instances dock as a tree per engine with a filter and a Runtimes section, a tab per instance with a status glyph, an instance header (Start/Stop, Restart, Open in…), Overview/Logs/Databases/Config sub-tabs, a New instance dialog with engine cards, a version list badged "Installed"/"Download", name and port validation, a no-password option, and a status bar. Its base palette is `#15161d`, derived from One Dark, so it is consistent with D-23. The prototype uses in-memory sample data and the umbrella crate `gpui-kit = "=0.10.0"`, the same stack as the already-used `gpui-pre =0.3.12` + `gpui-component =0.10.0`. Decision: the prototype's layout, dark theme, components and visual behavior are the UI reference; the data layer, event bridge, state, `strings.rs` and W1-G tests are kept and the views are replaced. Prototype content without a backend (Databases tab = Phase 2, Config tab = Phase 3, Open in… = Phase 2) shows as an honest "not available yet" state in production mode and never shows fabricated data; the prototype's sample data lives only in mock/demo builds. W1-G features not in the prototype (command palette, delete instance, toasts, offline banner, download progress) stay, in the prototype's style. The light theme is written in the same visual language. All text colours must pass 4.5:1 contrast (F-PLH-02). Consequence: the umbrella crate `gpui-kit` pulls in `x11rb` and `xkbcommon`, so building it on Linux needs `libxkbcommon-x11-devel` (absent on this development machine); whether to use the umbrella crate or direct dependencies is decided by the W2-D result. Status: Approved (direct user request).
 
-**D-26 | Rilis pertama = Linux + Windows; macOS ditunda; Valkey Windows ditunda**
-Konteks: keputusan Rezky 2026-11-24. Rilis pertama hanya menyasar Linux dan Windows; macOS ditunda (bukan dibatalkan), dan Windows dirilis **tanpa Valkey**. Katalog `catalog/engines.json` memang tidak punya artefak Valkey untuk Windows, `valkey-build.yml` belum pernah dijalankan dan tidak dijalankan sekarang, jadi tidak ada biner Valkey Windows yang bisa dipasang. Klaim "empat engine di semua target OS" (D-14, D-21, Definition of Done Phase 1) karena itu tidak benar lagi untuk Windows dan macOS.
-Keputusan: (a) scope rilis pertama = Linux (x86_64, aarch64 best-effort) + Windows x86_64. (b) Valkey di Windows diperlakukan sebagai "tidak tersedia di platform ini" (fallback D-13 / F-SPK-02 AC3, diperluas ke D-24): katalog tidak memuatnya, kartu engine di dialog Instance baru dan `dblocal create valkey` menampilkan alasan tekstual dengan kode `DBL-6001`, tanpa unduhan, tanpa panic. Gerbang ini berbasis data katalog (`ensure_engine_supported` di `crates/core/src/instance/`, dipanggil dari `validate_spec` dan `create_instance`), bukan `cfg!(windows)`, sehingga PostgreSQL/MySQL/MariaDB di Windows tidak terpengaruh dan perilaku Windows dapat diuji di Linux lewat seam platform pada mock. (c) macOS ditunda untuk rilis pertama; job macOS di CI/release dimatikan lewat `ENABLE_MACOS` dan alasan teknisnya (E0658 `map_or_default`, Rust 1.95 vs 1.98) dicatat di `docs/dev/macos-deferred.md`.
-Konsekuensi: Definition of Done Phase 1 (§11) tidak lagi menuntut lima target OS atau Valkey di setiap OS; parity engine mengikuti artefak upstream yang nyata (D-24) dan matriks engine × OS di README diturunkan dari katalog. F-SPK-02 (Valkey Windows/macOS) tetap terbuka sebagai pekerjaan pasca-rilis pertama, bukan blocker rilis ini. macOS dapat dinyalakan kembali dengan menyalakan `ENABLE_MACOS` dan mengikuti "Reviving macOS" di `docs/dev/macos-deferred.md`. Status: Approved (keputusan Rezky 2026-11-24).
+**D-26 | First release = Linux + Windows; macOS deferred; Valkey on Windows deferred**
+Context: Rezky's decision 2026-11-24. The first release targets only Linux and Windows; macOS is deferred (not cancelled), and Windows ships **without Valkey**. The `catalog/engines.json` catalog has no Valkey artifact for Windows, `valkey-build.yml` has never run and is not run now, so there is no Windows Valkey binary to install. The claim "four engines on every OS target" (D-14, D-21, Phase 1 Definition of Done) is therefore no longer true for Windows and macOS.
+Decision: (a) first-release scope = Linux (x86_64, aarch64 best-effort) + Windows x86_64. (b) Valkey on Windows is treated as "not available on this platform" (D-13 fallback / F-SPK-02 AC3, extended to D-24): the catalog omits it, and the engine card in the New instance dialog and `dblocal create valkey` show a textual reason with code `DBL-6001`, with no download and no panic. This gate is data-driven from the catalog (`ensure_engine_supported` in `crates/core/src/instance/`, called from `validate_spec` and `create_instance`), not `cfg!(windows)`, so PostgreSQL/MySQL/MariaDB on Windows are unaffected and Windows behavior can be tested on Linux through the platform seam in the mock. (c) macOS is deferred for the first release; the macOS CI/release job is disabled through `ENABLE_MACOS` and the technical reason (E0658 `map_or_default`, Rust 1.95 vs 1.98) is recorded in `docs/dev/macos-deferred.md`.
+Consequence: the Phase 1 Definition of Done (§11) no longer demands five OS targets or Valkey on every OS; engine parity follows the real upstream artifacts (D-24) and the engine × OS matrix in the README is derived from the catalog. F-SPK-02 (Valkey Windows/macOS) stays open as post-first-release work, not a blocker for this release. macOS can be turned back on by enabling `ENABLE_MACOS` and following "Reviving macOS" in `docs/dev/macos-deferred.md`. Status: Approved (Rezky's decision 2026-11-24).
 
 ---
 
 ## 13. Assumptions & Open Questions
 
-### Open — harus dijawab sebelum atau selama Phase 0
+### Open — must be answered before or during Phase 0
 
-- **[OPEN-01]** Dapatkah Valkey dibangun untuk Windows (dan macOS) di CI dengan hasil yang stabil? Upstream menyediakan CMake tetapi tidak menjanjikan dukungan Windows. → F-SPK-02. **Gate:** jika tidak, D-13 fallback aktif dan parity lima-OS resmi pecah.
-- **[OPEN-02]** Dapatkah ikon tray diintegrasikan dengan event loop GPUI di tiga OS? GPUI tidak memperlakukan tray sebagai warga kelas satu. → F-SPK-04. **Gate:** jika tidak, retention trigger D-04 harus diganti (kandidat: project profile atau global hotkey). **Hasil spike W0-C (2026-11-20):** Linux terbukti: `ksni` 0.3 (StatusNotifierItem lewat D-Bus, tanpa GTK) hidup berdampingan dengan event loop GPUI, latensi aksi tray p50 47,6 ms; GNOME membutuhkan ekstensi AppIndicator untuk menampilkannya. Windows dan macOS hanya dinalar, belum dijalankan; `tray-icon` 0.26 harus dipompa di thread pembuatnya (macOS: thread utama di dalam run loop yang dimiliki GPUI).
-- **[OPEN-03]** Seberapa matang GPUI di Windows untuk aplikasi non-Zed, dan seberapa sering `gpui-pre` memperkenalkan perubahan yang merusak? → F-SPK-01 + kebijakan pin versi. **Hasil spike W0-C:** Conditional GO. Shell bergaya Zed dirender di Wayland (GNOME 50.6, AMD RADV) dengan cold start p50 361 ms dan p95 425 ms; biner rilis 34,2 MiB. Wajib ada pre-flight Vulkan (tanpa Vulkan maupun GL, GPUI panik saat membuat window; pre-flight keluar dengan kode 78 dan petunjuk instalasi). X11 hanya lolos `cargo check` karena paket `libxkbcommon-x11-devel` tidak ada di host uji. Windows dan macOS belum dijalankan.
-- **[OPEN-04]** Siapa pemilik akun Apple Developer dan siapa yang menanggung biaya tahunannya, serta bagaimana rahasia penandatanganan disimpan di GitHub Actions?
-- **[OPEN-05]** Apakah runner `linux-aarch64` tersedia dan stabil untuk repo ini, atau build arm64 perlu cross-compilation/QEMU?
-- **[OPEN-06]** Apakah nama "DBLocal" bebas konflik di crates.io, Homebrew cask, winget, dan sebagai domain? (D-22.)
-- **[OPEN-07]** Endpoint unduhan MySQL mana yang stabil untuk otomatisasi, dan apakah ketentuan penggunaannya mengizinkan pengunduhan terprogram oleh aplikasi klien? Bila bermasalah, MariaDB menjadi jalur utama keluarga MySQL. Sebagian terjawab oleh spike W0-B: `dev.mysql.com/get/...` dan `cdn.mysql.com` dapat diunduh tanpa penerimaan syarat di browser, tetapi MySQL tidak menerbitkan SHA-256 (D-24). Ketentuan penggunaan Oracle untuk unduhan terprogram oleh aplikasi klien belum ditinjau secara hukum dan tetap terbuka.
-- **[OPEN-08]** Target idle RSS < 150 MB dan CPU < 1% belum tercapai oleh shell GPUI: spike W0-C mengukur RSS 176 MB dan CPU sekitar 3,2% dengan pump event 50 ms. Penyebabnya diduga baseline wgpu/Vulkan ditambah polling timer. → W1-G mengganti polling dengan wake berbasis event dan mengukur lantai jendela GPUI kosong. **Diselesaikan (keputusan Rezky 2026-11-25):** batas rilis pertama ditetapkan menjadi **RSS < 220 MB** dan **CPU idle <= 1,5%** (terukur sekitar 194 MB dan 1% di Linux).
+- **[OPEN-01]** Can Valkey be built for Windows (and macOS) in CI with a stable result? Upstream provides CMake but does not promise Windows support. → F-SPK-02. **Gate:** if not, the D-13 fallback activates and the official five-OS parity breaks.
+- **[OPEN-02]** Can a tray icon be integrated with the GPUI event loop on three OSes? GPUI does not treat the tray as a first-class citizen. → F-SPK-04. **Gate:** if not, the D-04 retention trigger must be replaced (candidates: project profiles or a global hotkey). **Spike W0-C result (2026-11-20):** proven on Linux: `ksni` 0.3 (StatusNotifierItem over D-Bus, no GTK) coexists with the GPUI event loop, tray action latency p50 47.6 ms; GNOME needs the AppIndicator extension to show it. Windows and macOS were only reasoned about, not run; `tray-icon` 0.26 must be pumped on its owning thread (macOS: the main thread inside the run loop owned by GPUI).
+- **[OPEN-03]** How mature is GPUI on Windows for non-Zed apps, and how often does `gpui-pre` introduce breaking changes? → F-SPK-01 + the version pinning policy. **Spike W0-C result:** Conditional GO. The Zed-style shell renders on Wayland (GNOME 50.6, AMD RADV) with cold start p50 361 ms and p95 425 ms; the release binary is 34.2 MiB. A Vulkan pre-flight is mandatory (without Vulkan or GL, GPUI panics when creating a window; the pre-flight exits with code 78 and install hints). X11 only passed `cargo check` because `libxkbcommon-x11-devel` is not installed on the test host. Windows and macOS were not run.
+- **[OPEN-04]** Who owns the Apple Developer account and who pays the annual fee, and how is the signing secret stored in GitHub Actions?
+- **[OPEN-05]** Is the `linux-aarch64` runner available and stable for this repo, or does the arm64 build need cross-compilation/QEMU?
+- **[OPEN-06]** Is the name "DBLocal" free of conflicts on crates.io, the Homebrew cask, winget, and as a domain? (D-22.)
+- **[OPEN-07]** Which MySQL download endpoint is stable for automation, and do its terms allow programmatic downloading by a client app? If problematic, MariaDB becomes the main path for the MySQL family. Partly answered by spike W0-B: `dev.mysql.com/get/...` and `cdn.mysql.com` can be downloaded without accepting terms in a browser, but MySQL does not publish SHA-256 (D-24). Oracle's terms of use for programmatic downloads by client apps have not been legally reviewed and remain open.
+- **[OPEN-08]** The idle RSS < 150 MB and CPU < 1% targets were not met by the GPUI shell: spike W0-C measured 176 MB RSS and about 3.2% CPU with a 50 ms event pump. The cause is thought to be the wgpu/Vulkan baseline plus timer polling. → W1-G replaces polling with event-based wake and measures the floor of an empty GPUI window. **Resolved (Rezky's decision 2026-11-25):** the first-release limits are set to **RSS < 220 MB** and **idle CPU <= 1.5%** (measured around 194 MB and 1% on Linux).
 
-### Assumptions — dipegang sampai terbukti sebaliknya
+### Assumptions — held until proven otherwise
 
-- **[ASSUMPTION-01]** `theseus-rs/postgresql-binaries` tetap dirawat dan terus merilis versi PostgreSQL baru (saat ini 18.7.0, lengkap dengan SHA-256, SBOM, dan provenance). Mitigasi: katalog bersifat data, sehingga sumber dapat dialihkan tanpa mengubah kode.
-- **[ASSUMPTION-02]** Tarball Valkey untuk Ubuntu `jammy` berjalan di Fedora dan distro lain berkat kompatibilitas mundur glibc. Terbukti sebagian oleh spike W0-B: jammy dan noble 9.2.0 berjalan di Fedora 44 (glibc 2.43) dengan 0 library hilang, tetapi tarball tidak self-contained (butuh `libssl.so.3` dan `libsystemd.so.0`) dan lantai glibc-nya 2.34 (jammy) dan 2.38 (noble); default jammy dengan preflight soname. Job E2E Fedora di Phase 1 tetap wajib.
-- **[ASSUMPTION-03]** Target user menjalankan mesin dengan driver Vulkan yang berfungsi (mesin pengembangan modern). Mesin tanpa Vulkan dianggap di luar dukungan, dengan pesan yang jelas, bukan crash.
-- **[ASSUMPTION-04]** Unduhan satu kali untuk MySQL (80 MB Linux x86_64 minimal sampai 832 MB Linux aarch64 penuh, D-24) dapat diterima user selama progres, ETA, dan kemampuan melanjutkan ditampilkan dengan baik.
-- **[ASSUMPTION-05]** Keychain tersedia di mayoritas lingkungan desktop target; fallback file `0600` cukup untuk sisanya (mis. Linux tanpa Secret Service).
-- **[ASSUMPTION-06]** Tidak ada kewajiban hukum tambahan karena tidak ada data pribadi yang dikumpulkan; pernyataan ini perlu ditinjau ulang bila kelak telemetri opt-in dipertimbangkan.
+- **[ASSUMPTION-01]** `theseus-rs/postgresql-binaries` stays maintained and keeps releasing new PostgreSQL versions (currently 18.7.0, complete with SHA-256, SBOM and provenance). Mitigation: the catalog is data, so the source can be switched without changing code.
+- **[ASSUMPTION-02]** The Valkey tarball for Ubuntu `jammy` runs on Fedora and other distros thanks to glibc backward compatibility. Partly proven by spike W0-B: jammy and noble 9.2.0 run on Fedora 44 (glibc 2.43) with 0 missing libraries, but the tarball is not self-contained (it needs `libssl.so.3` and `libsystemd.so.0`) and its glibc floor is 2.34 (jammy) and 2.38 (noble); default to jammy with a soname preflight. The Fedora E2E job in Phase 1 stays mandatory.
+- **[ASSUMPTION-03]** The target user runs a machine with a working Vulkan driver (a modern development machine). A machine without Vulkan is considered outside support, with a clear message, not a crash.
+- **[ASSUMPTION-04]** A one-time download for MySQL (80 MB Linux x86_64 minimal to 832 MB full Linux aarch64, D-24) is acceptable to users as long as progress, ETA and the ability to resume are shown well.
+- **[ASSUMPTION-05]** Keychain is available in the majority of target desktop environments; the `0600` file fallback is enough for the rest (e.g. Linux without Secret Service).
+- **[ASSUMPTION-06]** There are no additional legal obligations because no personal data is collected; this statement must be reviewed if opt-in telemetry is ever considered.
 
-### Backlog (dievaluasi ulang setelah ada pengguna nyata)
+### Backlog (re-evaluated after there are real users)
 
-Backup/restore terjadwal · project profile / grup instance · repo apt & yum sendiri · Homebrew cask, AUR, winget, Flathub · ekstensi PostgreSQL (pgvector, PostGIS) · `pg_upgrade`/`mysql_upgrade` antar versi mayor · mengadopsi instalasi database yang sudah ada di mesin · impor dari `docker-compose.yml` · engine tambahan (MongoDB, SQL Server, ClickHouse) · telemetri anonim opt-in.
+Scheduled backup/restore · project profiles / instance groups · our own apt & yum repo · Homebrew cask, AUR, winget, Flathub · PostgreSQL extensions (pgvector, PostGIS) · `pg_upgrade`/`mysql_upgrade` across major versions · adopting an existing database install on the machine · import from `docker-compose.yml` · additional engines (MongoDB, SQL Server, ClickHouse) · opt-in anonymous telemetry.

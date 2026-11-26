@@ -4,80 +4,80 @@
     "slug": "dblocal",
     "status": "planning",
     "version": "0.1",
-    "description": "Aplikasi desktop Rust untuk memasang dan mengelola server database lokal (PostgreSQL, MySQL, MariaDB, Valkey) dengan banyak versi berdampingan, tanpa container dan tanpa sudo.",
-    "coreValue": "Multi-versi native, satu klik, tanpa container",
-    "firstSessionJob": "Satu instance berjalan + connection URI tersalin dalam < 2 menit",
-    "retentionTrigger": "Tray/menubar start-stop + autostart saat login",
+    "description": "Rust desktop app that installs and manages local database servers (PostgreSQL, MySQL, MariaDB, Valkey) with several versions side by side, without containers and without sudo.",
+    "coreValue": "Multi-version native, one click, no container",
+    "firstSessionJob": "One running instance + the connection URI copied in < 2 minutes",
+    "retentionTrigger": "Tray/menubar start-stop + autostart at login",
     "license": "GPL-3.0-only",
-    "licenseNotes": "Seluruh dependensi wajib kompatibel-GPL (Apache-2.0, MIT, ISC, SQLite public domain), ditegakkan allowlist cargo deny. Kode DBDelve tidak disalin — keputusan rekayasa, bukan keterbatasan lisensi (DBDelve juga GPL-3.0).",
+    "licenseNotes": "Every dependency must be GPL-compatible (Apache-2.0, MIT, ISC, SQLite public domain), enforced by the cargo deny allowlist. DBDelve code is not copied — an engineering decision, not a licensing limitation (DBDelve is GPL-3.0 too).",
     "nonGoals": [
-      "Browsing/query data di dalam app (wilayah DB client)",
-      "Mode server/headless atau service sistem",
-      "Auto-restart saat engine crash (v1)",
-      "Upgrade versi mayor dengan migrasi data (pg_upgrade/mysql_upgrade)",
-      "Backup/restore terjadwal (backlog)",
-      "Project profile / grup instance (backlog)",
-      "Mengadopsi instalasi database yang sudah ada di mesin",
-      "Akun, login, atau sinkronisasi cloud",
-      "Arsitektur di luar x86_64 dan aarch64"
+      "In-app data browsing/query (the DB client's territory)",
+      "Server/headless mode or a system service",
+      "Auto-restart on engine crash (v1)",
+      "Major-version upgrade with data migration (pg_upgrade/mysql_upgrade)",
+      "Scheduled backup/restore (backlog)",
+      "Project profiles / instance groups (backlog)",
+      "Adopting an existing database install on the machine",
+      "Accounts, login, or cloud sync",
+      "Architectures beyond x86_64 and aarch64"
     ]
   },
   "phases": [
     {
       "id": 0,
-      "name": "Spikes & Fondasi",
-      "goal": "Membuktikan tiga asumsi paling berisiko (GPUI lintas-OS, build Valkey Windows, tray di GPUI) sebelum menulis kode produk",
-      "definitionOfDone": "Lima spike terdokumentasi dengan jawaban YA/TIDAK; gate keputusan D-13 dan D-04 dijalankan bila gagal; workspace + CI matrix hijau"
+      "name": "Spikes & Foundation",
+      "goal": "Prove the three riskiest assumptions (cross-OS GPUI, the Valkey Windows build, the GPUI tray) before writing product code",
+      "definitionOfDone": "Five spikes documented with YES/NO answers; the D-13 and D-04 decision gates run on failure; workspace + CI matrix green"
     },
     {
       "id": 1,
       "name": "MVP Vertical Slice",
-      "goal": "Developer dapat memasang DBLocal, menjalankan PostgreSQL atau Valkey, dan memakainya untuk project nyata",
-      "definitionOfDone": "Di lima target OS: unduh -> create -> start -> copy URI -> connect berhasil; TTFRI PostgreSQL p50 < 120s terukur di CI; instance bertahan setelah app di-quit; AppImage/.tar.gz/.dmg(notarized)/.zip + install.sh terbit dengan checksum"
+      "goal": "A developer can install DBLocal, run PostgreSQL or Valkey, and use it for a real project",
+      "definitionOfDone": "On five OS targets: download -> create -> start -> copy URI -> connect succeeds; TTFRI PostgreSQL p50 < 120s measured in CI; the instance survives an app quit; AppImage/.tar.gz/.dmg (notarized)/.zip + install.sh ship with checksums"
     },
     {
       "id": 2,
-      "name": "Keluarga MySQL, CLI & Paket Native",
-      "goal": "Janji empat engine terpenuhi, dan DBLocal bisa dipakai tanpa terminal maupun dari dalam terminal",
-      "definitionOfDone": "MySQL & MariaDB lulus E2E yang sama dengan Phase 1; membuat database project bisa sepenuhnya dari GUI; CLI lengkap dengan --json dan exit code; .deb/.rpm/.msi terbit; self-update bekerja dan dinonaktifkan untuk instalasi via package manager"
+      "name": "MySQL family, CLI & native packages",
+      "goal": "The four-engine promise is met, and DBLocal works without a terminal as well as from inside one",
+      "definitionOfDone": "MySQL & MariaDB pass the same E2E as Phase 1; a project database can be created entirely from the GUI; the CLI is complete with --json and exit codes; .deb/.rpm/.msi ship; self-update works and is disabled for package-manager installs"
     },
     {
       "id": 3,
-      "name": "Konfigurasi, Autostart & Polish",
-      "goal": "DBLocal menjadi bagian rutinitas harian dan bisa di-tuning tanpa membuka file konfigurasi",
-      "definitionOfDone": "Form konfigurasi untuk keempat engine dengan pemulihan otomatis; autostart user-level di tiga OS dan bisa dicabut bersih; checklist aksesibilitas lulus"
+      "name": "Configuration, autostart & polish",
+      "goal": "DBLocal becomes part of the daily routine and can be tuned without opening a configuration file",
+      "definitionOfDone": "A configuration form for all four engines with automatic recovery; user-level autostart on three OSes that can be cleanly revoked; the accessibility checklist passes"
     }
   ],
   "stack": {
     "mode": "user",
     "frontend": { "choice": "GPUI (gpui-pre 0.3.x) + gpui-component 0.10.x", "source": "user" },
-    "backend": { "choice": "Rust (edition 2024), crate dblocal-core UI-agnostic", "source": "user" },
-    "database": { "choice": "SQLite (rusqlite bundled, mode WAL)", "source": "ai" },
+    "backend": { "choice": "Rust (edition 2024), UI-agnostic dblocal-core crate", "source": "user" },
+    "database": { "choice": "SQLite (rusqlite bundled, WAL mode)", "source": "ai" },
     "deployment": { "choice": "GitHub Actions matrix + GitHub Releases + install.sh (curl)", "source": "ai" },
     "extras": {
-      "http": "reqwest + rustls (HTTP Range untuk resume)",
-      "archive": "flate2, xz2, zip (dengan proteksi zip-slip)",
-      "hash": "sha2 (verifikasi SHA-256 wajib)",
-      "secrets": "keyring (Secret Service / Keychain / Credential Manager) + fallback file 0600",
-      "process": "sysinfo + nix (Unix) + windows-sys (Windows), spawn detached",
-      "async": "tokio di thread terpisah, tidak pernah di executor GPUI",
+      "http": "reqwest + rustls (HTTP Range for resume)",
+      "archive": "flate2, xz2, zip (with zip-slip protection)",
+      "hash": "sha2 (mandatory SHA-256 verification)",
+      "secrets": "keyring (Secret Service / Keychain / Credential Manager) + 0600 file fallback",
+      "process": "sysinfo + nix (Unix) + windows-sys (Windows), detached spawn",
+      "async": "tokio on a separate thread, never on the GPUI executor",
       "dbDrivers": "tokio-postgres, mysql_async, redis (RESP)",
       "cli": "clap (derive)",
       "packaging": "cargo-deb, cargo-generate-rpm, appimagetool, create-dmg, WiX",
-      "signing": "Apple Developer ID + notarisasi (wajib); Windows unsigned di v1"
+      "signing": "Apple Developer ID + notarization (mandatory); Windows unsigned in v1"
     }
   },
   "roles": ["user-gui", "user-cli", "os-autostart"],
   "engines": [
     { "key": "postgresql", "displayName": "PostgreSQL", "canonicalPort": 5432, "phase": 1, "binarySource": "theseus-rs/postgresql-binaries (GitHub Releases, sha256 + SBOM + provenance)" },
-    { "key": "valkey", "displayName": "Valkey (kompatibel Redis)", "canonicalPort": 6379, "phase": 1, "binarySource": "download.valkey.io untuk Linux; build sendiri di CI untuk macOS & Windows (bergantung F-SPK-02)" },
-    { "key": "mysql", "displayName": "MySQL", "canonicalPort": 3306, "phase": 2, "binarySource": "Tarball resmi upstream MySQL (artefak Windows ~260MB)" },
+    { "key": "valkey", "displayName": "Valkey (Redis compatible)", "canonicalPort": 6379, "phase": 1, "binarySource": "download.valkey.io for Linux; our own CI build for macOS & Windows (depends on F-SPK-02)" },
+    { "key": "mysql", "displayName": "MySQL", "canonicalPort": 3306, "phase": 2, "binarySource": "Official MySQL upstream tarball (Windows artifact ~260MB)" },
     { "key": "mariadb", "displayName": "MariaDB", "canonicalPort": 3307, "phase": 2, "binarySource": "downloads.mariadb.org/rest-api" }
   ],
   "features": [
     {
       "id": "F-SPK",
-      "name": "Spikes & Fondasi",
+      "name": "Spikes & Foundation",
       "icon": "flask-conical",
       "phase": 0,
       "status": "planned",
@@ -87,47 +87,47 @@
       "subFeatures": [
         {
           "id": "F-SPK-01",
-          "name": "GPUI berjalan di tiga OS",
+          "name": "GPUI runs on three OSes",
           "priority": "must",
           "acceptanceCriteria": [
-            "Given runner CI Linux dengan driver Vulkan, When binary spike dijalankan, Then jendela GPUI terbuka dan merender daftar + tombol dari gpui-component, lalu keluar dengan kode 0",
-            "Given mesin Linux tanpa Vulkan, When binary dijalankan, Then aplikasi keluar dengan pesan yang bisa ditindaklanjuti (menyebut paket driver + link dokumentasi), bukan panic atau layar hitam",
-            "Given Windows 11 x86_64 dan macOS 14+ arm64, When binary dijalankan, Then jendela terbuka dan merender komponen yang sama"
+            "Given a Linux CI runner with a Vulkan driver, When the spike binary runs, Then a GPUI window opens and renders a list plus buttons from gpui-component, then exits with code 0",
+            "Given a Linux machine without Vulkan, When the binary runs, Then the app exits with an actionable message (naming the driver packages + a documentation link), not a panic or a black screen",
+            "Given Windows 11 x86_64 and macOS 14+ arm64, When the binary runs, Then a window opens and renders the same components"
           ],
           "entities": [],
           "endpoints": []
         },
         {
           "id": "F-SPK-02",
-          "name": "Build Valkey untuk Windows & macOS",
+          "name": "Valkey build for Windows & macOS",
           "priority": "must",
           "acceptanceCriteria": [
-            "Given source Valkey 8.x/9.x, When job CI menjalankan build CMake di windows-latest, Then dihasilkan valkey-server.exe yang bisa start, melayani PING -> PONG, dan shutdown bersih",
-            "Given runner macos-latest (arm64) dan macos-13 (x86_64), When build dijalankan, Then dihasilkan biner untuk kedua arsitektur dengan hasil uji PING yang sama",
-            "Given salah satu target gagal setelah upaya wajar, Then fallback D-13 diaktifkan: Valkey ditandai unsupported untuk platform itu di katalog, UI menampilkan alasan, dan PRD diperbarui"
+            "Given Valkey 8.x/9.x source, When a CI job runs the CMake build on windows-latest, Then it produces valkey-server.exe that starts, serves PING -> PONG, and shuts down cleanly",
+            "Given the macos-latest runner (arm64) and macos-13 (x86_64), When the build runs, Then it produces a binary for both architectures with the same PING result",
+            "Given one target fails after a reasonable effort, Then the D-13 fallback activates: Valkey is marked unsupported for that platform in the catalog, the UI shows the reason, and the PRD is updated"
           ],
           "entities": [],
           "endpoints": []
         },
         {
           "id": "F-SPK-03",
-          "name": "Siklus hidup PostgreSQL dari tarball upstream",
+          "name": "PostgreSQL lifecycle from the upstream tarball",
           "priority": "must",
           "acceptanceCriteria": [
-            "Given artefak theseus-rs 18.x untuk platform runner, When spike mengunduh, memverifikasi SHA-256, mengekstrak, menjalankan initdb lalu pg_ctl start, Then koneksi TCP ke 127.0.0.1:<port> berhasil melakukan SELECT 1",
-            "Given siklus selesai, When pg_ctl stop -m fast dipanggil, Then proses berakhir < 5 detik dan tidak ada proses postgres yatim yang tersisa"
+            "Given a theseus-rs 18.x artifact for the runner's platform, When the spike downloads, verifies SHA-256, extracts, runs initdb then pg_ctl start, Then a TCP connection to 127.0.0.1:<port> succeeds with SELECT 1",
+            "Given the cycle is complete, When pg_ctl stop -m fast is called, Then the process ends in < 5 seconds and no orphaned postgres process remains"
           ],
           "entities": [],
           "endpoints": []
         },
         {
           "id": "F-SPK-04",
-          "name": "Tray icon di tiga OS bersama GPUI",
+          "name": "Tray icon on three OSes alongside GPUI",
           "priority": "must",
           "acceptanceCriteria": [
-            "Given GPUI memiliki event loop sendiri, When ikon tray dipasang, Then ikon muncul di Windows, macOS, dan setidaknya satu desktop environment Linux (GNOME via AppIndicator, dan KDE)",
-            "Given menu tray diklik, Then aksi sampai ke state aplikasi tanpa memblokir atau merusak event loop GPUI",
-            "Given tray tidak tersedia di lingkungan desktop user, Then aplikasi tetap berfungsi penuh lewat jendela dan ketiadaan tray ditampilkan sebagai catatan, bukan error"
+            "Given GPUI has its own event loop, When the tray icon is installed, Then the icon appears on Windows, macOS, and at least one Linux desktop environment (GNOME via AppIndicator, and KDE)",
+            "Given the tray menu is clicked, Then the action reaches app state without blocking or breaking the GPUI event loop",
+            "Given the tray is unavailable in the user's desktop environment, Then the app still works fully through the window and the missing tray shows as a note, not an error"
           ],
           "entities": [],
           "endpoints": []
@@ -137,8 +137,8 @@
           "name": "Skeleton workspace & CI matrix",
           "priority": "must",
           "acceptanceCriteria": [
-            "Given repo kosong, When cargo xtask ci dijalankan lokal, Then workspace (core, gui, cli, xtask) terkompilasi, clippy bersih, dan test lulus",
-            "Given push ke main, When workflow berjalan, Then matrix linux-x86_64, linux-aarch64, macos-universal, windows-x86_64 menghasilkan artefak dan checksums.txt"
+            "Given an empty repo, When cargo xtask ci runs locally, Then the workspace (core, gui, cli, xtask) compiles, clippy is clean, and the tests pass",
+            "Given a push to main, When the workflow runs, Then the linux-x86_64, linux-aarch64, macos-universal, windows-x86_64 matrix produces artifacts and checksums.txt"
           ],
           "entities": [],
           "endpoints": []
@@ -157,37 +157,37 @@
       "subFeatures": [
         {
           "id": "F-CAT-01",
-          "name": "Snapshot bundled + refresh berkala",
+          "name": "Bundled snapshot + periodic refresh",
           "priority": "must",
           "acceptanceCriteria": [
-            "Given app pertama kali dibuka tanpa koneksi internet, When halaman katalog dibuka, Then daftar versi dari snapshot bundled tetap tampil disertai banner 'Katalog mungkin tidak terbaru'",
-            "Given snapshot terakhir di-refresh lebih dari 24 jam lalu dan ada koneksi, When app dibuka, Then refresh berjalan di background dan UI diperbarui tanpa memblokir interaksi",
-            "Given refresh gagal (timeout, 404, rate limit GitHub), Then tidak ada dialog error; hanya banner status katalog yang berubah dan snapshot lama tetap dipakai",
-            "Given payload katalog punya schema_version lebih tinggi dari yang dipahami app, Then payload ditolak, snapshot bundled tetap dipakai, dan app menyarankan update"
+            "Given the app is opened for the first time without an internet connection, When the catalog page is opened, Then the version list from the bundled snapshot still shows with the banner 'The catalog may be out of date'",
+            "Given the last snapshot was refreshed more than 24 hours ago and a connection exists, When the app opens, Then the refresh runs in the background and the UI updates without blocking interaction",
+            "Given the refresh fails (timeout, 404, GitHub rate limit), Then there is no error dialog; only the catalog status banner changes and the old snapshot stays in use",
+            "Given the catalog payload has a schema_version higher than the app understands, Then the payload is rejected, the bundled snapshot stays in use, and the app suggests an update"
           ],
           "entities": ["CatalogSnapshot", "EngineVersion", "Artifact"],
           "endpoints": ["core: catalog.refresh(force)"]
         },
         {
           "id": "F-CAT-02",
-          "name": "Daftar & filter versi",
+          "name": "Version list & filter",
           "priority": "must",
           "acceptanceCriteria": [
-            "Given katalog termuat, When user membuka New Instance, Then hanya versi yang punya artefak untuk OS+arch mesin ini yang ditampilkan",
-            "Given sebuah engine tidak punya artefak untuk platform ini, Then engine tetap terlihat tapi dinonaktifkan dengan alasan tekstual, bukan disembunyikan diam-diam",
-            "Given sebuah versi sudah terpasang sebagai runtime lokal, Then versi itu ditandai 'Terpasang' dan pembuatan instance melewati seluruh langkah unduh"
+            "Given the catalog loads, When the user opens New Instance, Then only versions with an artifact for this machine's OS+arch are shown",
+            "Given an engine has no artifact for this platform, Then the engine stays visible but disabled with a textual reason, not silently hidden",
+            "Given a version is already installed as a local runtime, Then that version is marked 'Installed' and creating an instance skips the whole download step"
           ],
           "entities": ["EngineVersion", "Artifact", "Runtime"],
           "endpoints": ["core: catalog.list_versions(engine, os, arch)"]
         },
         {
           "id": "F-CAT-03",
-          "name": "Pipeline pembangun katalog (CI)",
+          "name": "Catalog builder pipeline (CI)",
           "priority": "must",
           "acceptanceCriteria": [
-            "Given job terjadwal harian, When job berjalan, Then ia menanyakan sumber upstream tiap engine dan menghasilkan catalog/engines.json",
-            "Given sebuah artefak baru ditemukan, When job memproses, Then ia mengambil file .sha256 upstream atau menghitung checksum sendiri, dan menolak menulis entri tanpa checksum",
-            "Given hasil berbeda dari katalog saat ini, Then job membuka pull request (bukan push langsung) agar perubahan katalog selalu ditinjau manusia"
+            "Given a daily scheduled job, When the job runs, Then it queries each engine's upstream source and produces catalog/engines.json",
+            "Given a new artifact is found, When the job processes it, Then it fetches the upstream .sha256 file or computes the checksum itself, and refuses to write an entry without a checksum",
+            "Given the result differs from the current catalog, Then the job opens a pull request (not a direct push) so catalog changes are always reviewed by a human"
           ],
           "entities": ["EngineVersion", "Artifact"],
           "endpoints": ["ci: .github/workflows/catalog.yml"]
@@ -206,37 +206,37 @@
       "subFeatures": [
         {
           "id": "F-RTM-01",
-          "name": "Unduhan resumable dengan progres",
+          "name": "Resumable download with progress",
           "priority": "must",
           "acceptanceCriteria": [
-            "Given unduhan 260 MB sedang berjalan, When koneksi putus lalu user menekan Lanjutkan, Then unduhan dilanjutkan dengan header HTTP Range dari byte terakhir, bukan diulang dari nol",
-            "Given unduhan sedang berjalan, Then UI menampilkan persen, byte terunduh/total, kecepatan, dan ETA, diperbarui minimal 2x/detik",
-            "Given server merespons 200 dan bukan 206 (tidak mendukung Range), Then app mengulang dari awal secara transparan tanpa menampilkan error",
-            "Given user menekan Batal, Then unduhan berhenti < 1 detik dan file .part dihapus"
+            "Given a 260 MB download is running, When the connection drops and the user presses Resume, Then the download continues with an HTTP Range header from the last byte, not from zero",
+            "Given a download is running, Then the UI shows percent, bytes downloaded/total, speed and ETA, updated at least twice per second",
+            "Given the server responds 200 rather than 206 (no Range support), Then the app restarts from the beginning transparently, without showing an error",
+            "Given the user presses Cancel, Then the download stops in < 1 second and the .part file is deleted"
           ],
           "entities": ["DownloadJob", "Artifact"],
           "endpoints": ["core: runtime.install(engine, version)"]
         },
         {
           "id": "F-RTM-02",
-          "name": "Verifikasi & kegagalan yang bersih",
+          "name": "Verification & clean failure",
           "priority": "must",
           "acceptanceCriteria": [
-            "Given unduhan selesai, When SHA-256 tidak sama dengan nilai katalog, Then file dihapus, instalasi dibatalkan, dan pesan menyebut checksum diharapkan vs didapat beserta tombol Coba lagi",
-            "Given ekstraksi gagal di tengah (disk penuh, arsip korup), Then direktori runtime setengah jadi dihapus seluruhnya",
-            "Given arsip berisi path yang keluar dari direktori tujuan (../) atau symlink absolut, Then ekstraksi ditolak sebagai arsip tidak aman (proteksi zip-slip)"
+            "Given the download finishes, When the SHA-256 differs from the catalog value, Then the file is deleted, the install is cancelled, and the message names the expected vs. actual checksum with a Retry button",
+            "Given extraction fails midway (disk full, corrupt archive), Then the half-built runtime directory is removed entirely",
+            "Given the archive contains a path that escapes the destination directory (../) or an absolute symlink, Then extraction is refused as an unsafe archive (zip-slip protection)"
           ],
           "entities": ["Runtime", "DownloadJob"],
           "endpoints": []
         },
         {
           "id": "F-RTM-03",
-          "name": "Ekstraksi & layout runtime",
+          "name": "Extraction & runtime layout",
           "priority": "must",
           "acceptanceCriteria": [
-            "Given arsip .tar.gz, .tar.xz, atau .zip, When diekstrak, Then isinya mendarat di ~/.dblocal/runtimes/<engine>/<versi>-<arch>/ dengan strip_prefix katalog diterapkan sehingga bin/ berada tepat satu tingkat di dalamnya",
-            "Given platform Unix, When ekstraksi selesai, Then bit executable pada file di bin/ dipastikan menyala",
-            "Given runtime sudah ada untuk versi+arch yang sama, Then unduhan dilewati dan status langsung installed"
+            "Given a .tar.gz, .tar.xz or .zip archive, When it is extracted, Then its contents land in ~/.dblocal/runtimes/<engine>/<version>-<arch>/ with the catalog strip_prefix applied so bin/ sits exactly one level inside",
+            "Given a Unix platform, When extraction finishes, Then the executable bit on each file in bin/ is set",
+            "Given a runtime already exists for the same version+arch, Then the download is skipped and the status is immediately installed"
           ],
           "entities": ["Runtime"],
           "endpoints": []
@@ -246,8 +246,8 @@
           "name": "Reclaim disk",
           "priority": "should",
           "acceptanceCriteria": [
-            "Given sebuah runtime tidak lagi dirujuk instance mana pun, When user membuka Settings -> Storage, Then runtime itu terdaftar sebagai 'Tidak terpakai' beserta ukurannya dan bisa dihapus",
-            "Given runtime masih dirujuk minimal satu instance, Then tombol hapusnya nonaktif dengan daftar instance yang memakainya"
+            "Given a runtime is no longer referenced by any instance, When the user opens Settings -> Storage, Then that runtime is listed as 'Unused' with its size and can be deleted",
+            "Given a runtime is still referenced by at least one instance, Then its delete button is disabled with the list of instances using it"
           ],
           "entities": ["Runtime", "Instance"],
           "endpoints": ["core: runtime.remove(runtime_id)"]
@@ -266,24 +266,24 @@
       "subFeatures": [
         {
           "id": "F-PRT-01",
-          "name": "Alokasi otomatis",
+          "name": "Automatic allocation",
           "priority": "must",
           "acceptanceCriteria": [
-            "Given belum ada instance PostgreSQL, When user membuat instance PostgreSQL, Then port yang diusulkan adalah 5432",
-            "Given sudah ada instance di 5432, When user membuat instance PostgreSQL kedua, Then port yang diusulkan adalah 5433 (port bebas berikutnya)",
-            "Given user mengetik port manual yang sudah dialokasikan instance DBLocal lain, Then form menolak submit dengan menyebut nama instance pemiliknya"
+            "Given there is no PostgreSQL instance yet, When the user creates a PostgreSQL instance, Then the proposed port is 5432",
+            "Given an instance already uses 5432, When the user creates a second PostgreSQL instance, Then the proposed port is 5433 (the next free port)",
+            "Given the user types a port already allocated to another DBLocal instance, Then the form refuses to submit and names the owning instance"
           ],
           "entities": ["PortAllocation", "Instance"],
           "endpoints": ["core: ports.allocate(engine)"]
         },
         {
           "id": "F-PRT-02",
-          "name": "Uji bind sebelum start",
+          "name": "Bind test before start",
           "priority": "must",
           "acceptanceCriteria": [
-            "Given port instance ditempati proses di luar DBLocal, When user menekan Start, Then app mendeteksinya lewat percobaan bind nyata ke 127.0.0.1:<port> sebelum menjalankan engine, dan menampilkan dialog 'Port sedang dipakai' dengan aksi 1-klik 'Pindah ke <port+1>'",
-            "Given user memilih pindah port, Then konfigurasi instance diperbarui, alokasi lama dilepas, dan start dilanjutkan tanpa langkah tambahan",
-            "Given uji bind berhasil, Then socket uji ditutup sebelum engine dijalankan sehingga tidak ada balapan dengan proses engine"
+            "Given the instance's port is taken by a process outside DBLocal, When the user presses Start, Then the app detects it through a real bind attempt to 127.0.0.1:<port> before running the engine, and shows a 'Port is already in use' dialog with a one-click 'Move to <port+1>' action",
+            "Given the user chooses to move the port, Then the instance configuration is updated, the old allocation is released, and the start continues with no extra steps",
+            "Given the bind test succeeds, Then the test socket is closed before the engine runs, so there is no race with the engine process"
           ],
           "entities": ["PortAllocation", "Instance"],
           "endpoints": ["core: ports.probe(port)"]
@@ -303,19 +303,19 @@
         "entity": "Instance",
         "states": ["draft", "provisioning", "initializing", "stopped", "starting", "running", "stopping", "failed", "deleting"],
         "transitions": [
-          { "from": "draft", "to": "provisioning", "trigger": "user-gui: Create (runtime belum ada)" },
-          { "from": "draft", "to": "initializing", "trigger": "user-gui: Create (runtime sudah ada)" },
-          { "from": "provisioning", "to": "initializing", "trigger": "system: unduh + verifikasi OK" },
-          { "from": "provisioning", "to": "failed", "trigger": "system: unduh atau checksum gagal" },
-          { "from": "initializing", "to": "stopped", "trigger": "system: initdb / gen config OK" },
-          { "from": "initializing", "to": "failed", "trigger": "system: initdb gagal" },
+          { "from": "draft", "to": "provisioning", "trigger": "user-gui: Create (runtime missing)" },
+          { "from": "draft", "to": "initializing", "trigger": "user-gui: Create (runtime present)" },
+          { "from": "provisioning", "to": "initializing", "trigger": "system: download + verification OK" },
+          { "from": "provisioning", "to": "failed", "trigger": "system: download or checksum failed" },
+          { "from": "initializing", "to": "stopped", "trigger": "system: initdb / config generation OK" },
+          { "from": "initializing", "to": "failed", "trigger": "system: initdb failed" },
           { "from": "stopped", "to": "starting", "trigger": "user-gui | user-cli: Start" },
-          { "from": "starting", "to": "running", "trigger": "system: health check protokol lulus" },
-          { "from": "starting", "to": "failed", "trigger": "system: port bentrok / proses mati / timeout (30s; Valkey 10s)" },
+          { "from": "starting", "to": "running", "trigger": "system: protocol health check passed" },
+          { "from": "starting", "to": "failed", "trigger": "system: port conflict / process died / timeout (30s; Valkey 10s)" },
           { "from": "running", "to": "stopping", "trigger": "user-gui | user-cli: Stop" },
-          { "from": "running", "to": "failed", "trigger": "engine-process: mati tanpa diminta" },
-          { "from": "stopping", "to": "stopped", "trigger": "system: shutdown bersih" },
-          { "from": "stopping", "to": "failed", "trigger": "system: timeout 20s, perlu kill paksa" },
+          { "from": "running", "to": "failed", "trigger": "engine-process: died unrequested" },
+          { "from": "stopping", "to": "stopped", "trigger": "system: clean shutdown" },
+          { "from": "stopping", "to": "failed", "trigger": "system: 20s timeout, forced kill needed" },
           { "from": "failed", "to": "starting", "trigger": "user-gui: Retry" },
           { "from": "stopped", "to": "deleting", "trigger": "user-gui | user-cli: Delete" },
           { "from": "failed", "to": "deleting", "trigger": "user-gui | user-cli: Delete" }
@@ -324,25 +324,25 @@
       "subFeatures": [
         {
           "id": "F-INS-01",
-          "name": "Buat instance",
+          "name": "Create an instance",
           "priority": "must",
           "acceptanceCriteria": [
-            "Given user memilih engine + versi dan menekan Create, When runtime yang dibutuhkan sudah terpasang, Then instance tercipta dengan status stopped dalam < 10 detik tanpa pertanyaan tambahan selain nama (terisi default)",
-            "Given runtime belum terpasang, Then alur berlanjut otomatis ke F-RTM dengan progres terlihat, lalu kembali ke inisialisasi tanpa interaksi user",
-            "Given nama instance sudah dipakai, Then form menolak dengan saran nama alternatif"
+            "Given the user picks an engine + version and presses Create, When the required runtime is already installed, Then the instance is created in status stopped in < 10 seconds with no question beyond the name (pre-filled with a default)",
+            "Given the runtime is not installed, Then the flow continues automatically to F-RTM with visible progress, then returns to initialization without user interaction",
+            "Given the instance name is taken, Then the form refuses and suggests an alternative name"
           ],
           "entities": ["Instance", "Runtime", "PortAllocation", "CredentialRef"],
           "endpoints": ["core: instance.create(spec)"]
         },
         {
           "id": "F-INS-02",
-          "name": "Inisialisasi data directory",
+          "name": "Initialize the data directory",
           "priority": "must",
           "acceptanceCriteria": [
-            "Given instance PostgreSQL baru, When inisialisasi berjalan, Then initdb dipanggil dengan encoding UTF-8, locale C.UTF-8, dan metode autentikasi sesuai mode auth (scram-sha-256 atau trust)",
-            "Given instance Valkey baru, Then valkey.conf dibuat berisi bind 127.0.0.1, port, dir, dan requirepass bila mode auth berpassword",
-            "Given inisialisasi gagal, Then direktori data dibersihkan seluruhnya dan output mentah tool engine ditampilkan di panel log, bukan diringkas menjadi 'terjadi kesalahan'",
-            "Given platform mana pun, Then semua engine dikonfigurasi hanya mendengarkan 127.0.0.1 dan ::1, tidak pernah 0.0.0.0"
+            "Given a new PostgreSQL instance, When initialization runs, Then initdb is called with UTF-8 encoding, C.UTF-8 locale, and the authentication method matching the auth mode (scram-sha-256 or trust)",
+            "Given a new Valkey instance, Then valkey.conf is written with bind 127.0.0.1, port, dir, and requirepass when the auth mode has a password",
+            "Given initialization fails, Then the data directory is cleaned up entirely and the raw engine tool output is shown in the log panel, not summarized as 'an error occurred'",
+            "Given any platform, Then every engine is configured to listen on 127.0.0.1 and ::1 only, never 0.0.0.0"
           ],
           "entities": ["Instance", "Runtime"],
           "endpoints": ["core: EngineAdapter::initialize"]
@@ -352,35 +352,35 @@
           "name": "Start / Stop",
           "priority": "must",
           "acceptanceCriteria": [
-            "Given instance stopped, When user menekan Start, Then uji bind F-PRT-02 berjalan, engine di-spawn detached, dan status berubah ke running setelah health check lulus",
-            "Given instance running dan user keluar dari app sepenuhnya, When app dibuka lagi, Then instance masih running dan masih bisa dikendalikan",
-            "Given instance running, When user menekan Stop, Then shutdown bersih dipanggil dan status menjadi stopped dalam < 20 detik; bila lewat, kill paksa dijalankan dan dicatat",
-            "Given proses engine mati sendiri, When app mendeteksinya (poll <= 2 detik), Then status menjadi failed dan 20 baris log terakhir ditampilkan tanpa diminta"
+            "Given a stopped instance, When the user presses Start, Then the F-PRT-02 bind test runs, the engine is spawned detached, and the status becomes running after the health check passes",
+            "Given a running instance and the user quits the app fully, When the app is opened again, Then the instance is still running and still controllable",
+            "Given a running instance, When the user presses Stop, Then clean shutdown is called and the status becomes stopped in < 20 seconds; past that, a forced kill runs and is recorded",
+            "Given the engine process dies on its own, When the app detects it (poll <= 2 seconds), Then the status becomes failed and the last 20 log lines are shown without being asked"
           ],
           "entities": ["Instance", "PortAllocation"],
           "endpoints": ["core: instance.start(id)", "core: instance.stop(id)"]
         },
         {
           "id": "F-INS-04",
-          "name": "Rekonsiliasi proses yatim",
+          "name": "Reconcile orphaned processes",
           "priority": "must",
           "acceptanceCriteria": [
-            "Given app dijalankan dan ada pidfile dari sesi sebelumnya, When rekonsiliasi berjalan, Then setiap PID diverifikasi benar proses engine milik kita dengan mencocokkan nama executable dan waktu mulai proses terhadap yang tercatat",
-            "Given PID sudah dipakai ulang oleh proses lain yang tidak cocok, Then pidfile dianggap basi, dihapus, dan instance ditandai stopped - app tidak pernah mengirim sinyal ke proses asing",
-            "Given rekonsiliasi untuk 20 instance, Then seluruhnya selesai < 2 detik dan tidak memblokir render jendela"
+            "Given the app starts and a pidfile exists from a previous session, When reconciliation runs, Then each PID is verified as really our engine process by matching the executable name and process start time against the recorded values",
+            "Given a PID has been reused by another process that does not match, Then the pidfile is treated as stale, deleted, and the instance marked stopped - the app never signals a foreign process",
+            "Given reconciliation for 20 instances, Then it all finishes in < 2 seconds and does not block the window render"
           ],
           "entities": ["Instance"],
           "endpoints": ["core: instance.reconcile_all()"]
         },
         {
           "id": "F-INS-05",
-          "name": "Hapus instance",
+          "name": "Delete an instance",
           "priority": "must",
           "acceptanceCriteria": [
-            "Given user menekan Delete, Then dialog menampilkan ukuran data dir dan dua aksi: 'Hapus instance & data' dan 'Hapus instance, simpan data'",
-            "Given user memilih 'Hapus instance & data', Then tombol konfirmasi baru aktif setelah user mengetik nama instance dengan tepat",
-            "Given user memilih 'Hapus instance, simpan data', Then direktori data dipindah ke ~/.dblocal/archive/<nama>-<YYYYMMDD-HHMM>/, entri instance dihapus, alokasi port dilepas, dan kredensial di keychain dihapus",
-            "Given instance sedang running, Then Delete menghentikannya lebih dulu dan gagal bersih bila penghentian gagal"
+            "Given the user presses Delete, Then the dialog shows the data dir size and two actions: 'Delete instance and data' and 'Delete instance, keep data'",
+            "Given the user chooses 'Delete instance and data', Then the confirm button becomes enabled only after the user types the instance name exactly",
+            "Given the user chooses 'Delete instance, keep data', Then the data directory is moved to ~/.dblocal/archive/<name>-<YYYYMMDD-HHMM>/, the instance entry is deleted, the port allocation is released, and the keychain credential is deleted",
+            "Given the instance is running, Then Delete stops it first and fails cleanly if the stop fails"
           ],
           "entities": ["Instance", "ArchivedData", "PortAllocation", "CredentialRef"],
           "endpoints": ["core: instance.delete(id, DeleteMode)"]
@@ -399,37 +399,37 @@
       "subFeatures": [
         {
           "id": "F-CRD-01",
-          "name": "Generate & simpan kredensial",
+          "name": "Generate & store credentials",
           "priority": "must",
           "acceptanceCriteria": [
-            "Given instance baru dengan mode auth berpassword, When dibuat, Then password 24 karakter dihasilkan dari CSPRNG OS dan disimpan di keychain dengan kunci dblocal:<instance-id>",
-            "Given keychain tidak tersedia, Then fallback file 0600 dipakai dan UI menampilkan catatan 'Disimpan di file, bukan keychain' beserta path-nya",
-            "Given instance dihapus, Then entri keychain/file-nya ikut terhapus"
+            "Given a new instance with the password auth mode, When it is created, Then a 24-character password is generated from the OS CSPRNG and stored in the keychain under the key dblocal:<instance-id>",
+            "Given the keychain is unavailable, Then the 0600 file fallback is used and the UI shows the note 'Stored in a file, not the keychain' with its path",
+            "Given an instance is deleted, Then its keychain/file entry is deleted too"
           ],
           "entities": ["CredentialRef", "Instance"],
           "endpoints": []
         },
         {
           "id": "F-CRD-02",
-          "name": "Salin connection URI",
+          "name": "Copy the connection URI",
           "priority": "must",
           "acceptanceCriteria": [
-            "Given instance running, When user menekan Copy URI, Then clipboard berisi URI lengkap dan valid (mis. postgresql://postgres:<password>@127.0.0.1:5432/postgres) dan toast konfirmasi muncul",
-            "Given instance Valkey, Then URI berbentuk redis://default:<password>@127.0.0.1:6379",
-            "Given user menekan Copy .env, Then clipboard berisi blok variabel lingkungan bergaya framework (DB_CONNECTION, DB_HOST, DB_PORT, DB_DATABASE, DB_USERNAME, DB_PASSWORD)",
-            "Given password berisi karakter yang perlu di-escape pada URI, Then password di-percent-encode dengan benar sehingga URI selalu bisa di-parse"
+            "Given a running instance, When the user presses Copy URI, Then the clipboard holds a complete, valid URI (e.g. postgresql://postgres:<password>@127.0.0.1:5432/postgres) and a confirmation toast appears",
+            "Given a Valkey instance, Then the URI is redis://default:<password>@127.0.0.1:6379",
+            "Given the user presses Copy .env, Then the clipboard holds a framework-style environment variable block (DB_CONNECTION, DB_HOST, DB_PORT, DB_DATABASE, DB_USERNAME, DB_PASSWORD)",
+            "Given the password contains characters that need escaping in a URI, Then the password is percent-encoded correctly so the URI can always be parsed"
           ],
           "entities": ["Instance", "CredentialRef"],
           "endpoints": ["core: creds.uri(id, UriFormat)"]
         },
         {
           "id": "F-CRD-03",
-          "name": "Mode tanpa password",
+          "name": "No-password mode",
           "priority": "should",
           "acceptanceCriteria": [
-            "Given user mencentang 'Izinkan koneksi tanpa password' saat create, Then dialog peringatan menjelaskan bahwa proses dan user lain di mesin ini bisa terhubung tanpa kredensial, dan user harus mengonfirmasi sekali lagi",
-            "Given mode ini aktif, Then kartu instance menampilkan badge 'No auth' permanen",
-            "Given engine Valkey dengan mode ini, Then protected-mode yes tetap dipertahankan di config"
+            "Given the user checks 'Allow connections without a password' at create time, Then a warning dialog explains that other processes and users on this machine can connect without credentials, and the user must confirm once more",
+            "Given this mode is active, Then the instance card shows a permanent 'No auth' badge",
+            "Given a Valkey engine with this mode, Then protected-mode yes is still kept in the config"
           ],
           "entities": ["Instance"],
           "endpoints": []
@@ -448,23 +448,23 @@
       "subFeatures": [
         {
           "id": "F-LOG-01",
-          "name": "Panel log per instance",
+          "name": "Per-instance log panel",
           "priority": "must",
           "acceptanceCriteria": [
-            "Given instance pernah dijalankan, When user membuka tab Logs, Then 1000 baris terakhir tampil dan log baru mengalir live selama instance running",
-            "Given file log melebihi 10 MB, Then log dirotasi (.1, .2, maksimal 3 berkas) sehingga disk tidak tumbuh tanpa batas",
-            "Given user menekan Salin log, Then 500 baris terakhir masuk clipboard untuk ditempel ke issue GitHub"
+            "Given an instance has been started, When the user opens the Logs tab, Then the last 1000 lines are shown and new lines stream live while the instance is running",
+            "Given the log file exceeds 10 MB, Then the log is rotated (.1, .2, at most 3 files) so the disk does not grow without bound",
+            "Given the user presses Copy logs, Then the last 500 lines go to the clipboard, to paste into a GitHub issue"
           ],
           "entities": ["Instance"],
           "endpoints": ["core: logs.tail(id, lines)"]
         },
         {
           "id": "F-LOG-02",
-          "name": "Diagnosa gagal start",
+          "name": "Start-failure diagnosis",
           "priority": "must",
           "acceptanceCriteria": [
-            "Given start gagal, When app menampilkan kegagalan, Then pesannya memetakan penyebab yang dikenal menjadi aksi: port dipakai -> 'Pindah port'; data dir dari versi engine berbeda -> 'Versi tidak cocok, butuh instance baru'; izin ditolak -> path yang bermasalah; biner hilang/korup -> 'Pasang ulang runtime'",
-            "Given penyebab tidak dikenali, Then app menampilkan baris log mentah terakhir yang relevan + tombol 'Laporkan issue' dengan template terisi (OS, arsitektur, versi app, engine, versi engine) tanpa password atau path home yang teridentifikasi"
+            "Given a start failed, When the app shows the failure, Then the message maps a known cause to an action: port in use -> 'Change port'; data dir from another engine version -> 'Version mismatch, a new instance is required'; permission denied -> the offending path; binary missing/corrupt -> 'Reinstall the runtime'",
+            "Given an unrecognized cause, Then the app shows the last relevant raw log line + a 'Report an issue' button with a filled-in template (OS, architecture, app version, engine, engine version) without the password or an identifying home path"
           ],
           "entities": ["Instance"],
           "endpoints": []
@@ -483,24 +483,24 @@
       "subFeatures": [
         {
           "id": "F-TRY-01",
-          "name": "Menu tray",
+          "name": "Tray menu",
           "priority": "must",
           "acceptanceCriteria": [
-            "Given app berjalan, Then ikon tray/menubar menampilkan daftar instance beserta titik status (hijau running, abu stopped, merah failed) dan memungkinkan start/stop langsung dari menu",
-            "Given sebuah instance diubah dari menu tray, Then jendela utama (bila terbuka) mencerminkan perubahan dalam <= 1 detik",
-            "Given tray tidak didukung lingkungan desktop user, Then app tetap berfungsi penuh lewat jendela dan menampilkan catatan sekali saja"
+            "Given the app is running, Then the tray/menubar icon shows the instance list with status dots (green running, grey stopped, red failed) and allows start/stop directly from the menu",
+            "Given an instance is changed from the tray menu, Then the main window (when open) reflects the change within <= 1 second",
+            "Given the tray is unsupported in the user's desktop environment, Then the app still works fully through the window and shows the note once"
           ],
           "entities": ["Instance"],
           "endpoints": []
         },
         {
           "id": "F-TRY-02",
-          "name": "Perilaku close & quit",
+          "name": "Close & quit behavior",
           "priority": "must",
           "acceptanceCriteria": [
-            "Given user menutup jendela, Then app tetap hidup di tray dan instance tetap berjalan",
-            "Given user memilih Quit sementara masih ada instance running, Then dialog menawarkan 'Biarkan tetap berjalan' (default) atau 'Hentikan semua lalu keluar'",
-            "Given user memilih 'Biarkan tetap berjalan', Then proses engine tetap hidup setelah app berhenti dan F-INS-04 menyambungkannya kembali saat app dibuka lagi"
+            "Given the user closes the window, Then the app stays alive in the tray and instances keep running",
+            "Given the user chooses Quit while instances are running, Then the dialog offers 'Leave them running' (default) or 'Stop all, then quit'",
+            "Given the user chooses 'Leave them running', Then the engine processes stay alive after the app exits and F-INS-04 reconnects them when the app is opened again"
           ],
           "entities": ["Instance"],
           "endpoints": []
@@ -519,51 +519,51 @@
       "subFeatures": [
         {
           "id": "F-PKG-01",
-          "name": "Matrix build & checksum",
+          "name": "Build matrix & checksum",
           "phase": 1,
           "priority": "must",
           "acceptanceCriteria": [
-            "Given sebuah tag v* didorong, Then CI menghasilkan artefak untuk linux-x86_64, linux-aarch64, macos-universal, windows-x86_64 beserta checksums.txt",
-            "Given artefak melebihi batas ukuran 60 MB, Then build gagal (gate ukuran), bukan lolos diam-diam"
+            "Given a v* tag is pushed, Then CI produces artifacts for linux-x86_64, linux-aarch64, macos-universal, windows-x86_64 plus checksums.txt",
+            "Given an artifact exceeds the 60 MB size limit, Then the build fails (size gate) rather than passing silently"
           ],
           "entities": [],
           "endpoints": ["ci: .github/workflows/release.yml"]
         },
         {
           "id": "F-PKG-02",
-          "name": "Artefak portabel (AppImage, tar.gz, dmg, zip)",
+          "name": "Portable artifacts (AppImage, tar.gz, dmg, zip)",
           "phase": 1,
           "priority": "must",
           "acceptanceCriteria": [
-            "Given rilis Phase 1, Then tersedia .AppImage dan .tar.gz (Linux), .dmg ter-notarisasi (macOS universal), dan .zip (Windows)",
-            "Given AppImage dijalankan di Fedora dan Ubuntu LTS terbaru, Then app terbuka tanpa dependensi tambahan selain driver Vulkan sistem",
-            "Given .dmg diunduh lewat browser di macOS, Then app terbuka tanpa perlu perintah terminal apa pun"
+            "Given a Phase 1 release, Then .AppImage and .tar.gz (Linux), a notarized .dmg (macOS universal), and .zip (Windows) are available",
+            "Given the AppImage runs on Fedora and the latest Ubuntu LTS, Then the app opens with no extra dependencies beyond the system Vulkan driver",
+            "Given the .dmg is downloaded through a browser on macOS, Then the app opens without any terminal command"
           ],
           "entities": [],
           "endpoints": []
         },
         {
           "id": "F-PKG-03",
-          "name": "install.sh untuk curl",
+          "name": "install.sh for curl",
           "phase": 1,
           "priority": "must",
           "acceptanceCriteria": [
-            "Given curl -fsSL <url>/install.sh | sh dijalankan di Linux atau macOS, Then skrip mendeteksi OS+arch, mengunduh artefak yang tepat, memverifikasi checksum, memasang ke ~/.local/bin (atau /usr/local/bin bila dapat ditulis), dan mencetak langkah berikutnya",
-            "Given arsitektur tidak didukung, Then skrip berhenti dengan pesan jelas dan tidak memasang apa pun",
-            "Given skrip dijalankan ulang, Then ia melakukan upgrade in-place secara idempoten",
-            "Given CI, Then skrip lulus shellcheck dan tidak pernah memanggil sudo tanpa flag eksplisit"
+            "Given curl -fsSL <url>/install.sh | sh runs on Linux or macOS, Then the script detects OS+arch, downloads the right artifact, verifies the checksum, installs to ~/.local/bin (or /usr/local/bin when writable), and prints the next step",
+            "Given an unsupported architecture, Then the script stops with a clear message and installs nothing",
+            "Given the script is run again, Then it performs an idempotent in-place upgrade",
+            "Given CI, Then the script passes shellcheck and never calls sudo without an explicit flag"
           ],
           "entities": [],
           "endpoints": []
         },
         {
           "id": "F-PKG-04",
-          "name": "Paket native (.deb, .rpm, .msi)",
+          "name": "Native packages (.deb, .rpm, .msi)",
           "phase": 2,
           "priority": "must",
           "acceptanceCriteria": [
-            "Given rilis Phase 2, Then tersedia .deb (Debian/Ubuntu), .rpm (Fedora/RHEL), dan .msi (Windows)",
-            "Given .deb/.rpm dipasang lalu dihapus, Then tidak ada berkas tertinggal di luar ~/.dblocal, dan fakta bahwa data user dipertahankan disebut saat uninstall"
+            "Given a Phase 2 release, Then .deb (Debian/Ubuntu), .rpm (Fedora/RHEL), and .msi (Windows) are available",
+            "Given .deb/.rpm is installed and then removed, Then no files are left behind outside ~/.dblocal, and the fact that user data is kept is stated at uninstall time"
           ],
           "entities": [],
           "endpoints": []
@@ -574,10 +574,10 @@
           "phase": 2,
           "priority": "should",
           "acceptanceCriteria": [
-            "Given versi lebih baru tersedia di GitHub Releases, When user membuka Settings -> Updates, Then versi baru + catatan rilis ditampilkan dengan tombol pasang",
-            "Given app dipasang lewat package manager OS, Then self-update dinonaktifkan dan app mengarahkan user ke package manager-nya",
-            "Given platform Windows, Then update memakai proses helper yang mengganti binary setelah app keluar",
-            "Given paket update, Then checksum diverifikasi sebelum dipasang"
+            "Given a newer version is available on GitHub Releases, When the user opens Settings -> Updates, Then the new version + release notes are shown with an install button",
+            "Given the app was installed through the OS package manager, Then self-update is disabled and the app points the user to their package manager",
+            "Given the Windows platform, Then the update uses a helper process that replaces the binary after the app exits",
+            "Given the update package, Then the checksum is verified before installing"
           ],
           "entities": [],
           "endpoints": []
@@ -596,23 +596,23 @@
       "subFeatures": [
         {
           "id": "F-ENG-01",
-          "name": "Adapter MySQL",
+          "name": "MySQL adapter",
           "priority": "must",
           "acceptanceCriteria": [
-            "Given artefak MySQL dari katalog, When instance dibuat, Then inisialisasi memakai mysqld --initialize-insecure, lalu password superuser di-set dan my.cnf ditulis dengan bind-address=127.0.0.1, port, dan datadir instance",
-            "Given instance running, Then health check memakai handshake protokol MySQL, bukan sekadar cek proses",
-            "Given unduhan 260 MB, Then progres dan ETA ditampilkan sejak byte pertama dan unduhan dapat dilanjutkan setelah putus"
+            "Given a MySQL artifact from the catalog, When an instance is created, Then initialization uses mysqld --initialize-insecure, then the superuser password is set and my.cnf is written with bind-address=127.0.0.1, port, and the instance datadir",
+            "Given a running instance, Then the health check uses the MySQL protocol handshake, not just a process check",
+            "Given a 260 MB download, Then progress and ETA are shown from the first byte and the download can be resumed after a drop"
           ],
           "entities": ["Instance", "Runtime"],
           "endpoints": ["core: EngineAdapter(mysql)"]
         },
         {
           "id": "F-ENG-02",
-          "name": "Adapter MariaDB",
+          "name": "MariaDB adapter",
           "priority": "must",
           "acceptanceCriteria": [
-            "Given artefak MariaDB dari downloads.mariadb.org/rest-api, When instance dibuat, Then inisialisasi memakai mariadb-install-db dengan --auth-root-authentication-method=normal",
-            "Given MariaDB dan MySQL sama-sama terpasang, Then keduanya tampil sebagai engine berbeda dengan port kanonik berbeda (3306 vs 3307) dan tidak pernah berbagi data dir"
+            "Given a MariaDB artifact from downloads.mariadb.org/rest-api, When an instance is created, Then initialization uses mariadb-install-db with --auth-root-authentication-method=normal",
+            "Given MariaDB and MySQL are both installed, Then they appear as different engines with different canonical ports (3306 vs 3307) and never share a data dir"
           ],
           "entities": ["Instance", "Runtime"],
           "endpoints": ["core: EngineAdapter(mariadb)"]
@@ -631,35 +631,35 @@
       "subFeatures": [
         {
           "id": "F-DBU-01",
-          "name": "Kelola database",
+          "name": "Manage databases",
           "priority": "must",
           "acceptanceCriteria": [
-            "Given instance running, When user membuka tab Databases, Then daftar database beserta ukurannya tampil",
-            "Given user membuat database baru dengan nama valid, Then database tercipta dengan encoding UTF-8 (utf8mb4_unicode_ci untuk keluarga MySQL) dan langsung muncul di daftar",
-            "Given user menghapus database, Then konfirmasi mengharuskan pengetikan nama database",
-            "Given nama mengandung karakter di luar [A-Za-z0-9_], Then form menolaknya sebelum perintah apa pun dikirim ke engine"
+            "Given a running instance, When the user opens the Databases tab, Then the database list with sizes is shown",
+            "Given the user creates a new database with a valid name, Then the database is created with UTF-8 encoding (utf8mb4_unicode_ci for the MySQL family) and appears in the list immediately",
+            "Given the user deletes a database, Then the confirmation requires typing the database name",
+            "Given a name contains characters outside [A-Za-z0-9_], Then the form rejects it before any command is sent to the engine"
           ],
           "entities": ["Instance"],
           "endpoints": ["core: db.list/create/drop(instance_id)"]
         },
         {
           "id": "F-DBU-02",
-          "name": "Kelola user & hak akses",
+          "name": "Manage users & privileges",
           "priority": "should",
           "acceptanceCriteria": [
-            "Given user membuat database user baru, Then ia dapat memilih database dan tingkat hak (read-only atau read-write), dan perintah GRANT yang sesuai dijalankan",
-            "Given user dibuat, Then password-nya ditampilkan sekali dan disimpan di keychain seperti kredensial superuser"
+            "Given the user creates a new database user, Then they can choose the database and the privilege level (read-only or read-write), and the matching GRANT command is run",
+            "Given the user is created, Then its password is shown once and stored in the keychain like the superuser credential"
           ],
           "entities": ["Instance", "CredentialRef"],
           "endpoints": ["core: db.create_user(instance_id)"]
         },
         {
           "id": "F-DBU-03",
-          "name": "Reset password superuser",
+          "name": "Reset the superuser password",
           "priority": "should",
           "acceptanceCriteria": [
-            "Given user menekan Reset password, Then password baru dihasilkan, diterapkan ke engine, disimpan ke keychain, dan URI yang ditampilkan ikut diperbarui",
-            "Given reset gagal di tengah, Then password lama tetap berlaku dan keychain tidak diubah"
+            "Given the user presses Reset password, Then a new password is generated, applied to the engine, stored in the keychain, and the displayed URI is updated with it",
+            "Given the reset fails midway, Then the old password stays in effect and the keychain is unchanged"
           ],
           "entities": ["Instance", "CredentialRef"],
           "endpoints": []
@@ -678,22 +678,22 @@
       "subFeatures": [
         {
           "id": "F-OPN-01",
-          "name": "Deteksi client terpasang",
+          "name": "Detect installed clients",
           "priority": "should",
           "acceptanceCriteria": [
-            "Given mesin memiliki DBDelve, TablePlus, DBeaver, atau CLI (psql, mysql, valkey-cli/redis-cli), When user membuka menu 'Open in...', Then hanya client yang benar-benar terdeteksi yang ditampilkan",
-            "Given tidak ada satu pun terdeteksi, Then menu menampilkan 'Salin URI' sebagai gantinya, bukan daftar kosong"
+            "Given the machine has DBDelve, TablePlus, DBeaver, or a CLI (psql, mysql, valkey-cli/redis-cli), When the user opens the 'Open in...' menu, Then only clients actually detected are shown",
+            "Given none is detected, Then the menu shows 'Copy URI' instead, not an empty list"
           ],
           "entities": ["Instance"],
           "endpoints": []
         },
         {
           "id": "F-OPN-02",
-          "name": "Buka dengan koneksi instance",
+          "name": "Open with the instance connection",
           "priority": "should",
           "acceptanceCriteria": [
-            "Given user memilih sebuah client GUI, Then client terbuka langsung pada koneksi instance tersebut (URL scheme bila tersedia, atau argumen baris perintah)",
-            "Given user memilih client CLI, Then terminal OS terbuka dengan perintah siap jalan, dan password diberikan lewat variabel lingkungan (PGPASSWORD, MYSQL_PWD), tidak sebagai argumen yang terlihat di daftar proses"
+            "Given the user picks a GUI client, Then the client opens directly on that instance's connection (URL scheme when available, or command-line arguments)",
+            "Given the user picks a CLI client, Then the OS terminal opens with a ready-to-run command, and the password is supplied through environment variables (PGPASSWORD, MYSQL_PWD), not as an argument visible in the process list"
           ],
           "entities": ["Instance", "CredentialRef"],
           "endpoints": []
@@ -712,23 +712,23 @@
       "subFeatures": [
         {
           "id": "F-CLI-01",
-          "name": "Inspeksi (list, status)",
+          "name": "Inspection (list, status)",
           "priority": "should",
           "acceptanceCriteria": [
-            "Given beberapa instance ada, When dblocal list dijalankan, Then tabel nama/engine/versi/port/status tercetak; --json menghasilkan JSON yang bisa dipipe",
-            "Given dblocal status <nama>, Then status instance dicetak dengan exit code 0 bila running dan non-nol bila tidak"
+            "Given several instances exist, When dblocal list runs, Then a name/engine/version/port/status table is printed; --json produces pipeable JSON",
+            "Given dblocal status <name>, Then the instance status is printed with exit code 0 when running and non-zero otherwise"
           ],
           "entities": ["Instance"],
           "endpoints": ["cli: dblocal list [--json]", "cli: dblocal status <name>"]
         },
         {
           "id": "F-CLI-02",
-          "name": "Kontrol (start, stop)",
+          "name": "Control (start, stop)",
           "priority": "should",
           "acceptanceCriteria": [
-            "Given dblocal start <nama>, Then perintah memblokir sampai health check lulus atau timeout, lalu keluar dengan kode yang sesuai",
-            "Given GUI sedang terbuka saat CLI mengubah state, Then GUI mencerminkan perubahan dalam <= 2 detik",
-            "Given dua proses mencoba start instance yang sama bersamaan, Then satu menang dan yang lain keluar dengan pesan 'sudah berjalan', dijamin oleh transaksi SQLite"
+            "Given dblocal start <name>, Then the command blocks until the health check passes or times out, then exits with the matching code",
+            "Given the GUI is open while the CLI changes state, Then the GUI reflects the change within <= 2 seconds",
+            "Given two processes try to start the same instance at once, Then one wins and the other exits with the message 'already running', guaranteed by the SQLite transaction"
           ],
           "entities": ["Instance"],
           "endpoints": ["cli: dblocal start <name>", "cli: dblocal stop <name>"]
@@ -738,9 +738,9 @@
           "name": "Lifecycle & URI",
           "priority": "should",
           "acceptanceCriteria": [
-            "Given dblocal uri <nama>, Then connection URI tercetak ke stdout tanpa hiasan sehingga bisa langsung di-pipe ke .env",
-            "Given dblocal create --engine postgresql --version 18.7 --name app-dev, Then instance dibuat non-interaktif, mengunduh runtime bila perlu, dan mencetak URI saat selesai",
-            "Given dblocal delete <nama>, Then penghapusan menolak berjalan tanpa --yes di sesi non-interaktif, dan default-nya mengarsipkan data bukan menghapusnya"
+            "Given dblocal uri <name>, Then the connection URI is printed to stdout with no decoration so it can be piped straight into .env",
+            "Given dblocal create --engine postgresql --version 18.7 --name app-dev, Then the instance is created non-interactively, downloading the runtime when needed, and the URI is printed when done",
+            "Given dblocal delete <name>, Then the delete refuses to run without --yes in a non-interactive session, and by default archives the data rather than deleting it"
           ],
           "entities": ["Instance", "ArchivedData"],
           "endpoints": ["cli: dblocal uri <name> [--env]", "cli: dblocal create", "cli: dblocal delete <name> [--yes] [--purge]"]
@@ -759,22 +759,22 @@
       "subFeatures": [
         {
           "id": "F-CFG-01",
-          "name": "Form setting penting",
+          "name": "Form for key settings",
           "priority": "should",
           "acceptanceCriteria": [
-            "Given instance PostgreSQL, When user membuka tab Config, Then form menampilkan subset bernilai tinggi (port, max_connections, shared_buffers, work_mem, timezone, metode autentikasi) beserta nilai saat ini dan nilai default",
-            "Given user menyimpan perubahan, Then app memberi tahu bahwa restart diperlukan dan menawarkan melakukannya sekarang",
-            "Given perubahan membuat engine gagal start, Then app menawarkan 'Kembalikan konfigurasi sebelumnya' dari salinan yang disimpan sebelum perubahan"
+            "Given a PostgreSQL instance, When the user opens the Config tab, Then the form shows the high-value subset (port, max_connections, shared_buffers, work_mem, timezone, authentication method) with current and default values",
+            "Given the user saves changes, Then the app states that a restart is required and offers to do it now",
+            "Given a change makes the engine fail to start, Then the app offers 'Restore the previous configuration' from a copy saved before the change"
           ],
           "entities": ["Instance"],
           "endpoints": ["core: config.read/write(instance_id)"]
         },
         {
           "id": "F-CFG-02",
-          "name": "Edit berkas mentah",
+          "name": "Edit the raw file",
           "priority": "could",
           "acceptanceCriteria": [
-            "Given user memilih 'Buka file konfigurasi', Then file dibuka di editor teks default OS, dan komentar serta baris yang tidak dikenal app tidak pernah ditulis ulang atau dihapus oleh app"
+            "Given the user chooses 'Open config file', Then the file opens in the OS default text editor, and comments and lines the app does not recognize are never rewritten or deleted by the app"
           ],
           "entities": ["Instance"],
           "endpoints": []
@@ -793,23 +793,23 @@
       "subFeatures": [
         {
           "id": "F-AUT-01",
-          "name": "Autostart aplikasi saat login",
+          "name": "App autostart at login",
           "priority": "should",
           "acceptanceCriteria": [
-            "Given user mengaktifkan 'Jalankan saat login', Then login item terdaftar lewat mekanisme user-level yang sesuai (systemd --user, LaunchAgent, Registry Run) tanpa sudo",
-            "Given opsi dimatikan, Then entri itu dihapus sepenuhnya",
-            "Given app dijalankan oleh login item, Then ia terbuka langsung ke tray tanpa memunculkan jendela"
+            "Given the user enables 'Run at login', Then a login item is registered through the appropriate user-level mechanism (systemd --user, LaunchAgent, Registry Run) without sudo",
+            "Given the option is turned off, Then that entry is removed entirely",
+            "Given the app is started by the login item, Then it opens straight to the tray without showing a window"
           ],
           "entities": ["Setting"],
           "endpoints": ["core: autostart.set(enabled)"]
         },
         {
           "id": "F-AUT-02",
-          "name": "Autostart instance terpilih",
+          "name": "Autostart selected instances",
           "priority": "should",
           "acceptanceCriteria": [
-            "Given sebuah instance ditandai autostart, When app dijalankan saat login, Then instance itu dinyalakan dan hasilnya terlihat di tray",
-            "Given autostart sebuah instance gagal, Then kegagalan tidak memblokir instance lain dan tidak memunculkan dialog modal; status failed cukup ditampilkan di tray dan jendela"
+            "Given an instance is flagged for autostart, When the app starts at login, Then that instance is started and the result is visible in the tray",
+            "Given one instance's autostart fails, Then the failure does not block other instances and shows no modal dialog; a failed status in the tray and window is enough"
           ],
           "entities": ["Instance"],
           "endpoints": []
@@ -828,22 +828,22 @@
       "subFeatures": [
         {
           "id": "F-PLH-01",
-          "name": "Navigasi keyboard penuh",
+          "name": "Full keyboard navigation",
           "priority": "should",
           "acceptanceCriteria": [
-            "Given hanya keyboard, Then seluruh alur sesi pertama (pilih engine -> create -> start -> copy URI) dapat diselesaikan, dengan fokus yang selalu terlihat",
-            "Given command palette (Ctrl/Cmd+K), Then user dapat mencari instance dan menjalankan start/stop/copy URI"
+            "Given only a keyboard, Then the whole first-session flow (pick engine -> create -> start -> copy URI) can be completed, with focus always visible",
+            "Given the command palette (Ctrl/Cmd+K), Then the user can search instances and run start/stop/copy URI"
           ],
           "entities": [],
           "endpoints": []
         },
         {
           "id": "F-PLH-02",
-          "name": "Tema & kontras",
+          "name": "Theme & contrast",
           "priority": "should",
           "acceptanceCriteria": [
-            "Given tema sistem terang atau gelap, Then app mengikutinya dan seluruh teks memenuhi rasio kontras minimal 4,5:1",
-            "Given status instance, Then status tidak pernah disampaikan hanya lewat warna (selalu ada label teks atau ikon pendamping)"
+            "Given a light or dark system theme, Then the app follows it and all text meets a minimum contrast ratio of 4.5:1",
+            "Given an instance status, Then status is never conveyed by colour alone (there is always a text label or accompanying icon)"
           ],
           "entities": [],
           "endpoints": []
@@ -852,83 +852,83 @@
     }
   ],
   "entities": [
-    { "name": "Engine", "keyFields": ["key", "display_name", "family", "canonical_port"], "owner": "konstanta app", "lifecycle": "statik, berubah lewat rilis app" },
-    { "name": "EngineVersion", "keyFields": ["engine_key", "version", "major_line", "release_date", "eol"], "owner": "job CI katalog (F-CAT-03)", "lifecycle": "di-refresh dari katalog; entri lama disimpan bila masih dipakai runtime" },
-    { "name": "Artifact", "keyFields": ["id", "engine_key", "version", "os", "arch", "url", "sha256", "size_bytes", "format", "strip_prefix", "min_glibc"], "owner": "job CI katalog", "lifecycle": "mengikuti EngineVersion" },
-    { "name": "Runtime", "keyFields": ["id", "engine_key", "version", "arch", "path", "size_bytes", "installed_at", "state"], "owner": "F-RTM", "lifecycle": "hard delete lewat F-RTM-04, hanya bila tidak dirujuk" },
-    { "name": "Instance", "keyFields": ["id", "name", "engine_key", "runtime_id", "port", "data_dir", "auth_mode", "superuser", "status", "pid", "process_started_at", "process_exe", "autostart", "created_at"], "owner": "F-INS", "lifecycle": "hard delete dengan opsi mengarsipkan data dir" },
-    { "name": "PortAllocation", "keyFields": ["port (unik)", "instance_id", "reserved_at"], "owner": "F-PRT", "lifecycle": "dilepas saat instance dihapus atau port diubah" },
-    { "name": "CredentialRef", "keyFields": ["instance_id", "backend", "key_ref", "username"], "owner": "F-CRD", "lifecycle": "dihapus bersama instance; rahasia ada di keychain, bukan di DB" },
-    { "name": "DownloadJob", "keyFields": ["id", "artifact_id", "bytes_total", "bytes_done", "state", "error"], "owner": "F-RTM", "lifecycle": "dibersihkan 7 hari setelah selesai" },
-    { "name": "ArchivedData", "keyFields": ["id", "instance_name", "engine_key", "version", "path", "size_bytes", "archived_at"], "owner": "F-INS-05", "lifecycle": "hanya dihapus manual lewat Settings -> Storage" },
-    { "name": "CatalogSnapshot", "keyFields": ["id", "fetched_at", "etag", "source_url", "schema_version"], "owner": "F-CAT-01", "lifecycle": "satu baris aktif, diganti saat refresh" },
-    { "name": "Setting", "keyFields": ["key", "value"], "owner": "GUI Settings", "lifecycle": "persisten" }
+    { "name": "Engine", "keyFields": ["key", "display_name", "family", "canonical_port"], "owner": "app constant", "lifecycle": "static, changes with an app release" },
+    { "name": "EngineVersion", "keyFields": ["engine_key", "version", "major_line", "release_date", "eol"], "owner": "catalog CI job (F-CAT-03)", "lifecycle": "refreshed from the catalog; old entries kept while a runtime still uses them" },
+    { "name": "Artifact", "keyFields": ["id", "engine_key", "version", "os", "arch", "url", "sha256", "size_bytes", "format", "strip_prefix", "min_glibc"], "owner": "catalog CI job", "lifecycle": "follows EngineVersion" },
+    { "name": "Runtime", "keyFields": ["id", "engine_key", "version", "arch", "path", "size_bytes", "installed_at", "state"], "owner": "F-RTM", "lifecycle": "hard delete through F-RTM-04, only when unreferenced" },
+    { "name": "Instance", "keyFields": ["id", "name", "engine_key", "runtime_id", "port", "data_dir", "auth_mode", "superuser", "status", "pid", "process_started_at", "process_exe", "autostart", "created_at"], "owner": "F-INS", "lifecycle": "hard delete with the option to archive the data dir" },
+    { "name": "PortAllocation", "keyFields": ["port (unique)", "instance_id", "reserved_at"], "owner": "F-PRT", "lifecycle": "released when an instance is deleted or its port changes" },
+    { "name": "CredentialRef", "keyFields": ["instance_id", "backend", "key_ref", "username"], "owner": "F-CRD", "lifecycle": "deleted with the instance; the secret lives in the keychain, not the DB" },
+    { "name": "DownloadJob", "keyFields": ["id", "artifact_id", "bytes_total", "bytes_done", "state", "error"], "owner": "F-RTM", "lifecycle": "cleaned up 7 days after finishing" },
+    { "name": "ArchivedData", "keyFields": ["id", "instance_name", "engine_key", "version", "path", "size_bytes", "archived_at"], "owner": "F-INS-05", "lifecycle": "deleted only by hand through Settings -> Storage" },
+    { "name": "CatalogSnapshot", "keyFields": ["id", "fetched_at", "etag", "source_url", "schema_version"], "owner": "F-CAT-01", "lifecycle": "one active row, replaced on refresh" },
+    { "name": "Setting", "keyFields": ["key", "value"], "owner": "GUI Settings", "lifecycle": "persistent" }
   ],
   "metrics": [
-    { "name": "TTFRI PostgreSQL", "target": "p50 < 120 s @ 20 Mbps", "verify": "E2E CI dengan bandwidth di-throttle" },
+    { "name": "TTFRI PostgreSQL", "target": "p50 < 120 s @ 20 Mbps", "verify": "E2E CI with throttled bandwidth" },
     { "name": "TTFRI MySQL", "target": "p50 < 300 s @ 20 Mbps", "verify": "E2E CI" },
-    { "name": "Cold start", "target": "p95 < 1,5 s", "verify": "benchmark CI per OS" },
-    { "name": "RSS idle", "target": "< 220 MB", "verify": "benchmark CI" },
-    { "name": "CPU idle", "target": "<= 1,5%", "verify": "benchmark CI" },
-    { "name": "Ukuran installer", "target": "< 60 MB per platform", "verify": "gate ukuran artefak di CI" },
-    { "name": "Sukses install engine", "target": "100% di 5 target OS", "verify": "job E2E per OS tiap rilis" },
+    { "name": "Cold start", "target": "p95 < 1,5 s", "verify": "CI benchmark per OS" },
+    { "name": "RSS idle", "target": "< 220 MB", "verify": "CI benchmark" },
+    { "name": "CPU idle", "target": "<= 1,5%", "verify": "CI benchmark" },
+    { "name": "Ukuran installer", "target": "< 60 MB per platform", "verify": "artifact size gate in CI" },
+    { "name": "Sukses install engine", "target": "100% on 5 OS targets", "verify": "E2E job per OS on every release" },
     { "name": "Start PostgreSQL", "target": "p95 < 5 s", "verify": "E2E" },
     { "name": "Start Valkey", "target": "p95 < 1 s", "verify": "E2E" },
-    { "name": "Rasio issue install-failure", "target": "< 2% dari unduhan rilis", "verify": "proksi publik, dihitung manual per rilis" }
+    { "name": "Rasio issue install-failure", "target": "< 2% of release downloads", "verify": "public proxy, counted by hand per release" }
   ],
   "decisions": [
-    { "id": "D-01", "title": "Pengguna utama: developer web multi-project yang menolak Docker", "status": "approved" },
-    { "id": "D-02", "title": "First-session job: satu instance berjalan + connection URI tersalin < 2 menit", "status": "approved" },
-    { "id": "D-03", "title": "Core value: multi-versi native, satu klik, tanpa container", "status": "approved" },
-    { "id": "D-04", "title": "Retensi lewat tray + autostart", "status": "approved", "dependsOnSpike": "F-SPK-04" },
-    { "id": "D-05", "title": "Gratis dan open source di bawah GPL-3.0-only, tanpa telemetri, tanpa license key", "status": "approved", "revisedFrom": "MIT OR Apache-2.0" },
-    { "id": "D-06", "title": "UI memakai GPUI + gpui-component (Apache-2.0, kompatibel GPL-3.0); kode DBDelve tidak disalin sebagai keputusan rekayasa", "status": "approved" },
-    { "id": "D-07", "title": "State aplikasi di SQLite (WAL)", "status": "approved" },
-    { "id": "D-08", "title": "Distribusi lewat GitHub Releases + install.sh + self-update", "status": "approved" },
-    { "id": "D-09", "title": "Nol sudo saat runtime", "status": "approved" },
-    { "id": "D-10", "title": "Proses engine detached; aplikasi hanya controller", "status": "approved" },
-    { "id": "D-11", "title": "CLI di Phase 2, crate core UI-agnostic sejak Phase 1", "status": "approved" },
-    { "id": "D-12", "title": "Biner engine diunduh dari upstream, dipandu katalog JSON sendiri", "status": "approved" },
-    { "id": "D-13", "title": "Valkey sebagai engine Redis-compatible, dengan spike Windows wajib", "status": "approved-pending-spike", "dependsOnSpike": "F-SPK-02" },
-    { "id": "D-14", "title": "Empat engine di v1: PostgreSQL, MySQL, MariaDB, Valkey", "status": "approved" },
-    { "id": "D-15", "title": "Scope v1 = core + kelola DB/user + open-in-client + config editor", "status": "approved" },
-    { "id": "D-16", "title": "Port kanonik lalu auto-increment, dengan uji bind nyata", "status": "approved" },
-    { "id": "D-17", "title": "Password acak per instance di OS keychain; opsi tanpa password", "status": "approved" },
-    { "id": "D-18", "title": "Hapus instance menawarkan hapus-data atau arsip", "status": "approved" },
-    { "id": "D-19", "title": "Katalog bundled + refresh TTL 24 jam; unduhan resumable", "status": "approved" },
-    { "id": "D-20", "title": "macOS dinotarisasi; Windows unsigned di v1", "status": "approved" },
-    { "id": "D-21", "title": "Urutan fase: P0 spike, P1 PostgreSQL+Valkey, P2 MySQL/MariaDB+CLI+paket, P3 konfigurasi+autostart", "status": "approved" },
-    { "id": "D-22", "title": "Nama produk DBLocal, binary dblocal, data di ~/.dblocal/", "status": "approved" },
-    { "id": "D-23", "title": "Tampilan UI bergaya Zed IDE (dock, pane bertab, status bar, command palette); tema gelap+terang dari palet One Dark/Light; token warna wajib lolos kontras 4,5:1", "status": "approved", "supersedes": "referensi tampilan DBDelve di D-06", "doc": "docs/design/UI-DIRECTION.md" },
-    { "id": "D-24", "title": "Dukungan engine per platform mengikuti artefak upstream nyata (MariaDB hanya Linux x86_64 dan Windows x64; Valkey hanya Linux; MySQL Linux x86_64 pakai tarball minimal 80 MB); SHA-256 MySQL dihitung CI", "status": "approved", "adjusts": "D-14", "evidence": "docs/spikes/engines/upstream-sources.md" }
+    { "id": "D-01", "title": "Primary user: a multi-project web developer who rejects Docker", "status": "approved" },
+    { "id": "D-02", "title": "First-session job: one running instance + a copied connection URI in < 2 minutes", "status": "approved" },
+    { "id": "D-03", "title": "Core value: multi-version native, one click, no container", "status": "approved" },
+    { "id": "D-04", "title": "Retention through tray + autostart", "status": "approved", "dependsOnSpike": "F-SPK-04" },
+    { "id": "D-05", "title": "Free and open source under GPL-3.0-only, no telemetry, no license key", "status": "approved", "revisedFrom": "MIT OR Apache-2.0" },
+    { "id": "D-06", "title": "UI uses GPUI + gpui-component (Apache-2.0, GPL-3.0 compatible); DBDelve code is not copied, as an engineering decision", "status": "approved" },
+    { "id": "D-07", "title": "App state in SQLite (WAL)", "status": "approved" },
+    { "id": "D-08", "title": "Distribution through GitHub Releases + install.sh + self-update", "status": "approved" },
+    { "id": "D-09", "title": "Zero sudo at runtime", "status": "approved" },
+    { "id": "D-10", "title": "Engine processes detached; the app is only a controller", "status": "approved" },
+    { "id": "D-11", "title": "CLI in Phase 2, UI-agnostic core crate from Phase 1", "status": "approved" },
+    { "id": "D-12", "title": "Engine binaries downloaded from upstream, guided by our own JSON catalog", "status": "approved" },
+    { "id": "D-13", "title": "Valkey as the Redis-compatible engine, with a mandatory Windows spike", "status": "approved-pending-spike", "dependsOnSpike": "F-SPK-02" },
+    { "id": "D-14", "title": "Four engines in v1: PostgreSQL, MySQL, MariaDB, Valkey", "status": "approved" },
+    { "id": "D-15", "title": "v1 scope = core + DB/user management + open-in-client + config editor", "status": "approved" },
+    { "id": "D-16", "title": "Canonical port then auto-increment, with a real bind test", "status": "approved" },
+    { "id": "D-17", "title": "Random per-instance password in the OS keychain; optional no-password mode", "status": "approved" },
+    { "id": "D-18", "title": "Deleting an instance offers delete-data or archive", "status": "approved" },
+    { "id": "D-19", "title": "Bundled catalog + 24-hour TTL refresh; resumable downloads", "status": "approved" },
+    { "id": "D-20", "title": "macOS notarized; Windows unsigned in v1", "status": "approved" },
+    { "id": "D-21", "title": "Phase order: P0 spikes, P1 PostgreSQL+Valkey, P2 MySQL/MariaDB+CLI+packages, P3 configuration+autostart", "status": "approved" },
+    { "id": "D-22", "title": "Product name DBLocal, binary dblocal, data in ~/.dblocal/", "status": "approved" },
+    { "id": "D-23", "title": "Zed IDE-style UI (dock, tabbed panes, status bar, command palette); dark+light themes from the One Dark/Light palette; colour tokens must pass 4.5:1 contrast", "status": "approved", "supersedes": "the DBDelve look reference in D-06", "doc": "docs/design/UI-DIRECTION.md" },
+    { "id": "D-24", "title": "Per-platform engine support follows the real upstream artifacts (MariaDB only Linux x86_64 and Windows x64; Valkey only Linux; MySQL Linux x86_64 uses the 80 MB minimal tarball); MySQL SHA-256 is computed by CI", "status": "approved", "adjusts": "D-14", "evidence": "docs/spikes/engines/upstream-sources.md" }
   ],
   "openQuestions": [
-    { "id": "OPEN-01", "question": "Dapatkah Valkey dibangun untuk Windows (dan macOS) di CI dengan hasil stabil?", "gate": "F-SPK-02; bila tidak, fallback D-13 dan parity lima-OS pecah" },
-    { "id": "OPEN-02", "question": "Dapatkah ikon tray diintegrasikan dengan event loop GPUI di tiga OS?", "gate": "F-SPK-04; bila tidak, retention trigger D-04 harus diganti" },
-    { "id": "OPEN-03", "question": "Seberapa matang GPUI di Windows untuk aplikasi non-Zed, dan seberapa sering gpui-pre memperkenalkan perubahan yang merusak?", "gate": "F-SPK-01 + kebijakan pin versi" },
-    { "id": "OPEN-04", "question": "Siapa pemilik akun Apple Developer, siapa menanggung biayanya, dan bagaimana rahasia penandatanganan disimpan di GitHub Actions?" },
-    { "id": "OPEN-05", "question": "Apakah runner linux-aarch64 tersedia dan stabil, atau build arm64 perlu cross-compilation/QEMU?" },
-    { "id": "OPEN-06", "question": "Apakah nama DBLocal bebas konflik di crates.io, Homebrew cask, winget, dan sebagai domain?" },
-    { "id": "OPEN-07", "question": "Endpoint unduhan MySQL mana yang stabil untuk otomatisasi, dan apakah ketentuan penggunaannya mengizinkan pengunduhan terprogram?" }
+    { "id": "OPEN-01", "question": "Can Valkey be built for Windows (and macOS) in CI with a stable result?", "gate": "F-SPK-02; if not, the D-13 fallback applies and five-OS parity breaks" },
+    { "id": "OPEN-02", "question": "Can a tray icon be integrated with the GPUI event loop on three OSes?", "gate": "F-SPK-04; if not, the D-04 retention trigger must be replaced" },
+    { "id": "OPEN-03", "question": "How mature is GPUI on Windows for non-Zed apps, and how often does gpui-pre introduce breaking changes?", "gate": "F-SPK-01 + the version pinning policy" },
+    { "id": "OPEN-04", "question": "Who owns the Apple Developer account, who pays the fee, and how is the signing secret stored in GitHub Actions?" },
+    { "id": "OPEN-05", "question": "Is the linux-aarch64 runner available and stable, or does the arm64 build need cross-compilation/QEMU?" },
+    { "id": "OPEN-06", "question": "Is the name DBLocal free of conflicts on crates.io, the Homebrew cask, winget, and as a domain?" },
+    { "id": "OPEN-07", "question": "Which MySQL download endpoint is stable for automation, and do its terms allow programmatic downloads?" }
   ],
   "assumptions": [
-    { "id": "ASSUMPTION-01", "text": "theseus-rs/postgresql-binaries tetap dirawat dan terus merilis versi PostgreSQL baru (saat ini 18.7.0)", "mitigation": "katalog bersifat data sehingga sumber dapat dialihkan tanpa mengubah kode" },
-    { "id": "ASSUMPTION-02", "text": "Tarball Valkey untuk Ubuntu jammy berjalan di Fedora berkat kompatibilitas mundur glibc", "mitigation": "dibuktikan job E2E Fedora di Phase 1" },
-    { "id": "ASSUMPTION-03", "text": "Target user menjalankan mesin dengan driver Vulkan yang berfungsi", "mitigation": "pesan jelas untuk mesin tanpa Vulkan, bukan crash" },
-    { "id": "ASSUMPTION-04", "text": "Unduhan 260 MB untuk MySQL dapat diterima user selama progres, ETA, dan resume ditampilkan" },
-    { "id": "ASSUMPTION-05", "text": "Keychain tersedia di mayoritas lingkungan desktop target; fallback file 0600 cukup untuk sisanya" },
-    { "id": "ASSUMPTION-06", "text": "Tidak ada kewajiban hukum tambahan karena tidak ada data pribadi dikumpulkan", "mitigation": "ditinjau ulang bila telemetri opt-in dipertimbangkan" }
+    { "id": "ASSUMPTION-01", "text": "theseus-rs/postgresql-binaries stays maintained and keeps releasing new PostgreSQL versions (currently 18.7.0)", "mitigation": "the catalog is data, so the source can be switched without changing code" },
+    { "id": "ASSUMPTION-02", "text": "The Valkey tarball for Ubuntu jammy runs on Fedora thanks to glibc backward compatibility", "mitigation": "proven by the Fedora E2E job in Phase 1" },
+    { "id": "ASSUMPTION-03", "text": "The target user runs a machine with a working Vulkan driver", "mitigation": "a clear message for a machine without Vulkan, not a crash" },
+    { "id": "ASSUMPTION-04", "text": "A 260 MB download for MySQL is acceptable as long as progress, ETA and resume are shown" },
+    { "id": "ASSUMPTION-05", "text": "Keychain is available in the majority of target desktop environments; the 0600 file fallback is enough for the rest" },
+    { "id": "ASSUMPTION-06", "text": "There are no additional legal obligations because no personal data is collected", "mitigation": "reviewed again if opt-in telemetry is considered" }
   ],
   "backlog": [
-    "Backup/restore terjadwal",
-    "Project profile / grup instance",
-    "Repo apt & yum sendiri",
+    "Scheduled backup/restore",
+    "Project profiles / instance groups",
+    "Our own apt & yum repo",
     "Homebrew cask, AUR, winget, Flathub",
-    "Ekstensi PostgreSQL (pgvector, PostGIS)",
-    "pg_upgrade / mysql_upgrade antar versi mayor",
-    "Mengadopsi instalasi database yang sudah ada di mesin",
-    "Impor dari docker-compose.yml",
-    "Engine tambahan (MongoDB, SQL Server, ClickHouse)",
-    "Telemetri anonim opt-in"
+    "PostgreSQL extensions (pgvector, PostGIS)",
+    "pg_upgrade / mysql_upgrade across major versions",
+    "Adopting an existing database install on the machine",
+    "Import from docker-compose.yml",
+    "Additional engines (MongoDB, SQL Server, ClickHouse)",
+    "Opt-in anonymous telemetry"
   ]
 }
