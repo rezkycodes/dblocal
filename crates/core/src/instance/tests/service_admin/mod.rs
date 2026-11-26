@@ -201,17 +201,19 @@ impl UpdateFetcher for FixedFetcher {
 }
 
 fn release_body(tag: &str) -> Vec<u8> {
+    let ver = tag.strip_prefix('v').unwrap_or(tag);
+    let asset_name = format!("dblocal-{ver}-linux-x86_64.tar.gz");
     serde_json::json!([{
         "tag_name": tag,
         "draft": false,
         "prerelease": false,
         "body": "notes",
         "assets": [
-            {"name": "dblocal-linux-x86_64.tar.gz",
-             "browser_download_url": "https://github.com/a/b/releases/download/v0.9.0/dblocal-linux-x86_64.tar.gz",
+            {"name": asset_name,
+             "browser_download_url": format!("https://github.com/a/b/releases/download/{tag}/dblocal-{ver}-linux-x86_64.tar.gz"),
              "size": 100},
             {"name": "checksums.txt",
-             "browser_download_url": "https://github.com/a/b/releases/download/v0.9.0/checksums.txt",
+             "browser_download_url": format!("https://github.com/a/b/releases/download/{tag}/checksums.txt"),
              "size": 80}
         ]
     }])

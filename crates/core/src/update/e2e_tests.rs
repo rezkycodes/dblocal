@@ -5,11 +5,12 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{
     Arc,
     atomic::{AtomicUsize, Ordering},
 };
+use std::time::Duration;
 
 #[cfg(unix)]
 use flate2::Compression;
@@ -1121,9 +1122,21 @@ fn windows_msi_helper_runs_from_staging_copy_not_install_target_and_cleans_up_la
         other => panic!("expected RunWindowsMsi, got {other:?}"),
     }
 
-    // Later startup cleanup removes the stale run-* staging directory.
+    // Pending staging dir is protected from startup cleanup until completed or aged.
+    mark_staging_pending(&run_dir);
     cleanup_stale_staging(&staging_root);
-    assert!(!run_dir.exists(), "stale run-* dir must be cleaned up");
+    assert!(
+        run_dir.exists(),
+        "pending run-* dir must not be deleted by startup cleanup"
+    );
+
+    // Once marked completed (after helper finishes), startup cleanup removes it immediately.
+    mark_staging_completed(&run_dir);
+    cleanup_stale_staging(&staging_root);
+    assert!(
+        !run_dir.exists(),
+        "completed run-* dir must be cleaned up on next startup"
+    );
 }
 
 #[test]
@@ -1361,10 +1374,496 @@ fn ed25519_verifier_verifies_exact_openssl_release_yml_signature_and_fails_close
         .expect_err("short sig");
     assert_eq!(err.code(), CODE_UPDATE_VERIFY_FAILED);
 
-    // 6. Fail closed: empty production TRUSTED_PUBLIC_KEYS refuses everything.
+    // 6. Fail closed: empty production public-keys.txt refuses everything.
     let empty_prod = Ed25519ReleaseVerifier::from_raw_keys(Vec::new());
     let err = empty_prod
         .verify_manifest(b"anything", Some(&sig_bytes))
         .expect_err("empty keys must fail closed");
     assert_eq!(err.code(), CODE_UPDATE_VERIFY_FAILED);
+}
+
+#[cfg(unix)]
+#[test]
+fn windows_zip_swap_rollback_restores_original_bytes_on_smoke_failure() {
+    use std::sync::atomic::AtomicBool;
+    let tmp = tempdir().unwrap();
+    let target = tmp.path().join("dblocal.exe");
+    let staged = tmp.path().join("run-42-abcd/extracted/dblocal.exe");
+    std::fs::create_dir_all(staged.parent().unwrap()).unwrap();
+
+    let original_bytes = b"#!/bin/sh\n# original-0.1.3-marker\necho 'dblocal 0.1.3'\n";
+    let broken_bytes = b"#!/bin/sh\n# broken-0.9.9-marker\necho 'dblocal 0.9.9'\n";
+    std::fs::write(&target, original_bytes).unwrap();
+    std::fs::write(&staged, broken_bytes).unwrap();
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::fs::set_permissions(&staged, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    let err_file = tmp.path().join(LAST_UPDATE_ERROR_FILE);
+    let relaunched = AtomicBool::new(false);
+    let args = WindowsHelperArgs {
+        pid: 0,
+        msi: None,
+        staged: Some(staged.clone()),
+        target: target.clone(),
+        version: Some("0.2.0".to_owned()),
+        error_file: Some(err_file.clone()),
+    };
+
+    let err = super::install::run_windows_apply_helper_with(
+        &args,
+        |_| true,
+        |_| unreachable!("zip swap must not invoke msiexec"),
+        |exe| {
+            assert_eq!(exe, target);
+            relaunched.store(true, Ordering::SeqCst);
+            Ok(())
+        },
+    )
+    .expect_err("wrong version binary must trigger rollback");
+    assert_eq!(err.code(), CODE_UPDATE_APPLY_FAILED);
+    assert!(
+        relaunched.load(Ordering::SeqCst),
+        "must relaunch restored original binary"
+    );
+
+    // Crucial regression check: the hard-linked backup was NOT overwritten by the swap,
+    // so rollback restored the exact original 0.1.3 bytes!
+    let restored = std::fs::read(&target).unwrap();
+    assert_eq!(
+        restored, original_bytes,
+        "rollback must restore exact original bytes, not the broken staged binary"
+    );
+    let backup = target.with_file_name("dblocal.exe.old");
+    assert_eq!(
+        std::fs::read(&backup).unwrap(),
+        original_bytes,
+        "backup must still hold the untouched original bytes"
+    );
+    let persisted = take_last_update_failure(tmp.path()).expect("failure persisted");
+    assert!(persisted.contains("smoke check"), "{persisted}");
+}
+
+#[test]
+fn public_keys_file_single_source_rejects_malformed_lines() {
+    // 1. Committed packaging/release-signing/public-keys.txt must parse cleanly.
+    let committed = parse_trusted_public_keys(TRUSTED_PUBLIC_KEYS_RAW)
+        .expect("committed packaging/release-signing/public-keys.txt must have no malformed lines");
+    assert_eq!(
+        committed.len(),
+        Ed25519ReleaseVerifier::production().key_count()
+    );
+
+    // 2. Comments, blank lines, and multiple 64-char lowercase hex keys parse cleanly.
+    let key1 = "a".repeat(64);
+    let key2 = "0123456789abcdef".repeat(4);
+    let valid_doc = format!("# comment\n\n  {key1}  \n# another\n{key2}\n");
+    let parsed = parse_trusted_public_keys(&valid_doc).expect("valid keys");
+    assert_eq!(parsed.len(), 2);
+
+    // 3. Any malformed line must fail (never silently skipped).
+    for bad in [
+        format!("{key1}\nnot-a-hex-key\n"),
+        format!("{}\n", "A".repeat(64)), // uppercase rejected to match release.yml
+        format!("{}\n", "a".repeat(63)), // too short
+        format!("{key1} extra\n"),       // trailing junk
+    ] {
+        let err = parse_trusted_public_keys(&bad).expect_err("malformed line must fail");
+        assert_eq!(err.code(), CODE_UPDATE_VERIFY_FAILED);
+    }
+}
+
+#[test]
+fn startup_cleanup_protects_pending_and_locked_staging_and_reclaims_completed_or_aged() {
+    use std::sync::atomic::AtomicBool;
+    let tmp = tempdir().unwrap();
+    let staging = tmp.path().join("update");
+    std::fs::create_dir_all(&staging).unwrap();
+
+    // 1. Fresh unmarked dir is protected (minimum age) so a race mid-download never deletes it.
+    let fresh_unmarked = staging.join("run-100-fresh");
+    std::fs::create_dir_all(&fresh_unmarked).unwrap();
+    cleanup_stale_staging(&staging);
+    assert!(
+        fresh_unmarked.exists(),
+        "fresh unmarked dir must be protected"
+    );
+
+    // 2. Pending dir is protected across repeated startup cleanups.
+    let pending_dir = staging.join("run-200-pending");
+    std::fs::create_dir_all(&pending_dir).unwrap();
+    mark_staging_pending(&pending_dir);
+    cleanup_stale_staging(&staging);
+    assert!(pending_dir.exists(), "pending dir must be protected");
+
+    // 3. While the detached helper is running, it holds UpdateLock and marks completed when done.
+    let helper_run = staging.join("run-300-helper");
+    std::fs::create_dir_all(&helper_run).unwrap();
+    mark_staging_pending(&helper_run);
+    let msi = helper_run.join("dblocal-update.bin");
+    std::fs::write(&msi, b"MSI").unwrap();
+    let target = tmp.path().join("dblocal.exe");
+    std::fs::write(&target, b"MZ").unwrap();
+    let lock_blocked_during_helper = AtomicBool::new(false);
+    let staging_for_closure = staging.clone();
+    let args = WindowsHelperArgs {
+        pid: 0,
+        msi: Some(msi),
+        staged: None,
+        target,
+        version: None,
+        error_file: Some(staging.join(LAST_UPDATE_ERROR_FILE)),
+    };
+    super::install::run_windows_apply_helper_with(
+        &args,
+        |_| true,
+        |_| {
+            // While helper runs, another process cannot acquire UpdateLock.
+            let err = UpdateLock::acquire(&staging_for_closure).expect_err("helper must hold lock");
+            if err.code() == CODE_UPDATE_IN_PROGRESS {
+                lock_blocked_during_helper.store(true, Ordering::SeqCst);
+            }
+            Ok(Some(0))
+        },
+        |_| Ok(()),
+    )
+    .expect("helper succeeds");
+    assert!(
+        lock_blocked_during_helper.load(Ordering::SeqCst),
+        "helper must hold UpdateLock during execution"
+    );
+    assert!(
+        helper_run.join(STAGED_COMPLETED_MARKER).is_file(),
+        "helper must mark run dir completed on exit"
+    );
+    assert!(
+        !helper_run.join(STAGED_PENDING_MARKER).exists(),
+        "pending marker must be cleared on completion"
+    );
+
+    // 4. Next startup cleanup removes completed dir immediately while keeping pending dir.
+    cleanup_stale_staging(&staging);
+    assert!(!helper_run.exists(), "completed run dir must be removed");
+    assert!(pending_dir.exists(), "still-pending run dir must remain");
+
+    // 5. Aged dirs (past threshold) are reclaimed.
+    super::install::cleanup_stale_staging_with_ages(&staging, Duration::ZERO, Duration::ZERO);
+    assert!(!fresh_unmarked.exists(), "aged unmarked dir reclaimed");
+    assert!(!pending_dir.exists(), "aged pending dir reclaimed");
+}
+
+#[tokio::test]
+async fn check_rejects_mismatched_or_versionless_asset_names_including_msi() {
+    struct StaticFetcher(String);
+    impl UpdateFetcher for StaticFetcher {
+        fn get(
+            &self,
+            _url: String,
+        ) -> std::pin::Pin<
+            Box<
+                dyn std::future::Future<Output = std::result::Result<FetchResponse, String>>
+                    + Send
+                    + '_,
+            >,
+        > {
+            let body = self.0.as_bytes().to_vec();
+            Box::pin(async move { Ok(FetchResponse::new(200, body)) })
+        }
+    }
+
+    let make_json = |tag: &str, asset_name: &str| {
+        serde_json::json!([{
+            "tag_name": tag,
+            "draft": false,
+            "prerelease": false,
+            "body": "release",
+            "assets": [
+                {
+                    "name": asset_name,
+                    "browser_download_url": format!("https://github.com/a/b/releases/download/{tag}/{asset_name}"),
+                    "size": 100
+                },
+                {
+                    "name": "checksums.txt",
+                    "browser_download_url": format!("https://github.com/a/b/releases/download/{tag}/checksums.txt"),
+                    "size": 10
+                }
+            ]
+        }])
+        .to_string()
+    };
+
+    let current = Version::parse("0.1.3").unwrap();
+    let win_msi_opts = UpdateCheckOptions::for_repo("rezkycodes/dblocal")
+        .with_platform(Os::Windows, Arch::X86_64)
+        .with_install_kind(InstallKind::WindowsMsi {
+            exe_path: PathBuf::from(r"C:\Users\u\AppData\Local\DBLocal\dblocal.exe"),
+        });
+
+    // 1. Older MSI re-uploaded under newer tag v0.2.0 -> refused.
+    let fetcher = StaticFetcher(make_json("v0.2.0", "dblocal-0.1.2-windows-x86_64.msi"));
+    let res = check(&current, &fetcher, &win_msi_opts).await.unwrap();
+    assert!(
+        matches!(res, UpdateCheck::UpToDate { .. }),
+        "older MSI under newer tag must be refused"
+    );
+
+    // 2. Versionless MSI under tag v0.2.0 -> refused.
+    let fetcher = StaticFetcher(make_json("v0.2.0", "dblocal-windows-x86_64.msi"));
+    let res = check(&current, &fetcher, &win_msi_opts).await.unwrap();
+    assert!(
+        matches!(res, UpdateCheck::UpToDate { .. }),
+        "versionless MSI must be refused"
+    );
+
+    // 3. Prerelease tarball under stable tag v0.2.0 -> refused.
+    let linux_opts = UpdateCheckOptions::for_repo("rezkycodes/dblocal")
+        .with_platform(Os::Linux, Arch::X86_64)
+        .with_install_kind(InstallKind::PortableTarball {
+            exe_path: PathBuf::from("/home/u/.local/bin/dblocal"),
+        });
+    let fetcher = StaticFetcher(make_json(
+        "v0.2.0",
+        "dblocal-0.2.0-rc.1-linux-x86_64.tar.gz",
+    ));
+    let res = check(&current, &fetcher, &linux_opts).await.unwrap();
+    assert!(
+        matches!(res, UpdateCheck::UpToDate { .. }),
+        "prerelease asset under stable tag must be refused"
+    );
+
+    // 4. Matching versioned MSI -> accepted.
+    let fetcher = StaticFetcher(make_json("v0.2.0", "dblocal-0.2.0-windows-x86_64.msi"));
+    let res = check(&current, &fetcher, &win_msi_opts).await.unwrap();
+    match res {
+        UpdateCheck::Available(u) => {
+            assert_eq!(u.version().to_string(), "0.2.0");
+            assert_eq!(u.asset().name(), "dblocal-0.2.0-windows-x86_64.msi");
+        }
+        other => panic!("expected Available for matching MSI, got {other:?}"),
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn generate_key_script_backup_guards_and_fake_gh_upload() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .to_path_buf();
+    let script = repo_root.join("packaging/release-signing/generate-key.sh");
+    assert!(script.is_file(), "missing {}", script.display());
+
+    let tmp = tempdir().unwrap();
+    let fake_bin = tmp.path().join("bin");
+    std::fs::create_dir_all(&fake_bin).unwrap();
+    let captured_key = tmp.path().join("captured-secret.pem");
+    let captured_args = tmp.path().join("captured-args.txt");
+
+    // Fake `gh` on PATH: records args and stdin without touching GitHub.
+    let fake_gh = fake_bin.join("gh");
+    std::fs::write(
+        &fake_gh,
+        format!(
+            "#!/usr/bin/env bash\nset -euo pipefail\nprintf '%s\\n' \"$*\" > '{}'\ncat > '{}'\n",
+            captured_args.display(),
+            captured_key.display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&fake_gh, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    let path_env = format!(
+        "{}:{}",
+        fake_bin.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+
+    // 1. Fails when neither --backup nor --no-backup is passed.
+    let out = std::process::Command::new("bash")
+        .arg(&script)
+        .env("PATH", &path_env)
+        .output()
+        .unwrap();
+    assert!(
+        !out.status.success(),
+        "must require --backup or --no-backup"
+    );
+
+    // 2. Refuses backup path inside the git repository.
+    let in_repo_backup = repo_root.join("should-never-be-created.enc.pem");
+    let out = std::process::Command::new("bash")
+        .arg(&script)
+        .args(["--backup", in_repo_backup.to_str().unwrap()])
+        .env("PATH", &path_env)
+        .output()
+        .unwrap();
+    assert!(!out.status.success(), "must refuse backup inside git repo");
+    assert!(!in_repo_backup.exists());
+
+    // 3. Refuses to overwrite an existing backup file.
+    let existing_backup = tmp.path().join("existing.enc.pem");
+    std::fs::write(&existing_backup, b"existing").unwrap();
+    let out = std::process::Command::new("bash")
+        .arg(&script)
+        .args(["--backup", existing_backup.to_str().unwrap()])
+        .env("PATH", &path_env)
+        .output()
+        .unwrap();
+    assert!(!out.status.success(), "must refuse to overwrite backup");
+    assert_eq!(std::fs::read(&existing_backup).unwrap(), b"existing");
+
+    // 4. Succeeds with --no-backup using fake gh; never prints private key.
+    let out = std::process::Command::new("bash")
+        .arg(&script)
+        .args(["--no-backup", "--repo", "example/dblocal"])
+        .env("PATH", &path_env)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        !stdout.contains("PRIVATE KEY"),
+        "must never print private key"
+    );
+    assert!(
+        stdout.contains("packaging/release-signing/public-keys.txt"),
+        "must point to single source of truth"
+    );
+    assert!(
+        !stdout.contains("TRUSTED_PUBLIC_KEYS"),
+        "must not tell user to edit a second list"
+    );
+    let uploaded = std::fs::read_to_string(&captured_key).unwrap();
+    assert!(uploaded.contains("BEGIN PRIVATE KEY"));
+    let gh_args = std::fs::read_to_string(&captured_args).unwrap();
+    assert!(gh_args.contains("secret set RELEASE_SIGNING_KEY --repo example/dblocal"));
+
+    // 5. Succeeds with --backup <outside-temp-file> driven through a PTY so OpenSSL
+    // prompts interactively (never via env var or CLI arg).
+    let backup_file = tmp.path().join("offline-backup.enc.pem");
+    let py_driver = r#"
+import fcntl, os, pty, re, select, subprocess, sys, termios, time
+script, backup_path = sys.argv[1], sys.argv[2]
+master, slave = pty.openpty()
+def set_ctty():
+    os.setsid()
+    fcntl.ioctl(slave, termios.TIOCSCTTY, 0)
+proc = subprocess.Popen(
+    ["bash", script, "--backup", backup_path, "--repo", "example/dblocal"],
+    stdin=slave, stdout=slave, stderr=slave, close_fds=True, preexec_fn=set_ctty,
+)
+os.close(slave)
+buf = b""
+prompts_answered = 0
+prompt_re = re.compile(rb"(pass\s*phrase[^:\n]*|password)\s*:", re.IGNORECASE)
+deadline = time.time() + 20
+while time.time() < deadline:
+    r, _, _ = select.select([master], [], [], 0.1)
+    if r:
+        try:
+            chunk = os.read(master, 4096)
+        except OSError:
+            break
+        if not chunk:
+            break
+        buf += chunk
+        count = len(prompt_re.findall(buf))
+        while prompts_answered < count:
+            os.write(master, b"test-backup-passphrase-123\n")
+            prompts_answered += 1
+    if proc.poll() is not None:
+        while True:
+            r2, _, _ = select.select([master], [], [], 0.05)
+            if not r2:
+                break
+            try:
+                c = os.read(master, 4096)
+                if not c:
+                    break
+                buf += c
+            except OSError:
+                break
+        break
+if proc.poll() is None:
+    proc.kill()
+os.close(master)
+sys.stdout.buffer.write(buf)
+sys.exit(proc.wait())
+"#;
+    let out = std::process::Command::new("python3")
+        .args([
+            "-c",
+            py_driver,
+            script.to_str().unwrap(),
+            backup_file.to_str().unwrap(),
+        ])
+        .env("PATH", &path_env)
+        .output()
+        .unwrap();
+    let combined = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        out.status.success(),
+        "backup run failed: {combined}\nstderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        !combined.contains("BEGIN PRIVATE KEY"),
+        "must never print plaintext key"
+    );
+    assert!(backup_file.is_file(), "backup file must exist");
+    let mode = std::fs::metadata(&backup_file)
+        .unwrap()
+        .permissions()
+        .mode()
+        & 0o777;
+    assert_eq!(mode, 0o600, "backup file must be mode 0600");
+    let backup_text = std::fs::read_to_string(&backup_file).unwrap();
+    assert!(
+        backup_text.contains("BEGIN ENCRYPTED PRIVATE KEY"),
+        "backup must be encrypted PKCS#8"
+    );
+
+    // Confirm backup decrypts to the exact 64-char hex public key printed by the script.
+    let printed_hex = combined
+        .lines()
+        .map(str::trim)
+        .find(|line| {
+            line.len() == 64 && line.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+        })
+        .expect("script must print 64-char lowercase hex public key");
+    let dec_der = tmp.path().join("dec.pub.der");
+    let st = std::process::Command::new("openssl")
+        .args(["pkey", "-in"])
+        .arg(&backup_file)
+        .args([
+            "-passin",
+            "pass:test-backup-passphrase-123",
+            "-pubout",
+            "-outform",
+            "DER",
+            "-out",
+        ])
+        .arg(&dec_der)
+        .status()
+        .unwrap();
+    assert!(st.success());
+    let der = std::fs::read(&dec_der).unwrap();
+    let raw = &der[der.len() - ED25519_PUBLIC_KEY_LEN..];
+    let mut derived_hex = String::with_capacity(64);
+    for b in raw {
+        use std::fmt::Write as _;
+        let _ = write!(derived_hex, "{b:02x}");
+    }
+    assert_eq!(derived_hex, printed_hex);
 }

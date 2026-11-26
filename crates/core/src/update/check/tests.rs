@@ -39,14 +39,16 @@ fn linux_options() -> UpdateCheckOptions {
 }
 
 fn sample_release_json(tag: &str) -> String {
+    let ver = tag.strip_prefix('v').unwrap_or(tag);
+    let asset_name = format!("dblocal-{ver}-linux-x86_64.tar.gz");
     serde_json::json!([{
         "tag_name": tag,
         "draft": false,
         "prerelease": false,
         "body": "Hello",
         "assets": [
-            {"name":"dblocal-linux-x86_64.tar.gz","browser_download_url":"https://github.com/a/b/releases/download/v1/dblocal-linux-x86_64.tar.gz","size":100},
-            {"name":"checksums.txt","browser_download_url":"https://github.com/a/b/releases/download/v1/checksums.txt","size":10}
+            {"name": asset_name, "browser_download_url": format!("https://github.com/a/b/releases/download/{tag}/dblocal-{ver}-linux-x86_64.tar.gz"), "size": 100},
+            {"name":"checksums.txt","browser_download_url": format!("https://github.com/a/b/releases/download/{tag}/checksums.txt"), "size": 10}
         ]
     }]).to_string()
 }
@@ -79,7 +81,7 @@ async fn check_returns_available_for_newer_release() {
     match result {
         UpdateCheck::Available(u) => {
             assert_eq!(u.version(), &Version::parse("1.1.0").unwrap());
-            assert_eq!(u.asset().name(), "dblocal-linux-x86_64.tar.gz");
+            assert_eq!(u.asset().name(), "dblocal-1.1.0-linux-x86_64.tar.gz");
             assert_eq!(u.checksums_asset().name(), "checksums.txt");
         }
         _ => panic!("expected available"),
@@ -95,7 +97,7 @@ async fn check_ignores_draft_and_prerelease_by_default() {
             "prerelease": false,
             "body":"draft",
             "assets":[
-                {"name":"dblocal-linux-x86_64.tar.gz","browser_download_url":"https://github.com/a/b/releases/download/v2/dblocal-linux-x86_64.tar.gz","size":1},
+                {"name":"dblocal-2.0.0-linux-x86_64.tar.gz","browser_download_url":"https://github.com/a/b/releases/download/v2/dblocal-2.0.0-linux-x86_64.tar.gz","size":1},
                 {"name":"checksums.txt","browser_download_url":"https://github.com/a/b/releases/download/v2/checksums.txt","size":1}
             ]
         },
@@ -105,7 +107,7 @@ async fn check_ignores_draft_and_prerelease_by_default() {
             "prerelease": true,
             "body":"rc",
             "assets":[
-                {"name":"dblocal-linux-x86_64.tar.gz","browser_download_url":"https://github.com/a/b/releases/download/v1.5/dblocal-linux-x86_64.tar.gz","size":1},
+                {"name":"dblocal-1.5.0-rc.1-linux-x86_64.tar.gz","browser_download_url":"https://github.com/a/b/releases/download/v1.5/dblocal-1.5.0-rc.1-linux-x86_64.tar.gz","size":1},
                 {"name":"checksums.txt","browser_download_url":"https://github.com/a/b/releases/download/v1.5/checksums.txt","size":1}
             ]
         },
@@ -115,7 +117,7 @@ async fn check_ignores_draft_and_prerelease_by_default() {
             "prerelease": false,
             "body":"rc-marked-stable",
             "assets":[
-                {"name":"dblocal-linux-x86_64.tar.gz","browser_download_url":"https://github.com/a/b/releases/download/v1.4/dblocal-linux-x86_64.tar.gz","size":1},
+                {"name":"dblocal-1.4.0-rc.1-linux-x86_64.tar.gz","browser_download_url":"https://github.com/a/b/releases/download/v1.4/dblocal-1.4.0-rc.1-linux-x86_64.tar.gz","size":1},
                 {"name":"checksums.txt","browser_download_url":"https://github.com/a/b/releases/download/v1.4/checksums.txt","size":1}
             ]
         },
@@ -125,7 +127,7 @@ async fn check_ignores_draft_and_prerelease_by_default() {
             "prerelease": false,
             "body":"stable",
             "assets":[
-                {"name":"dblocal-linux-x86_64.tar.gz","browser_download_url":"https://github.com/a/b/releases/download/v1.1/dblocal-linux-x86_64.tar.gz","size":1},
+                {"name":"dblocal-1.1.0-linux-x86_64.tar.gz","browser_download_url":"https://github.com/a/b/releases/download/v1.1/dblocal-1.1.0-linux-x86_64.tar.gz","size":1},
                 {"name":"checksums.txt","browser_download_url":"https://github.com/a/b/releases/download/v1.1/checksums.txt","size":1}
             ]
         }
@@ -152,7 +154,7 @@ async fn check_includes_prerelease_when_preview_channel() {
         "prerelease": true,
         "body":"rc",
         "assets":[
-            {"name":"dblocal-linux-x86_64.tar.gz","browser_download_url":"https://github.com/a/b/releases/download/v1.5/dblocal-linux-x86_64.tar.gz","size":1},
+            {"name":"dblocal-1.5.0-rc.1-linux-x86_64.tar.gz","browser_download_url":"https://github.com/a/b/releases/download/v1.5/dblocal-1.5.0-rc.1-linux-x86_64.tar.gz","size":1},
             {"name":"checksums.txt","browser_download_url":"https://github.com/a/b/releases/download/v1.5/checksums.txt","size":1}
         ]
     }]).to_string();
@@ -267,18 +269,24 @@ fn releases_url_rejects_bad_repo() {
 fn select_platform_asset_picks_appimage_over_tarball() {
     let assets = vec![
         asset(
-            "dblocal-linux-x86_64.tar.gz",
+            "dblocal-1.1.0-linux-x86_64.tar.gz",
             "https://example.com/a.tar.gz",
         ),
         asset(
-            "dblocal-linux-x86_64.AppImage",
+            "dblocal-1.1.0-linux-x86_64.AppImage",
             "https://example.com/a.AppImage",
         ),
         asset("checksums.txt", "https://example.com/checksums.txt"),
     ];
-    let selected = select_platform_asset(&assets, Os::Linux, Arch::X86_64, None)
-        .unwrap()
-        .unwrap();
+    let selected = select_platform_asset(
+        &assets,
+        &Version::parse("1.1.0").unwrap(),
+        Os::Linux,
+        Arch::X86_64,
+        None,
+    )
+    .unwrap()
+    .unwrap();
     assert_eq!(selected.kind(), UpdateAssetKind::AppImage);
 }
 
@@ -479,7 +487,14 @@ fn map_network_classifies_rate_limit_messages() {
 fn select_platform_asset_rejects_unsupported_platform() {
     let err = platform_asset_tokens(Os::Windows, Arch::Aarch64).is_some();
     assert!(err);
-    let selected = select_platform_asset(&[], Os::Windows, Arch::Aarch64, None).unwrap();
+    let selected = select_platform_asset(
+        &[],
+        &Version::parse("1.1.0").unwrap(),
+        Os::Windows,
+        Arch::Aarch64,
+        None,
+    )
+    .unwrap();
     assert!(selected.is_none());
 }
 

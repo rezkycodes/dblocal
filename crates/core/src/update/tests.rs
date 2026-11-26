@@ -229,8 +229,8 @@ fn install_kind_unknown_refused() {
 fn downgrade_allowed_only_when_flag_set() {
     let json = release_json(
         "v0.9.0",
-        "dblocal-linux-x86_64.tar.gz",
-        "https://github.com/a/b/releases/download/v0.9.0/dblocal-linux-x86_64.tar.gz",
+        "dblocal-0.9.0-linux-x86_64.tar.gz",
+        "https://github.com/a/b/releases/download/v0.9.0/dblocal-0.9.0-linux-x86_64.tar.gz",
         "https://github.com/a/b/releases/download/v0.9.0/checksums.txt",
     );
     let fetcher = MockFetcher::new(vec![Ok(FetchResponse::new(200, json.clone().into_bytes()))]);
@@ -301,7 +301,7 @@ async fn check_rejects_unsafe_asset_name() {
         "prerelease": false,
         "body": "notes",
         "assets": [
-            {"name":"../dblocal-linux-x86_64.tar.gz","browser_download_url":"https://github.com/a/b/releases/download/v1.1/dblocal-linux-x86_64.tar.gz","size":1},
+            {"name":"../dblocal-1.1.0-linux-x86_64.tar.gz","browser_download_url":"https://github.com/a/b/releases/download/v1.1/dblocal-1.1.0-linux-x86_64.tar.gz","size":1},
             {"name":"checksums.txt","browser_download_url":"https://github.com/a/b/releases/download/v1.1/checksums.txt","size":1}
         ]
     }]).to_string();
