@@ -66,10 +66,17 @@ impl EngineAdapter for RustfsAdapter {
         let mut cmd = Command::new(bin);
         cmd.arg("--address")
             .arg(format!("127.0.0.1:{}", ctx.port.get()));
-        if let Some(console_port) = ctx.extra_port {
-            cmd.arg("--console-enable")
-                .arg("--console-address")
-                .arg(format!("127.0.0.1:{}", console_port.get()));
+        match ctx.extra_port {
+            Some(console_port) => {
+                cmd.arg("--console-enable")
+                    .arg("--console-address")
+                    .arg(format!("127.0.0.1:{}", console_port.get()));
+            }
+            None => {
+                // RustFS enables the web console on [::]:9001 by default when no
+                // console flags are passed; explicitly disable it via env.
+                cmd.env("RUSTFS_CONSOLE_ENABLE", "false");
+            }
         }
         cmd.arg(&ctx.data_dir);
 
@@ -314,10 +321,15 @@ mod tests {
             envs.get("RUSTFS_SECRET_KEY").map(String::as_str),
             Some("super-secret-rustfs-key-24plus")
         );
+        assert_eq!(
+            envs.get("RUSTFS_CONSOLE_ENABLE"),
+            None,
+            "console-on branch must not set RUSTFS_CONSOLE_ENABLE=false"
+        );
     }
 
     #[test]
-    fn spawn_command_omits_console_flags_when_console_is_off() {
+    fn spawn_command_omits_console_flags_and_disables_console_via_env_when_off() {
         let dir = tempdir().expect("tempdir");
         let ctx = sample_run_ctx(dir.path(), None);
         let cmd = RustfsAdapter.spawn_command(&ctx);
@@ -333,6 +345,20 @@ mod tests {
                 "127.0.0.1:49000",
                 &ctx.data_dir.display().to_string(),
             ]
+        );
+        let envs: std::collections::BTreeMap<String, String> = cmd
+            .get_envs()
+            .filter_map(|(k, v)| {
+                Some((
+                    k.to_string_lossy().into_owned(),
+                    v?.to_string_lossy().into_owned(),
+                ))
+            })
+            .collect();
+        assert_eq!(
+            envs.get("RUSTFS_CONSOLE_ENABLE").map(String::as_str),
+            Some("false"),
+            "console-off branch must explicitly disable the RustFS console via env"
         );
     }
 

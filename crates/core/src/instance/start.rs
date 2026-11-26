@@ -215,6 +215,17 @@ async fn run_start_inner(
 
     match poll_health(inner, instance, &ctx, &identity, deadline).await {
         Ok(()) => {
+            if engine == EngineKey::Rustfs {
+                let pid = identity.pid();
+                if let Err(err) = blocking(move || {
+                    crate::engine::rustfs_sockets::verify_process_loopback_only(pid)
+                })
+                .await
+                {
+                    let tail = failure_tail(&log_path);
+                    return fail_with_tail(inner, id, err, StartFailure::Unknown, tail).await;
+                }
+            }
             let id2 = id.clone();
             db_async(inner, move |store| {
                 let current = store

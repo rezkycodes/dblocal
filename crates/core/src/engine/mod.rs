@@ -12,6 +12,7 @@ mod postgres;
 mod redis;
 pub mod resp;
 pub mod rustfs;
+pub mod rustfs_sockets;
 pub mod shlib;
 pub mod sockdir;
 pub mod uri;
