@@ -45,6 +45,11 @@ pub fn mariadb_api_url(version: &str) -> String {
 pub const CATALOG_SOURCE_URL: &str =
     "https://raw.githubusercontent.com/rezkycodes/dblocal/main/catalog/engines-v3.json";
 
+/// Refresh URL written into the compatible `catalog/engines-v2.json` output
+/// for released `v0.1.3`/`v0.1.4` clients.
+pub const CATALOG_V2_SOURCE_URL: &str =
+    "https://raw.githubusercontent.com/rezkycodes/dblocal/main/catalog/engines-v2.json";
+
 /// Failure of a source adapter.
 #[derive(Debug)]
 pub struct SourceError(String);

@@ -6,9 +6,10 @@ use dblocal_core::catalog::{CatalogArtifact, CatalogDocument, CatalogVersion, va
 #[cfg(test)]
 use super::sources::find_tracked;
 use super::sources::{
-    self, CATALOG_SOURCE_URL, HttpSource, MysqlBuild, Source, TrackedVersion, WAVE_ONE_VARIANTS,
-    assemble, mariadb_api_url, mysql_builds_for,
+    self, CATALOG_SOURCE_URL, CATALOG_V2_SOURCE_URL, HttpSource, MysqlBuild, Source,
+    TrackedVersion, WAVE_ONE_VARIANTS, assemble, mariadb_api_url, mysql_builds_for,
 };
+use super::validate::{COMPAT_V2_SCHEMA_VERSION, validate_any_schema};
 use dblocal_core::model::EngineKey;
 
 /// Which engines to fetch from upstream.
@@ -100,18 +101,51 @@ impl BuildSelection {
     }
 }
 
-/// Builds the bundled catalog and writes it atomically.
+/// Builds the bundled catalog and writes it atomically (plus an optional
+/// derived schema-2 file for released `v0.1.3`/`v0.1.4` clients).
 ///
 /// `generated_at` is honest without daily churn: it is today's UTC date only
 /// when the rest of the document actually changed, otherwise the existing
 /// file's stamp is kept (finding B4).
-pub fn run(output: &Path) -> Result<String, String> {
-    run_at(output, SystemTime::now())
+pub fn run_with_compat(output: &Path, compat_v2_output: Option<&Path>) -> Result<String, String> {
+    build_and_write_with_compat(
+        &http_source()?,
+        &BuildSelection::wave_one(),
+        output,
+        compat_v2_output,
+        SystemTime::now(),
+    )
 }
 
-/// [`run`] with an injectable clock, so the date behaviour is testable.
-pub fn run_at(output: &Path, now: SystemTime) -> Result<String, String> {
-    build_and_write(&http_source()?, &BuildSelection::wave_one(), output, now)
+/// Derives a schema-2 compatible catalog from a schema-3 catalog.
+///
+/// Drops every `redis` version and artifact, drops every `deb` artifact, clears
+/// the `license` field so it is omitted during JSON serialization, sets
+/// `schema_version = 2`, and restores the v2 `source_url`.
+pub fn derive_compat_v2(v3: &CatalogDocument) -> CatalogDocument {
+    let versions = v3
+        .versions
+        .iter()
+        .filter(|version| version.engine != "redis")
+        .cloned()
+        .map(|mut version| {
+            version.license = None;
+            version
+        })
+        .collect();
+    let artifacts = v3
+        .artifacts
+        .iter()
+        .filter(|artifact| artifact.engine != "redis" && artifact.format != "deb")
+        .cloned()
+        .collect();
+    CatalogDocument {
+        schema_version: COMPAT_V2_SCHEMA_VERSION,
+        generated_at: None,
+        source_url: CATALOG_V2_SOURCE_URL.to_owned(),
+        versions,
+        artifacts,
+    }
 }
 
 /// Builds the production HTTP source, reading `GITHUB_TOKEN` if present.
@@ -124,10 +158,24 @@ pub fn http_source() -> Result<HttpSource, String> {
 
 /// Builds, stamps and writes, keeping an existing `generated_at` when nothing
 /// else changed.
+#[cfg(test)]
 pub fn build_and_write(
     source: &dyn Source,
     selection: &BuildSelection,
     output: &Path,
+    now: SystemTime,
+) -> Result<String, String> {
+    build_and_write_with_compat(source, selection, output, None, now)
+}
+
+/// Builds once, validates and atomically writes the v3 catalog, and when
+/// `compat_v2_output` is set also derives, validates and atomically writes the
+/// schema-2 catalog with its own independent `generated_at` stability check.
+pub fn build_and_write_with_compat(
+    source: &dyn Source,
+    selection: &BuildSelection,
+    output: &Path,
+    compat_v2_output: Option<&Path>,
     now: SystemTime,
 ) -> Result<String, String> {
     let existing = std::fs::read_to_string(output)
@@ -137,12 +185,25 @@ pub fn build_and_write(
     let today = format!("{}T00:00:00Z", utc_date(now));
     document.generated_at = Some(match read_stamp_if_unchanged(output, &document) {
         Some(existing) => existing,
-        None => today,
+        None => today.clone(),
     });
     validate_document(&document)
         .map_err(|err| format!("generated catalog failed validation: {err}"))?;
     write_atomic(output, &document)
         .map_err(|err| format!("could not write {}: {err}", output.display()))?;
+
+    if let Some(v2_output) = compat_v2_output {
+        let mut v2 = derive_compat_v2(&document);
+        v2.generated_at = Some(match read_stamp_if_unchanged(v2_output, &v2) {
+            Some(existing) => existing,
+            None => today,
+        });
+        validate_any_schema(&v2)
+            .map_err(|err| format!("generated compat v2 catalog failed validation: {err}"))?;
+        write_atomic(v2_output, &v2)
+            .map_err(|err| format!("could not write {}: {err}", v2_output.display()))?;
+    }
+
     Ok(render_summary(&document))
 }
 
@@ -762,6 +823,75 @@ mod tests {
                 artifact.strip_prefix
             );
         }
+    }
+
+    #[test]
+    fn deriving_v2_from_committed_v3_equals_committed_v2_ignoring_generated_at() {
+        let v3_path = Path::new(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../catalog/engines-v3.json"
+        ));
+        let v2_path = Path::new(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../catalog/engines-v2.json"
+        ));
+        let v3_doc: CatalogDocument =
+            serde_json::from_str(&std::fs::read_to_string(v3_path).expect("read v3"))
+                .expect("parse v3");
+        let v2_committed_text = std::fs::read_to_string(v2_path).expect("read v2");
+        let v2_committed: CatalogDocument =
+            serde_json::from_str(&v2_committed_text).expect("parse v2");
+
+        let mut derived = derive_compat_v2(&v3_doc);
+        derived.generated_at = v2_committed.generated_at.clone();
+
+        validate_any_schema(&derived).expect("derived v2 must validate");
+        assert_eq!(derived, v2_committed);
+
+        let mut derived_json = serde_json::to_string_pretty(&derived).expect("encode derived");
+        derived_json.push('\n');
+        assert_eq!(
+            derived_json, v2_committed_text,
+            "derived v2 JSON serialization must match committed engines-v2.json byte-for-byte"
+        );
+    }
+
+    #[test]
+    fn build_and_write_with_compat_writes_both_and_preserves_stamps_independently() {
+        let source = FixtureSource::wave_one();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let v3_out = dir.path().join("catalog/engines-v3.json");
+        let v2_out = dir.path().join("catalog/engines-v2.json");
+        let day1 = SystemTime::UNIX_EPOCH + Duration::from_secs(1_800_000_000); // 2027-01-15
+        let day2 = day1 + Duration::from_secs(86_400); // 2027-01-16
+
+        build_and_write_with_compat(&source, &fixture_selection(), &v3_out, Some(&v2_out), day1)
+            .expect("first write");
+        let v3_first: CatalogDocument =
+            serde_json::from_str(&std::fs::read_to_string(&v3_out).expect("read v3")).expect("v3");
+        let v2_first: CatalogDocument =
+            serde_json::from_str(&std::fs::read_to_string(&v2_out).expect("read v2")).expect("v2");
+        assert_eq!(v3_first.schema_version, 3);
+        assert_eq!(v2_first.schema_version, 2);
+        assert_eq!(v2_first.source_url, CATALOG_V2_SOURCE_URL);
+        assert_eq!(
+            v3_first.generated_at.as_deref(),
+            Some("2027-01-15T00:00:00Z")
+        );
+        assert_eq!(
+            v2_first.generated_at.as_deref(),
+            Some("2027-01-15T00:00:00Z")
+        );
+
+        // Second run on a later day with unchanged data keeps both stamps.
+        build_and_write_with_compat(&source, &fixture_selection(), &v3_out, Some(&v2_out), day2)
+            .expect("second write");
+        let v3_second: CatalogDocument =
+            serde_json::from_str(&std::fs::read_to_string(&v3_out).expect("read v3")).expect("v3");
+        let v2_second: CatalogDocument =
+            serde_json::from_str(&std::fs::read_to_string(&v2_out).expect("read v2")).expect("v2");
+        assert_eq!(v3_second.generated_at, v3_first.generated_at);
+        assert_eq!(v2_second.generated_at, v2_first.generated_at);
     }
 }
 

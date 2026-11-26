@@ -13,11 +13,16 @@ use clap::Subcommand;
 pub enum CatalogCommand {
     /// Rebuilds the bundled engine catalog.
     Build {
-        /// Where to write the generated JSON.
+        /// Where to write the generated schema-3 JSON.
         #[arg(long)]
         output: PathBuf,
+        /// Optional path where a derived schema-2 compatible JSON (without
+        /// `redis`, `deb`, or `license`) is also written for released
+        /// `v0.1.3`/`v0.1.4` clients.
+        #[arg(long)]
+        compat_v2_output: Option<PathBuf>,
     },
-    /// Validates a catalog JSON file offline.
+    /// Validates a catalog JSON file offline (schema 2 or schema 3).
     Validate {
         /// Path to validate (defaults to `catalog/engines-v3.json`).
         #[arg(long)]
@@ -26,17 +31,20 @@ pub enum CatalogCommand {
 }
 
 pub fn run(command: CatalogCommand) -> ExitCode {
-    run_with(command, build::run)
+    run_with(command, build::run_with_compat)
 }
 
 /// [`run`] with the build step injected, so both dispatch arms are testable
 /// offline (the real builder needs the network).
 pub fn run_with(
     command: CatalogCommand,
-    build: impl FnOnce(&Path) -> Result<String, String>,
+    build: impl FnOnce(&Path, Option<&Path>) -> Result<String, String>,
 ) -> ExitCode {
     match command {
-        CatalogCommand::Build { output } => match build(&output) {
+        CatalogCommand::Build {
+            output,
+            compat_v2_output,
+        } => match build(&output, compat_v2_output.as_deref()) {
             Ok(summary) => {
                 print!("{summary}");
                 ExitCode::SUCCESS
@@ -75,11 +83,25 @@ mod tests {
 
     #[test]
     fn build_argument_matches_the_workflow_command() {
-        let cli = Cli::try_parse_from(["catalog", "build", "--output", "catalog/engines-v3.json"])
-            .expect("parse");
+        let cli = Cli::try_parse_from([
+            "catalog",
+            "build",
+            "--output",
+            "catalog/engines-v3.json",
+            "--compat-v2-output",
+            "catalog/engines-v2.json",
+        ])
+        .expect("parse");
         match cli.command {
-            CatalogCommand::Build { output } => {
+            CatalogCommand::Build {
+                output,
+                compat_v2_output,
+            } => {
                 assert_eq!(output, PathBuf::from("catalog/engines-v3.json"));
+                assert_eq!(
+                    compat_v2_output,
+                    Some(PathBuf::from("catalog/engines-v2.json"))
+                );
             }
             other => panic!("unexpected {other:?}"),
         }
@@ -99,9 +121,11 @@ mod tests {
         let ok = run_with(
             CatalogCommand::Build {
                 output: PathBuf::from("out.json"),
+                compat_v2_output: Some(PathBuf::from("out-v2.json")),
             },
-            |path| {
+            |path, v2| {
                 assert_eq!(path, Path::new("out.json"));
+                assert_eq!(v2, Some(Path::new("out-v2.json")));
                 Ok("summary".to_owned())
             },
         );
@@ -110,8 +134,9 @@ mod tests {
         let failed = run_with(
             CatalogCommand::Build {
                 output: PathBuf::from("out.json"),
+                compat_v2_output: None,
             },
-            |_| Err("upstream down".to_owned()),
+            |_, _| Err("upstream down".to_owned()),
         );
         assert_eq!(failed, ExitCode::FAILURE);
     }

@@ -8,25 +8,28 @@ frozen so already-released clients never break:
 - `engines.json` (`schema_version: 1`) is kept frozen for early `v0.1.x` clients
   whose UI does not render EOL/status badges or the "Only show latest versions"
   filter.
-- `engines-v2.json` (`schema_version: 2`) is kept frozen for released `v0.1.3`
-  and `v0.1.4` clients. Empirically verified against an archived `v0.1.4` tree
+- `engines-v2.json` (`schema_version: 2`) continues to be refreshed daily for
+  released `v0.1.3` and `v0.1.4` clients, derived automatically from
+  `engines-v3.json` with every `redis` entry, `deb` artifact, and `license`
+  field stripped. Empirically verified against an archived `v0.1.4` tree
   (`cargo xtask catalog validate`): a `v0.1.4` client rejects the entire file on
   either an unknown engine (`unknown engine "redis"`) or an unknown archive
   format (`unknown archive format: deb`), causing daily refresh to degrade to
-  `Stale`/`Offline`. Therefore Redis and `.deb` artifacts are published
-  exclusively in `engines-v3.json`, and `engines.json` and `engines-v2.json`
-  remain byte-identical (guarded by a regression test in `xtask`).
+  `Stale`/`Offline`. Deriving v2 from v3 keeps released `v0.1.3`/`v0.1.4`
+  clients receiving PostgreSQL, MySQL, MariaDB, and Valkey patch updates without
+  seeing Redis or `.deb` entries (guarded by regression tests in `xtask`).
 
 None of these files is edited by hand.
 
 ## Generating and validating
 
 ```sh
-# Rebuild the catalog (HTTPS; needs network, and GITHUB_TOKEN for PostgreSQL).
-cargo xtask catalog build --output catalog/engines-v3.json
+# Rebuild the v3 catalog and derived v2 catalog (HTTPS; needs network, and GITHUB_TOKEN for PostgreSQL).
+cargo xtask catalog build --output catalog/engines-v3.json --compat-v2-output catalog/engines-v2.json
 
-# Validate any catalog file offline (used in CI).
+# Validate either catalog file offline (schema 2 or schema 3; used in CI).
 cargo xtask catalog validate --file catalog/engines-v3.json
+cargo xtask catalog validate --file catalog/engines-v2.json
 ```
 
 The builder output is deterministic: entries are sorted, every artifact carries a
