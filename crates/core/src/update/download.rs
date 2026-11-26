@@ -12,7 +12,9 @@ use crate::download::{CancellationToken, FreeSpaceFn, check_disk_space};
 
 use super::error::{UpdateError, UpdateResult};
 use super::model::{AvailableUpdate, UpdateAssetKind, UpdateProgress};
-use super::verify::{Checksums, ReleaseVerifier, Sha256ReleaseVerifier, verify_sha256_file};
+#[cfg(test)]
+use super::verify::Sha256ReleaseVerifier;
+use super::verify::{Checksums, ReleaseVerifier, verify_sha256_file};
 
 /// Hosts allowed for update downloads/redirects.
 pub const ALLOWED_HOSTS: &[&str] = &[
@@ -186,8 +188,10 @@ impl StagedUpdate {
     }
 }
 
-/// Downloads checksums and asset for `update`, verifies SHA-256, and stages the
-/// asset under a fresh private directory inside `staging_dir`.
+/// Test-only helper: downloads checksums and asset for `update` using the
+/// unsigned SHA-256-only verifier. Production callers must use
+/// [`download_update_with_progress`] with [`super::Ed25519ReleaseVerifier`].
+#[cfg(test)]
 pub async fn download_update(
     update: &AvailableUpdate,
     staging_dir: &Path,

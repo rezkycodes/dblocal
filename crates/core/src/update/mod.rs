@@ -23,10 +23,11 @@ pub use check::{
     FetchResponse, MAX_CHECKSUMS_BODY_BYTES, MAX_RELEASE_NOTES_BYTES, MAX_RELEASES_BODY_BYTES,
     ReqwestUpdateFetcher, UpdateCheckOptions, UpdateFetcher, check, sanitize_release_notes,
 };
+#[cfg(test)]
+pub use download::download_update;
 pub use download::{
     ALLOWED_HOSTS, MAX_UPDATE_BYTES, StagedUpdate, UpdateDownloadOptions, UpdateProgressSink,
-    download_and_verify, download_update, download_update_with_progress, redirect_allowed,
-    validate_url,
+    download_and_verify, download_update_with_progress, redirect_allowed, validate_url,
 };
 pub use error::{
     CODE_UPDATE_APPLY_FAILED, CODE_UPDATE_ASSET_MISSING, CODE_UPDATE_CANCELLED,
@@ -40,10 +41,12 @@ pub use extract::{
     MAX_UPDATE_EXTRACTED_BYTES, SVG_ICON_REL, extract_linux_tarball, extract_windows_zip,
 };
 pub use install::{
-    InstallPlan, InstallStep, LAST_UPDATE_ERROR_FILE, MSI_EXIT_REBOOT_REQUIRED, WindowsHelperArgs,
-    apply, apply_staged_update, cleanup_backup, cleanup_stale_staging, execute_restart,
-    plan_install, record_update_failure, restore_backup, run_windows_apply_helper, smoke_check,
-    take_last_update_failure, windows_helper_command, windows_msi_helper_command,
+    InstallPlan, InstallStep, LAST_UPDATE_ERROR_FILE, MSI_EXIT_REBOOT_REQUIRED,
+    STAGED_COMPLETED_MARKER, STAGED_PENDING_MARKER, WindowsHelperArgs, apply, apply_staged_update,
+    cleanup_backup, cleanup_stale_staging, execute_restart, mark_staging_completed,
+    mark_staging_pending, plan_install, record_update_failure, restore_backup,
+    run_windows_apply_helper, smoke_check, take_last_update_failure, windows_helper_command,
+    windows_msi_helper_command,
 };
 pub use kind::{
     InstallKind, PackageManagerHint, PackageOwnership, detect_for_os, detect_install_kind,
@@ -54,8 +57,10 @@ pub use model::{
     AvailableUpdate, ReleaseAsset, ReleaseChannel, RestartAction, UpdateAssetKind, UpdateCheck,
     UpdateProgress, platform_asset_tokens,
 };
+#[cfg(test)]
+pub use verify::Sha256ReleaseVerifier;
 pub use verify::{
     Checksums, ED25519_PUBLIC_KEY_LEN, ED25519_SIGNATURE_LEN, Ed25519ReleaseVerifier,
-    ReleaseVerifier, Sha256ReleaseVerifier, TRUSTED_PUBLIC_KEYS, constant_time_eq_hex,
-    decode_hex_32, has_trusted_signing_keys, sha256_file_hex, verify_sha256_file,
+    ReleaseVerifier, TRUSTED_PUBLIC_KEYS_RAW, constant_time_eq_hex, decode_hex_32,
+    has_trusted_signing_keys, parse_trusted_public_keys, sha256_file_hex, verify_sha256_file,
 };

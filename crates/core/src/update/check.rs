@@ -414,8 +414,13 @@ fn release_to_update(
         .install_kind
         .as_ref()
         .and_then(InstallKind::expected_asset_kind);
-    let Some(asset) =
-        select_platform_asset(&release.assets, options.os, options.arch, preferred_kind)?
+    let Some(asset) = select_platform_asset(
+        &release.assets,
+        &version,
+        options.os,
+        options.arch,
+        preferred_kind,
+    )?
     else {
         return Ok(None);
     };
@@ -463,6 +468,7 @@ fn is_checksums_asset(name: &str) -> bool {
 
 fn select_platform_asset(
     assets: &[GhAsset],
+    version: &Version,
     os: Os,
     arch: Arch,
     preferred: Option<UpdateAssetKind>,
@@ -479,6 +485,9 @@ fn select_platform_asset(
         };
         let lower = asset.name.to_ascii_lowercase();
         if !tokens.iter().any(|t| lower.contains(t)) {
+            continue;
+        }
+        if !asset_matches_version(&asset.name, version, tokens) {
             continue;
         }
         let candidate = asset_from_gh(asset)?.with_kind(kind);
@@ -510,6 +519,76 @@ fn select_platform_asset(
         return Ok(None);
     }
     Ok(fallback)
+}
+
+/// Verifies that `name` embeds the release's exact `version` on token boundaries
+/// so an older signed `checksums.txt` + older asset (including `.msi`, which has
+/// no pre-install `--version` smoke check) re-uploaded under a newer tag is refused.
+fn asset_matches_version(name: &str, version: &Version, platform_tokens: &[&str]) -> bool {
+    let lower = name.to_ascii_lowercase();
+    let canonical = version.to_string().to_ascii_lowercase();
+    let mut candidates = vec![canonical.clone()];
+    if !version.pre.is_empty() {
+        // GitHub Releases / build-deb/rpm normalize prerelease `-` to `.` (from `~`).
+        let normalized = canonical.replace('-', ".");
+        if normalized != canonical {
+            candidates.push(normalized);
+        }
+    }
+
+    for ver in &candidates {
+        let mut search_from = 0;
+        while let Some(rel) = lower[search_from..].find(ver.as_str()) {
+            let start = search_from + rel;
+            let end = start + ver.len();
+            search_from = start + 1;
+
+            let prefix_ok = is_valid_version_prefix(&lower[..start]);
+            let suffix_ok = is_valid_version_suffix(&lower[end..], platform_tokens);
+            if prefix_ok && suffix_ok {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn is_valid_version_prefix(prefix: &str) -> bool {
+    if prefix.ends_with('-') || prefix.ends_with('_') {
+        return true;
+    }
+    if let Some(before_v) = prefix.strip_suffix('v') {
+        return before_v.ends_with('-') || before_v.ends_with('_');
+    }
+    false
+}
+
+fn is_valid_version_suffix(suffix: &str, platform_tokens: &[&str]) -> bool {
+    if let Some(rest) = suffix
+        .strip_prefix('-')
+        .or_else(|| suffix.strip_prefix('_'))
+    {
+        // Require the next segment to be a platform token (e.g. `linux-x86_64`,
+        // `windows-x86_64`, `amd64`) or an RPM numeric release (`1.x86_64.rpm`),
+        // so stable `0.2.0` never matches prerelease `0.2.0-rc.1-...`.
+        if platform_tokens
+            .iter()
+            .any(|t| suffix.starts_with(t) || rest.starts_with(t))
+        {
+            return true;
+        }
+        let mut chars = rest.chars().peekable();
+        let mut digits = 0usize;
+        while chars.peek().is_some_and(char::is_ascii_digit) {
+            chars.next();
+            digits += 1;
+        }
+        return digits > 0 && chars.peek() == Some(&'.');
+    }
+    if let Some(rest) = suffix.strip_prefix('.') {
+        return rest.chars().next().is_some_and(|c| !c.is_ascii_digit());
+    }
+    false
 }
 
 fn should_replace_asset(current: Option<&ReleaseAsset>, candidate: &ReleaseAsset) -> bool {

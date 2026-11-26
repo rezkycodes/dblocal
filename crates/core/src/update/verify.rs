@@ -10,6 +10,7 @@
 use std::future::Future;
 use std::path::Path;
 use std::pin::Pin;
+use std::sync::OnceLock;
 
 use ring::signature::{ED25519, UnparsedPublicKey};
 use sha2::{Digest, Sha256};
@@ -22,20 +23,56 @@ pub const ED25519_PUBLIC_KEY_LEN: usize = 32;
 /// Expected raw byte length of an Ed25519 signature (`checksums.txt.sig`).
 pub const ED25519_SIGNATURE_LEN: usize = 64;
 
-/// Trusted Ed25519 release-signing public keys (64-character lowercase hex,
-/// representing the 32-byte raw Ed25519 public key).
+/// Single source of truth for trusted Ed25519 release-signing public keys,
+/// embedded directly from `packaging/release-signing/public-keys.txt`.
 ///
-/// Multiple keys may be listed to support seamless key rotation. While this
-/// list is empty (before the owner runs `packaging/release-signing/generate-key.sh`
-/// and commits the public key), release builds fail closed and refuse self-update.
-pub const TRUSTED_PUBLIC_KEYS: &[&str] = &[];
+/// Both CI (`.github/workflows/release.yml`) and the compiled Rust binary read
+/// this same file so they cannot drift. Multiple keys may be listed to support
+/// seamless key rotation. While this file has no keys, release builds fail
+/// closed and refuse self-update.
+pub const TRUSTED_PUBLIC_KEYS_RAW: &str =
+    include_str!("../../../../packaging/release-signing/public-keys.txt");
 
-/// Returns true when at least one valid Ed25519 public key is committed in
-/// [`TRUSTED_PUBLIC_KEYS`].
+/// Parses a `public-keys.txt` document into raw 32-byte Ed25519 public keys.
+///
+/// Format rules (shared with `.github/workflows/release.yml`):
+/// - Blank lines and lines whose trimmed form starts with `#` are ignored.
+/// - Every other line must be a 64-character lowercase hex string encoding a
+///   32-byte Ed25519 public key.
+/// - Any malformed line returns an error instead of being silently skipped.
+pub fn parse_trusted_public_keys(
+    contents: &str,
+) -> UpdateResult<Vec<[u8; ED25519_PUBLIC_KEY_LEN]>> {
+    let mut keys = Vec::new();
+    for (idx, raw) in contents.lines().enumerate() {
+        let line = raw.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        if line.len() != ED25519_PUBLIC_KEY_LEN * 2
+            || !line.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+        {
+            return Err(UpdateError::VerifyFailed {
+                reason: format!(
+                    "malformed Ed25519 public key in public-keys.txt at line {}",
+                    idx + 1
+                ),
+            });
+        }
+        keys.push(decode_hex_32(line)?);
+    }
+    Ok(keys)
+}
+
+fn compiled_trusted_public_keys() -> &'static UpdateResult<Vec<[u8; ED25519_PUBLIC_KEY_LEN]>> {
+    static PARSED: OnceLock<UpdateResult<Vec<[u8; ED25519_PUBLIC_KEY_LEN]>>> = OnceLock::new();
+    PARSED.get_or_init(|| parse_trusted_public_keys(TRUSTED_PUBLIC_KEYS_RAW))
+}
+
+/// Returns true when `packaging/release-signing/public-keys.txt` parses cleanly
+/// and contains at least one trusted Ed25519 public key.
 pub fn has_trusted_signing_keys() -> bool {
-    TRUSTED_PUBLIC_KEYS
-        .iter()
-        .any(|hex| decode_hex_32(hex).is_ok())
+    matches!(compiled_trusted_public_keys(), Ok(keys) if !keys.is_empty())
 }
 
 /// Verification seam for release manifests (`checksums.txt` + `checksums.txt.sig`)
@@ -68,16 +105,25 @@ pub trait ReleaseVerifier: Send + Sync {
 #[derive(Debug, Clone)]
 pub struct Ed25519ReleaseVerifier {
     trusted_keys: Vec<[u8; ED25519_PUBLIC_KEY_LEN]>,
+    init_error: Option<String>,
 }
 
 impl Ed25519ReleaseVerifier {
-    /// Builds a verifier from the compiled-in [`TRUSTED_PUBLIC_KEYS`].
+    /// Builds a verifier from the compiled-in `packaging/release-signing/public-keys.txt`.
+    ///
+    /// If the committed key file contains a malformed entry, every verification
+    /// call fails closed with that parse error rather than silently skipping it.
     pub fn production() -> Self {
-        let trusted_keys = TRUSTED_PUBLIC_KEYS
-            .iter()
-            .filter_map(|hex| decode_hex_32(hex).ok())
-            .collect();
-        Self { trusted_keys }
+        match compiled_trusted_public_keys() {
+            Ok(keys) => Self {
+                trusted_keys: keys.clone(),
+                init_error: None,
+            },
+            Err(err) => Self {
+                trusted_keys: Vec::new(),
+                init_error: Some(err.to_string()),
+            },
+        }
     }
 
     /// Builds a verifier from explicit hex-encoded 32-byte Ed25519 public keys.
@@ -88,12 +134,16 @@ impl Ed25519ReleaseVerifier {
         }
         Ok(Self {
             trusted_keys: decoded,
+            init_error: None,
         })
     }
 
     /// Builds a verifier from raw 32-byte Ed25519 public keys.
     pub fn from_raw_keys(keys: Vec<[u8; ED25519_PUBLIC_KEY_LEN]>) -> Self {
-        Self { trusted_keys: keys }
+        Self {
+            trusted_keys: keys,
+            init_error: None,
+        }
     }
 
     /// Number of trusted public keys loaded.
@@ -108,6 +158,11 @@ impl ReleaseVerifier for Ed25519ReleaseVerifier {
         checksums_bytes: &[u8],
         signature_bytes: Option<&[u8]>,
     ) -> UpdateResult<Checksums> {
+        if let Some(reason) = &self.init_error {
+            return Err(UpdateError::VerifyFailed {
+                reason: reason.clone(),
+            });
+        }
         if self.trusted_keys.is_empty() {
             return Err(UpdateError::VerifyFailed {
                 reason: "no trusted release signing public key is configured in this build"
@@ -155,12 +210,14 @@ impl ReleaseVerifier for Ed25519ReleaseVerifier {
     }
 }
 
-/// SHA-256-only verifier (used by unit tests that exercise download/checksum
-/// logic without generating a signing keypair). Production uses
-/// [`Ed25519ReleaseVerifier`].
+/// Test-only SHA-256-only verifier (used by unit tests that exercise
+/// download/checksum logic without generating a signing keypair).
+/// Production always uses [`Ed25519ReleaseVerifier`].
+#[cfg(test)]
 #[derive(Debug, Default, Clone, Copy)]
 pub struct Sha256ReleaseVerifier;
 
+#[cfg(test)]
 impl ReleaseVerifier for Sha256ReleaseVerifier {
     fn verify_manifest(
         &self,

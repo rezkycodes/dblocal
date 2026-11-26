@@ -33,6 +33,18 @@ pub const LAST_UPDATE_ERROR_FILE: &str = "last-error.txt";
 /// File name of the copied updater binary placed inside the private staging
 /// directory so Windows never executes the helper from the target being replaced.
 const STAGED_HELPER_EXE_NAME: &str = "dblocal-updater.exe";
+/// Marker file placed inside a `run-*` staging directory when a deferred
+/// Windows update is waiting for the user to restart (or for the helper to run).
+pub const STAGED_PENDING_MARKER: &str = "pending";
+/// Marker file placed inside a `run-*` staging directory once the detached
+/// Windows helper has finished so the next startup can remove it immediately.
+pub const STAGED_COMPLETED_MARKER: &str = "completed";
+/// Minimum age before an unmarked (interrupted) `run-*` staging directory is
+/// considered stale and deleted by startup cleanup.
+const ORPHAN_STAGING_MIN_AGE: Duration = Duration::from_secs(60 * 60);
+/// Maximum age a `pending`-marked `run-*` staging directory is protected from
+/// startup cleanup before being reclaimed as abandoned.
+const PENDING_STAGING_MAX_AGE: Duration = Duration::from_secs(24 * 60 * 60);
 
 /// A pure, serializable-ish description of how to apply an update.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -476,15 +488,47 @@ fn stage_windows_helper_copy(current_exe: &Path, run_dir: &Path) -> UpdateResult
     Ok(helper_dest)
 }
 
+/// Marks a `run-*` staging directory as pending restart so startup cleanup in
+/// other processes will not delete the staged MSI/helper while waiting for the
+/// user to restart.
+pub fn mark_staging_pending(run_dir: &Path) {
+    let _ = std::fs::remove_file(run_dir.join(STAGED_COMPLETED_MARKER));
+    let _ = std::fs::write(run_dir.join(STAGED_PENDING_MARKER), b"pending\n");
+}
+
+/// Marks a `run-*` staging directory as completed once the detached Windows
+/// helper has finished so the next startup cleanup removes it immediately.
+pub fn mark_staging_completed(run_dir: &Path) {
+    let _ = std::fs::remove_file(run_dir.join(STAGED_PENDING_MARKER));
+    let _ = std::fs::write(run_dir.join(STAGED_COMPLETED_MARKER), b"completed\n");
+}
+
 /// Removes leftover `run-*` staging directories on a later startup when no
 /// update lock is held and the current process is not executing from inside one.
+///
+/// Protection against deleting an active or pending update:
+/// - `completed`-marked directories are removed immediately (unless `current_exe`
+///   is inside them).
+/// - `pending`-marked directories (waiting for restart / helper) are preserved
+///   until they exceed `PENDING_STAGING_MAX_AGE` (24 hours).
+/// - Unmarked directories (interrupted mid-download) are preserved until they
+///   exceed `ORPHAN_STAGING_MIN_AGE` (1 hour).
 pub fn cleanup_stale_staging(staging_dir: &Path) {
+    cleanup_stale_staging_with_ages(staging_dir, ORPHAN_STAGING_MIN_AGE, PENDING_STAGING_MAX_AGE);
+}
+
+pub(crate) fn cleanup_stale_staging_with_ages(
+    staging_dir: &Path,
+    orphan_min_age: Duration,
+    pending_max_age: Duration,
+) {
     let Ok(entries) = std::fs::read_dir(staging_dir) else {
         return;
     };
     let current_exe = std::env::current_exe()
         .ok()
         .and_then(|p| std::fs::canonicalize(&p).ok().or(Some(p)));
+    let now = std::time::SystemTime::now();
     for entry in entries.flatten() {
         let name = entry.file_name();
         if !name.to_string_lossy().starts_with("run-") {
@@ -501,8 +545,34 @@ pub fn cleanup_stale_staging(staging_dir: &Path) {
         {
             continue;
         }
+        if !should_reclaim_staging_dir(&path, now, orphan_min_age, pending_max_age) {
+            continue;
+        }
         let _ = std::fs::remove_dir_all(&path);
     }
+}
+
+fn should_reclaim_staging_dir(
+    run_dir: &Path,
+    now: std::time::SystemTime,
+    orphan_min_age: Duration,
+    pending_max_age: Duration,
+) -> bool {
+    if run_dir.join(STAGED_COMPLETED_MARKER).is_file() {
+        return true;
+    }
+    let pending_marker = run_dir.join(STAGED_PENDING_MARKER);
+    if pending_marker.is_file() {
+        return path_age(&pending_marker, now)
+            .or_else(|| path_age(run_dir, now))
+            .is_some_and(|age| age >= pending_max_age);
+    }
+    path_age(run_dir, now).is_some_and(|age| age >= orphan_min_age)
+}
+
+fn path_age(path: &Path, now: std::time::SystemTime) -> Option<Duration> {
+    let modified = std::fs::metadata(path).ok()?.modified().ok()?;
+    now.duration_since(modified).ok()
 }
 
 /// Persists an update failure message in `staging_dir/last-error.txt` so the
@@ -1091,62 +1161,118 @@ pub(crate) fn run_windows_apply_helper_with(
     msi_runner: impl FnOnce(&Path) -> UpdateResult<Option<i32>>,
     relaunch_fn: impl Fn(&Path) -> UpdateResult<()>,
 ) -> UpdateResult<()> {
-    if !wait_fn(args.pid) {
-        let reason = format!(
-            "previous DBLocal process (PID {}) did not exit within {}s; update aborted",
-            args.pid,
-            WINDOWS_HELPER_WAIT_TIMEOUT.as_secs()
-        );
-        persist_helper_error(args, &reason);
-        return Err(UpdateError::ApplyFailed { reason });
-    }
+    let helper_run_dir = helper_run_dir_for(args);
+    let _staging_lock = helper_staging_dir_for(args, helper_run_dir.as_deref())
+        .and_then(|dir| super::lock::UpdateLock::acquire(&dir).ok());
 
-    let apply_result = if let Some(msi) = &args.msi {
-        match msi_runner(msi) {
-            Ok(Some(0)) => Ok(()),
-            Ok(Some(MSI_EXIT_REBOOT_REQUIRED)) => {
-                tracing::info!("msiexec exited with 3010 (success, reboot required)");
-                Ok(())
-            }
-            Ok(code) => Err(UpdateError::ApplyFailed {
-                reason: format!("MSI installer failed with exit code {code:?}"),
-            }),
-            Err(err) => Err(err),
+    let result = (|| -> UpdateResult<()> {
+        if !wait_fn(args.pid) {
+            let reason = format!(
+                "previous DBLocal process (PID {}) did not exit within {}s; update aborted",
+                args.pid,
+                WINDOWS_HELPER_WAIT_TIMEOUT.as_secs()
+            );
+            persist_helper_error(args, &reason);
+            return Err(UpdateError::ApplyFailed { reason });
         }
-    } else if let Some(staged) = &args.staged {
-        apply_windows_zip_swap(staged, &args.target, args.version.as_deref())
-    } else {
-        Err(UpdateError::Malformed {
-            reason: "--apply-update requires either --msi or --staged".to_owned(),
-        })
-    };
 
-    if let Err(err) = apply_result {
-        persist_helper_error(args, &err.to_string());
+        let apply_result = if let Some(msi) = &args.msi {
+            match msi_runner(msi) {
+                Ok(Some(0)) => Ok(()),
+                Ok(Some(MSI_EXIT_REBOOT_REQUIRED)) => {
+                    tracing::info!("msiexec exited with 3010 (success, reboot required)");
+                    Ok(())
+                }
+                Ok(code) => Err(UpdateError::ApplyFailed {
+                    reason: format!("MSI installer failed with exit code {code:?}"),
+                }),
+                Err(err) => Err(err),
+            }
+        } else if let Some(staged) = &args.staged {
+            apply_windows_zip_swap(staged, &args.target, args.version.as_deref())
+        } else {
+            Err(UpdateError::Malformed {
+                reason: "--apply-update requires either --msi or --staged".to_owned(),
+            })
+        };
+
+        if let Err(err) = apply_result {
+            persist_helper_error(args, &err.to_string());
+            if args.target.is_file() {
+                let _ = relaunch_fn(&args.target);
+            }
+            return Err(err);
+        }
+
         if args.target.is_file() {
             let _ = relaunch_fn(&args.target);
         }
-        return Err(err);
-    }
+        Ok(())
+    })();
 
-    if args.target.is_file() {
-        let _ = relaunch_fn(&args.target);
+    if let Some(run_dir) = helper_run_dir {
+        mark_staging_completed(&run_dir);
     }
-    Ok(())
+    result
+}
+
+fn helper_run_dir_for(args: &WindowsHelperArgs) -> Option<PathBuf> {
+    let candidate = args.msi.as_deref().or(args.staged.as_deref())?;
+    for ancestor in candidate.ancestors().skip(1) {
+        if ancestor
+            .file_name()
+            .is_some_and(|n| n.to_string_lossy().starts_with("run-"))
+        {
+            return Some(ancestor.to_path_buf());
+        }
+    }
+    None
+}
+
+fn helper_staging_dir_for(args: &WindowsHelperArgs, run_dir: Option<&Path>) -> Option<PathBuf> {
+    if let Some(dir) = run_dir.and_then(Path::parent) {
+        return Some(dir.to_path_buf());
+    }
+    args.error_file
+        .as_deref()
+        .and_then(Path::parent)
+        .map(Path::to_path_buf)
 }
 
 fn apply_windows_zip_swap(staged: &Path, target: &Path, version: Option<&str>) -> UpdateResult<()> {
+    let expected_version = match version {
+        Some(ver_str) => Some(
+            Version::parse(ver_str).map_err(|err| UpdateError::Malformed {
+                reason: format!("invalid expected version '{ver_str}': {err}"),
+            })?,
+        ),
+        None => None,
+    };
+
     let backup = backup_path(target);
-    create_backup(target, &backup)?;
-    if let Err(err) = copy_with_mode(staged, target, target) {
-        let _ = restore_backup(&backup, target);
+    let tmp = sibling_temp_path(target);
+
+    // Copy to a sibling temp file and rename over `target` instead of writing
+    // into `target` in place: `create_backup` hard-links `<exe>.old` to `target`,
+    // so writing into `target` would overwrite the backup inode too.
+    copy_with_mode(staged, &tmp, target)?;
+    if let Err(err) = fsync_path(&tmp) {
+        let _ = std::fs::remove_file(&tmp);
         return Err(err);
     }
-    if let Some(ver_str) = version {
-        let ver = Version::parse(ver_str).map_err(|err| UpdateError::Malformed {
-            reason: format!("invalid expected version '{ver_str}': {err}"),
-        })?;
-        smoke_or_rollback(target, &backup, &ver)?;
+    if let Err(err) = create_backup(target, &backup) {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(err);
+    }
+    if let Err(source) = std::fs::rename(&tmp, target) {
+        let _ = std::fs::remove_file(&tmp);
+        let _ = restore_backup(&backup, target);
+        return Err(UpdateError::ApplyFailed {
+            reason: format!("could not replace the binary: {source}"),
+        });
+    }
+    if let Some(ver) = &expected_version {
+        smoke_or_rollback(target, &backup, ver)?;
     }
     Ok(())
 }

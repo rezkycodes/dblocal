@@ -561,9 +561,12 @@ impl UpdateInstaller for DownloadInstaller {
         );
         match res {
             Ok(action) => {
-                // Keep the staged file only when a deferred Windows helper needs it after exit.
+                // Keep the staged file only when a deferred Windows helper needs it after exit,
+                // and mark the run dir pending so startup cleanup in other processes protects it.
                 if matches!(action, RestartAction::Relaunch { .. }) {
                     staged.cleanup();
+                } else {
+                    crate::update::mark_staging_pending(staged.run_dir());
                 }
                 Ok(action)
             }
