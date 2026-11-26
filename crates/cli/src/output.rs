@@ -139,6 +139,7 @@ pub fn format_update_json(status: &dblocal_core::service::UpdateStatus) -> Strin
         serde_json::json!({
             "version": available.version,
             "tag": available.tag,
+            "release_url": available.release_url,
             "asset_name": available.asset_name,
             "size_bytes": available.size_bytes,
         })
@@ -148,6 +149,7 @@ pub fn format_update_json(status: &dblocal_core::service::UpdateStatus) -> Strin
         "available": available,
         "can_self_update": status.install_kind.can_self_update(),
         "package_manager_hint": status.package_manager_hint,
+        "cannot_update_reason": status.cannot_update_reason,
     })
     .to_string()
 }

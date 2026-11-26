@@ -117,6 +117,10 @@ pub const MSG_UPDATE_UP_TO_DATE: &str = "DBLocal is up to date.";
 pub const MSG_UPDATE_AVAILABLE: &str = "A new version is available:";
 /// The update was applied.
 pub const MSG_UPDATE_APPLIED: &str = "Update installed.";
+/// Formats the post-install message with the installed version.
+pub fn update_applied_version(version: &str) -> String {
+    format!("{MSG_UPDATE_APPLIED} Restart DBLocal to use v{version}.")
+}
 /// The install is package-manager owned, so self-update is refused.
 pub const MSG_UPDATE_PACKAGE_MANAGER: &str =
     "Automatic updates are not available; update through your package manager.";

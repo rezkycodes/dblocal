@@ -298,6 +298,12 @@ pub const AUTOSTART_FLAG: &str = dblocal_core::autostart::AUTOSTART_FLAG;
 
 /// Entry point used by `main`; returns the process exit code.
 pub fn run(args: Vec<OsString>) -> ExitCode {
+    if args
+        .first()
+        .is_some_and(|a| a == dblocal_core::consts::APPLY_UPDATE_FLAG)
+    {
+        return run_apply_update_helper(&args[1..]);
+    }
     let args = normalize_autostart_flag(args);
     let cli = match Cli::try_parse_from(std::iter::once(OsString::from("dblocal")).chain(args)) {
         Ok(cli) => cli,
@@ -316,6 +322,71 @@ pub fn run(args: Vec<OsString>) -> ExitCode {
         Some(Command::Autostart { action, json }) => run_autostart_command(&action, json),
         Some(command) => run_command(command),
     }
+}
+
+fn run_apply_update_helper(args: &[OsString]) -> ExitCode {
+    let parsed = match parse_windows_helper_args(args) {
+        Ok(parsed) => parsed,
+        Err(msg) => {
+            eprintln!("{msg}");
+            return ExitCode::from(EXIT_BAD_ARGS);
+        }
+    };
+    match dblocal_core::update::run_windows_apply_helper(&parsed) {
+        Ok(()) => ExitCode::from(EXIT_OK),
+        Err(err) => {
+            eprintln!("{}", err.diagnostic());
+            ExitCode::from(EXIT_GENERAL)
+        }
+    }
+}
+
+fn parse_windows_helper_args(
+    args: &[OsString],
+) -> std::result::Result<dblocal_core::update::WindowsHelperArgs, String> {
+    let mut pid: Option<u32> = None;
+    let mut msi: Option<std::path::PathBuf> = None;
+    let mut staged: Option<std::path::PathBuf> = None;
+    let mut target: Option<std::path::PathBuf> = None;
+    let mut version: Option<String> = None;
+
+    let mut i = 0;
+    while i < args.len() {
+        let key = args[i].to_string_lossy();
+        let next = args
+            .get(i + 1)
+            .ok_or_else(|| format!("missing value for {key}"))?;
+        match key.as_ref() {
+            "--pid" => {
+                pid = Some(
+                    next.to_string_lossy()
+                        .parse::<u32>()
+                        .map_err(|e| format!("invalid --pid: {e}"))?,
+                );
+            }
+            "--msi" => msi = Some(std::path::PathBuf::from(next)),
+            "--staged" => staged = Some(std::path::PathBuf::from(next)),
+            "--target" => target = Some(std::path::PathBuf::from(next)),
+            "--version" => {
+                version = Some(next.to_string_lossy().into_owned());
+            }
+            other => return Err(format!("unknown --apply-update argument: {other}")),
+        }
+        i += 2;
+    }
+
+    let pid = pid.ok_or_else(|| "missing --pid".to_owned())?;
+    let target = target.ok_or_else(|| "missing --target".to_owned())?;
+    if msi.is_none() && staged.is_none() {
+        return Err("missing --msi or --staged".to_owned());
+    }
+    Ok(dblocal_core::update::WindowsHelperArgs {
+        pid,
+        msi,
+        staged,
+        target,
+        version,
+    })
 }
 
 fn run_autostart_command(action: &str, json: bool) -> ExitCode {
