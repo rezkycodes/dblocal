@@ -55,10 +55,14 @@ Configure these under **Settings → Secrets and variables → Actions**.
 |---|---|
 | `RELEASE_SIGNING_KEY` | Ed25519 private key in PEM format used by OpenSSL in the `release` job to sign `checksums.txt` -> `checksums.txt.sig` (raw 64-byte Ed25519 signature). |
 
-- **Initial setup**: Run `bash packaging/release-signing/generate-key.sh`. It creates the key pair in a private `0700` temp directory, uploads `RELEASE_SIGNING_KEY` via `gh secret set` over stdin without printing it, reminds you to keep a safe offline backup, prints only the 64-character hex public key, and deletes all temporary files even on error.
-- **Commit the public key**: Paste the 64-character hex public key into both `packaging/release-signing/public-keys.txt` and `TRUSTED_PUBLIC_KEYS` in `crates/core/src/update/verify.rs`.
+- **Initial setup**: Run `bash packaging/release-signing/generate-key.sh --backup /path/outside/repo/dblocal-signing.enc.pem`. It creates the key pair in a private `0700` temp directory, encrypts a PKCS#8 AES-256 offline backup at `--backup` (prompting interactively via OpenSSL, mode `0600`, refusing to overwrite or write inside a git work tree, and verifying the backup decrypts to the same public key before deleting the temp key), uploads `RELEASE_SIGNING_KEY` via `gh secret set` over stdin without printing it, prints only the 64-character lowercase hex public key, and deletes all temporary files even on error. Pass `--no-backup` only if explicitly opting out (not recommended for production because GitHub secrets cannot be read back).
+- **Commit the public key (single source of truth)**: Paste the 64-character lowercase hex public key into `packaging/release-signing/public-keys.txt`. Both `.github/workflows/release.yml` and `crates/core/src/update/verify.rs` (via `include_str!`) read this single file so CI and binaries cannot drift. Malformed lines fail tests and verification.
 - **Fail-closed**: While no public key is committed or `RELEASE_SIGNING_KEY` is missing, tag builds in `release.yml` fail and release builds of DBLocal refuse automatic self-update. Dry-run builds (`release-dry/**`) are unaffected.
-- **Key rotation**: Add the new public key alongside the existing one in both files, release a version trusting both keys, then update `RELEASE_SIGNING_KEY` to the new private key and retire the old public key in a later release.
+- **Restoring from backup**: If `RELEASE_SIGNING_KEY` is lost in GitHub Actions, restore it directly from your encrypted offline backup without writing plaintext to disk:
+  ```sh
+  openssl pkey -in /path/to/dblocal-signing.enc.pem | gh secret set RELEASE_SIGNING_KEY --repo rezkycodes/dblocal
+  ```
+- **Key rotation**: Generate a new key pair (saving a new `--backup`), keep the old key in `RELEASE_SIGNING_KEY` temporarily while adding the new 64-char hex public key alongside the old one in `packaging/release-signing/public-keys.txt`, ship a release signed with the old key so installed apps learn the new key, then upload the new private key to `RELEASE_SIGNING_KEY` (and optionally remove the old public key in a later release once users have upgraded).
 
 ### macOS signing and notarization (D-20, OPEN-04)
 
