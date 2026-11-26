@@ -3,7 +3,7 @@
 //! Each entry says what the picker should show: the tag, the release line it
 //! groups under, whether upstream still supports it, and the support status
 //! (`lts`, `innovation`, `rolling`). Every line's newest patch is listed; the
-//! picker hides older patches unless "Hanya versi terbaru" is unchecked, so the
+//! picker hides older patches unless "Only show latest versions" is unchecked, so the
 //! table only needs to say which patches exist for the "all" list.
 //!
 //! Adding or retiring a version is a one-line edit here, and the daily catalog

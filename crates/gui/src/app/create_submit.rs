@@ -49,7 +49,7 @@ pub struct CreateForm {
 }
 
 impl CreateForm {
-    /// The picker filter the "Hanya versi terbaru" checkbox currently chooses.
+    /// The picker filter the "Only show latest versions" checkbox currently chooses.
     pub fn version_filter(&self) -> VersionFilter {
         if self.latest_only {
             VersionFilter::LatestOnly

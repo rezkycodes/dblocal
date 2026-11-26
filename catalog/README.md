@@ -4,7 +4,7 @@ This directory is the bundled source of truth for "what can I install on this
 host". The application compiles `engines-v2.json` (`schema_version: 2`) into
 the binary and refreshes it in the background; `engines.json`
 (`schema_version: 1`) is kept frozen for released `v0.1.x` clients whose UI
-does not render EOL/status badges or the "Hanya versi terbaru" filter. Neither
+does not render EOL/status badges or the "Only show latest versions" filter. Neither
 file is edited by hand.
 
 ## Generating and validating

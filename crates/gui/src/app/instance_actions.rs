@@ -406,7 +406,7 @@ impl Workspace {
 
     /// The version-row focus handles for `engine`, in picker order.
     ///
-    /// Rebuilt whenever the selected engine or the "Hanya versi terbaru"
+    /// Rebuilt whenever the selected engine or the "Only show latest versions"
     /// checkbox changes, because each engine has its own version list and the
     /// filter changes which rows exist (`F-PLH-01` AC1: Tab reaches every row).
     fn version_focus_for(
@@ -517,7 +517,7 @@ impl Workspace {
         }
     }
 
-    /// Toggles the "Hanya versi terbaru" checkbox and keeps the selection valid.
+    /// Toggles the "Only show latest versions" checkbox and keeps the selection valid.
     ///
     /// Turning the filter on can hide the row the user had chosen (an older
     /// patch of a line). If that happens the newest visible version on the same

@@ -202,7 +202,7 @@ fn render_engine_cards(
     h_flex().gap_2p5().flex_wrap().children(cards)
 }
 
-/// The version list with the "Hanya versi terbaru" toggle, status badges and
+/// The version list with the "Only show latest versions" toggle, status badges and
 /// the installed / download badges.
 fn render_versions(
     entry: Option<&EngineEntry>,
@@ -327,7 +327,7 @@ fn render_versions(
     list
 }
 
-/// The "Hanya versi terbaru" checkbox row shown above the version list.
+/// The "Only show latest versions" checkbox row shown above the version list.
 fn latest_only_toggle(
     checked: bool,
     theme: &Theme,

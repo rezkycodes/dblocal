@@ -201,7 +201,7 @@ pub const UI_VERSION_INNOVATION: &str = "Innovation";
 /// Version badge: MariaDB rolling stable release.
 pub const UI_VERSION_ROLLING: &str = "Rolling";
 /// Create dialog: the "latest only" version-list checkbox.
-pub const UI_CREATE_LATEST_ONLY: &str = "Hanya versi terbaru";
+pub const UI_CREATE_LATEST_ONLY: &str = "Only show latest versions";
 
 // --- Delete dialog (D-18) ---------------------------------------------------
 
