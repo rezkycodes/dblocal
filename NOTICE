@@ -1,0 +1,24 @@
+# Third-Party Notices
+
+## Simple Icons
+
+The service icon SVG files under `crates/gui/assets/icons/` (`postgresql.svg`,
+`mysql.svg`, `mariadb.svg`, `redis.svg`, `rustfs.svg`) are copied from
+[Simple Icons](https://github.com/simple-icons/simple-icons) v16.38.1
+(`https://www.npmjs.com/package/simple-icons/v/16.38.1`), which is dedicated to
+the public domain under **CC0 1.0 Universal (CC0-1.0)**.
+
+## Third-Party Trademarks
+
+Product names, logos, and brands shown in DBLocal are the property of their
+respective trademark owners and are used solely to identify the corresponding
+local database and storage services managed by DBLocal:
+
+- **PostgreSQL** and the PostgreSQL elephant logo are registered trademarks of
+  the PostgreSQL Community Association of Canada.
+- **MySQL** is a registered trademark of Oracle Corporation.
+- **MariaDB** is a registered trademark of MariaDB Corporation Ab.
+- **Redis** is a registered trademark of Redis Ltd.
+- **Valkey** and the Valkey logo are trademarks of LF Projects, LLC. (DBLocal
+  displays a `VK` monogram badge for Valkey rather than the Valkey logo.)
+- **RustFS** is a trademark of the RustFS project (Apache-2.0).
