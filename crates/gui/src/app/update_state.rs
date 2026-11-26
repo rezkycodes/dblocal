@@ -1,0 +1,607 @@
+//! Pure state for the in-app update (`F-PKG-05`).
+//!
+//! The title-bar download icon, the update dialog and the Settings section all
+//! read this one read model. It is plain data so every stage — available,
+//! downloading, verifying, installing, ready, failed, cancelled and
+//! cannot-self-update — is unit-tested without a window or a service.
+//!
+//! Nothing here starts work: the action handlers in `update_actions` call the
+//! service, and `apply_progress` folds each `UpdateProgress` event into a phase.
+
+use dblocal_core::service::{AvailableUpdateView, OperationId, UpdateStatus, UserFacingError};
+use dblocal_core::update::{InstallKind, UpdateProgress};
+
+/// What the update UI is showing.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum UpdatePhase {
+    /// No newer release, or no check has found one: no icon, no dialog.
+    #[default]
+    Hidden,
+    /// A newer release exists and this install may replace itself.
+    Available,
+    /// A newer release exists but this install cannot replace itself (deb, rpm,
+    /// per-machine MSI, macOS, unknown). The icon shows; pressing explains.
+    CannotSelfUpdate,
+    /// The asset is downloading; the numbers are the latest sample.
+    Downloading {
+        /// Bytes received so far.
+        received: u64,
+        /// Expected total, when the server sent a length.
+        total: Option<u64>,
+    },
+    /// The checksum of the download is being verified.
+    Verifying,
+    /// The verified files are being installed.
+    Installing,
+    /// Installed; the app is about to restart into `version`.
+    Ready {
+        /// Version that will run after the restart.
+        version: String,
+    },
+    /// The update stopped with a stable code.
+    Failed {
+        /// Stable `DBL-xxxx` code.
+        code: String,
+        /// English explanation from the service.
+        message: String,
+    },
+    /// The user cancelled while downloading. Nothing was changed.
+    Cancelled,
+}
+
+impl UpdatePhase {
+    /// Whether an update is downloading, verifying or installing right now.
+    pub fn is_running(&self) -> bool {
+        matches!(
+            self,
+            Self::Downloading { .. } | Self::Verifying | Self::Installing
+        )
+    }
+
+    /// Whether a terminal outcome is on screen (failed or cancelled).
+    pub fn is_stopped(&self) -> bool {
+        matches!(self, Self::Failed { .. } | Self::Cancelled)
+    }
+}
+
+/// The whole update read model.
+#[derive(Debug, Clone, Default)]
+pub struct UpdateState {
+    /// The newer release the last check found.
+    pub available: Option<AvailableUpdateView>,
+    /// How this binary was installed, and therefore whether it may self-update.
+    pub install_kind: Option<InstallKind>,
+    /// The refusal reason the check returned, shown instead of the progress.
+    pub cannot_reason: Option<String>,
+    /// The operation `start_update` returned, while one is in flight.
+    pub operation: Option<OperationId>,
+    /// What the icon and the dialog show.
+    pub phase: UpdatePhase,
+    /// Whether the update dialog is open.
+    pub dialog_open: bool,
+    /// "Check for updates automatically", as the service last confirmed it.
+    pub auto_check: Option<bool>,
+    /// A write of the automatic-check setting is in flight.
+    pub auto_check_busy: bool,
+    /// The automatic-check write failed; the switch keeps the confirmed value.
+    pub auto_check_error: Option<String>,
+    /// Whether a manual check is in flight (the Settings "Check now" spinner).
+    pub checking: bool,
+    /// Whether any check returned an answer, so Settings can say "up to date".
+    pub checked_once: bool,
+    /// The last manual check's typed failure, shown under the button.
+    pub check_error: Option<UserFacingError>,
+    /// A failed restart, kept beside the `Ready` phase so the user can press
+    /// "Restart now" instead of downloading the release again.
+    pub restart_error: Option<UserFacingError>,
+}
+
+impl UpdateState {
+    /// Applies a completed check. `None` means the check was quiet (offline or
+    /// rate limited) and must change nothing; a status without a newer release
+    /// hides the icon and closes a finished dialog.
+    pub fn apply_check(&mut self, status: Option<&UpdateStatus>) {
+        let Some(status) = status else {
+            return;
+        };
+        self.install_kind = Some(status.install_kind.clone());
+        self.available = status.available.clone();
+        self.checked_once = true;
+        self.check_error = None;
+        self.cannot_reason = status
+            .cannot_update_reason
+            .clone()
+            .or_else(|| status.package_manager_hint.clone());
+        match &status.available {
+            None => {
+                self.phase = UpdatePhase::Hidden;
+                self.operation = None;
+                self.dialog_open = false;
+            }
+            Some(_) if self.phase.is_running() => {}
+            Some(view) if view.can_self_update => {
+                self.phase = UpdatePhase::Available;
+            }
+            Some(_) => self.phase = UpdatePhase::CannotSelfUpdate,
+        }
+    }
+
+    /// The newer release, which the title-bar tooltip names.
+    pub fn available_version(&self) -> Option<&str> {
+        self.available.as_ref().map(|view| view.version.as_str())
+    }
+
+    /// Whether the title-bar download icon is on screen.
+    ///
+    /// Hidden with no newer release, and while nothing was checked. Shown for a
+    /// newer release whether or not this install can replace itself: a
+    /// package-manager install still needs to point at its release page.
+    pub fn icon_visible(&self) -> bool {
+        self.available.is_some() && !matches!(self.phase, UpdatePhase::Hidden)
+    }
+
+    /// Whether an update is running; the title-bar button then shows the
+    /// dialog instead of starting a second update.
+    pub fn running(&self) -> bool {
+        self.phase.is_running()
+    }
+
+    /// Whether a second `start_update` must be refused.
+    pub fn blocks_new_update(&self) -> bool {
+        self.phase.is_running() || matches!(self.phase, UpdatePhase::Ready { .. })
+    }
+
+    /// Whether the dialog should draw.
+    pub fn dialog_visible(&self) -> bool {
+        self.dialog_open && !matches!(self.phase, UpdatePhase::Hidden)
+    }
+
+    /// Download percent, when the total is known.
+    pub fn percent(&self) -> Option<u8> {
+        match self.phase {
+            UpdatePhase::Downloading {
+                received,
+                total: Some(total),
+            } if total > 0 => Some((received.saturating_mul(100) / total).min(100) as u8),
+            _ => None,
+        }
+    }
+
+    /// Bytes received so far, for the dialog's size line.
+    pub fn received_bytes(&self) -> Option<u64> {
+        match self.phase {
+            UpdatePhase::Downloading { received, .. } => Some(received),
+            _ => None,
+        }
+    }
+
+    /// Expected bytes, when the release declared them.
+    pub fn total_bytes(&self) -> Option<u64> {
+        match self.phase {
+            UpdatePhase::Downloading { total, .. } => total,
+            _ => self
+                .available
+                .as_ref()
+                .map(|view| view.size_bytes)
+                .filter(|size| *size > 0),
+        }
+    }
+
+    /// The `received / total · percent` detail line.
+    pub fn download_detail(&self) -> Option<String> {
+        let received = self.received_bytes()?;
+        let total = self.total_bytes();
+        let percent = self.percent();
+        Some(match (total, percent) {
+            (Some(total), Some(percent)) => format!(
+                "{} / {}  ·  {percent}%",
+                crate::format::format_bytes(received),
+                crate::format::format_bytes(total)
+            ),
+            (Some(total), None) => format!(
+                "{} / {}",
+                crate::format::format_bytes(received),
+                crate::format::format_bytes(total)
+            ),
+            (None, _) => crate::format::format_bytes(received),
+        })
+    }
+
+    /// The dialog headline for the current phase.
+    pub fn headline(&self) -> String {
+        use dblocal_core::strings;
+        let version = self.available_version().unwrap_or_default();
+        match &self.phase {
+            UpdatePhase::Hidden => String::new(),
+            UpdatePhase::Available => strings::settings_available(version),
+            UpdatePhase::CannotSelfUpdate => strings::UI_UPDATE_CANNOT.to_owned(),
+            UpdatePhase::Downloading { .. } => strings::update_downloading(version),
+            UpdatePhase::Verifying => strings::UI_UPDATE_VERIFYING.to_owned(),
+            UpdatePhase::Installing => strings::update_installing(version),
+            UpdatePhase::Ready { version } => strings::update_ready(version),
+            UpdatePhase::Failed { .. } => strings::UI_UPDATE_FAILED.to_owned(),
+            UpdatePhase::Cancelled => strings::UI_UPDATE_CANCELLED.to_owned(),
+        }
+    }
+
+    /// The refusal reason `CannotSelfUpdate` explains, from the check.
+    pub fn cannot_update_reason(&self) -> Option<&str> {
+        if self.phase != UpdatePhase::CannotSelfUpdate {
+            return None;
+        }
+        self.cannot_reason.as_deref()
+    }
+
+    /// The release page URL, when a newer release was found.
+    pub fn release_url(&self) -> Option<&str> {
+        self.available
+            .as_ref()
+            .map(|view| view.release_url.as_str())
+            .filter(|url| !url.is_empty())
+    }
+
+    /// Whether the dialog offers "Cancel update" (downloading only: after that
+    /// the files are already being replaced).
+    pub fn can_cancel(&self) -> bool {
+        matches!(self.phase, UpdatePhase::Downloading { .. })
+    }
+
+    /// Whether the dialog offers "Try again" (a stopped attempt, or an
+    /// available one that has not started).
+    ///
+    /// A managed install never offers it: retrying cannot change the install
+    /// method, so the release page is the only action there.
+    pub fn can_retry(&self) -> bool {
+        self.phase.is_stopped() || self.phase == UpdatePhase::Available
+    }
+
+    /// Whether the dialog offers "Restart now".
+    pub fn can_restart(&self) -> bool {
+        matches!(self.phase, UpdatePhase::Ready { .. })
+    }
+
+    /// Folds one progress event for `id`.
+    ///
+    /// An event for an operation this state does not own is ignored, so a stale
+    /// sample can never move a fresh attempt.
+    pub fn apply_progress(&mut self, id: &OperationId, progress: &UpdateProgress) {
+        if self.operation.as_ref() != Some(id) {
+            return;
+        }
+        match progress {
+            UpdateProgress::Downloading {
+                received_bytes,
+                total_bytes,
+            } => {
+                self.phase = UpdatePhase::Downloading {
+                    received: *received_bytes,
+                    total: *total_bytes,
+                };
+                self.dialog_open = true;
+            }
+            UpdateProgress::Verifying => {
+                self.phase = UpdatePhase::Verifying;
+                self.dialog_open = true;
+            }
+            UpdateProgress::Installing => {
+                self.phase = UpdatePhase::Installing;
+                self.dialog_open = true;
+            }
+            UpdateProgress::ReadyToRestart { version, .. } => {
+                self.operation = None;
+                self.phase = UpdatePhase::Ready {
+                    version: version.clone(),
+                };
+                self.dialog_open = true;
+            }
+            UpdateProgress::Cancelled => {
+                self.operation = None;
+                self.phase = UpdatePhase::Cancelled;
+                self.dialog_open = true;
+            }
+            UpdateProgress::Failed { code, message } => {
+                self.operation = None;
+                self.phase = UpdatePhase::Failed {
+                    code: code.clone(),
+                    message: message.clone(),
+                };
+                self.dialog_open = true;
+            }
+            // `UpdateProgress` is non-exhaustive; a stage this build does not
+            // know leaves the current phase alone rather than guessing.
+            _ => {}
+        }
+    }
+
+    /// Starts a fresh attempt: remembers the operation before any event lands.
+    pub fn begin_operation(&mut self, id: OperationId) {
+        self.restart_error = None;
+        self.operation = Some(id);
+        self.phase = UpdatePhase::Downloading {
+            received: 0,
+            total: self.available.as_ref().map(|view| view.size_bytes),
+        };
+        self.dialog_open = true;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::expect_used, clippy::unwrap_used)]
+
+    use dblocal_core::update::InstallKind;
+
+    use super::*;
+
+    fn view(can_self_update: bool) -> AvailableUpdateView {
+        AvailableUpdateView {
+            version: "0.9.0".to_owned(),
+            tag: "v0.9.0".to_owned(),
+            release_notes: "Notes".to_owned(),
+            release_url: "https://github.com/rezkycodes/dblocal/releases/tag/v0.9.0".to_owned(),
+            asset_name: "dblocal-linux-x86_64.tar.gz".to_owned(),
+            size_bytes: 42 * 1024 * 1024,
+            can_self_update,
+        }
+    }
+
+    fn status(available: Option<AvailableUpdateView>, kind: InstallKind) -> UpdateStatus {
+        UpdateStatus {
+            current: "0.8.0".to_owned(),
+            available,
+            install_kind: kind,
+            package_manager_hint: None,
+            cannot_update_reason: None,
+        }
+    }
+
+    fn portable() -> InstallKind {
+        InstallKind::PortableTarball {
+            exe_path: "/opt/dblocal/dblocal".into(),
+        }
+    }
+
+    fn distro() -> InstallKind {
+        InstallKind::DistPackage {
+            exe_path: "/usr/bin/dblocal".into(),
+            hint: dblocal_core::update::PackageManagerHint::Dpkg,
+        }
+    }
+
+    /// A quiet check (offline or rate limited) changes nothing.
+    #[test]
+    fn a_quiet_check_keeps_the_previous_state() {
+        let mut state = UpdateState::default();
+        state.apply_check(None);
+        assert!(!state.icon_visible());
+        assert_eq!(state.phase, UpdatePhase::Hidden);
+
+        let found = status(Some(view(true)), portable());
+        state.apply_check(Some(&found));
+        assert!(state.icon_visible());
+        state.apply_check(None);
+        assert_eq!(state.phase, UpdatePhase::Available);
+    }
+
+    /// No newer release: no icon, no dialog, and a found release is forgotten.
+    #[test]
+    fn up_to_date_hides_the_icon_and_closes_the_dialog() {
+        let mut state = UpdateState::default();
+        state.apply_check(Some(&status(Some(view(true)), portable())));
+        state.dialog_open = true;
+        state.apply_check(Some(&status(None, portable())));
+        assert!(!state.icon_visible());
+        assert!(!state.dialog_visible());
+        assert!(state.available_version().is_none());
+    }
+
+    /// A newer release on a self-updatable install shows the icon.
+    #[test]
+    fn a_newer_release_shows_the_icon_and_names_the_version() {
+        let mut state = UpdateState::default();
+        state.apply_check(Some(&status(Some(view(true)), portable())));
+        assert!(state.icon_visible());
+        assert_eq!(state.available_version(), Some("0.9.0"));
+        assert_eq!(state.phase, UpdatePhase::Available);
+        assert!(
+            !state.dialog_visible(),
+            "the icon alone, until it is pressed"
+        );
+    }
+
+    /// A package-manager install still shows the icon, and its phase refuses.
+    #[test]
+    fn a_managed_install_shows_the_icon_but_cannot_self_update() {
+        let mut state = UpdateState::default();
+        state.apply_check(Some(&status(Some(view(false)), distro())));
+        assert!(state.icon_visible());
+        assert_eq!(state.phase, UpdatePhase::CannotSelfUpdate);
+        assert!(
+            !state.can_retry(),
+            "a managed install offers the release page, not a retry"
+        );
+        assert!(state.release_url().is_some());
+        assert!(!state.can_cancel());
+        assert!(!state.can_restart());
+    }
+
+    /// Download samples fill the numbers; cancel is offered only here.
+    #[test]
+    fn downloading_reports_percent_and_size() {
+        let mut state = UpdateState::default();
+        state.apply_check(Some(&status(Some(view(true)), portable())));
+        let op = OperationId::new("op-update");
+        state.begin_operation(op.clone());
+        assert!(state.running());
+        assert!(state.dialog_visible());
+        assert_eq!(state.percent(), Some(0));
+
+        state.apply_progress(
+            &op,
+            &UpdateProgress::Downloading {
+                received_bytes: 21 * 1024 * 1024,
+                total_bytes: Some(42 * 1024 * 1024),
+            },
+        );
+        assert_eq!(state.percent(), Some(50));
+        assert_eq!(state.received_bytes(), Some(21 * 1024 * 1024));
+        assert!(
+            state
+                .download_detail()
+                .is_some_and(|line| line.contains("50%") && line.contains('/')),
+            "detail must carry size and percent"
+        );
+        assert!(state.can_cancel());
+        assert!(!state.can_retry());
+    }
+
+    /// An unknown total still shows bytes received, without a percent.
+    #[test]
+    fn an_unknown_total_reports_bytes_only() {
+        let mut state = UpdateState {
+            available: Some(view(true)),
+            ..UpdateState::default()
+        };
+        let op = OperationId::new("op");
+        state.begin_operation(op.clone());
+        state.apply_progress(
+            &op,
+            &UpdateProgress::Downloading {
+                received_bytes: 1024,
+                total_bytes: None,
+            },
+        );
+        assert_eq!(state.percent(), None);
+        assert_eq!(state.download_detail().as_deref(), Some("1.00 KB"));
+    }
+
+    /// Verify and install are their own phases, with no cancel.
+    #[test]
+    fn verifying_and_installing_are_separate_and_not_cancellable() {
+        let mut state = UpdateState {
+            available: Some(view(true)),
+            ..UpdateState::default()
+        };
+        let op = OperationId::new("op");
+        state.begin_operation(op.clone());
+
+        state.apply_progress(&op, &UpdateProgress::Verifying);
+        assert_eq!(state.phase, UpdatePhase::Verifying);
+        assert!(!state.can_cancel(), "the download is over");
+        assert!(state.running());
+
+        state.apply_progress(&op, &UpdateProgress::Installing);
+        assert_eq!(state.phase, UpdatePhase::Installing);
+        assert!(state.running());
+    }
+
+    /// Ready carries the new version and offers the restart.
+    #[test]
+    fn ready_to_restart_offers_the_restart_and_blocks_a_second_update() {
+        let mut state = UpdateState {
+            available: Some(view(true)),
+            ..UpdateState::default()
+        };
+        let op = OperationId::new("op");
+        state.begin_operation(op.clone());
+        state.apply_progress(
+            &op,
+            &UpdateProgress::ReadyToRestart {
+                version: "0.9.0".to_owned(),
+                restart_target: "/opt/dblocal/dblocal".into(),
+            },
+        );
+        assert_eq!(
+            state.phase,
+            UpdatePhase::Ready {
+                version: "0.9.0".to_owned()
+            }
+        );
+        assert!(state.can_restart());
+        assert!(state.blocks_new_update());
+        assert!(!state.running(), "installing finished");
+        assert_eq!(state.operation, None);
+    }
+
+    /// Failure carries the code and message and offers a retry.
+    #[test]
+    fn failure_carries_a_code_and_offers_a_retry() {
+        let mut state = UpdateState {
+            available: Some(view(true)),
+            ..UpdateState::default()
+        };
+        let op = OperationId::new("op");
+        state.begin_operation(op.clone());
+        state.apply_progress(
+            &op,
+            &UpdateProgress::Failed {
+                code: "DBL-8003".to_owned(),
+                message: "The network connection failed.".to_owned(),
+            },
+        );
+        assert!(matches!(state.phase, UpdatePhase::Failed { .. }));
+        assert!(state.can_retry());
+        assert!(!state.running());
+        assert!(
+            state.icon_visible(),
+            "the release is still there to retry or to open"
+        );
+        assert_eq!(state.headline(), "The update did not finish.");
+    }
+
+    /// Cancel lands in its own phase and leaves the app usable.
+    #[test]
+    fn cancel_is_its_own_phase_and_offers_a_retry() {
+        let mut state = UpdateState {
+            available: Some(view(true)),
+            ..UpdateState::default()
+        };
+        let op = OperationId::new("op");
+        state.begin_operation(op.clone());
+        state.apply_progress(&op, &UpdateProgress::Cancelled);
+        assert_eq!(state.phase, UpdatePhase::Cancelled);
+        assert!(state.can_retry());
+        assert!(!state.running());
+        assert_eq!(state.operation, None);
+    }
+
+    /// An event for another operation (or a stale one) is ignored.
+    #[test]
+    fn a_progress_event_for_another_operation_is_ignored() {
+        let mut state = UpdateState {
+            available: Some(view(true)),
+            ..UpdateState::default()
+        };
+        let op = OperationId::new("mine");
+        state.begin_operation(op);
+        state.apply_progress(
+            &OperationId::new("other"),
+            &UpdateProgress::Failed {
+                code: "DBL-8003".to_owned(),
+                message: "x".to_owned(),
+            },
+        );
+        assert!(
+            state.running(),
+            "a foreign failure must not stop our update"
+        );
+    }
+
+    /// A running update is not reset by a check that returns the same release.
+    #[test]
+    fn a_check_during_a_download_does_not_reset_the_phase() {
+        let mut state = UpdateState::default();
+        state.apply_check(Some(&status(Some(view(true)), portable())));
+        let op = OperationId::new("op");
+        state.begin_operation(op.clone());
+        state.apply_progress(
+            &op,
+            &UpdateProgress::Downloading {
+                received_bytes: 10,
+                total_bytes: Some(100),
+            },
+        );
+        state.apply_check(Some(&status(Some(view(true)), portable())));
+        assert_eq!(state.percent(), Some(10));
+    }
+}
