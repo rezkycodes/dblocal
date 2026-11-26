@@ -118,12 +118,17 @@ change to `WAVE_ONE_VARIANTS` in `sources/valkey.rs` once the objects agree.
   avoid adding a heavy OpenPGP dependency.
 
 - **RustFS**: the builder queries `rustfs/rustfs` GitHub releases over HTTPS,
-  selects the latest stable release `>= 1.0.6` (excluding drafts, prereleases,
-  `-preview` tags, and `-latest.zip` assets), reads `SHA256SUMS`, and
-  cross-checks each target `.zip` by downloading and hashing it (reusing
-  unchanged verified entries from the existing catalog). Because RustFS had 43
-  security advisories (4 critical) in 10 months prior to `1.0.6`, DBLocal pins
-  `>= 1.0.6`, runs loopback-only with random per-instance credentials, and relies
+  selects the latest stable release `>= 1.0.6` (currently `1.0.7`, released
+  `2026-11-26`, excluding drafts, prereleases, `-preview` tags, and `-latest.zip`
+  assets), reads `SHA256SUMS`, and cross-checks each target `.zip` by
+  downloading and hashing it (reusing unchanged verified entries from the
+  existing catalog). GitHub lists 43 published security advisories for RustFS
+  (4 critical, 17 high, 18 medium, 4 low), all patched in `1.0.2` or earlier
+  with none listing `1.0.7` as affected (checked `2026-11-27`); because the
+  risk is the rate of new findings, DBLocal pins `>= 1.0.6`, explicitly
+  disables the web console (`RUSTFS_CONSOLE_ENABLE=false`) because RustFS
+  otherwise binds it to `[::]:9001` by default, verifies loopback-only
+  listening sockets on Linux, uses random per-instance credentials, and relies
   on the daily catalog refresh workflow to pick up new patches promptly.
 
 ### RustFS 1.0.7 (`rustfs/rustfs` GitHub Releases, 2026-11-26)
