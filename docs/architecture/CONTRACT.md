@@ -57,7 +57,7 @@ Read models (each is flattened so the UI never re-implements filtering):
 
 - `InstanceView { id, name, engine, version, port, status, auth, autostart, credential_backend, failure }`
   — `auth` drives the permanent "No auth" badge (F-CRD-03 AC2), `credential_backend` drives the
-  "Disimpan di file, bukan keychain" note (F-CRD-01 AC2), `failure` is `Some` while `failed` (F-INS-03 AC4).
+  "Stored in file, not keychain" note (F-CRD-01 AC2), `failure` is `Some` while `failed` (F-INS-03 AC4).
 - `FailureInfo { code, message, diagnosis, log_tail }` — last 20 log lines inline (F-INS-03 AC4).
 - `CatalogView { status, banner, engines: Vec<EngineEntry> }` — already filtered for this platform
   (F-CAT-02 AC1-3). `EngineEntry { engine, available, unavailable_reason, versions }`,

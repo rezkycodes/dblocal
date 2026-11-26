@@ -70,7 +70,7 @@ start, which is exactly the `F-CFG-01` AC3 restore path.
 
 ## 4. Read-only: authentication method
 
-`F-CFG-01` AC1 lists "metode autentikasi" in the form. This task shows the
+`F-CFG-01` AC1 lists "authentication method" in the form. This task shows the
 current PostgreSQL method (the methods of the `pg_hba.conf` `host` lines DBLocal
 manages) but **does not edit `pg_hba.conf`**: a bad edit can lock the user out of
 an instance whose credential DBLocal holds. This is a deliberate deviation,

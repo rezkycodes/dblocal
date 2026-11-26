@@ -715,7 +715,7 @@ was created without a password, …"), which names what to do.
 An HTTP 404 (and a 403 that is not a rate limit) from the releases API is the
 repository missing or private, not a connection failure. It now maps to
 `DBL-8011` "the update release source was not found or is not public", instead of
-`DBL-8004` "periksa koneksi".
+`DBL-8004` "check connection".
 
 ### Mutation checks (each reverted, red pasted, restored, `git status --short` empty)
 

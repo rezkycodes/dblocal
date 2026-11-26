@@ -194,9 +194,9 @@ could not be opened.
 
 | Command | stdout | stderr |
 |---|---|---|
-| `autostart status` | `autostart: aktif` or `autostart: nonaktif` | `lokasi: <path>` |
-| `autostart enable` | same, after writing the login item | `lokasi: <path>` |
-| `autostart disable` | `autostart: nonaktif` | `lokasi: <path>` |
+| `autostart status` | `autostart: enabled` or `autostart: disabled` | `location: <path>` |
+| `autostart enable` | same, after writing the login item | `location: <path>` |
+| `autostart disable` | `autostart: disabled` | `location: <path>` |
 | `autostart ... --json` | one line `{"enabled":bool,"location":"..."}` | empty |
 
 Exit codes: 0 success, 2 unknown action, 1 backend failure (the `DBL-85xx` code
@@ -241,8 +241,8 @@ The I/O contract is unchanged: stdout is data, stderr the rest, module-local
 | `user create <instance> <name> --db <db> --level ro\|rw` | the generated password, once | `User created. Save this password…` |
 | `password reset <instance>` | the new connect URI, once | `Superuser password changed…` |
 | `update check [--json]` | the available version or "up to date"; JSON with `--json` | the package-manager hint, when managed |
-| `update apply [--yes]` | nothing | `Pembaruan dipasang.` |
-| `open <instance> --client <kind> [--dry-run]` | the plan, only with `--dry-run` | the plan header / `Client dibuka.` |
+| `update apply [--yes]` | nothing | `Update installed.` |
+| `open <instance> --client <kind> [--dry-run]` | the plan, only with `--dry-run` | the plan header / `Client opened.` |
 
 - **`db drop` typed-name confirmation (`F-DBU-01` AC3).** Without `--yes`, the
   database name must be typed again: `--confirm <name>` must equal `<name>`, or,

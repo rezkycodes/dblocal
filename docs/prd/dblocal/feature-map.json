@@ -870,11 +870,11 @@
     { "name": "Cold start", "target": "p95 < 1,5 s", "verify": "CI benchmark per OS" },
     { "name": "RSS idle", "target": "< 220 MB", "verify": "CI benchmark" },
     { "name": "CPU idle", "target": "<= 1,5%", "verify": "CI benchmark" },
-    { "name": "Ukuran installer", "target": "< 60 MB per platform", "verify": "artifact size gate in CI" },
+    { "name": "Installer size", "target": "< 60 MB per platform", "verify": "artifact size gate in CI" },
     { "name": "Sukses install engine", "target": "100% on 5 OS targets", "verify": "E2E job per OS on every release" },
     { "name": "Start PostgreSQL", "target": "p95 < 5 s", "verify": "E2E" },
     { "name": "Start Valkey", "target": "p95 < 1 s", "verify": "E2E" },
-    { "name": "Rasio issue install-failure", "target": "< 2% of release downloads", "verify": "public proxy, counted by hand per release" }
+    { "name": "Install-failure issue rate", "target": "< 2% of release downloads", "verify": "public proxy, counted by hand per release" }
   ],
   "decisions": [
     { "id": "D-01", "title": "Primary user: a multi-project web developer who rejects Docker", "status": "approved" },

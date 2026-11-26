@@ -172,7 +172,7 @@ real-window transcript (Xvfb) and every mutation that turns a test red are in
   (WCAG 2.1 SC 1.4.11) of `theme.ring` against every surface it is drawn on.
   Both themes pass. `cargo test -p dblocal-gui --test contrast_table
   -- --nocapture` prints the measured table.
-- Disabled controls: WCAG exempts disabled text, but the PRD says "seluruh teks".
+- Disabled controls: WCAG exempts disabled text, but the PRD says "all text".
   The disabled palette rows and disabled `gpui-component` buttons use
   `muted.foreground`, which the table checks against every surface at 4.5:1; no
   exemption is taken.
@@ -292,7 +292,7 @@ not link `service::mock` (checked with `strings` on the built rlib: 0 `MockServi
   the returned closure inside `this.update(...)`. The closure receives `(&mut Workspace,
   &mut Context)`, so the result lands on the UI thread with no shared mutable state.
 - A `pending` counter is bumped before the spawn and decremented in the apply step. The status bar
-  shows `UI_PENDING` ("Memuat...") while it is non-zero — the neutral pending state.
+  shows `UI_PENDING` ("Loading...") while it is non-zero — the neutral pending state.
 - Every call site goes through it: initial load, resync, catalog reload, tab open (logs, URI,
   `.env`, data size, port suggestion), reveal, copy, start, stop, delete, autostart, create submit,
   `watch_logs(false)` on removal/tab close, and each quit-flow stop.

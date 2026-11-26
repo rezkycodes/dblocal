@@ -147,8 +147,8 @@ dblocal autostart enable [--json]
 dblocal autostart disable [--json]
 ```
 
-`status`/`disable` print `autostart: aktif` / `autostart: nonaktif` on stdout
-and `lokasi: <path>` on stderr; `--json` prints one line
+`status`/`disable` print `autostart: enabled` / `autostart: disabled` on stdout
+and `location: <path>` on stderr; `--json` prints one line
 `{"enabled":bool,"location":"..."}`. Exit codes follow `docs/architecture/cli.md`:
 0 success, 2 unknown action, 1 backend failure (with the `DBL-85xx` code on
 stderr). `autostart` needs no state database, so the CLI dispatches it before

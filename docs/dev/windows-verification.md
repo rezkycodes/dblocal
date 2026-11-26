@@ -101,8 +101,8 @@ Rows depending on the tray and quit flow assume the GUI-wiring task (W2-B) has b
 | SmartScreen first run | Download/run unsigned artifact from release. | SmartScreen "Windows protected your PC" / Unknown publisher may appear; verify checksum before proceeding; "More info" -> "Run anyway" works. | | |
 | High DPI | Run on 125%/150%/200% scaling if available. | Layout readable; no clipped controls; tray/window icons crisp enough. | | |
 | Clean shutdown/no leftovers | Quit app after starting/stopping engines. | No orphan dblocal/engine processes; ports released. | | |
-| Autostart: enable writes the Run value (W4-D) | Run `dblocal.exe autostart enable`, then `reg query "HKCU\Software\Microsoft\Windows\CurrentVersion\Run" /v DBLocal`. | The value is present and quotes the installed exe path (`"C:\Program Files\DBLocal\dblocal.exe" --autostart`), including under `Program Files` (a space in the path). `dblocal.exe autostart status` prints `autostart: aktif`. | | |
-| Autostart: disable removes the Run value (W4-D) | Run `dblocal.exe autostart disable`, then `reg query` the same key. | The `DBLocal` value is gone; `autostart status` prints `autostart: nonaktif`; running `disable` twice does not error. | | |
+| Autostart: enable writes the Run value (W4-D) | Run `dblocal.exe autostart enable`, then `reg query "HKCU\Software\Microsoft\Windows\CurrentVersion\Run" /v DBLocal`. | The value is present and quotes the installed exe path (`"C:\Program Files\DBLocal\dblocal.exe" --autostart`), including under `Program Files` (a space in the path). `dblocal.exe autostart status` prints `autostart: enabled`. | | |
+| Autostart: disable removes the Run value (W4-D) | Run `dblocal.exe autostart disable`, then `reg query` the same key. | The `DBLocal` value is gone; `autostart status` prints `autostart: disabled`; running `disable` twice does not error. | | |
 | Autostart: login opens to the tray (W4-D) | With the Run value enabled, sign out and back in (or run `dblocal.exe --autostart`). | No window appears; the app runs in the tray (W2-G now provides a real Windows tray). If the tray could not be created (restricted session), the process opens the window instead, or with a flagged instance keeps running headless; record which behaviour you saw and whether the status bar showed "Tray unavailable". | | |
 | Autostart: flagged instance starts at login (W4-D) | Flag one instance (`autostart`), sign out and in. | The instance reaches `running`; the tray dot turns green. If its port is taken by another process, it ends `failed` with `[DBL-1005]` and the other flagged instances still start. | | |
 | Tray: icon appears in the notification area (W2-G) | Start the app normally, look at the notification area / overflow. | A DBLocal tray icon appears (a status dot: grey with nothing running, green with a running instance, red with a failed one). Hovering shows the "DBLocal" tooltip. | | |
@@ -153,7 +153,7 @@ file.
 - Uninstall must keep `%USERPROFILE%\.dblocal`.
 - The MSI built by CI is unsigned unless signing is added later; document the exact warning text you saw.
 
-## Run in a Windows 10 x64 VM (diuji di VM, not bare metal)
+## Run in a Windows 10 x64 VM (tested in VM, not bare metal)
 
 A reviewer ran the **CLI** (no GUI, no tray, no MSI) in a VirtualBox VM `dblocal-win64`
 (Windows 10 22H2 x64, built inside the VM with Rust stable + VS 2022 Build Tools + NASM, home
@@ -176,7 +176,7 @@ the defects it exposed are already fixed on `main`.
 | `9b84d4f` | MySQL bootstrap passed `--daemonize=OFF` (unknown variable on Windows) | `mysqld.exe` aborted |
 | `9baa592` | `stop` signalled right after the shutdown request; Windows `terminate` is `TerminateProcess` and `mysqladmin shutdown` returns before the process exits | `stop` said "Siap" after 340 ms while `mysqld.exe` ran another second; an immediate `delete` failed on locked files (`DBL-3001`, row stuck in `deleting`) |
 
-### What ran green in the VM (CLI, labelled "diuji di VM")
+### What ran green in the VM (CLI, tested in VM)
 
 | Flow | Result |
 |---|---|
