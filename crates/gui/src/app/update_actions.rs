@@ -177,9 +177,47 @@ impl Workspace {
         if self.update.running() {
             return;
         }
+        // A previous run's failure has no release attached: checking again is
+        // what a retry can honestly do, and it either finds a release to start
+        // or reports that the app is current.
+        if self.update.available.is_none() {
+            self.update.dismiss_previous_failure();
+            self.check_update_now(cx);
+            return;
+        }
         // A retry is a fresh attempt at the same release; the service re-checks
         // its cache and refuses a second run at the lock.
         self.start_update(cx);
+    }
+
+    /// Reads the failure a previous run persisted (`take_pending_update_failure`)
+    /// and shows it in the update dialog.
+    ///
+    /// Runs once at startup, off the GPUI thread: the helper writes the file
+    /// after the old process exited, so nothing in this session ever saw the
+    /// failure. A quiet read is a no-op.
+    pub(crate) fn read_pending_update_failure(&mut self, cx: &mut Context<Self>) {
+        if self.pending_failure_read {
+            return;
+        }
+        self.pending_failure_read = true;
+        let service = self.service.clone();
+        self.bg(cx, move || {
+            let result = service.take_pending_update_failure();
+            move |this: &mut Workspace, cx: &mut Context<Workspace>| {
+                match result {
+                    Ok(Some(message)) => {
+                        this.update.record_previous_failure(message);
+                        this.begin_modal_without_window(cx);
+                    }
+                    Ok(None) => {}
+                    Err(err) => {
+                        tracing::debug!(%err, "could not read the previous update failure");
+                    }
+                }
+                cx.notify();
+            }
+        });
     }
 
     /// Restarts into the installed version, then quits without touching any
@@ -223,17 +261,25 @@ impl Workspace {
     }
 
     /// Closes the update dialog without changing the update state.
+    ///
+    /// Closing a previous-run failure is what dismisses it: it is a one-time
+    /// note, not a permanent banner.
     pub(crate) fn close_update_dialog(&mut self, cx: &mut Context<Self>) {
         self.update.dialog_open = false;
+        self.update.dismiss_previous_failure();
         self.restore_dialog_focus_after_close();
         cx.notify();
     }
 
     /// Opens the release page in the OS default handler.
     pub(crate) fn open_update_release_page(&mut self, cx: &mut Context<Self>) {
-        let Some(url) = self.update.release_url().map(str::to_owned) else {
-            return;
-        };
+        // With no newer release known (a previous run's failure), the releases
+        // page is still the right place to look, so the action never no-ops.
+        let url = self
+            .update
+            .release_url()
+            .map(str::to_owned)
+            .unwrap_or_else(|| self.update.releases_page());
         let launcher: std::sync::Arc<dyn dblocal_core::config::OpenLauncher> =
             std::sync::Arc::new(dblocal_core::config::SystemOpenLauncher);
         self.bg(cx, move || {

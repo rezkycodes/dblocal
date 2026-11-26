@@ -94,6 +94,12 @@ pub struct UpdateState {
     /// A failed restart, kept beside the `Ready` phase so the user can press
     /// "Restart now" instead of downloading the release again.
     pub restart_error: Option<UserFacingError>,
+    /// The failure a previous run persisted (the detached Windows helper writes
+    /// it after the app closed), read once at startup.
+    ///
+    /// It has no `DBL-` code and no known version: it is the helper's own
+    /// sentence, so the dialog shows it verbatim.
+    pub previous_failure: Option<String>,
 }
 
 impl UpdateState {
@@ -140,6 +146,18 @@ impl UpdateState {
         self.available.is_some() && !matches!(self.phase, UpdatePhase::Hidden)
     }
 
+    /// Whether this install may replace its own binary right now.
+    ///
+    /// Reads the check's own flags (`AvailableUpdateView::can_self_update`),
+    /// never the install kind alone: a release build with no signing key keeps
+    /// a writable per-user install but still refuses to update.
+    pub fn can_self_update(&self) -> bool {
+        self.available
+            .as_ref()
+            .is_some_and(|view| view.can_self_update)
+            && self.phase == UpdatePhase::Available
+    }
+
     /// Whether an update is running; the title-bar button then shows the
     /// dialog instead of starting a second update.
     pub fn running(&self) -> bool {
@@ -152,8 +170,12 @@ impl UpdateState {
     }
 
     /// Whether the dialog should draw.
+    ///
+    /// A previous failure is its own reason to draw: it can arrive with no
+    /// newer release known at all.
     pub fn dialog_visible(&self) -> bool {
-        self.dialog_open && !matches!(self.phase, UpdatePhase::Hidden)
+        self.dialog_open
+            && (!matches!(self.phase, UpdatePhase::Hidden) || self.previous_failure.is_some())
     }
 
     /// Download percent, when the total is known.
@@ -207,9 +229,42 @@ impl UpdateState {
         })
     }
 
+    /// Records the failure a previous run persisted, and opens the dialog so it
+    /// is not silent. Called once at startup with `take_pending_update_failure`.
+    pub fn record_previous_failure(&mut self, message: impl Into<String>) {
+        let message = message.into();
+        if message.trim().is_empty() {
+            return;
+        }
+        self.previous_failure = Some(message);
+        self.dialog_open = true;
+    }
+
+    /// Dismisses the previous-failure note (the dialog's "Close").
+    pub fn dismiss_previous_failure(&mut self) {
+        self.previous_failure = None;
+    }
+
+    /// The previous-failure sentence, when one is on screen.
+    pub fn previous_failure(&self) -> Option<&str> {
+        self.previous_failure.as_deref()
+    }
+
+    /// The release page for the repository, used when no newer release is known
+    /// (a previous failure has no release URL of its own).
+    pub fn releases_page(&self) -> String {
+        format!(
+            "https://github.com/{}/releases",
+            dblocal_core::consts::UPDATE_REPO
+        )
+    }
+
     /// The dialog headline for the current phase.
     pub fn headline(&self) -> String {
         use dblocal_core::strings;
+        if self.previous_failure.is_some() && matches!(self.phase, UpdatePhase::Hidden) {
+            return strings::UI_UPDATE_FAILED_PREVIOUS.to_owned();
+        }
         let version = self.available_version().unwrap_or_default();
         match &self.phase {
             UpdatePhase::Hidden => String::new(),
@@ -246,13 +301,15 @@ impl UpdateState {
         matches!(self.phase, UpdatePhase::Downloading { .. })
     }
 
-    /// Whether the dialog offers "Try again" (a stopped attempt, or an
-    /// available one that has not started).
+    /// Whether the dialog offers "Try again" (a stopped attempt, an available
+    /// one that has not started, or a previous run's failure).
     ///
     /// A managed install never offers it: retrying cannot change the install
     /// method, so the release page is the only action there.
     pub fn can_retry(&self) -> bool {
-        self.phase.is_stopped() || self.phase == UpdatePhase::Available
+        self.phase.is_stopped()
+            || self.phase == UpdatePhase::Available
+            || matches!(self.phase, UpdatePhase::Hidden) && self.previous_failure.is_some()
     }
 
     /// Whether the dialog offers "Restart now".

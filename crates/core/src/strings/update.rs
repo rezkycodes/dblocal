@@ -22,6 +22,9 @@ pub const UI_UPDATE_READY_RESTART: &str = "Restart now";
 pub const UI_UPDATE_IN_PROGRESS: &str = "This can take a minute.";
 /// Update dialog: the update stopped before it finished.
 pub const UI_UPDATE_FAILED: &str = "The update did not finish.";
+/// Update dialog heading: the previous attempt failed after the app closed, so
+/// the message comes from the persisted helper record, not from this session.
+pub const UI_UPDATE_FAILED_PREVIOUS: &str = "The last update did not finish.";
 /// Update dialog: the user cancelled while downloading.
 pub const UI_UPDATE_CANCELLED: &str = "Update cancelled. DBLocal is unchanged.";
 /// Update dialog: this install method cannot replace its own binary.

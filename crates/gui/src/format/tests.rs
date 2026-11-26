@@ -353,6 +353,33 @@ fn env_lines_split_key_from_value() {
     assert_eq!(rows[2].value, "secret");
 }
 
+/// Every catalog freshness word must name the catalog: the title bar shows the
+/// app-update icon beside it, so a bare "Up to date" would read as a claim about
+/// DBLocal itself (`F-PKG-05`).
+#[test]
+fn every_catalog_freshness_word_names_the_catalog() {
+    for (status, word) in [
+        (
+            CatalogStatus::Fresh,
+            catalog_freshness_word(CatalogStatus::Fresh),
+        ),
+        (
+            CatalogStatus::Stale,
+            catalog_freshness_word(CatalogStatus::Stale),
+        ),
+        (
+            CatalogStatus::Offline,
+            catalog_freshness_word(CatalogStatus::Offline),
+        ),
+    ] {
+        assert!(
+            word.starts_with("Catalog "),
+            "{status:?} label must name the catalog: {word}"
+        );
+        assert_ne!(word, "Up to date", "a bare up-to-date word is ambiguous");
+    }
+}
+
 #[test]
 fn catalog_banner_and_label_follow_status() {
     let catalog = CatalogView {

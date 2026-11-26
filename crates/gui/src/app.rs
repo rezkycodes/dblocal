@@ -258,6 +258,8 @@ pub struct Workspace {
     _update_check_task: Option<Task<()>>,
     /// Whether `restart_for_update` already ran, so the restart fires once.
     update_restart_started: bool,
+    /// Whether a previous run's persisted update failure was already read.
+    pending_failure_read: bool,
     /// The login-item seam; `Err` when this host has no usable backend.
     login: Option<Result<Arc<dyn login_item::LoginItemControl>, UserFacingError>>,
     palette_open: bool,
@@ -361,6 +363,9 @@ impl Workspace {
         // `F-PKG-05` AC1: one check at startup, then about every 6 hours. It
         // runs off the GPUI thread and is quiet when offline or rate limited.
         workspace.start_update_check_loop(cx);
+        // `F-PKG-05`: a previous attempt can have failed after the app closed
+        // (the detached Windows helper persists it), so read that note once.
+        workspace.read_pending_update_failure(cx);
         // `F7a`: the external editor DBLocal launches, the CLI and a second
         // window all write the file without an in-process `ConfigChanged`. On
         // the way back to this window the visible Config tab re-reads, so the
@@ -492,6 +497,7 @@ impl Workspace {
             update_check_in_flight: false,
             _update_check_task: None,
             update_restart_started: false,
+            pending_failure_read: false,
             login: None,
             palette_open: false,
             last_failure_mirror: None,

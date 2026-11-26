@@ -1833,6 +1833,23 @@ sys.exit(proc.wait())
         backup_text.contains("BEGIN ENCRYPTED PRIVATE KEY"),
         "backup must be encrypted PKCS#8"
     );
+    // A stolen backup must resist offline guessing: the PBKDF2 iteration count
+    // lives in the clear in the PKCS#8 parameters, so it can be read instead of
+    // trusted. OpenSSL's old default (2048) is far too low. `asn1parse` prints
+    // the INTEGER in uppercase hex, so compare against that form.
+    let asn1 = std::process::Command::new("openssl")
+        .args(["asn1parse", "-in"])
+        .arg(&backup_file)
+        .output()
+        .unwrap();
+    assert!(asn1.status.success(), "backup must parse as PKCS#8");
+    let asn1_text = String::from_utf8_lossy(&asn1.stdout);
+    // ASN.1 prints the INTEGER signed, so a positive value whose top byte sets
+    // the sign bit appears with one leading `0`: 600000 (0x0927C0) is `0927C0`.
+    assert!(
+        asn1_text.contains(":0927C0"),
+        "backup must use a 600000-iteration PBKDF2: {asn1_text}"
+    );
 
     // Confirm backup decrypts to the exact 64-char hex public key printed by the script.
     let printed_hex = combined

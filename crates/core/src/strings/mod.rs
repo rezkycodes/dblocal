@@ -318,11 +318,15 @@ pub const VULKAN_EXIT_CODE: &str = "Exit code";
 // --- Human descriptions for machine slugs shown in the UI ---------------------
 
 /// Catalog freshness: fresh.
-pub const CATALOG_FRESH_LABEL: &str = "Up to date";
+///
+/// Every freshness word names the catalog explicitly: the title bar also
+/// carries the app-update icon, so a bare "Up to date" reads as a claim about
+/// DBLocal itself (`F-PKG-05`).
+pub const CATALOG_FRESH_LABEL: &str = "Catalog up to date";
 /// Catalog freshness: stale.
-pub const CATALOG_STALE_LABEL: &str = "Outdated";
+pub const CATALOG_STALE_LABEL: &str = "Catalog outdated";
 /// Catalog freshness: offline.
-pub const CATALOG_OFFLINE_LABEL: &str = "Offline";
+pub const CATALOG_OFFLINE_LABEL: &str = "Catalog offline";
 
 /// Start diagnosis: the port was already bound.
 pub const DIAGNOSIS_PORT_IN_USE: &str = "The port is already used by another process";

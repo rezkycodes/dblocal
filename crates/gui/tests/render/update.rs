@@ -13,14 +13,19 @@ use super::{
 /// Every update stage renders in both themes, and the light frame is lighter.
 #[test]
 fn every_update_stage_renders_in_both_themes() {
-    let cases: [(&str, Build); 7] = [
+    let cases: [(&str, Build); 9] = [
         ("available", Workspace::preview_update_available),
         ("downloading", Workspace::preview_update_downloading),
         ("verifying", Workspace::preview_update_verifying),
         ("installing", Workspace::preview_update_installing),
         ("ready", Workspace::preview_update_ready),
         ("failed", Workspace::preview_update_failed),
+        (
+            "previous-failed",
+            Workspace::preview_update_previous_failure,
+        ),
         ("cannot", Workspace::preview_update_cannot),
+        ("no-signing-key", Workspace::preview_update_no_signing_key),
     ];
     for (name, build) in cases {
         let dark = render(true, &format!("update-{name}-dark.png"), build);
@@ -125,5 +130,61 @@ fn settings_shows_the_automatic_check_and_the_release() {
         frame.count_near(panel, DARK_PRIMARY, 40) > 0
             || frame.count_near(panel, LIGHT_PRIMARY, 40) > 0,
         "the re-used install action was not painted"
+    );
+}
+
+/// A previous run's persisted failure is drawn as a warning line with the
+/// helper's own sentence, plus a release-page action.
+#[test]
+fn a_previous_failure_draws_its_sentence_and_an_action() {
+    let frame = render(
+        false,
+        "update-previous-failed-line-light.png",
+        Workspace::preview_update_previous_failure,
+    );
+    let dialog = (110, 90, LOGICAL_W - 110, 620);
+    let warning = frame.count_near(dialog, [0x73, 0x53, 0x00], 40);
+    let text = frame.count_not_near(dialog, LIGHT_BG, 14);
+    eprintln!("UPDATE PREVIOUS warning={warning} text={text}");
+    assert!(text > 2_000, "the failure note did not render ({text})");
+    assert!(
+        frame.count_near(dialog, LIGHT_PRIMARY, 30) > 0,
+        "the retry button must be painted as a primary action"
+    );
+}
+
+/// A release build with no signing key explains itself and offers no download
+/// button, even though the install kind is a writable per-user tarball.
+#[test]
+fn no_signing_key_dialog_explains_and_offers_no_download() {
+    let frame = render(
+        true,
+        "update-no-signing-key-dialog-dark.png",
+        Workspace::preview_update_no_signing_key,
+    );
+    let dialog = (110, 90, LOGICAL_W - 110, 620);
+    let text = frame.count_not_near(dialog, DARK_BG, 14);
+    eprintln!("UPDATE NOSIGN text={text}");
+    assert!(
+        text > 2_000,
+        "the signing-key reason did not render ({text})"
+    );
+
+    // The title bar still shows the icon so the reason can be reached (the
+    // dialog preview itself dims the bar, so the icon case is its own frame).
+    let frame = render(
+        true,
+        "update-no-signing-key-icon-dark.png",
+        Workspace::preview_update_no_signing_key_icon,
+    );
+    let row = (0, 0, LOGICAL_W, 34);
+    let idle = render(
+        true,
+        "update-no-signing-key-idle-dark.png",
+        Workspace::preview,
+    );
+    assert!(
+        frame.count_not_near(row, DARK_BG, 24) > idle.count_not_near(row, DARK_BG, 24) + 20,
+        "the update icon must still be drawn without a signing key"
     );
 }

@@ -122,6 +122,11 @@ pub(super) fn render(
     if let Some(err) = &state.restart_error {
         body = body.child(error_line(&err.code, &err.message, &theme));
     }
+    if let Some(message) = state.previous_failure() {
+        // The persisted note has no `DBL-` code: it is the helper's own
+        // sentence, so show it verbatim under the warning colour.
+        body = body.child(previous_failure_line(message, &theme));
+    }
 
     body = body.child(actions(workspace, &theme, cx));
 
@@ -176,36 +181,47 @@ pub(super) fn render(
 }
 
 /// The dialog's button row, one set per phase.
+///
+/// `Cancel update` and `Open release page` are secondary buttons and `Try
+/// again` / `Restart now` is the single primary one, matching the Delete and
+/// Create dialogs; a bare label would read as text, not an action.
 fn actions(workspace: &Workspace, theme: &Theme, cx: &mut Context<Workspace>) -> AnyElement {
     let state = workspace.update_state();
     let running = state.running();
     let mut row = h_flex().gap_2().items_center().justify_end();
 
-    if state.release_url().is_some()
-        && matches!(
-            state.phase,
-            UpdatePhase::CannotSelfUpdate | UpdatePhase::Failed { .. }
-        )
-    {
-        row = row.child(
-            Button::new("update-release-page")
-                .ghost()
-                .small()
-                .label(strings::UI_UPDATE_RELEASE_PAGE)
-                .on_click(cx.listener(|this, _, _, cx| {
-                    this.open_update_release_page(cx);
-                })),
-        );
-    }
-
     if state.can_cancel() {
         row = row.child(
             Button::new("update-cancel")
-                .ghost()
+                .secondary()
                 .small()
                 .label(strings::UI_UPDATE_CANCEL)
                 .on_click(cx.listener(|this, _, _, cx| {
                     this.cancel_update(cx);
+                })),
+        );
+    }
+
+    // The release page is the only action a managed install or a previous
+    // run's failure can offer, so it is always drawn for those, with no newer
+    // release needed to name a URL (the releases page is the fallback).
+    // Never during a live download: the release page would compete with the
+    // one action that matters there.
+    let offer_release_page = !running
+        && (state.release_url().is_some()
+            || matches!(
+                state.phase,
+                UpdatePhase::CannotSelfUpdate | UpdatePhase::Failed { .. }
+            )
+            || state.previous_failure().is_some());
+    if offer_release_page {
+        row = row.child(
+            Button::new("update-release-page")
+                .secondary()
+                .small()
+                .label(strings::UI_UPDATE_RELEASE_PAGE)
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.open_update_release_page(cx);
                 })),
         );
     }
@@ -242,6 +258,24 @@ fn actions(workspace: &Workspace, theme: &Theme, cx: &mut Context<Workspace>) ->
     }
 
     row.into_any_element()
+}
+
+/// A previous run's persisted failure: the helper's own sentence, no `DBL-`
+/// code. The dialog headline already says it did not finish, so this line does
+/// not repeat it.
+fn previous_failure_line(message: &str, theme: &Theme) -> AnyElement {
+    h_flex()
+        .id("update-previous-failure")
+        .gap_2()
+        .items_start()
+        .child(icon(IconName::TriangleAlert, 14.0, theme.warning))
+        .child(
+            Label::new(message.to_owned())
+                .id(SharedString::from("update-previous-failure-body"))
+                .text_xs()
+                .text_color(theme.foreground),
+        )
+        .into_any_element()
 }
 
 /// One typed failure line: code plus the message.

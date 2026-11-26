@@ -57,6 +57,8 @@ pub(crate) struct CallCounts {
     pub restart_for_update: usize,
     /// `set_auto_update_check`.
     pub set_auto_check: usize,
+    /// `take_pending_update_failure`.
+    pub take_pending_failure: usize,
     /// `config_view`.
     pub config_view: usize,
     /// `config_apply`.
@@ -109,6 +111,8 @@ pub(crate) struct Script {
     pub auto_check: bool,
     /// Whether `cancel_operation` fails.
     pub cancel_fails: bool,
+    /// The message a previous run persisted, when one did.
+    pub pending_failure: Option<String>,
     /// `config_view` answer (the read model the Config tab renders).
     pub config_view: ServiceResult<dblocal_core::config::ConfigView>,
     /// `config_apply` answer.
@@ -176,6 +180,7 @@ impl Default for Script {
             restart: Ok(()),
             auto_check: true,
             cancel_fails: false,
+            pending_failure: None,
             config_view: Ok(sample_config_view()),
             config_apply: Ok(sample_config_applied()),
             config_restore: Ok(()),
@@ -576,6 +581,17 @@ impl DblService for ScriptedService {
             Ok(op) => Ok(op.clone()),
             Err(err) => Err(clone_error(err)),
         }
+    }
+    fn take_pending_update_failure(&self) -> Result<Option<String>> {
+        self.bump(|counts| counts.take_pending_failure += 1);
+        // `take_` is one-shot, as the real service is: the note is consumed.
+        let message = self
+            .script
+            .lock()
+            .expect("script lock")
+            .pending_failure
+            .take();
+        Ok(message)
     }
     fn restart_for_update(&self) -> ServiceResult<()> {
         self.bump(|counts| counts.restart_for_update += 1);

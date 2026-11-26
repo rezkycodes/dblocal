@@ -11,10 +11,11 @@
 # - Never prints the private key to stdout or stderr.
 # - Stores temporary key material in a 0700 temp directory with 0600 files.
 # - Removes the temporary directory on exit, error, or signal (EXIT/INT/TERM/HUP).
-# - Encrypted backup uses `openssl pkcs8 -topk8 -v2 aes-256-cbc` with an
-#   interactive passphrase prompt (never an argument or environment variable),
-#   mode 0600, refusing to overwrite existing files and refusing paths inside
-#   any git work tree.
+# - Encrypted backup uses `openssl pkcs8 -topk8 -v2 aes-256-cbc -iter 600000`
+#   (a high PBKDF2 iteration count, so a stolen file resists offline guessing)
+#   with an interactive passphrase prompt (never an argument or environment
+#   variable), mode 0600, refusing to overwrite existing files and refusing
+#   paths inside any git work tree.
 # - Prints ONLY the public key (64-char hex) and the single file to paste it in.
 set -euo pipefail
 
@@ -139,7 +140,9 @@ openssl pkeyutl -verify -pubin -inkey "$pub_pem" -rawin -in "$tmpdir/test.txt" -
 if [ -n "$BACKUP_PATH" ]; then
   echo "Creating passphrase-encrypted PKCS#8 (AES-256) backup at ${BACKUP_PATH}..."
   echo "OpenSSL will prompt you for an encryption passphrase."
-  openssl pkcs8 -topk8 -v2 aes-256-cbc -in "$priv_pem" -out "$BACKUP_PATH"
+  # PBKDF2 iterations: OpenSSL's default (2048) is weak against offline guessing
+  # of a stolen backup, so raise it to the modern guidance of 600k.
+  openssl pkcs8 -topk8 -v2 aes-256-cbc -iter 600000 -in "$priv_pem" -out "$BACKUP_PATH"
   chmod 0600 "$BACKUP_PATH"
 
   # Verify the encrypted backup decrypts to the exact same public key without

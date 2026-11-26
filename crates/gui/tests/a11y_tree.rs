@@ -172,6 +172,8 @@ case_tests! {
     update_ready_is_unique => "update ready", Workspace::preview_update_ready;
     update_failed_is_unique => "update failed", Workspace::preview_update_failed;
     update_cannot_is_unique => "update cannot self-update", Workspace::preview_update_cannot;
+    update_previous_failure_is_unique => "update previous failure", Workspace::preview_update_previous_failure;
+    update_no_signing_key_is_unique => "update without a signing key", Workspace::preview_update_no_signing_key;
     same_database_name_two_instances_is_unique => "two instances, same database name", Workspace::preview_two_instances_same_db;
     config_product_is_unique => "config product", Workspace::preview_product_config;
     config_demo_is_unique => "config demo", Workspace::preview_config_demo;

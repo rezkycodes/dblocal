@@ -477,6 +477,49 @@ impl Workspace {
         workspace
     }
 
+    /// Preview of a failure the previous run persisted (the detached helper's
+    /// note), with no newer release known.
+    pub fn preview_update_previous_failure(
+        service: Arc<dyn DblService>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let mut workspace = Self::preview(service, window, cx);
+        workspace.update.record_previous_failure(
+            "The previous DBLocal process (PID 48211) did not exit within 60s; update aborted.",
+        );
+        workspace
+    }
+
+    /// Preview of a release build with no signing key: self-update is refused
+    /// even on a per-user install, and the reason names the missing key.
+    pub fn preview_update_no_signing_key(
+        service: Arc<dyn DblService>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let mut workspace = Self::preview(service, window, cx);
+        workspace
+            .update
+            .apply_check(Some(&sample_update_status_no_signing_key()));
+        workspace.update.dialog_open = true;
+        workspace
+    }
+
+    /// Preview of a release build with no signing key, dialog closed: only the
+    /// title-bar icon, so a render can prove it is still there.
+    pub fn preview_update_no_signing_key_icon(
+        service: Arc<dyn DblService>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let mut workspace = Self::preview(service, window, cx);
+        workspace
+            .update
+            .apply_check(Some(&sample_update_status_no_signing_key()));
+        workspace
+    }
+
     /// Preview with a newer release this install cannot apply (a distro package).
     pub fn preview_update_cannot(
         service: Arc<dyn DblService>,
@@ -842,5 +885,29 @@ fn sample_update_status(can_self_update: bool) -> dblocal_core::service::UpdateS
             .cannot_update_reason_with(Some(&release_url), Some(&asset_name)),
         install_kind,
         package_manager_hint: None,
+    }
+}
+
+/// A sample check result for a release build with no signing key configured:
+/// the install kind is fine, but the signing gate refuses the update.
+fn sample_update_status_no_signing_key() -> dblocal_core::service::UpdateStatus {
+    let kind = dblocal_core::update::InstallKind::PortableTarball {
+        exe_path: "/home/u/.local/bin/dblocal".into(),
+    };
+    let reason = "Release signing public key is not configured in this build; automatic self-update is disabled.";
+    dblocal_core::service::UpdateStatus {
+        current: "0.8.0".to_owned(),
+        available: Some(dblocal_core::service::AvailableUpdateView {
+            version: "0.9.0".to_owned(),
+            tag: "v0.9.0".to_owned(),
+            release_notes: "Sample release notes.".to_owned(),
+            release_url: "https://github.com/rezkycodes/dblocal/releases/tag/v0.9.0".to_owned(),
+            asset_name: "dblocal-0.9.0-linux-x86_64.tar.gz".to_owned(),
+            size_bytes: 42 * 1024 * 1024,
+            can_self_update: false,
+        }),
+        install_kind: kind,
+        package_manager_hint: None,
+        cannot_update_reason: Some(reason.to_owned()),
     }
 }

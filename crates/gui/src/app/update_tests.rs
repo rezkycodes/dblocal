@@ -474,3 +474,122 @@ fn the_check_loop_checks_once_at_startup(cx: &mut TestAppContext) {
     settle(cx);
     assert_eq!(service.counts().check_due, 1, "the loop is installed once");
 }
+
+/// A failure the previous run persisted is read once and shown in the dialog
+/// with a retry and a release-page action.
+#[gpui_kit::test]
+fn a_previous_update_failure_is_shown_on_startup(cx: &mut TestAppContext) {
+    let (view, service, cx) = fixture(cx);
+    service.set(|script| {
+        script.pending_failure = Some(
+            "The previous DBLocal process (PID 48211) did not exit within 60s; update aborted."
+                .to_owned(),
+        );
+    });
+    view.update(cx, |this, cx| this.read_pending_update_failure(cx));
+    settle(cx);
+    let (visible, message, can_retry, release_url) = view.read_with(cx, |this, _| {
+        let state = this.update_state();
+        (
+            state.dialog_visible(),
+            state.previous_failure().map(str::to_owned),
+            state.can_retry(),
+            state.release_url().map(str::to_owned),
+        )
+    });
+    assert!(visible, "the persisted failure must open the dialog");
+    assert!(
+        message
+            .as_deref()
+            .is_some_and(|m| m.contains("did not exit")),
+        "the helper's own sentence must be shown: {message:?}"
+    );
+    assert!(can_retry, "a previous failure offers a retry");
+    assert!(release_url.is_none(), "no release is known");
+    assert_eq!(service.counts().take_pending_failure, 1);
+
+    // One-shot: a second startup read must not consume another note.
+    view.update(cx, |this, cx| this.read_pending_update_failure(cx));
+    settle(cx);
+    assert_eq!(service.counts().take_pending_failure, 1);
+}
+
+/// Closing the dialog dismisses the previous-failure note.
+#[gpui_kit::test]
+fn closing_the_dialog_dismisses_the_previous_failure(cx: &mut TestAppContext) {
+    let (view, _service, cx) = fixture(cx);
+    view.update(cx, |this, _| {
+        this.update
+            .record_previous_failure("the helper could not replace the binary");
+    });
+    settle(cx);
+    assert!(view.read_with(cx, |this, _| this.update_state().dialog_visible()));
+    view.update(cx, |this, cx| this.close_update_dialog(cx));
+    settle(cx);
+    assert!(view.read_with(cx, |this, _| {
+        this.update_state().previous_failure().is_none()
+    }));
+    assert!(!view.read_with(cx, |this, _| this.update_state().dialog_visible()));
+}
+
+/// A release build with no signing key keeps a writable per-user install but
+/// still refuses self-update; the UI must follow the flags, not the install kind.
+#[gpui_kit::test]
+fn no_signing_key_refuses_update_on_a_per_user_install(cx: &mut TestAppContext) {
+    let (view, service, cx) = fixture(cx);
+    service.set(|script| {
+        script.check_due = Ok(Some(no_signing_key_status()));
+    });
+    view.update(cx, |this, cx| this.check_update_bg(cx));
+    settle(cx);
+    let (icon, phase, can_self_update, can_retry, reason) = view.read_with(cx, |this, _| {
+        let state = this.update_state();
+        (
+            state.icon_visible(),
+            state.phase.clone(),
+            state.can_self_update(),
+            state.can_retry(),
+            state.cannot_update_reason().map(str::to_owned),
+        )
+    });
+    assert!(icon, "the icon still shows, so the reason can be read");
+    assert_eq!(phase, UpdatePhase::CannotSelfUpdate);
+    assert!(
+        !can_self_update,
+        "the signing gate must win over the install kind"
+    );
+    assert!(!can_retry, "a missing key cannot be retried into existence");
+    assert!(
+        reason
+            .as_deref()
+            .is_some_and(|r| r.contains("signing public key")),
+        "the reason must name the missing key: {reason:?}"
+    );
+
+    // Pressing must not start a download.
+    view.update_in(cx, |this, window, cx| this.press_update_button(window, cx));
+    settle(cx);
+    assert_eq!(service.counts().start_update, 0);
+    assert!(view.read_with(cx, |this, _| this.update_state().dialog_visible()));
+}
+
+fn no_signing_key_status() -> UpdateStatus {
+    UpdateStatus {
+        current: "0.8.0".to_owned(),
+        available: Some(AvailableUpdateView {
+            version: "0.9.0".to_owned(),
+            tag: "v0.9.0".to_owned(),
+            release_notes: "Notes".to_owned(),
+            release_url: "https://github.com/rezkycodes/dblocal/releases/tag/v0.9.0".to_owned(),
+            asset_name: "dblocal-0.9.0-linux-x86_64.tar.gz".to_owned(),
+            size_bytes: 1024,
+            can_self_update: false,
+        }),
+        install_kind: portable(),
+        package_manager_hint: None,
+        cannot_update_reason: Some(
+            "Release signing public key is not configured in this build; automatic self-update is disabled."
+                .to_owned(),
+        ),
+    }
+}

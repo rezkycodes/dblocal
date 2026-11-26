@@ -125,6 +125,17 @@ impl Workspace {
         handle
     }
 
+    /// Opens a modal from a background result, where no window is in hand.
+    ///
+    /// Same effect as [`Self::begin_modal`] minus the opener capture: there was
+    /// no focused element at startup, so the close path falls back to the root
+    /// handle (see `restore_dialog_focus_after_close`).
+    pub(crate) fn begin_modal_without_window(&mut self, cx: &mut Context<Self>) {
+        self.dialog_focus.opened(None);
+        self.modal_focus = Some(cx.focus_handle());
+        self.focus_modal_root();
+    }
+
     /// Gives the keyboard to an element inside a just-opened modal on the next
     /// frame (it does not exist in the focus tree until it is drawn once).
     pub(crate) fn focus_modal_root(&mut self) {

@@ -208,7 +208,10 @@ fn render_update_result(
                         this.check_update_now(cx);
                     })),
             )
-            .when(update.icon_visible() && !running, |this| {
+            // Only an install that may replace itself gets the update button:
+            // a managed install or a release without a signing key is pointed
+            // at its release page instead (`F-PKG-05` AC2).
+            .when(update.can_self_update() && !running, |this| {
                 this.child(
                     Button::new("settings-update")
                         .label(strings::UI_SETTINGS_INSTALL)
@@ -222,7 +225,7 @@ fn render_update_result(
             .when_some(update.release_url().map(str::to_owned), |this, _url| {
                 this.child(
                     Button::new("settings-release-page")
-                        .ghost()
+                        .secondary()
                         .small()
                         .label(strings::UI_UPDATE_RELEASE_PAGE)
                         .on_click(cx.listener(|this, _, _, cx| {
