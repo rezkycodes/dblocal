@@ -43,7 +43,7 @@ corruption and a bad mirror but not against a compromised release; verify proven
 ```sh
 # install a specific tag
 curl -fsSL https://raw.githubusercontent.com/rezkycodes/dblocal/main/packaging/install.sh \
-  | sh -s -- --version v0.1.3
+  | sh -s -- --version v0.1.4
 
 # see what it would do, without changing anything
 sh install.sh --dry-run
@@ -70,6 +70,14 @@ before running:
 sha256sum -c checksums.txt --ignore-missing      # Linux
 gh attestation verify dblocal-<version>-linux-x86_64.AppImage --repo rezkycodes/dblocal
 ```
+
+### Updating
+
+Starting with **v0.1.4**, DBLocal can update itself from inside the app (via the title-bar download icon or **Settings → Updates**):
+
+- **Self-updating installs:** per-user tarball (including `install.sh`), AppImage, Windows `.zip`, and per-user Windows `.msi`.
+- **Managed installs:** `.deb`, `.rpm`, and per-machine Windows `.msi` cannot replace themselves; the update dialog links to the GitHub release page instead.
+- **Upgrading to v0.1.4:** v0.1.4 is the first release that includes the in-app updater, so it must be installed manually before subsequent releases can update in place.
 
 ## Supported platforms
 
