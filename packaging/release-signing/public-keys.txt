@@ -9,9 +9,11 @@
 #   a raw 32-byte Ed25519 public key. Malformed lines fail tests and verification.
 #
 # Multiple keys may be listed during key rotation.
-# While this file has no keys, tag builds in .github/workflows/release.yml
+# If this file ever has no keys, tag builds in .github/workflows/release.yml
 # fail closed and release builds refuse automatic self-update.
 #
 # To generate the key pair, save an encrypted offline backup, and upload the
 # private key to GitHub Actions secrets without printing it, run:
 #   bash packaging/release-signing/generate-key.sh --backup /path/outside/repo/dblocal-signing.enc.pem
+
+e07274c5a37fe2bd838eec464a5b7424ec552bf0b7fd1092e8077a534d1cf5ad

@@ -123,3 +123,15 @@ async fn sha256_file_hex_reports_missing_file() {
     let err = sha256_file_hex(&missing).await.expect_err("missing");
     assert_eq!(err.code(), crate::update::error::CODE_UPDATE_APPLY_FAILED);
 }
+
+#[test]
+fn committed_public_keys_file_parses_and_contains_at_least_one_key() {
+    let keys = parse_trusted_public_keys(TRUSTED_PUBLIC_KEYS_RAW)
+        .expect("committed packaging/release-signing/public-keys.txt must parse cleanly");
+    assert!(
+        !keys.is_empty(),
+        "committed packaging/release-signing/public-keys.txt must contain at least one trusted release signing key"
+    );
+    assert_eq!(Ed25519ReleaseVerifier::production().key_count(), keys.len());
+    assert!(has_trusted_signing_keys());
+}

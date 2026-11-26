@@ -50,16 +50,21 @@ fn now_unix_secs() -> u64 {
         .unwrap_or(0)
 }
 
-fn signing_key_refusal_reason() -> Option<&'static str> {
-    #[cfg(not(any(test, debug_assertions)))]
-    if !has_trusted_signing_keys() {
+fn signing_key_refusal_reason_for(
+    enforce_release_gate: bool,
+    has_keys: bool,
+) -> Option<&'static str> {
+    if enforce_release_gate && !has_keys {
         return Some(
             "Release signing public key is not configured in this build; automatic self-update is disabled.",
         );
     }
-    #[cfg(any(test, debug_assertions))]
-    let _ = has_trusted_signing_keys;
     None
+}
+
+fn signing_key_refusal_reason() -> Option<&'static str> {
+    let enforce = !cfg!(any(test, debug_assertions));
+    signing_key_refusal_reason_for(enforce, has_trusted_signing_keys())
 }
 
 fn build_status(
@@ -581,4 +586,26 @@ impl UpdateInstaller for DownloadInstaller {
 /// The running version, read from the crate metadata.
 pub(crate) fn running_version() -> Version {
     Version::parse(env!("CARGO_PKG_VERSION")).unwrap_or_else(|_| Version::new(0, 0, 0))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn signing_key_refusal_reason_covers_key_present_and_absent() {
+        assert!(
+            signing_key_refusal_reason_for(true, true).is_none(),
+            "release build with a trusted signing key must allow self-update"
+        );
+        let reason = signing_key_refusal_reason_for(true, false);
+        assert!(
+            reason.is_some_and(|msg| msg.contains("signing public key")),
+            "release build without a trusted signing key must refuse self-update: {reason:?}"
+        );
+        assert!(
+            signing_key_refusal_reason_for(false, false).is_none(),
+            "debug/test build skips the release signing gate"
+        );
+    }
 }
