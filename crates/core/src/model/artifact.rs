@@ -16,6 +16,8 @@ pub enum ArchiveFormat {
     TarXz,
     /// `.zip`.
     Zip,
+    /// Debian `.deb` (`ar` archive containing `data.tar.{zst,xz,gz}`).
+    Deb,
 }
 
 impl ArchiveFormat {
@@ -25,6 +27,7 @@ impl ArchiveFormat {
             Self::TarGz => "tar.gz",
             Self::TarXz => "tar.xz",
             Self::Zip => "zip",
+            Self::Deb => "deb",
         }
     }
 }
@@ -37,6 +40,7 @@ impl FromStr for ArchiveFormat {
             "tar.gz" => Ok(Self::TarGz),
             "tar.xz" => Ok(Self::TarXz),
             "zip" => Ok(Self::Zip),
+            "deb" => Ok(Self::Deb),
             other => Err(DblError::InvalidInput {
                 field: "format",
                 reason: format!("unknown archive format: {other}"),
@@ -312,6 +316,7 @@ mod tests {
             ArchiveFormat::TarGz,
             ArchiveFormat::TarXz,
             ArchiveFormat::Zip,
+            ArchiveFormat::Deb,
         ] {
             assert_eq!(format.as_str().parse::<ArchiveFormat>().ok(), Some(format));
         }

@@ -84,7 +84,7 @@ fn validate_hard_link_target(
     Ok(rel)
 }
 
-fn extract_tar<R: Read>(
+pub(super) fn extract_tar<R: Read>(
     reader: R,
     staging: &Path,
     strip_prefix: Option<&str>,
@@ -139,8 +139,10 @@ fn extract_tar<R: Read>(
         let rel = match stripped_relative_path(&raw_path, strip_prefix, &raw_name)? {
             Some(p) => p,
             None => {
-                // Entry is (part of) the stripped prefix itself; skip it but record.
-                if strip_prefix.is_some() {
+                // Entry is (part of) the stripped prefix itself or a `.` root
+                // marker; skip it. Only count the prefix itself as matched so
+                // an archive containing only `.` still fails `strip_prefix`.
+                if strip_prefix.is_some() && !matches!(raw_name.as_str(), "." | "./") {
                     state.stripped_any = true;
                 }
                 continue;

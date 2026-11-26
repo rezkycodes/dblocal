@@ -614,6 +614,7 @@ async fn run_extract(
         ArchiveFormat::TarGz => "archive.tar.gz",
         ArchiveFormat::TarXz => "archive.tar.xz",
         ArchiveFormat::Zip => "archive.zip",
+        ArchiveFormat::Deb => "archive.deb",
     };
     let archive = base.join(archive_name);
     tokio::fs::write(&archive, bytes)

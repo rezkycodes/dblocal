@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 use crate::model::ArchiveFormat;
 use crate::{DblError, Result};
 
+mod deb;
 mod fsops;
 mod path;
 mod tarball;
@@ -178,6 +179,7 @@ fn extract_into_staging_sync(
         ArchiveFormat::TarGz => tarball::extract_tar_gz(archive_path, staging, strip, &caps),
         ArchiveFormat::TarXz => tarball::extract_tar_xz(archive_path, staging, strip, &caps),
         ArchiveFormat::Zip => zip::extract_zip(archive_path, staging, strip, &caps),
+        ArchiveFormat::Deb => deb::extract_deb(archive_path, staging, strip, &caps),
     }
 }
 
