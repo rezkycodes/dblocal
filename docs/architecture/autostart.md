@@ -17,7 +17,7 @@ bootstrap. It covers PRD `F-AUT-01` (app starts at login) and `F-AUT-02`
 | `autostart/plan.rs` | Pure decisions: `decide_mode`, `flagged_targets` |
 | `autostart/runner.rs` | Bounded, independent start fan-out |
 | `autostart/mode.rs` | `run_pass`: plan + service |
-| `autostart/error.rs` | `DBL-8500..8505`, Indonesian messages in `messages.rs` |
+| `autostart/error.rs` | `DBL-8500..8505`, messages in `messages.rs` |
 | `crates/cli/src/commands/autostart.rs` | `dblocal autostart status\|enable\|disable` and the login mode |
 | `crates/gui/src/app/bootstrap.rs` | `run_autostart_with_service`: tray-only login path |
 | `crates/gui/src/lib.rs` | `run_autostart()` |
@@ -158,7 +158,7 @@ be opened.
 ## Errors
 
 `DBL-8500..8599` is the reserved "packaging and autostart helpers" range
-(`docs/architecture/error-codes.md`). Messages are Indonesian and live in
+(`docs/architecture/error-codes.md`). Messages are user-facing and live in
 `autostart/messages.rs`; `Debug` and `Display` never carry a path or helper
 stderr that could hold a secret.
 

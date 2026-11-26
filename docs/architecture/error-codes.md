@@ -27,7 +27,7 @@ New feature modules do NOT edit `error.rs` or `strings.rs` (several workers edit
 
 Rules for a module error type:
 
-1. A small enum with `fn code(&self) -> &'static str` (a `const` per variant, in your range) and `fn user_message(&self) -> &'static str` (Indonesian, no secrets, no SQL text, no paths that contain secrets). The messages live in a file inside the module (for example `admin/messages.rs`).
+1. A small enum with `fn code(&self) -> &'static str` (a `const` per variant, in your range) and `fn user_message(&self) -> &'static str` (English, no secrets, no SQL text, no paths that contain secrets). The messages live in a file inside the module (for example `admin/messages.rs`).
 2. `impl From<YourError> for UserFacingError` using `UserFacingError::new(code, message)`.
 3. `Debug` and `Display` never contain a password, a token, a connection string or the text of a failing statement; test it with a canary secret across every variant.
 4. A table test asserts that every variant's code is inside your range and that codes are unique.

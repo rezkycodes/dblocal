@@ -25,7 +25,7 @@ pub struct ConfigSetting {
     pub unit: String,
     /// Whether a restart is needed (always true for this subset).
     pub restart_required: bool,
-    /// Indonesian one-line description.
+    /// One-line description.
     pub description: String,
     /// Whether the setting is read-only in this task (port, auth method).
     pub readonly: bool,

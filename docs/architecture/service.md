@@ -51,7 +51,7 @@ follows the same shape:
    `DownloadProgress` only when the downloader reports it, and
    `InstanceChanged` with a full `InstanceView` after every persisted change.
 4. Emit `OperationFinished` exactly once, carrying `UserFacingError` (stable
-   `DBL-NNNN` code, Indonesian message from `strings`, optional start
+   `DBL-NNNN` code, English message from `strings`, optional start
    `diagnosis`) on failure.
 
 Events go through a `broadcast` channel. A slow or absent subscriber can only
@@ -471,7 +471,7 @@ existing `translate` already has a `_ => None` arm.
   the engine gate (only PostgreSQL + a password instance is supported), reads
   the superuser password from the secret store, and dials loopback through
   `PgAdmin`. MySQL/MariaDB (awaiting `W4-A2`) and Valkey return the admin
-  module's typed `Unsupported` (`DBL-8111`) with its Indonesian message — never
+  module's typed `Unsupported` (`DBL-8111`) with its message — never
   an empty list or a `todo!()`. The engine calls sit behind an injectable
   `AdminExecutor`; the production factory is `PgAdmin`, tests inject a fake.
   - `create_user` drops the half-created role if the GRANT fails, so a failure

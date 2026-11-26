@@ -4,7 +4,6 @@ Version=1.0
 Name=DBLocal
 GenericName=Local Database Manager
 Comment=Install and run local PostgreSQL, MySQL, MariaDB and Valkey servers without containers
-Comment[id]=Install and run local PostgreSQL, MySQL, MariaDB and Valkey servers without containers
 Exec=dblocal
 TryExec=dblocal
 Icon=dblocal

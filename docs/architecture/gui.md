@@ -57,7 +57,7 @@ Coverage totals are from `cargo llvm-cov -p dblocal-gui`. Layout-heavy files (`a
 2. `service_bridge::spawn_bridge` runs a dedicated thread with a current-thread tokio runtime that forwards events into an unbounded `flume::Sender<UiEvent>`.
 3. The GPUI app spawns an async task: `while let Ok(ev) = rx.recv_async().await { view.update(...); cx.notify(); }`. It parks on the channel, so an idle app consumes no CPU.
 4. Log streaming is opt-in per opened instance via `watch_logs(id, true/false)`. Each open tab owns its own buffer in a `LogStore` keyed by `InstanceId`, so a line for instance B can never appear under instance A; closing the tab drops it. The Logs tab renders through `uniform_list` over that buffer, and lines are stored as `SharedString`, so a frame clones pointers, never text.
-5. **Removal and forced stop (addendum G).** `InstanceRemoved` goes through `ShellState::apply_removed`, which drops the row, closes its tab, clears the selection if it pointed there and drops its log buffer; the workspace then calls `watch_logs(id, false)`. An unknown id is a no-op. The mock emits it when a delete completes (before `OperationFinished`) and when a create rolls back; both are tested. `StopForced` (a scripted `StopNeedsForce`) is emitted before the final `InstanceChanged` and raises the Indonesian toast `UI_TOAST_STOP_FORCED`; a render test proves a deleted instance leaves the dock (status-dot pixels 540 → 360, 113 sidebar rows differ).
+5. **Removal and forced stop (addendum G).** `InstanceRemoved` goes through `ShellState::apply_removed`, which drops the row, closes its tab, clears the selection if it pointed there and drops its log buffer; the workspace then calls `watch_logs(id, false)`. An unknown id is a no-op. The mock emits it when a delete completes (before `OperationFinished`) and when a create rolls back; both are tested. `StopForced` (a scripted `StopNeedsForce`) is emitted before the final `InstanceChanged` and raises the `UI_TOAST_STOP_FORCED` toast; a render test proves a deleted instance leaves the dock (status-dot pixels 540 → 360, 113 sidebar rows differ).
 6. **Resync on lag.** `broadcast` drops the oldest events of a slow receiver. When the bridge sees `RecvError::Lagged` it emits `UiEvent::Resync`; the workspace then re-reads `list_instances()` and the catalog, so a row can never stay "running" after missed `InstanceChanged` events.
 
 ## Focus model and keyboard (`F-PLH-01`, W4-G)
@@ -274,7 +274,7 @@ The Wave 2 seam is closed. `dblocal_gui::run()` builds a real
    opens SQLite, reads the catalog and probes glibc **on the service's own thread**
    (`service.md`, "Threading model"), so the GPUI thread does no I/O.
 3. If construction fails (unwritable home, corrupt store), `show_startup_failure` opens a small
-   window with the Indonesian `DblError::user_message()` and the process exits `1`. With no display
+   window with the `DblError::user_message()` text and the process exits `1`. With no display
    it prints `UI_STARTUP_FAILED_TITLE` to stderr and exits `1`. There is no panic and no black window.
 4. `app::run_with_service(Arc<dyn DblService>)` opens the window.
 

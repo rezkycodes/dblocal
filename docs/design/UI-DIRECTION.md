@@ -72,4 +72,4 @@ live screen; no honest placeholder remains (`D-25`).
 - No idle timer (OPEN-08). The event pump parks on a flume channel.
 - No `unwrap/expect/panic/todo/unimplemented` outside tests.
 - Files < 800 lines, functions < 50 lines except pure layout.
-- All user-facing strings live in `crates/core/src/strings.rs`. Indonesian strings are exactly as the PRD/prototype write them.
+- All user-facing strings live in `crates/core/src/strings.rs`, in English. The wording follows the glossary the PRD sets.

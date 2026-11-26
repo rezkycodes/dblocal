@@ -10,9 +10,9 @@ This document describes the `dblocal` command-line interface implemented in
 - Command handlers are library functions over `&dyn DblService` with injected
   `out`/`err` writers and an `is_interactive` flag (`commands::Ctx`). `main`
   builds `LocalService::new(DblPaths::from_env()?, ServiceOptions::default())`
-  and dispatches. A service-open failure prints a clear Indonesian error on
+  and dispatches. A service-open failure prints a clear error on
   stderr and exits 1; it never panics.
-- User-facing CLI strings live in `crates/cli/src/messages.rs` (Indonesian and
+- User-facing CLI strings live in `crates/cli/src/messages.rs` (user-facing and
   the `DBL-84xx` codes). No handler formats a user-facing sentence or a
   diagnostic code itself; `messages::code_line`, `timeout_line`,
   `runtime_line`, `diagnosis_line`, `stage_line` and `download_progress` are the
@@ -64,7 +64,7 @@ the CLI prints whatever the service returns, verbatim.
   existing non-running instances.
 - `start` blocks until healthy or timeout (`--timeout`, default 60 s). It waits
   on the service event stream, not blind sleep-poll loops. Failure prints the DBL
-  code, the Indonesian message and the diagnosis when present; exit 4 for
+  code, the message and the diagnosis when present; exit 4 for
   engine/start failures.
 - `create` is non-interactive. Unknown engine, bad name/port, duplicate name,
   port in use and no installable artifact all exit 2; a failed download exits 1;

@@ -161,7 +161,7 @@ fn wait_cross_process(ctx: &mut Ctx<'_>, id: &InstanceId, timeout: Duration) -> 
 }
 
 /// Every failed start exits 4 (F-CLI-02: "a failed start prints the DBL code,
-/// the Indonesian message and the diagnosis, exit 4").
+/// the user message and the diagnosis, exit 4").
 fn report_start_failure(ctx: &mut Ctx<'_>, e: &dblocal_core::service::UserFacingError) -> u8 {
     output::stderr_line(ctx.err, &messages::code_line(&e.code, &e.message));
     if let Some(diag) = e.diagnosis {

@@ -1,7 +1,7 @@
 //! Module-local errors for open-in-client (DBL-8300-8399).
 //!
 //! This module must not leak secrets in `Debug` or `Display`. User messages
-//! are Indonesian and live in [`super::messages`].
+//! are user-facing and live in [`super::messages`].
 
 use std::fmt;
 
@@ -49,7 +49,7 @@ impl ClientError {
         }
     }
 
-    /// Indonesian, user-safe message.
+    /// User-safe message.
     pub fn user_message(&self) -> &'static str {
         match self {
             Self::UnsupportedClient { .. } => messages::UNSUPPORTED_CLIENT,
@@ -138,7 +138,7 @@ mod tests {
     }
 
     #[test]
-    fn user_messages_are_indonesian_and_safe() {
+    fn user_messages_are_non_empty_and_safe() {
         for err in all_variants() {
             let msg = err.user_message();
             assert!(!msg.is_empty());

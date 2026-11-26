@@ -216,7 +216,7 @@ impl AdminError {
         }
     }
 
-    /// Indonesian message for the UI. Static per variant, so it can never embed
+    /// User-facing message for the UI. Static per variant, so it can never embed
     /// a password, a connection string or the text of a failing statement.
     pub fn user_message(&self) -> &'static str {
         match self {

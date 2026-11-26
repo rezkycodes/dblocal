@@ -197,6 +197,6 @@ failure (F-INS-03 AC4), so the two events are deliberately distinct.
 - `SecretString` redacts `Debug`/`Display`, has no `Serialize`, zeroes its buffer on drop, and exposes
   raw bytes only via `expose()`.
 - `DblPaths` is the only source of `~/.dblocal` layout; tests use `DblPaths::with_root` and `DBLOCAL_HOME`.
-- Errors are `DblError` with stable `DBL-NNNN` codes and Indonesian `user_message()` strings from `strings`.
+- Errors are `DblError` with stable `DBL-NNNN` codes and English `user_message()` strings from `strings`.
 - Validation lives at boundaries (`InstanceName`, `Port`, version tags, artifact SHA-256, HTTPS URLs,
   non-zero artifact size, path segments).

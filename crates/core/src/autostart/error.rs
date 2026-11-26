@@ -76,7 +76,7 @@ impl AutostartError {
         }
     }
 
-    /// Indonesian, user-safe message.
+    /// User-safe message.
     pub fn user_message(&self) -> &'static str {
         match self {
             Self::Unsupported { .. } => messages::ERR_UNSUPPORTED,

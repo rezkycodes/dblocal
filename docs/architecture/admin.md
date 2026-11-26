@@ -13,7 +13,7 @@ Code layout:
 | `admin/sql.rs` (+ `admin/sql/tests.rs`) | Pure SQL builders, identifier validation, quoting, hostile corpus |
 | `admin/postgres.rs` (+ `admin/postgres/tests.rs`) | `tokio-postgres` execution, the F-DBU-03 AC2 reset state machine |
 | `admin/error.rs` | Module-local `AdminError` with `DBL-8100..=8199` codes |
-| `admin/messages.rs` | Indonesian user messages, one static string per variant |
+| `admin/messages.rs` | User messages, one static string per variant |
 
 ## Invariants honoured
 
@@ -279,7 +279,7 @@ Databases tab shows nothing for a Valkey instance. This matches the PRD's
 ### F2 (MEDIUM) — wrong password vs stopped engine
 
 Connect failures carrying SQLSTATE `28P01`/`28000` map to `AuthFailed`
-(DBL-8116) with its own Indonesian message; timeouts/refused connections remain
+(DBL-8116) with its own message; timeouts/refused connections remain
 `Connect` (DBL-8100). Neither error's Debug/Display contains the password.
 
 ### F3 (MEDIUM) — admin API panics inside a tokio runtime
