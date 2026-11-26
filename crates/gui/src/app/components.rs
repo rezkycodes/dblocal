@@ -86,6 +86,18 @@ pub fn status_glyph(status: InstanceStatus, size: f32, theme: &Theme) -> Div {
     }
 }
 
+/// Scale factor for an engine's Simple Icons SVG inside a square container.
+///
+/// Wide wordmark glyphs (`mysql`, `rustfs`) sit in a 24x24 viewBox with shorter
+/// vertical extent; fitting the long (horizontal) edge to the container keeps
+/// them as legible as square glyphs like PostgreSQL.
+const fn svg_scale_for(engine: EngineKey) -> f32 {
+    match engine {
+        EngineKey::Mysql | EngineKey::Rustfs => 0.88,
+        _ => 0.64,
+    }
+}
+
 /// Service icon badge for an engine: paints the tinted Simple Icons SVG for
 /// PostgreSQL, MySQL, MariaDB, Redis and RustFS, and keeps the `VK` monogram
 /// badge for Valkey.
@@ -97,6 +109,7 @@ pub fn engine_badge(engine: EngineKey, size: f32, theme: &Theme) -> Div {
     let is_dark = theme.background.l < 0.5;
     if let Some(svg_path) = crate::assets::service_icon_path(engine) {
         let brand = crate::assets::service_brand_colour(engine, is_dark);
+        let glyph_size = size * svg_scale_for(engine);
         return div()
             .flex()
             .flex_none()
@@ -105,7 +118,7 @@ pub fn engine_badge(engine: EngineKey, size: f32, theme: &Theme) -> Div {
             .size(px(size))
             .rounded(px(size * 0.2))
             .bg(tokens::tint(brand, 0.16))
-            .child(svg().path(svg_path).size(px(size * 0.64)).text_color(brand));
+            .child(svg().path(svg_path).size(px(glyph_size)).text_color(brand));
     }
     let colour = engine_colour(engine, theme);
     div()
@@ -136,13 +149,17 @@ pub fn engine_icon(engine: EngineKey, size: f32, theme: &Theme) -> Div {
     let is_dark = theme.background.l < 0.5;
     if let Some(svg_path) = crate::assets::service_icon_path(engine) {
         let brand = crate::assets::service_brand_colour(engine, is_dark);
+        let glyph_size = match engine {
+            EngineKey::Mysql | EngineKey::Rustfs => size * 1.2,
+            _ => size,
+        };
         div()
             .flex_none()
             .flex()
             .items_center()
             .justify_center()
             .size(px(size))
-            .child(svg().path(svg_path).size(px(size)).text_color(brand))
+            .child(svg().path(svg_path).size(px(glyph_size)).text_color(brand))
     } else {
         engine_badge(engine, size, theme)
     }

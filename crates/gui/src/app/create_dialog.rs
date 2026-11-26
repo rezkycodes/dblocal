@@ -214,8 +214,8 @@ fn render_engine_cards(
         let reason = format::engine_unavailable_reason(entry).map(str::to_owned);
         let card = v_flex()
             .id(SharedString::from(format!("engine-{}", engine.as_str())))
-            .flex_1()
-            .min_w(px(120.))
+            .w(px(218.))
+            .flex_none()
             .gap_2()
             .p(px(12.))
             .rounded(px(8.))
