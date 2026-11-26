@@ -117,16 +117,20 @@ pub fn run_with_compat(output: &Path, compat_v2_output: Option<&Path>) -> Result
     )
 }
 
+/// Engines published exclusively in schema v3 (excluded from derived v2).
+const V3_ONLY_ENGINES: &[&str] = &["redis", "rustfs"];
+
 /// Derives a schema-2 compatible catalog from a schema-3 catalog.
 ///
-/// Drops every `redis` version and artifact, drops every `deb` artifact, clears
-/// the `license` field so it is omitted during JSON serialization, sets
-/// `schema_version = 2`, and restores the v2 `source_url`.
+/// Drops every v3-only engine (`redis`, `rustfs`) version and artifact, drops
+/// every `deb` artifact, clears the `license` field so it is omitted during
+/// JSON serialization, sets `schema_version = 2`, and restores the v2
+/// `source_url`.
 pub fn derive_compat_v2(v3: &CatalogDocument) -> CatalogDocument {
     let versions = v3
         .versions
         .iter()
-        .filter(|version| version.engine != "redis")
+        .filter(|version| !V3_ONLY_ENGINES.contains(&version.engine.as_str()))
         .cloned()
         .map(|mut version| {
             version.license = None;
@@ -136,7 +140,9 @@ pub fn derive_compat_v2(v3: &CatalogDocument) -> CatalogDocument {
     let artifacts = v3
         .artifacts
         .iter()
-        .filter(|artifact| artifact.engine != "redis" && artifact.format != "deb")
+        .filter(|artifact| {
+            !V3_ONLY_ENGINES.contains(&artifact.engine.as_str()) && artifact.format != "deb"
+        })
         .cloned()
         .collect();
     CatalogDocument {

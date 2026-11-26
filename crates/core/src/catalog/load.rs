@@ -5,7 +5,7 @@ use std::time::{Duration, SystemTime};
 use crate::catalog::cache::{CachedDocument, catalog_cache_path, read_cache, write_cache};
 use crate::catalog::dto::CatalogDocument;
 use crate::catalog::fetch::{CatalogFetcher, RefreshOutcome};
-use crate::catalog::validate::validate_document;
+use crate::catalog::validate::validate_document_tolerant;
 use crate::error::Result;
 use crate::model::{CatalogSnapshot, CatalogStatus};
 use crate::paths::DblPaths;
@@ -77,8 +77,8 @@ pub fn load_bundled_snapshot() -> Result<CatalogState> {
         .map_err(|err| crate::DblError::Storage {
             reason: format!("bundled catalog is not valid JSON: {err}"),
         })?;
-    validate_document(&document)?;
-    let snapshot = document.into_snapshot(SystemTime::now(), CatalogStatus::Stale)?;
+    validate_document_tolerant(&document)?;
+    let (snapshot, _) = document.into_snapshot_tolerant(SystemTime::now(), CatalogStatus::Stale)?;
     Ok(CatalogState::new(document, snapshot))
 }
 
@@ -98,7 +98,9 @@ pub fn load_or_bundled(paths: &DblPaths, now: SystemTime, ttl: Duration) -> Resu
         } else {
             CatalogStatus::Fresh
         };
-        let snapshot = cached.document.into_snapshot(cached.fetched_at(), status)?;
+        let (snapshot, _) = cached
+            .document
+            .into_snapshot_tolerant(cached.fetched_at(), status)?;
         return Ok(CatalogState::new(cached.document, snapshot));
     }
     load_bundled_snapshot()
@@ -134,7 +136,7 @@ pub async fn refresh<F: CatalogFetcher>(
         }
         Ok(RefreshOutcome::Modified { etag, body }) => {
             let document = match serde_json::from_str::<CatalogDocument>(&body) {
-                Ok(document) if validate_document(&document).is_ok() => document,
+                Ok(document) if validate_document_tolerant(&document).is_ok() => document,
                 Ok(_) => {
                     tracing::debug!("catalog refresh returned a payload that failed validation");
                     return Ok(degrade(state));
@@ -146,7 +148,7 @@ pub async fn refresh<F: CatalogFetcher>(
             };
             let cached = CachedDocument::new(document.clone(), now, etag);
             record(cache_write(paths, &cached), "catalog cache");
-            let mut snapshot = document.into_snapshot(now, CatalogStatus::Fresh)?;
+            let (mut snapshot, _) = document.into_snapshot_tolerant(now, CatalogStatus::Fresh)?;
             if let Some(etag) = &cached.etag {
                 snapshot = snapshot.with_etag(etag.clone());
             }
@@ -426,5 +428,61 @@ mod tests {
         .expect("skipped");
         assert_eq!(result.status(), CatalogStatus::Fresh);
         assert!(fetcher.calls().is_empty());
+    }
+
+    #[tokio::test]
+    async fn refresh_accepts_unknown_engine_and_unknown_format_entries_tolerantly() {
+        let dir = tempdir().expect("tempdir");
+        let paths = DblPaths::with_root(dir.path());
+        let mut doc = sample_document();
+        doc.versions.push(crate::catalog::dto::CatalogVersion {
+            engine: "future_db".to_owned(),
+            version: "1.0.0".to_owned(),
+            major_line: "1".to_owned(),
+            release_date: None,
+            eol: false,
+            line: Some("1.0".to_owned()),
+            status: None,
+            license: None,
+        });
+        doc.artifacts.push(crate::catalog::dto::CatalogArtifact {
+            id: "future_db-1.0.0-linux-x86_64".to_owned(),
+            engine: "future_db".to_owned(),
+            version: "1.0.0".to_owned(),
+            os: "linux".to_owned(),
+            arch: "x86_64".to_owned(),
+            url: "https://example.test/future.tar.zst".to_owned(),
+            sha256: crate::catalog::dto::tests::sha(),
+            size_bytes: 55,
+            format: "tar.zst".to_owned(),
+            strip_prefix: None,
+            min_glibc: None,
+            variant: None,
+        });
+        let body = serde_json::to_string(&doc).expect("encode");
+        let fetcher = FakeFetcher::new(Ok(RefreshOutcome::Modified {
+            etag: Some("\"v3-future\"".to_owned()),
+            body,
+        }));
+        let refreshed = refresh(
+            &state(CatalogStatus::Stale),
+            &paths,
+            &fetcher,
+            true,
+            SystemTime::now(),
+            Duration::from_secs(86_400),
+        )
+        .await
+        .expect("tolerant refresh");
+        assert_eq!(refreshed.status(), CatalogStatus::Fresh);
+        assert_eq!(refreshed.snapshot().versions().len(), 1);
+        assert_eq!(refreshed.snapshot().artifacts().len(), 1);
+
+        // Reloading from the cache written by refresh also succeeds tolerantly.
+        let reloaded = load_or_bundled(&paths, SystemTime::now(), Duration::from_secs(86_400))
+            .expect("tolerant cache reload");
+        assert_eq!(reloaded.status(), CatalogStatus::Fresh);
+        assert_eq!(reloaded.snapshot().versions().len(), 1);
+        assert_eq!(reloaded.snapshot().artifacts().len(), 1);
     }
 }

@@ -11,7 +11,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use serde::{Deserialize, Serialize};
 
 use crate::catalog::dto::{CATALOG_SCHEMA_VERSION, CatalogDocument};
-use crate::catalog::validate::validate_document;
+use crate::catalog::validate::validate_document_tolerant;
 use crate::error::Result;
 use crate::paths::DblPaths;
 
@@ -88,7 +88,7 @@ pub fn read_cache(path: &Path) -> Option<CachedDocument> {
         }
     };
     if cached.schema_version != CATALOG_SCHEMA_VERSION
-        || validate_document(&cached.document).is_err()
+        || validate_document_tolerant(&cached.document).is_err()
     {
         tracing::debug!(path = %path.display(), "catalog cache failed validation");
         return None;

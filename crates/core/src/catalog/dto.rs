@@ -5,6 +5,7 @@
 //! [`crate::catalog::view`], so a reader never has to walk a nested tree, and
 //! the builder only has to sort two arrays.
 
+use std::collections::BTreeSet;
 use std::time::SystemTime;
 
 use serde::{Deserialize, Serialize};
@@ -110,72 +111,117 @@ pub struct CatalogDocument {
     pub artifacts: Vec<CatalogArtifact>,
 }
 
+/// Number of forward-compatible entries skipped while reading a schema-3 catalog.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct CatalogSkipCounts {
+    skipped_versions: usize,
+    skipped_artifacts: usize,
+}
+
+impl CatalogSkipCounts {
+    /// Constructs a skip count record.
+    pub fn new(skipped_versions: usize, skipped_artifacts: usize) -> Self {
+        Self {
+            skipped_versions,
+            skipped_artifacts,
+        }
+    }
+
+    /// Number of version entries skipped due to an unknown engine key.
+    pub fn skipped_versions(&self) -> usize {
+        self.skipped_versions
+    }
+
+    /// Number of artifact entries skipped due to an unknown engine, format, or skipped version.
+    pub fn skipped_artifacts(&self) -> usize {
+        self.skipped_artifacts
+    }
+
+    /// Total number of skipped entries.
+    pub fn total(&self) -> usize {
+        self.skipped_versions + self.skipped_artifacts
+    }
+}
+
 impl CatalogDocument {
-    /// Converts the document into a validated [`CatalogSnapshot`].
+    /// Converts the document into a validated [`CatalogSnapshot`] strictly.
     ///
-    /// Every artifact goes through [`Artifact::new`], so the same invariants the
-    /// rest of the app relies on (HTTPS URL, 64-hex SHA-256, non-zero size) are
-    /// enforced here rather than at download time.
+    /// Unknown engine keys and archive formats are rejected. Use this in
+    /// authoring and CI validation; runtime readers should use
+    /// [`Self::into_snapshot_tolerant`].
     pub fn into_snapshot(
         &self,
         fetched_at: SystemTime,
         status: CatalogStatus,
     ) -> Result<CatalogSnapshot> {
+        self.convert_snapshot(fetched_at, status, false)
+            .map(|(snapshot, _)| snapshot)
+    }
+
+    /// Converts the document into a validated [`CatalogSnapshot`], skipping
+    /// entries whose engine key or archive format this build does not know
+    /// (and artifacts belonging to a skipped version).
+    ///
+    /// Malformed entries for known engines still return an error.
+    pub fn into_snapshot_tolerant(
+        &self,
+        fetched_at: SystemTime,
+        status: CatalogStatus,
+    ) -> Result<(CatalogSnapshot, CatalogSkipCounts)> {
+        let (snapshot, counts) = self.convert_snapshot(fetched_at, status, true)?;
+        if counts.total() > 0 {
+            tracing::warn!(
+                skipped_versions = counts.skipped_versions(),
+                skipped_artifacts = counts.skipped_artifacts(),
+                "skipped unknown catalog entries while loading schema 3 catalog"
+            );
+        }
+        Ok((snapshot, counts))
+    }
+
+    fn convert_snapshot(
+        &self,
+        fetched_at: SystemTime,
+        status: CatalogStatus,
+        tolerant: bool,
+    ) -> Result<(CatalogSnapshot, CatalogSkipCounts)> {
         crate::catalog::validate::check_schema_version(self.schema_version)?;
         crate::catalog::validate::check_source_url(&self.source_url)?;
 
         let mut versions = Vec::with_capacity(self.versions.len());
+        let mut skipped_version_keys: BTreeSet<(&str, &str)> = BTreeSet::new();
+        let mut skipped_versions = 0usize;
+
         for entry in &self.versions {
-            let engine = parse_engine(&entry.engine)?;
-            let status = match &entry.status {
-                Some(value) => Some(value.parse::<crate::model::VersionStatus>()?),
-                None => None,
+            let engine = match parse_engine(&entry.engine) {
+                Ok(engine) => engine,
+                Err(_) if tolerant => {
+                    skipped_versions += 1;
+                    skipped_version_keys.insert((entry.engine.as_str(), entry.version.as_str()));
+                    continue;
+                }
+                Err(err) => return Err(err),
             };
-            let version = EngineVersion::new(
-                engine,
-                entry.version.clone(),
-                entry.release_date.clone(),
-                entry.eol,
-            )?
-            .with_status(status)
-            .with_license(entry.license.clone());
-            if version.major_line() != entry.major_line {
-                return Err(invalid(
-                    "major_line",
-                    format!(
-                        "{} {} declares major line {} but derives {}",
-                        entry.engine,
-                        entry.version,
-                        entry.major_line,
-                        version.major_line()
-                    ),
-                ));
-            }
-            if entry
-                .line
-                .as_deref()
-                .is_some_and(|line| line != version.line())
-            {
-                return Err(invalid(
-                    "line",
-                    format!(
-                        "{} {} declares line {:?} but belongs to {}",
-                        entry.engine,
-                        entry.version,
-                        entry.line.as_deref().unwrap_or_default(),
-                        version.line()
-                    ),
-                ));
-            }
-            versions.push(version);
+            versions.push(domain_version(entry, engine)?);
         }
 
         let mut artifacts = Vec::with_capacity(self.artifacts.len());
+        let mut skipped_artifacts = 0usize;
+
         for entry in &self.artifacts {
+            if tolerant
+                && (entry.engine.parse::<EngineKey>().is_err()
+                    || skipped_version_keys
+                        .contains(&(entry.engine.as_str(), entry.version.as_str()))
+                    || entry.format.parse::<ArchiveFormat>().is_err())
+            {
+                skipped_artifacts += 1;
+                continue;
+            }
             artifacts.push(domain_artifact(entry)?);
         }
 
-        Ok(CatalogSnapshot::new(
+        let snapshot = CatalogSnapshot::new(
             self.id(),
             fetched_at,
             self.source_url.clone(),
@@ -183,6 +229,10 @@ impl CatalogDocument {
             versions,
             artifacts,
             status,
+        );
+        Ok((
+            snapshot,
+            CatalogSkipCounts::new(skipped_versions, skipped_artifacts),
         ))
     }
 
@@ -193,6 +243,50 @@ impl CatalogDocument {
             None => "catalog".to_owned(),
         }
     }
+}
+
+fn domain_version(entry: &CatalogVersion, engine: EngineKey) -> Result<EngineVersion> {
+    let status = match &entry.status {
+        Some(value) => Some(value.parse::<crate::model::VersionStatus>()?),
+        None => None,
+    };
+    let version = EngineVersion::new(
+        engine,
+        entry.version.clone(),
+        entry.release_date.clone(),
+        entry.eol,
+    )?
+    .with_status(status)
+    .with_license(entry.license.clone());
+    if version.major_line() != entry.major_line {
+        return Err(invalid(
+            "major_line",
+            format!(
+                "{} {} declares major line {} but derives {}",
+                entry.engine,
+                entry.version,
+                entry.major_line,
+                version.major_line()
+            ),
+        ));
+    }
+    if entry
+        .line
+        .as_deref()
+        .is_some_and(|line| line != version.line())
+    {
+        return Err(invalid(
+            "line",
+            format!(
+                "{} {} declares line {:?} but belongs to {}",
+                entry.engine,
+                entry.version,
+                entry.line.as_deref().unwrap_or_default(),
+                version.line()
+            ),
+        ));
+    }
+    Ok(version)
 }
 
 fn domain_artifact(entry: &CatalogArtifact) -> Result<Artifact> {

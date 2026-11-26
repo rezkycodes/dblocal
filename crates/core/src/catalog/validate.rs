@@ -10,23 +10,39 @@ use std::time::SystemTime;
 
 use semver::Version;
 
-use crate::catalog::dto::{CATALOG_SCHEMA_VERSION, CatalogArtifact, CatalogDocument, invalid};
+use crate::catalog::dto::{
+    CATALOG_SCHEMA_VERSION, CatalogArtifact, CatalogDocument, CatalogSkipCounts, invalid,
+};
 use crate::error::Result;
-use crate::model::CatalogStatus;
+use crate::model::{ArchiveFormat, CatalogStatus, EngineKey};
 
-/// Checks every invariant a catalog document must hold.
+/// Checks every invariant a catalog document must hold strictly.
 ///
-/// The checks are ordered from cheapest to most detailed, so a corrupt file
-/// reports the first real problem instead of a cascade.
+/// Unknown engine keys and archive formats fail validation. Used by
+/// `xtask catalog validate` and the catalog builder so typos fail CI.
 pub fn validate_document(document: &CatalogDocument) -> Result<()> {
     check_schema_version(document.schema_version)?;
     check_source_url(&document.source_url)?;
-    check_versions(document)?;
-    check_artifacts(document)?;
+    check_versions(document, false)?;
+    check_artifacts(document, false)?;
     // The last step is the authoritative one: it reuses the same domain
     // constructors the rest of the app trusts.
     document.into_snapshot(SystemTime::UNIX_EPOCH, CatalogStatus::Fresh)?;
     Ok(())
+}
+
+/// Validates a schema-3 catalog document for runtime clients, skipping entries
+/// with unknown engine keys or unknown archive formats (and artifacts belonging
+/// to a skipped version) while keeping malformed entries of known engines as
+/// hard errors.
+pub fn validate_document_tolerant(document: &CatalogDocument) -> Result<CatalogSkipCounts> {
+    check_schema_version(document.schema_version)?;
+    check_source_url(&document.source_url)?;
+    check_versions(document, true)?;
+    check_artifacts(document, true)?;
+    let (_, counts) =
+        document.into_snapshot_tolerant(SystemTime::UNIX_EPOCH, CatalogStatus::Fresh)?;
+    Ok(counts)
 }
 
 /// Rejects payloads this build cannot safely interpret.
@@ -55,11 +71,14 @@ pub(crate) fn check_source_url(url: &str) -> Result<()> {
     }
 }
 
-fn check_versions(document: &CatalogDocument) -> Result<()> {
+fn check_versions(document: &CatalogDocument, tolerant: bool) -> Result<()> {
     let mut seen = BTreeSet::new();
     let mut by_engine: std::collections::BTreeMap<&str, Vec<Version>> =
         std::collections::BTreeMap::new();
     for entry in &document.versions {
+        if tolerant && entry.engine.parse::<EngineKey>().is_err() {
+            continue;
+        }
         if !seen.insert((entry.engine.as_str(), entry.version.as_str())) {
             return Err(invalid(
                 "versions",
@@ -87,15 +106,33 @@ fn check_versions(document: &CatalogDocument) -> Result<()> {
     Ok(())
 }
 
-fn check_artifacts(document: &CatalogDocument) -> Result<()> {
+fn check_artifacts(document: &CatalogDocument, tolerant: bool) -> Result<()> {
     let mut seen_ids = BTreeSet::new();
     let versions: BTreeSet<(&str, &str)> = document
         .versions
         .iter()
+        .filter(|v| !tolerant || v.engine.parse::<EngineKey>().is_ok())
         .map(|v| (v.engine.as_str(), v.version.as_str()))
         .collect();
+    let skipped_versions: BTreeSet<(&str, &str)> = if tolerant {
+        document
+            .versions
+            .iter()
+            .filter(|v| v.engine.parse::<EngineKey>().is_err())
+            .map(|v| (v.engine.as_str(), v.version.as_str()))
+            .collect()
+    } else {
+        BTreeSet::new()
+    };
 
     for artifact in &document.artifacts {
+        if tolerant
+            && (artifact.engine.parse::<EngineKey>().is_err()
+                || skipped_versions.contains(&(artifact.engine.as_str(), artifact.version.as_str()))
+                || artifact.format.parse::<ArchiveFormat>().is_err())
+        {
+            continue;
+        }
         check_artifact(artifact, &versions)?;
         if !seen_ids.insert(artifact.id.as_str()) {
             return Err(invalid(
@@ -262,5 +299,83 @@ mod tests {
         assert_eq!(parse_glibc("2.28"), Some((2, 28)));
         assert_eq!(parse_glibc("2"), None);
         assert_eq!(parse_glibc("x.y"), None);
+    }
+
+    #[test]
+    fn tolerant_parser_skips_unknown_engine_and_unknown_format_keeping_known_entries() {
+        let mut document = sample_document();
+        // Add an unknown engine version and two artifacts belonging to it.
+        document.versions.push(crate::catalog::dto::CatalogVersion {
+            engine: "mongodb".to_owned(),
+            version: "8.0.1".to_owned(),
+            major_line: "8".to_owned(),
+            release_date: None,
+            eol: false,
+            line: Some("8.0".to_owned()),
+            status: None,
+            license: Some("SSPLv1".to_owned()),
+        });
+        document.artifacts.push(CatalogArtifact {
+            id: "mongodb-8.0.1-linux-x86_64".to_owned(),
+            engine: "mongodb".to_owned(),
+            version: "8.0.1".to_owned(),
+            os: "linux".to_owned(),
+            arch: "x86_64".to_owned(),
+            url: "https://example.test/mongodb-8.0.1.tgz".to_owned(),
+            sha256: crate::catalog::dto::tests::sha(),
+            size_bytes: 100,
+            format: "tar.gz".to_owned(),
+            strip_prefix: None,
+            min_glibc: None,
+            variant: None,
+        });
+        // Add an unknown archive format on a known engine.
+        document.artifacts.push(CatalogArtifact {
+            id: "postgresql-18.7.0-linux-x86_64-rpm".to_owned(),
+            engine: "postgresql".to_owned(),
+            version: "18.7.0".to_owned(),
+            os: "linux".to_owned(),
+            arch: "x86_64".to_owned(),
+            url: "https://example.test/postgresql-18.7.0.rpm".to_owned(),
+            sha256: crate::catalog::dto::tests::sha(),
+            size_bytes: 200,
+            format: "rpm".to_owned(),
+            strip_prefix: None,
+            min_glibc: None,
+            variant: None,
+        });
+
+        // Strict validation (used by CI / xtask) must still reject unknown entries.
+        assert!(validate_document(&document).is_err());
+
+        // Tolerant validation skips the unknown engine version, its artifact, and the unknown format artifact.
+        let counts = validate_document_tolerant(&document).expect("tolerant validation");
+        assert_eq!(counts.skipped_versions(), 1);
+        assert_eq!(counts.skipped_artifacts(), 2);
+        assert_eq!(counts.total(), 3);
+
+        let (snapshot, snap_counts) = document
+            .into_snapshot_tolerant(SystemTime::UNIX_EPOCH, CatalogStatus::Fresh)
+            .expect("tolerant snapshot");
+        assert_eq!(snap_counts, counts);
+        assert_eq!(snapshot.versions().len(), 1);
+        assert_eq!(snapshot.versions()[0].engine(), EngineKey::Postgresql);
+        assert_eq!(snapshot.artifacts().len(), 1);
+        assert_eq!(snapshot.artifacts()[0].id(), "postgresql-18.7.0-linux-x86_64");
+    }
+
+    #[test]
+    fn tolerant_parser_still_rejects_malformed_known_engine_entries() {
+        let mut bad_sha = sample_document();
+        bad_sha.artifacts[0].sha256 = "not-a-sha".to_owned();
+        assert!(validate_document_tolerant(&bad_sha).is_err());
+
+        let mut bad_url = sample_document();
+        bad_url.artifacts[0].url = "http://insecure.test/pg.tar.gz".to_owned();
+        assert!(validate_document_tolerant(&bad_url).is_err());
+
+        let mut bad_major = sample_document();
+        bad_major.versions[0].major_line = "99".to_owned();
+        assert!(validate_document_tolerant(&bad_major).is_err());
     }
 }

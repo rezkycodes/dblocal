@@ -21,12 +21,15 @@ pub fn validate_any_schema(document: &CatalogDocument) -> Result<(), String> {
     }
 }
 
+/// Engines that must never appear in a schema-2 catalog.
+const V3_ONLY_ENGINES: &[&str] = &["redis", "rustfs"];
+
 fn validate_compat_v2(document: &CatalogDocument) -> Result<(), String> {
     for version in &document.versions {
-        if version.engine == "redis" {
+        if V3_ONLY_ENGINES.contains(&version.engine.as_str()) {
             return Err(format!(
-                "schema 2 catalog must not contain redis version {}",
-                version.version
+                "schema 2 catalog must not contain {} version {}",
+                version.engine, version.version
             ));
         }
         if version.license.is_some() {
@@ -37,10 +40,10 @@ fn validate_compat_v2(document: &CatalogDocument) -> Result<(), String> {
         }
     }
     for artifact in &document.artifacts {
-        if artifact.engine == "redis" {
+        if V3_ONLY_ENGINES.contains(&artifact.engine.as_str()) {
             return Err(format!(
-                "schema 2 catalog must not contain redis artifact {}",
-                artifact.id
+                "schema 2 catalog must not contain {} artifact {}",
+                artifact.engine, artifact.id
             ));
         }
         if artifact.format == "deb" {
@@ -143,14 +146,16 @@ mod tests {
             let doc: CatalogDocument = serde_json::from_str(&text).expect("parse frozen catalog");
             assert_eq!(doc.schema_version, expected_schema, "{rel}");
             assert!(
-                !doc.versions.iter().any(|v| v.engine == "redis"),
-                "{rel} must not contain redis versions"
+                !doc.versions
+                    .iter()
+                    .any(|v| V3_ONLY_ENGINES.contains(&v.engine.as_str())),
+                "{rel} must not contain redis or rustfs versions"
             );
             assert!(
                 !doc.artifacts
                     .iter()
-                    .any(|a| a.engine == "redis" || a.format == "deb"),
-                "{rel} must not contain redis or deb artifacts"
+                    .any(|a| V3_ONLY_ENGINES.contains(&a.engine.as_str()) || a.format == "deb"),
+                "{rel} must not contain redis, rustfs, or deb artifacts"
             );
         }
     }
