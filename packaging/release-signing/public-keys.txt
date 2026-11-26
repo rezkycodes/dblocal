@@ -1,13 +1,17 @@
 # Trusted Ed25519 release-signing public keys for DBLocal.
 #
-# Each non-comment line is a 64-character lowercase hex string representing
-# a raw 32-byte Ed25519 public key (matching TRUSTED_PUBLIC_KEYS in
-# crates/core/src/update/verify.rs).
+# Single source of truth: both .github/workflows/release.yml and
+# crates/core/src/update/verify.rs (via include_str!) read this file directly.
+#
+# Format rules:
+# - Blank lines and lines starting with '#' are ignored.
+# - Every other line must be a 64-character lowercase hex string representing
+#   a raw 32-byte Ed25519 public key. Malformed lines fail tests and verification.
 #
 # Multiple keys may be listed during key rotation.
 # While this file has no keys, tag builds in .github/workflows/release.yml
 # fail closed and release builds refuse automatic self-update.
 #
-# To generate the key pair and upload the private key to GitHub Actions
-# secrets without printing it, run:
-#   bash packaging/release-signing/generate-key.sh
+# To generate the key pair, save an encrypted offline backup, and upload the
+# private key to GitHub Actions secrets without printing it, run:
+#   bash packaging/release-signing/generate-key.sh --backup /path/outside/repo/dblocal-signing.enc.pem

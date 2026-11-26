@@ -712,8 +712,8 @@ jobs:
 
           verified=0
           for hex in "${pub_keys[@]}"; do
-            if [[ ! "$hex" =~ ^[0-9a-fA-F]{64}$ ]]; then
-              echo "::error::Invalid 64-char hex public key entry in ${pub_file}"
+            if [[ ! "$hex" =~ ^[0-9a-f]{64}$ ]]; then
+              echo "::error::Invalid 64-char lowercase hex public key entry in ${pub_file}"
               exit 1
             fi
             pub_der="${sign_dir}/pub.der"
