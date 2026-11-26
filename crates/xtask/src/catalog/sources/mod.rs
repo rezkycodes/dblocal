@@ -10,6 +10,7 @@ mod mariadb;
 mod mysql;
 mod postgresql;
 mod redis;
+mod rustfs;
 mod tracked;
 mod valkey;
 
@@ -20,6 +21,7 @@ pub use mysql::md5_hex as mysql_md5_hex;
 pub use mysql::{MysqlBuild, mysql_artifact, mysql_builds_for, mysql_target_optional};
 pub use postgresql::{GithubRelease, postgresql_from_releases};
 pub use redis::redis_from_apt;
+pub use rustfs::{RUSTFS_RELEASES_URL, RustfsRelease, rustfs_from_releases};
 #[cfg(test)]
 pub use tracked::find as find_tracked;
 pub use tracked::{TrackedVersion, for_engine as tracked_for_engine};

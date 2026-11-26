@@ -21,6 +21,8 @@ pub struct BuildSelection {
     pub valkey: Vec<TrackedVersion>,
     /// Redis versions to include (resolved from `packages.redis.io/deb`).
     pub redis: Vec<TrackedVersion>,
+    /// Whether to resolve the latest stable RustFS release `>= 1.0.6`.
+    pub rustfs: bool,
     /// MariaDB releases to include, as `(api_url, tracked)`.
     pub mariadb: Vec<(String, TrackedVersion)>,
     /// MySQL builds to download and hash, as `(build, tracked)`.
@@ -52,6 +54,7 @@ impl BuildSelection {
             postgresql,
             valkey,
             redis,
+            rustfs: true,
             mariadb,
             mysql,
         }
@@ -85,6 +88,7 @@ impl BuildSelection {
             postgresql: pick(EngineKey::Postgresql, postgresql)?,
             valkey: pick(EngineKey::Valkey, valkey)?,
             redis: Vec::new(),
+            rustfs: false,
             mariadb: mariadb_tracked
                 .into_iter()
                 .map(|tracked| (mariadb_api_url(tracked.version), tracked))
@@ -308,6 +312,18 @@ pub fn build_with_existing(
         artifacts.extend(a);
     }
 
+    if selection.rustfs {
+        let releases_text = source
+            .get_text(sources::RUSTFS_RELEASES_URL)
+            .map_err(|err| err.to_string())?;
+        let releases: Vec<sources::RustfsRelease> = serde_json::from_str(&releases_text)
+            .map_err(|err| format!("RustFS releases JSON: {err}"))?;
+        let (v, a) = sources::rustfs_from_releases(&releases, source, existing)
+            .map_err(|err| err.to_string())?;
+        versions.extend(v);
+        artifacts.extend(a);
+    }
+
     for (api_url, tracked) in &selection.mariadb {
         let release = sources::mariadb_release_from_api(source, api_url, tracked.version)
             .map_err(|err| err.to_string())?;
@@ -455,6 +471,7 @@ mod tests {
             postgresql: vec![pg("18.7.0", "18"), pg("17.12.0", "17"), pg("16.16.0", "16")],
             valkey: vec![valkey],
             redis: Vec::new(),
+            rustfs: false,
             mariadb: vec![
                 (
                     sources::mariadb_api_url("11.8.10"),
@@ -687,6 +704,7 @@ mod tests {
             }],
             valkey: Vec::new(),
             redis: Vec::new(),
+            rustfs: false,
             mariadb: Vec::new(),
             mysql: Vec::new(),
         };
@@ -792,6 +810,7 @@ mod tests {
             postgresql: Vec::new(),
             valkey: Vec::new(),
             redis: Vec::new(),
+            rustfs: false,
             mariadb: vec![(sources::mariadb_api_url("11.8.10"), mariadb)],
             mysql: mysql_builds_for(&tracked)
                 .into_iter()

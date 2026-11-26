@@ -87,6 +87,11 @@ fn rows(engine: EngineKey) -> Vec<VersionRow> {
             eol: false,
             size_bytes: 1_586_598,
         }],
+        EngineKey::Rustfs => vec![VersionRow {
+            version: "1.0.7",
+            eol: false,
+            size_bytes: 112_388_130,
+        }],
     }
 }
 
@@ -101,6 +106,7 @@ pub(crate) fn unavailable_reason(engine: EngineKey, os: Os, arch: Arch) -> Optio
             Some(strings::CATALOG_ENGINE_UNAVAILABLE_PLATFORM)
         }
         EngineKey::Redis if os != Os::Linux => Some(strings::CATALOG_ENGINE_UNAVAILABLE_PLATFORM),
+        EngineKey::Rustfs if os == Os::Macos => Some(strings::CATALOG_ENGINE_UNAVAILABLE_PLATFORM),
         _ => None,
     }
 }

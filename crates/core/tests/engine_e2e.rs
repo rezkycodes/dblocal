@@ -185,6 +185,7 @@ fn pg_run_ctx(
         logs_dir: logs.to_path_buf(),
         run_dir: run.to_path_buf(),
         port: Port::new(port).unwrap(),
+        extra_port: None,
         superuser: "postgres".into(),
         auth,
         credential: password
@@ -226,6 +227,7 @@ fn vk_run_ctx(
         logs_dir: logs.to_path_buf(),
         run_dir: run.to_path_buf(),
         port: Port::new(port).unwrap(),
+        extra_port: None,
         superuser: "default".into(),
         auth,
         credential: password

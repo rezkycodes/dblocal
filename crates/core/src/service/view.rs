@@ -37,6 +37,8 @@ pub struct InstanceView {
     pub version: String,
     /// Bound port.
     pub port: Port,
+    /// Optional secondary port (e.g. RustFS Console port when enabled).
+    pub extra_port: Option<Port>,
     /// Lifecycle status.
     pub status: InstanceStatus,
     /// Authentication mode, shown as the "No auth" badge when [`AuthMode::None`].
@@ -58,6 +60,7 @@ impl InstanceView {
             engine: instance.engine(),
             version: instance.version().to_owned(),
             port: instance.port(),
+            extra_port: instance.extra_port(),
             status: instance.status(),
             auth: instance.auth(),
             autostart: instance.autostart(),

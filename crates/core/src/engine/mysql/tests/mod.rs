@@ -28,6 +28,7 @@ pub(crate) fn run_ctx(port: u16, auth: AuthMode, password: Option<&str>) -> RunC
         logs_dir: PathBuf::from("/logs"),
         run_dir: PathBuf::from("/run"),
         port: Port::new(port).expect("port"),
+        extra_port: None,
         superuser: "root".into(),
         auth,
         credential: password.map(|p| Credential::new("root", SecretString::from(p))),

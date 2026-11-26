@@ -1,6 +1,6 @@
 {
   "schema_version": 3,
-  "generated_at": "2026-11-26T00:00:00Z",
+  "generated_at": "2026-11-27T00:00:00Z",
   "source_url": "https://raw.githubusercontent.com/rezkycodes/dblocal/main/catalog/engines-v3.json",
   "versions": [
     {
@@ -166,6 +166,15 @@
       "eol": false,
       "line": "7.4",
       "license": "RSALv2 / SSPLv1"
+    },
+    {
+      "engine": "rustfs",
+      "version": "1.0.7",
+      "major_line": "1",
+      "release_date": "2026-11-26",
+      "eol": false,
+      "line": "1.0",
+      "license": "Apache-2.0"
     },
     {
       "engine": "valkey",
@@ -1160,6 +1169,39 @@
       "strip_prefix": "usr",
       "min_glibc": "2.34",
       "variant": "jammy"
+    },
+    {
+      "id": "rustfs-1.0.7-linux-aarch64",
+      "engine": "rustfs",
+      "version": "1.0.7",
+      "os": "linux",
+      "arch": "aarch64",
+      "url": "https://github.com/rustfs/rustfs/releases/download/1.0.7/rustfs-linux-aarch64-musl-v1.0.7.zip",
+      "sha256": "e2c6d45105dd05df2f35547fbebfacf40dfba6ec4f8c31b86e30934faea79e76",
+      "size_bytes": 103469869,
+      "format": "zip"
+    },
+    {
+      "id": "rustfs-1.0.7-linux-x86_64",
+      "engine": "rustfs",
+      "version": "1.0.7",
+      "os": "linux",
+      "arch": "x86_64",
+      "url": "https://github.com/rustfs/rustfs/releases/download/1.0.7/rustfs-linux-x86_64-musl-v1.0.7.zip",
+      "sha256": "c90a40ba8cdc1468c71029a4d65fdd13449720183d3a8e00bc61ab09fcd448a5",
+      "size_bytes": 112388130,
+      "format": "zip"
+    },
+    {
+      "id": "rustfs-1.0.7-windows-x86_64",
+      "engine": "rustfs",
+      "version": "1.0.7",
+      "os": "windows",
+      "arch": "x86_64",
+      "url": "https://github.com/rustfs/rustfs/releases/download/1.0.7/rustfs-windows-x86_64-v1.0.7.zip",
+      "sha256": "d8f58a799836d964bd16440a042028d870130288b7c0c0924471983027d8dce8",
+      "size_bytes": 121635959,
+      "format": "zip"
     },
     {
       "id": "valkey-9.2.0-linux-aarch64-jammy",

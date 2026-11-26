@@ -12,6 +12,10 @@ pub const PORT_MARIADB: u16 = 3307;
 pub const PORT_VALKEY: u16 = 6379;
 /// Canonical Redis port (port allocator avoids clashes when Valkey is on 6379).
 pub const PORT_REDIS: u16 = 6379;
+/// Canonical RustFS S3 API port.
+pub const PORT_RUSTFS: u16 = 9000;
+/// Canonical RustFS web console port when enabled.
+pub const PORT_RUSTFS_CONSOLE: u16 = 9001;
 
 /// Lowest port an instance may use; anything below needs privileges.
 pub const MIN_PORT: u16 = 1024;
@@ -24,6 +28,8 @@ pub const START_TIMEOUT_SECS: u64 = 30;
 pub const START_TIMEOUT_VALKEY_SECS: u64 = 10;
 /// Start timeout for Redis.
 pub const START_TIMEOUT_REDIS_SECS: u64 = START_TIMEOUT_VALKEY_SECS;
+/// Start timeout for RustFS.
+pub const START_TIMEOUT_RUSTFS_SECS: u64 = 15;
 /// Grace period before a stop escalates to a forced kill.
 pub const STOP_GRACE_SECS: u64 = 20;
 /// Grace given to the escalation after an engine that accepted its own shutdown
@@ -49,6 +55,8 @@ pub const LOG_TAIL_LINES: usize = 1000;
 
 /// Length of a generated superuser password.
 pub const PASSWORD_LEN: usize = 24;
+/// Length of a generated RustFS S3 access key.
+pub const ACCESS_KEY_LEN: usize = 20;
 
 /// Environment variable that relocates the whole state tree.
 pub const ENV_DBLOCAL_HOME: &str = "DBLOCAL_HOME";
@@ -93,6 +101,8 @@ pub const SUPERUSER_MYSQL: &str = "root";
 pub const SUPERUSER_VALKEY: &str = "default";
 /// Canonical user name for Redis.
 pub const SUPERUSER_REDIS: &str = "default";
+/// Placeholder superuser name for RustFS (real instances generate a random access key).
+pub const SUPERUSER_RUSTFS: &str = "rustfs";
 
 /// Default database name used in connection URIs.
 pub const DEFAULT_DATABASE: &str = "postgres";

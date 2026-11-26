@@ -34,7 +34,7 @@ pub fn config_path(inner: &Inner, instance: &Instance) -> PathBuf {
             .paths
             .data_dir(instance.name())
             .join(config_file_name(instance.engine())),
-        EngineKey::Mysql | EngineKey::Valkey | EngineKey::Redis => inner
+        EngineKey::Mysql | EngineKey::Valkey | EngineKey::Redis | EngineKey::Rustfs => inner
             .paths
             .run_dir(instance.name())
             .join(config_file_name(instance.engine())),

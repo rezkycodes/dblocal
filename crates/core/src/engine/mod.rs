@@ -11,6 +11,7 @@ mod mysql;
 mod postgres;
 mod redis;
 pub mod resp;
+pub mod rustfs;
 pub mod shlib;
 pub mod sockdir;
 pub mod uri;
@@ -40,6 +41,10 @@ pub use postgres::{
 pub use redis::{
     RedisAdapter, prepare_run as prepare_redis_run, read_pidfile as read_redis_pidfile,
     sync_port as sync_redis_port,
+};
+pub use rustfs::{
+    RustfsAdapter, generate_access_key as generate_rustfs_access_key,
+    prepare_run as prepare_rustfs_run,
 };
 pub use valkey::{
     ConfigParams, ServerIdentity, ValkeyAdapter, parse_pidfile, prepare_run as prepare_valkey_run,
@@ -115,6 +120,8 @@ pub struct RunContext {
     pub run_dir: PathBuf,
     /// Port the engine listens on.
     pub port: Port,
+    /// Optional secondary port (e.g. RustFS Console port).
+    pub extra_port: Option<Port>,
     /// Superuser name.
     pub superuser: String,
     /// Authentication mode of this instance.
@@ -269,6 +276,7 @@ pub fn adapter_for(engine: EngineKey) -> Box<dyn EngineAdapter> {
         EngineKey::Redis => Box::new(redis::RedisAdapter),
         EngineKey::Mariadb => Box::new(mariadb::MariaDbAdapter),
         EngineKey::Mysql => Box::new(mysql::MysqlAdapter),
+        EngineKey::Rustfs => Box::new(rustfs::RustfsAdapter),
     }
 }
 
@@ -296,6 +304,7 @@ mod tests {
             logs_dir: PathBuf::from("/tmp/logs"),
             run_dir: PathBuf::from("/tmp/run"),
             port,
+            extra_port: None,
             superuser: "postgres".into(),
             auth: AuthMode::Password,
             credential: Some(Credential::new("postgres", SecretString::from("pw"))),
@@ -368,6 +377,7 @@ mod tests {
             logs_dir: PathBuf::from("/tmp/logs"),
             run_dir: PathBuf::from("/tmp/run"),
             port: Port::new(5432).expect("valid"),
+            extra_port: None,
             superuser: "postgres".into(),
             auth: AuthMode::Password,
             credential: Some(Credential::new("postgres", password)),
@@ -411,6 +421,7 @@ mod tests {
 
         let run_vk = RunContext {
             port: Port::new(6379).expect("valid"),
+            extra_port: None,
             ..run
         };
         let vk = adapter_for(EngineKey::Valkey);

@@ -11,6 +11,6 @@ pub(crate) mod test_support;
 
 pub use allocate::{
     BindProbeChecker, MAX_SCAN, PortChecker, PortConflict, PortSuggestion, port_conflict,
-    suggest_port, suggest_port_with,
+    suggest_port, suggest_port_from_with, suggest_port_with,
 };
 pub use probe::{BindReport, BindStatus, probe_bind, probe_or_in_use};

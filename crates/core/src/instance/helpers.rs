@@ -224,13 +224,16 @@ pub(crate) fn claim_status(
     inner.db(|store| store.transition_status(id, expected, next))
 }
 
-/// Every port already reserved by an instance.
+/// Every port already reserved by an instance (primary and optional extra port).
 pub(crate) fn reserved_ports(inner: &Inner) -> Result<std::collections::HashSet<Port>> {
-    Ok(inner
-        .db(|store| store.list_instances())?
-        .into_iter()
-        .map(|instance| instance.port())
-        .collect())
+    let mut set = std::collections::HashSet::new();
+    for instance in inner.db(|store| store.list_instances())? {
+        set.insert(instance.port());
+        if let Some(extra) = instance.extra_port() {
+            set.insert(extra);
+        }
+    }
+    Ok(set)
 }
 
 pub(crate) fn ensure_port_is_free(
@@ -239,7 +242,8 @@ pub(crate) fn ensure_port_is_free(
     ignore: Option<&crate::model::InstanceId>,
 ) -> Result<()> {
     for other in inner.db(|store| store.list_instances())? {
-        if other.port() == port && ignore.is_none_or(|id| other.id() != id) {
+        let same_port = other.port() == port || other.extra_port() == Some(port);
+        if same_port && ignore.is_none_or(|id| other.id() != id) {
             return Err(DblError::PortInUse { port: port.get() });
         }
     }
@@ -262,6 +266,7 @@ pub(crate) fn run_context(
         logs_dir: paths.logs_dir(name),
         run_dir: paths.run_dir(name),
         port: instance.port(),
+        extra_port: instance.extra_port(),
         superuser: instance.superuser().to_owned(),
         auth: instance.auth(),
         credential,
@@ -312,6 +317,7 @@ pub(crate) fn sync_instance_port(paths: &DblPaths, instance: &Instance) -> Resul
                 crate::engine::sync_mysql_port(&paths.run_dir(name), port)?;
             }
         }
+        EngineKey::Rustfs => {}
     }
     Ok(())
 }
@@ -396,6 +402,7 @@ pub(crate) fn log_file_for(paths: &DblPaths, instance: &Instance) -> PathBuf {
         EngineKey::Redis => logs.join("redis.log"),
         EngineKey::Mysql => logs.join("mysql.log"),
         EngineKey::Mariadb => logs.join("mariadb.log"),
+        EngineKey::Rustfs => logs.join("rustfs.log"),
     }
 }
 
@@ -421,6 +428,7 @@ pub(crate) fn start_timeout(engine: EngineKey) -> Duration {
         EngineKey::Valkey | EngineKey::Redis => {
             Duration::from_secs(consts::START_TIMEOUT_VALKEY_SECS)
         }
+        EngineKey::Rustfs => Duration::from_secs(consts::START_TIMEOUT_RUSTFS_SECS),
         _ => Duration::from_secs(consts::START_TIMEOUT_SECS),
     }
 }
@@ -543,6 +551,21 @@ pub(crate) fn validate_spec_boundary(spec: &crate::model::InstanceSpec) -> Resul
         return Err(DblError::InvalidInput {
             field: "version",
             reason: "must not be empty".to_owned(),
+        });
+    }
+    if spec.engine() == EngineKey::Rustfs && spec.auth() == AuthMode::None {
+        return Err(DblError::InvalidInput {
+            field: "auth",
+            reason: "RustFS requires per-instance credentials and cannot run without authentication"
+                .to_owned(),
+        });
+    }
+    if let (Some(port), Some(extra)) = (spec.port(), spec.extra_port())
+        && port == extra
+    {
+        return Err(DblError::InvalidInput {
+            field: "extra_port",
+            reason: "console port must differ from the S3 API port".to_owned(),
         });
     }
     Ok(())

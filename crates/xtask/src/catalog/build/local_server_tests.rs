@@ -231,6 +231,7 @@ fn build_reads_recorded_fixtures_from_a_local_server_on_port_0() {
         postgresql: vec![super::tests::fixture_tracked("18.7.0", "18")],
         valkey: vec![super::tests::fixture_tracked("9.2.0", "9.2")],
         redis: Vec::new(),
+        rustfs: false,
         mariadb: Vec::new(),
         mysql: Vec::new(),
     };

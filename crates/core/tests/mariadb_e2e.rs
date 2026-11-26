@@ -172,6 +172,7 @@ fn run_ctx(
         logs_dir: logs.to_path_buf(),
         run_dir: run.to_path_buf(),
         port: Port::new(port).unwrap(),
+        extra_port: None,
         superuser: "root".into(),
         auth,
         credential: password

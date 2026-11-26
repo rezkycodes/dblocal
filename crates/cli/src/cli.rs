@@ -80,7 +80,7 @@ pub enum Command {
     },
     /// Create a new instance without prompting.
     Create {
-        /// Engine: postgresql, mysql, mariadb, valkey or redis.
+        /// Engine: postgresql, mysql, mariadb, valkey, redis or rustfs.
         #[arg(long)]
         engine: String,
         /// Engine version tag, e.g. 18.7.0.
@@ -95,6 +95,9 @@ pub enum Command {
         /// Create without a password.
         #[arg(long = "no-password")]
         no_password: bool,
+        /// Enable the optional web console (RustFS; OFF by default).
+        #[arg(long)]
+        console: bool,
     },
     /// Delete an instance (the data is archived by default).
     Delete {
@@ -588,6 +591,16 @@ mod tests {
                 "--port",
                 "5432",
                 "--no-password",
+            ],
+            &[
+                "create",
+                "--engine",
+                "rustfs",
+                "--version",
+                "1.0.7",
+                "--name",
+                "s3-dev",
+                "--console",
             ],
             &["delete", "app", "--yes", "--purge"],
             &["logs", "app", "--follow"],

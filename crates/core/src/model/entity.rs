@@ -17,6 +17,8 @@ pub struct InstanceSpec {
     port: Option<Port>,
     auth: AuthMode,
     autostart: bool,
+    console_enabled: bool,
+    extra_port: Option<Port>,
 }
 
 impl InstanceSpec {
@@ -40,6 +42,8 @@ impl InstanceSpec {
             port,
             auth,
             autostart: false,
+            console_enabled: false,
+            extra_port: None,
         })
     }
 
@@ -67,6 +71,14 @@ impl InstanceSpec {
     pub const fn autostart(&self) -> bool {
         self.autostart
     }
+    /// Whether the optional web console (e.g. RustFS Console) is enabled.
+    pub const fn console_enabled(&self) -> bool {
+        self.console_enabled
+    }
+    /// Optional secondary port (e.g. RustFS Console port).
+    pub const fn extra_port(&self) -> Option<Port> {
+        self.extra_port
+    }
 
     /// Returns a copy with a different port, or `None` to re-allocate.
     pub fn with_port(mut self, port: Option<Port>) -> Self {
@@ -79,6 +91,21 @@ impl InstanceSpec {
         self.autostart = autostart;
         self
     }
+
+    /// Returns a copy with the optional web console toggled.
+    pub fn with_console_enabled(mut self, enabled: bool) -> Self {
+        self.console_enabled = enabled;
+        self
+    }
+
+    /// Returns a copy with an explicit secondary port (also enables console when `Some`).
+    pub fn with_extra_port(mut self, port: Option<Port>) -> Self {
+        self.extra_port = port;
+        if port.is_some() {
+            self.console_enabled = true;
+        }
+        self
+    }
 }
 
 /// A created instance, as persisted in `state.db`.
@@ -89,6 +116,7 @@ pub struct Instance {
     engine: EngineKey,
     version: String,
     port: Port,
+    extra_port: Option<Port>,
     status: InstanceStatus,
     auth: AuthMode,
     superuser: String,
@@ -118,6 +146,7 @@ impl Instance {
             port: spec
                 .port
                 .unwrap_or_else(|| Port::assume_valid(spec.engine.canonical_port())),
+            extra_port: spec.extra_port,
             status,
             auth: spec.auth,
             superuser: spec.engine.default_superuser().to_owned(),
@@ -148,6 +177,10 @@ impl Instance {
     /// Port the engine binds.
     pub const fn port(&self) -> Port {
         self.port
+    }
+    /// Optional secondary port (e.g. RustFS Console port).
+    pub const fn extra_port(&self) -> Option<Port> {
+        self.extra_port
     }
     /// Current lifecycle status.
     pub const fn status(&self) -> InstanceStatus {
@@ -192,6 +225,18 @@ impl Instance {
     /// Returns a copy with a new port, used by the "switch port" action.
     pub fn with_port(mut self, port: Port) -> Self {
         self.port = port;
+        self
+    }
+
+    /// Returns a copy with an updated secondary port.
+    pub fn with_extra_port(mut self, extra_port: Option<Port>) -> Self {
+        self.extra_port = extra_port;
+        self
+    }
+
+    /// Returns a copy with a custom superuser / access key (e.g. per-instance RustFS access key).
+    pub fn with_superuser(mut self, superuser: impl Into<String>) -> Self {
+        self.superuser = superuser.into();
         self
     }
 

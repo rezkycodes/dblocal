@@ -21,6 +21,7 @@ fn target(engine: EngineKey) -> OpenTarget {
         EngineKey::Mysql => ("root", "", 3306),
         EngineKey::Mariadb => ("root", "", 3307),
         EngineKey::Valkey | EngineKey::Redis => ("default", "0", 6379),
+        EngineKey::Rustfs => ("DBLKEY", "", 9000),
     };
     OpenTarget::new(engine, "127.0.0.1", port, user, db, "my-app").unwrap()
 }

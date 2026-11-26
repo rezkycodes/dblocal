@@ -7,7 +7,7 @@ use crate::catalog::InstalledVersions;
 use crate::engine::Credential;
 use crate::error::Result;
 use crate::model::{AuthMode, EngineKey, Instance, InstanceId, InstanceSpec, Port};
-use crate::ports::{PortChecker, suggest_port_with};
+use crate::ports::{PortChecker, suggest_port_from_with, suggest_port_with};
 use crate::secret::SecretString;
 use crate::service::{CatalogView, InstanceView, OperationId, UriFormat};
 
@@ -80,6 +80,12 @@ impl PortChecker for ProbeChecker<'_> {
 pub(crate) fn suggest_port(inner: &Inner, engine: EngineKey) -> Result<Port> {
     let reserved = reserved_ports(inner)?;
     Ok(suggest_port_with(engine, &reserved, &ProbeChecker(inner))?.port())
+}
+
+pub(crate) fn suggest_extra_port(inner: &Inner, start_port: u16, exclude: Port) -> Result<Port> {
+    let mut reserved = reserved_ports(inner)?;
+    reserved.insert(exclude);
+    Ok(suggest_port_from_with(start_port, &reserved, &ProbeChecker(inner))?.port())
 }
 
 pub(crate) fn change_port(inner: &Inner, id: &InstanceId, port: Port) -> Result<()> {

@@ -33,7 +33,7 @@ pub(crate) fn constraint_target(err: &rusqlite::Error) -> Option<Constraint> {
     let text = message.as_deref().unwrap_or_default();
     if text.contains("instances.name") {
         Some(Constraint::InstanceName)
-    } else if text.contains("instances.port") {
+    } else if text.contains("instances.port") || text.contains("instances.extra_port") {
         Some(Constraint::InstancePort)
     } else if text.contains("runtimes.engine")
         || text.contains("runtimes.version")

@@ -351,6 +351,12 @@ fn tableplus_url(target: &OpenTarget) -> ClientResult<String> {
         EngineKey::Valkey | EngineKey::Redis => {
             format!("redis://{user}@{host}:{}/{db}", target.port())
         }
+        EngineKey::Rustfs => {
+            return Err(ClientError::UnsupportedClient {
+                client: ClientKind::TablePlus.as_str(),
+                engine: target.engine.as_str(),
+            });
+        }
     };
     Ok(url)
 }
@@ -361,6 +367,12 @@ fn plan_dbeaver(client: &DetectedClient, target: &OpenTarget) -> ClientResult<La
         EngineKey::Mysql => "mysql",
         EngineKey::Mariadb => "maria",
         EngineKey::Valkey | EngineKey::Redis => "redis",
+        EngineKey::Rustfs => {
+            return Err(ClientError::UnsupportedClient {
+                client: ClientKind::DBeaver.as_str(),
+                engine: target.engine.as_str(),
+            });
+        }
     };
     let spec = format!(
         "driver={driver}|name={}|host={}|port={}|user={}|database={}|openConsole=true",
@@ -382,7 +394,10 @@ fn plan_dbeaver(client: &DetectedClient, target: &OpenTarget) -> ClientResult<La
 }
 
 fn plan_dbdelve(client: &DetectedClient, target: &OpenTarget) -> ClientResult<LaunchPlan> {
-    if matches!(target.engine, EngineKey::Valkey | EngineKey::Redis) {
+    if matches!(
+        target.engine,
+        EngineKey::Valkey | EngineKey::Redis | EngineKey::Rustfs
+    ) {
         return Err(ClientError::UnsupportedClient {
             client: ClientKind::DbDelve.as_str(),
             engine: target.engine.as_str(),
@@ -410,6 +425,7 @@ fn passwordless_uri(target: &OpenTarget) -> ClientResult<String> {
         EngineKey::Valkey | EngineKey::Redis => {
             format!("redis://{user}@{host}:{}/{db}", target.port())
         }
+        EngineKey::Rustfs => format!("http://{host}:{}", target.port()),
     };
     Ok(url)
 }

@@ -13,8 +13,9 @@ pub fn run(
     name: &str,
     port: Option<u16>,
     no_password: bool,
+    console: bool,
 ) -> u8 {
-    let spec = match build_spec(ctx, engine, version, name, port, no_password) {
+    let spec = match build_spec(ctx, engine, version, name, port, no_password, console) {
         Ok(spec) => spec,
         Err(code) => return code,
     };
@@ -105,6 +106,7 @@ fn build_spec(
     name: &str,
     port: Option<u16>,
     no_password: bool,
+    console: bool,
 ) -> Result<InstanceSpec, u8> {
     let engine_key = match engine.parse::<EngineKey>() {
         Ok(e) => e,
@@ -129,6 +131,7 @@ fn build_spec(
     } else {
         AuthMode::Password
     };
-    InstanceSpec::new(inst_name, engine_key, version.to_owned(), port, auth)
-        .map_err(|e| output::report_error(ctx.err, &e))
+    let spec = InstanceSpec::new(inst_name, engine_key, version.to_owned(), port, auth)
+        .map_err(|e| output::report_error(ctx.err, &e))?;
+    Ok(spec.with_console_enabled(console))
 }

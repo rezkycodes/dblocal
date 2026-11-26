@@ -14,6 +14,7 @@ fn create_stdout_is_exactly_the_uri_and_exits_0() {
             name: "made".into(),
             port: None,
             no_password: false,
+            console: false,
         },
         false,
     );
@@ -40,6 +41,7 @@ fn create_no_password_has_no_secret() {
             name: "open".into(),
             port: Some(25000),
             no_password: true,
+            console: false,
         },
         false,
     );
@@ -68,6 +70,7 @@ fn create_no_password_stdout_is_exactly_the_no_password_uri() {
             name: "open".into(),
             port: Some(25100),
             no_password: true,
+            console: false,
         },
         false,
     );
@@ -90,6 +93,7 @@ fn create_no_password_postgres_uri_has_a_user_but_no_colon() {
             name: "open".into(),
             port: Some(25101),
             no_password: true,
+            console: false,
         },
         false,
     );
@@ -109,6 +113,7 @@ fn create_unknown_engine_is_bad_arguments() {
             name: "x1".into(),
             port: None,
             no_password: false,
+            console: false,
         },
         false,
     );
@@ -128,6 +133,7 @@ fn create_bad_name_and_port_are_bad_arguments() {
             name: "Bad_Name".into(),
             port: None,
             no_password: false,
+            console: false,
         },
         false,
     );
@@ -140,6 +146,7 @@ fn create_bad_name_and_port_are_bad_arguments() {
             name: "okname".into(),
             port: Some(80),
             no_password: false,
+            console: false,
         },
         false,
     );
@@ -168,6 +175,7 @@ fn create_valkey_on_windows_is_unsupported_and_creates_nothing() {
             name: "vk-win".into(),
             port: None,
             no_password: false,
+            console: false,
         },
         false,
     );
@@ -195,6 +203,7 @@ fn create_redis_on_windows_is_unsupported_and_creates_nothing() {
             name: "rd-win".into(),
             port: None,
             no_password: false,
+            console: false,
         },
         false,
     );
@@ -215,6 +224,7 @@ fn redis_cli_create_status_uri_and_stop_round_trip() {
             name: "rd-cache".into(),
             port: Some(46380),
             no_password: false,
+            console: false,
         },
         false,
     );
@@ -282,6 +292,7 @@ fn create_duplicate_name_is_bad_arguments() {
             name: "taken".into(),
             port: None,
             no_password: false,
+            console: false,
         },
         false,
     );
@@ -568,6 +579,7 @@ fn create_port_in_use_exits_bad_arguments() {
             name: "conflicted".into(),
             port: Some(5432),
             no_password: false,
+            console: false,
         },
         false,
     );
@@ -587,6 +599,7 @@ fn create_download_failure_is_general_and_rolls_back() {
             name: "dlfail".into(),
             port: None,
             no_password: false,
+            console: false,
         },
         false,
     );
@@ -606,6 +619,7 @@ fn create_rolled_back_exits_engine_failed() {
             name: "rollback".into(),
             port: None,
             no_password: false,
+            console: false,
         },
         false,
     );
@@ -626,6 +640,7 @@ fn create_downloads_a_missing_runtime_then_prints_the_uri() {
             name: "fresh-mysql".into(),
             port: None,
             no_password: false,
+            console: false,
         },
         false,
     );
@@ -644,6 +659,7 @@ fn create_download_progress_goes_to_stderr_only() {
             name: "progress".into(),
             port: None,
             no_password: false,
+            console: false,
         },
         false,
     );
@@ -651,4 +667,98 @@ fn create_download_progress_goes_to_stderr_only() {
     // stdout carries the URI and nothing else.
     assert_eq!(out.trim().lines().count(), 1, "out: {out}");
     assert!(err.contains("downloading"), "err: {err}");
+}
+
+#[test]
+fn rustfs_create_start_stop_status_and_uri_with_and_without_console() {
+    let svc = MockService::deterministic();
+
+    // Create without --console: extra_port is None.
+    let (code, out, err) = run_cmd(
+        &svc,
+        &Command::Create {
+            engine: "rustfs".into(),
+            version: "1.0.7".into(),
+            name: "s3-plain".into(),
+            port: None,
+            no_password: false,
+            console: false,
+        },
+        false,
+    );
+    assert_eq!(code, EXIT_OK, "stderr: {err}");
+    assert_eq!(out.trim(), "http://127.0.0.1:9000");
+    let plain = svc
+        .list_instances()
+        .unwrap()
+        .into_iter()
+        .find(|v| v.name == "s3-plain")
+        .expect("s3-plain");
+    assert_eq!(plain.extra_port, None);
+
+    // Create with --console: extra_port allocated at 9001.
+    let (code, out, err) = run_cmd(
+        &svc,
+        &Command::Create {
+            engine: "rustfs".into(),
+            version: "1.0.7".into(),
+            name: "s3-ui".into(),
+            port: Some(29000),
+            no_password: false,
+            console: true,
+        },
+        false,
+    );
+    assert_eq!(code, EXIT_OK, "stderr: {err}");
+    assert_eq!(out.trim(), "http://127.0.0.1:29000");
+    let with_ui = svc
+        .list_instances()
+        .unwrap()
+        .into_iter()
+        .find(|v| v.name == "s3-ui")
+        .expect("s3-ui");
+    assert_eq!(with_ui.extra_port.map(dblocal_core::model::Port::get), Some(9001));
+
+    // Start, status, uri (--env), stop.
+    let (code, _, err) = run_cmd(
+        &svc,
+        &Command::Start {
+            name: "s3-ui".into(),
+            timeout: 15,
+        },
+        false,
+    );
+    assert_eq!(code, EXIT_OK, "start stderr: {err}");
+
+    let (code, out, _) = run_cmd(
+        &svc,
+        &Command::Status {
+            name: "s3-ui".into(),
+        },
+        false,
+    );
+    assert_eq!(code, EXIT_OK);
+    assert_eq!(out.trim(), "running");
+
+    let (code, out, _) = run_cmd(
+        &svc,
+        &Command::Uri {
+            name: "s3-ui".into(),
+            env: true,
+        },
+        false,
+    );
+    assert_eq!(code, EXIT_OK);
+    assert!(out.contains("AWS_ENDPOINT_URL=http://127.0.0.1:29000"), "{out}");
+    assert!(out.contains("AWS_ACCESS_KEY_ID="), "{out}");
+    assert!(out.contains("AWS_SECRET_ACCESS_KEY="), "{out}");
+
+    let (code, _, err) = run_cmd(
+        &svc,
+        &Command::Stop {
+            name: "s3-ui".into(),
+        },
+        false,
+    );
+    assert_eq!(code, EXIT_OK, "stop stderr: {err}");
 }

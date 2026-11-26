@@ -73,7 +73,16 @@ pub fn suggest_port_with(
     reserved: &HashSet<Port>,
     checker: &dyn PortChecker,
 ) -> Result<PortSuggestion> {
-    let canonical = Port::new(engine.canonical_port()).map_err(|_| DblError::InvalidInput {
+    suggest_port_from_with(engine.canonical_port(), reserved, checker)
+}
+
+/// Suggests a free port starting at `start_port`, skipping `reserved` and ports in use.
+pub fn suggest_port_from_with(
+    start_port: u16,
+    reserved: &HashSet<Port>,
+    checker: &dyn PortChecker,
+) -> Result<PortSuggestion> {
+    let canonical = Port::new(start_port).map_err(|_| DblError::InvalidInput {
         field: "port",
         reason: "canonical port is outside the allowed range".to_owned(),
     })?;

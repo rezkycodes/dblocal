@@ -131,6 +131,101 @@ fn future_user_version_is_refused_with_stable_storage_error() {
 }
 
 #[test]
+fn migration_v1_to_v2_adds_extra_port_and_preserves_existing_rows() {
+    let dir = tempdir().expect("tempdir");
+    let paths = DblPaths::with_root(dir.path());
+    std::fs::create_dir_all(paths.root()).expect("mkdir");
+    // Build a genuine v1 database (schema version 1, no extra_port column) with one row.
+    {
+        let conn = rusqlite::Connection::open(paths.state_db()).expect("open raw");
+        conn.execute_batch(super::schema::MIGRATIONS[0])
+            .expect("apply v1");
+        conn.pragma_update(None, "user_version", 1_i32)
+            .expect("set v1");
+        conn.execute(
+            "INSERT INTO instances (
+                id, name, engine, version, port, status, auth, superuser,
+                pid, process_started_at_secs, process_started_at_nanos, process_exe,
+                autostart, created_at_secs, created_at_nanos
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, NULL, NULL, NULL, NULL, 0, 10, 0)",
+            params![
+                InstanceId::new().as_str(),
+                "legacy-pg",
+                "postgresql",
+                "18.7",
+                5432_i64,
+                "stopped",
+                "password",
+                "postgres",
+            ],
+        )
+        .expect("insert v1 row");
+    }
+
+    // Reopening through Store runs migration v2 and preserves the v1 row with extra_port = None.
+    let store = Store::open(&paths).expect("migrate v1 -> v2");
+    let version: i32 = store
+        .connection()
+        .pragma_query_value(None, "user_version", |row| row.get(0))
+        .expect("user_version");
+    assert_eq!(version, 2);
+
+    let legacy = store
+        .get_instance_by_name("legacy-pg")
+        .expect("read")
+        .expect("legacy row preserved");
+    assert_eq!(legacy.port().get(), 5432);
+    assert_eq!(legacy.extra_port(), None);
+
+    // RustFS row with custom access key and extra_port round-trips cleanly.
+    let rustfs_spec = InstanceSpec::new(
+        InstanceName::new("s3-dev").expect("name"),
+        EngineKey::Rustfs,
+        "1.0.7",
+        Some(Port::new(9000).expect("port")),
+        AuthMode::Password,
+    )
+    .expect("spec")
+    .with_extra_port(Some(Port::new(9001).expect("console port")));
+    let rustfs = Instance::new(
+        &rustfs_spec,
+        InstanceId::new(),
+        InstanceStatus::Stopped,
+        UNIX_EPOCH + Duration::from_secs(20),
+    )
+    .with_superuser("DBLACCESSKEY12345678");
+    store.insert_instance(&rustfs).expect("insert rustfs");
+    let loaded = store
+        .get_instance(rustfs.id())
+        .expect("get")
+        .expect("present");
+    assert_eq!(loaded.extra_port().map(Port::get), Some(9001));
+    assert_eq!(loaded.superuser(), "DBLACCESSKEY12345678");
+
+    // Duplicate extra_port is rejected as AlreadyExists.
+    let dup_console_spec = InstanceSpec::new(
+        InstanceName::new("s3-dev-2").expect("name"),
+        EngineKey::Rustfs,
+        "1.0.7",
+        Some(Port::new(9002).expect("port")),
+        AuthMode::Password,
+    )
+    .expect("spec")
+    .with_extra_port(Some(Port::new(9001).expect("console port")));
+    let dup_console = Instance::new(
+        &dup_console_spec,
+        InstanceId::new(),
+        InstanceStatus::Stopped,
+        UNIX_EPOCH + Duration::from_secs(21),
+    )
+    .with_superuser("DBLACCESSKEY87654321");
+    let err = store
+        .insert_instance(&dup_console)
+        .expect_err("duplicate extra_port rejected");
+    assert!(matches!(err, DblError::AlreadyExists { .. }), "{err:?}");
+}
+
+#[test]
 fn unique_name_is_case_insensitive_and_unique_port_maps_to_typed_error() {
     let store = Store::open_in_memory().expect("store");
     let first = instance("app-dev", 5432, InstanceStatus::Stopped);

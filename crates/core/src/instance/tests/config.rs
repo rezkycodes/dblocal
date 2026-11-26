@@ -338,10 +338,11 @@ fn created_with_runtime(engine: EngineKey) -> (Harness, InstanceId, PathBuf) {
                 } else {
                     "my.cnf"
                 }),
-            EngineKey::Mysql | EngineKey::Valkey | EngineKey::Redis => {
+            EngineKey::Mysql | EngineKey::Valkey | EngineKey::Redis | EngineKey::Rustfs => {
                 harness.paths.run_dir(instance.name()).join(match engine {
                     EngineKey::Mysql => "my.cnf",
                     EngineKey::Valkey => "valkey.conf",
+                    EngineKey::Rustfs => "rustfs.env",
                     _ => "redis.conf",
                 })
             }
@@ -354,6 +355,7 @@ fn seed_any(path: &std::path::Path, engine: EngineKey) {
         EngineKey::Postgresql => "# base\nmax_connections = 100\n",
         EngineKey::Mysql | EngineKey::Mariadb => "[mysqld]\nport=3307\nmax_connections=151\n",
         EngineKey::Valkey | EngineKey::Redis => "port 6379\nmaxmemory 0\n",
+        EngineKey::Rustfs => "",
     };
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).expect("parent");
@@ -391,6 +393,7 @@ fn bad_values(engine: EngineKey) -> Vec<(&'static str, &'static str)> {
             ("maxmemory-policy", "bogus"), // outside the enum
             ("maxmemory", "12XB"),
         ],
+        EngineKey::Rustfs => vec![],
     }
 }
 

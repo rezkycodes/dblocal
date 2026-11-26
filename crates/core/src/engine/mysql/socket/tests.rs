@@ -303,6 +303,7 @@ fn public_prepare_run_prepares_the_tmpdir_before_any_config_exists() {
         logs_dir: dir.path().join("logs"),
         run_dir: run_dir.clone(),
         port: Port::new(42250).expect("port"),
+        extra_port: None,
         superuser: "root".into(),
         auth: AuthMode::None,
         credential: None,

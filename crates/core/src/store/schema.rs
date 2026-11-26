@@ -8,10 +8,10 @@ pub(crate) const WAL_SWITCH_ATTEMPTS: u32 = 40;
 pub(crate) const WAL_SWITCH_BACKOFF_MS: u64 = 25;
 
 /// Latest schema version this binary understands.
-pub(crate) const LATEST_USER_VERSION: i32 = 1;
+pub(crate) const LATEST_USER_VERSION: i32 = 2;
 
 /// Ordered migrations. Index `n` upgrades schema version `n` to `n + 1`.
-pub(crate) const MIGRATIONS: &[&str] = &[MIGRATION_V1];
+pub(crate) const MIGRATIONS: &[&str] = &[MIGRATION_V1, MIGRATION_V2];
 
 /// Version 1: instances, runtimes, archives, credential references, settings.
 ///
@@ -86,6 +86,15 @@ CREATE TABLE settings (
     key   TEXT PRIMARY KEY NOT NULL,
     value TEXT NOT NULL
 );
+"#;
+
+/// Version 2: optional secondary port on `instances` (used for the RustFS web console).
+const MIGRATION_V2: &str = r#"
+ALTER TABLE instances
+    ADD COLUMN extra_port INTEGER CHECK (extra_port IS NULL OR extra_port BETWEEN 1024 AND 65535);
+CREATE UNIQUE INDEX idx_instances_extra_port
+    ON instances(extra_port)
+    WHERE extra_port IS NOT NULL;
 "#;
 
 #[cfg(test)]

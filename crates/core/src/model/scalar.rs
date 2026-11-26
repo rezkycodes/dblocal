@@ -17,8 +17,10 @@ pub enum Family {
     Postgres,
     /// MySQL wire protocol, shared by MySQL and MariaDB.
     Mysql,
-    /// RESP, used by Valkey.
+    /// RESP, used by Valkey and Redis.
     Redis,
+    /// S3-compatible object storage, used by RustFS.
+    ObjectStorage,
 }
 
 impl Family {
@@ -28,11 +30,12 @@ impl Family {
             Self::Postgres => "postgres",
             Self::Mysql => "mysql",
             Self::Redis => "redis",
+            Self::ObjectStorage => "object-storage",
         }
     }
 }
 
-/// The five engines DBLocal can manage.
+/// The six engines DBLocal can manage.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[non_exhaustive]
 pub enum EngineKey {
@@ -46,16 +49,19 @@ pub enum EngineKey {
     Valkey,
     /// Redis.
     Redis,
+    /// RustFS (S3-compatible object storage).
+    Rustfs,
 }
 
 impl EngineKey {
     /// Every engine, in catalog order.
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 6] = [
         Self::Postgresql,
         Self::Mysql,
         Self::Mariadb,
         Self::Valkey,
         Self::Redis,
+        Self::Rustfs,
     ];
 
     /// Stable identifier used in paths, the catalog and SQLite.
@@ -66,6 +72,7 @@ impl EngineKey {
             Self::Mariadb => "mariadb",
             Self::Valkey => "valkey",
             Self::Redis => "redis",
+            Self::Rustfs => "rustfs",
         }
     }
 
@@ -77,6 +84,7 @@ impl EngineKey {
             Self::Mariadb => consts::PORT_MARIADB,
             Self::Valkey => consts::PORT_VALKEY,
             Self::Redis => consts::PORT_REDIS,
+            Self::Rustfs => consts::PORT_RUSTFS,
         }
     }
 
@@ -88,6 +96,7 @@ impl EngineKey {
             Self::Mariadb => "MariaDB",
             Self::Valkey => "Valkey",
             Self::Redis => "Redis",
+            Self::Rustfs => "RustFS",
         }
     }
 
@@ -97,6 +106,7 @@ impl EngineKey {
             Self::Postgresql => Family::Postgres,
             Self::Mysql | Self::Mariadb => Family::Mysql,
             Self::Valkey | Self::Redis => Family::Redis,
+            Self::Rustfs => Family::ObjectStorage,
         }
     }
 
@@ -107,6 +117,7 @@ impl EngineKey {
             Self::Mysql | Self::Mariadb => consts::SUPERUSER_MYSQL,
             Self::Valkey => consts::SUPERUSER_VALKEY,
             Self::Redis => consts::SUPERUSER_REDIS,
+            Self::Rustfs => consts::SUPERUSER_RUSTFS,
         }
     }
 }
@@ -127,6 +138,7 @@ impl FromStr for EngineKey {
             "mariadb" => Ok(Self::Mariadb),
             "valkey" => Ok(Self::Valkey),
             "redis" => Ok(Self::Redis),
+            "rustfs" => Ok(Self::Rustfs),
             other => Err(DblError::InvalidInput {
                 field: "engine",
                 reason: format!("unknown engine: {other}"),

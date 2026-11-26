@@ -26,16 +26,17 @@ impl Store {
         self.conn
             .execute(
                 "INSERT INTO instances (
-                    id, name, engine, version, port, status, auth, superuser,
+                    id, name, engine, version, port, extra_port, status, auth, superuser,
                     pid, process_started_at_secs, process_started_at_nanos, process_exe,
                     autostart, created_at_secs, created_at_nanos
-                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
                 params![
                     instance.id().as_str(),
                     instance.name().as_str(),
                     instance.engine().as_str(),
                     instance.version(),
                     i64::from(instance.port().get()),
+                    instance.extra_port().map(|p| i64::from(p.get())),
                     instance.status().as_str(),
                     instance.auth().as_str(),
                     instance.superuser(),

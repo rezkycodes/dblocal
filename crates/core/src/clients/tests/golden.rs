@@ -36,6 +36,9 @@ fn target(engine: EngineKey) -> OpenTarget {
         EngineKey::Valkey | EngineKey::Redis => {
             OpenTarget::new(engine, "127.0.0.1", 6379, "default", "0", "my-app").unwrap()
         }
+        EngineKey::Rustfs => {
+            OpenTarget::new(engine, "127.0.0.1", 9000, "DBLKEY", "", "my-app").unwrap()
+        }
     }
 }
 

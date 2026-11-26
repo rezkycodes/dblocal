@@ -33,7 +33,7 @@ fn identity_source(engine: EngineKey) -> IdentitySource {
     match engine {
         EngineKey::Postgresql => IdentitySource::PostmasterPid,
         EngineKey::Valkey | EngineKey::Redis => IdentitySource::ValkeyPid,
-        EngineKey::Mysql | EngineKey::Mariadb => IdentitySource::Child,
+        EngineKey::Mysql | EngineKey::Mariadb | EngineKey::Rustfs => IdentitySource::Child,
     }
 }
 
@@ -122,6 +122,11 @@ async fn run_start_inner(
 
     // F-PRT-02: probe the port again before anything is executed.
     if let Err(err) = ensure_port_is_free(inner, instance.port(), Some(id)) {
+        return fail(inner, id, instance, &log_path, err, StartFailure::PortInUse).await;
+    }
+    if let Some(extra) = instance.extra_port()
+        && let Err(err) = ensure_port_is_free(inner, extra, Some(id))
+    {
         return fail(inner, id, instance, &log_path, err, StartFailure::PortInUse).await;
     }
 
@@ -245,6 +250,7 @@ fn prepare(adapter: &dyn EngineAdapter, ctx: &RunContext) -> Result<()> {
         EngineKey::Redis => crate::engine::prepare_redis_run(ctx),
         EngineKey::Mysql => crate::engine::mysql_prepare_run(ctx),
         EngineKey::Mariadb => crate::engine::prepare_mariadb_run(ctx),
+        EngineKey::Rustfs => crate::engine::prepare_rustfs_run(ctx),
     }
 }
 
@@ -346,7 +352,7 @@ fn read_engine_pid(inner: &Inner, engine: EngineKey, instance: &Instance) -> Opt
                 .ok()
                 .map(|pid| pid.pid)
         }
-        EngineKey::Mysql | EngineKey::Mariadb => None,
+        EngineKey::Mysql | EngineKey::Mariadb | EngineKey::Rustfs => None,
     }
 }
 

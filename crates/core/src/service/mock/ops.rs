@@ -242,7 +242,29 @@ impl DblService for MockService {
             } else {
                 InstanceStatus::Initializing
             };
-            let instance = Instance::new(&spec, id.clone(), initial, created);
+            let mut spec = spec;
+            if spec.engine() == EngineKey::Rustfs
+                && (spec.console_enabled() || spec.extra_port().is_some())
+                && spec.extra_port().is_none()
+            {
+                let mut candidate = crate::consts::PORT_RUSTFS_CONSOLE;
+                while g
+                    .instances
+                    .values()
+                    .any(|i| i.port().get() == candidate || i.extra_port().map(Port::get) == Some(candidate))
+                    || spec.port().map(Port::get) == Some(candidate)
+                {
+                    candidate = candidate.saturating_add(1);
+                }
+                if let Ok(extra) = Port::new(candidate) {
+                    spec = spec.with_extra_port(Some(extra));
+                }
+            }
+            let mut instance = Instance::new(&spec, id.clone(), initial, created);
+            if spec.engine() == EngineKey::Rustfs {
+                let ak = format!("DBL{:017X}", g.det.next_u64());
+                instance = instance.with_superuser(ak);
+            }
             if spec.auth() == AuthMode::Password {
                 g.credentials
                     .insert(id.clone(), crate::model::CredentialBackend::Keychain);

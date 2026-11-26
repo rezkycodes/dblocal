@@ -41,6 +41,7 @@ pub(crate) fn uri(
             // Valkey and Redis have no database name; an empty user means no userinfo.
             AuthMode::None => format!("redis://127.0.0.1:{port}/0"),
         },
+        EngineKey::Rustfs => format!("http://127.0.0.1:{port}"),
     }
 }
 
@@ -76,6 +77,14 @@ pub(crate) fn dotenv(
             out.push_str(&format!("REDIS_URL={connection_uri}\n"));
             out.push_str("REDIS_HOST=127.0.0.1\n");
             out.push_str(&format!("REDIS_PORT={port}\n"));
+        }
+        EngineKey::Rustfs => {
+            out.push_str(&format!("AWS_ENDPOINT_URL={connection_uri}\n"));
+            out.push_str(&format!("AWS_ACCESS_KEY_ID={user}\n"));
+            if auth == AuthMode::Password {
+                out.push_str(&format!("AWS_SECRET_ACCESS_KEY={password}\n"));
+            }
+            return out;
         }
     }
     if auth == AuthMode::Password {

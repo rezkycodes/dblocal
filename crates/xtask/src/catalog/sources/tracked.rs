@@ -123,6 +123,9 @@ pub const VALKEY: &[TrackedVersion] = &[
 /// Redis: 7.4.12 only (Linux `jammy` APT package; 7.0 is EOL and not offered).
 pub const REDIS: &[TrackedVersion] = &[v("7.4.12", "7.4")];
 
+/// RustFS: latest stable >= 1.0.6 resolved from GitHub releases (`rustfs/rustfs`).
+pub const RUSTFS: &[TrackedVersion] = &[v("1.0.7", "1.0")];
+
 /// The tracked table for one engine.
 pub fn for_engine(engine: EngineKey) -> &'static [TrackedVersion] {
     match engine {
@@ -131,6 +134,7 @@ pub fn for_engine(engine: EngineKey) -> &'static [TrackedVersion] {
         EngineKey::Mariadb => MARIADB,
         EngineKey::Valkey => VALKEY,
         EngineKey::Redis => REDIS,
+        EngineKey::Rustfs => RUSTFS,
         // `EngineKey` is `#[non_exhaustive]`; a new engine gets its own table.
         _ => &[],
     }
@@ -219,6 +223,7 @@ mod tests {
                 &["9.2.0", "8.1.12", "8.0.13", "7.2.16"][..],
             ),
             (EngineKey::Redis, &["7.4.12"][..]),
+            (EngineKey::Rustfs, &["1.0.7"][..]),
         ] {
             let table = for_engine(engine);
             for tag in tags {

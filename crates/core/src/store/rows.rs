@@ -15,7 +15,7 @@ use crate::platform::Arch;
 use super::time::{decode, decode_opt};
 
 /// Columns of `instances`, in select order.
-pub(crate) const INSTANCE_COLUMNS: &str = "id, name, engine, version, port, status, auth, superuser, \
+pub(crate) const INSTANCE_COLUMNS: &str = "id, name, engine, version, port, extra_port, status, auth, superuser, \
      pid, process_started_at_secs, process_started_at_nanos, process_exe, \
      autostart, created_at_secs, created_at_nanos";
 
@@ -34,16 +34,17 @@ pub(crate) fn instance(row: &rusqlite::Row<'_>) -> rusqlite::Result<Instance> {
     let engine: String = row.get(2)?;
     let version: String = row.get(3)?;
     let port: i64 = row.get(4)?;
-    let status: String = row.get(5)?;
-    let auth: String = row.get(6)?;
-    let superuser: String = row.get(7)?;
-    let pid: Option<i64> = row.get(8)?;
-    let started_secs: Option<i64> = row.get(9)?;
-    let started_nanos: Option<i64> = row.get(10)?;
-    let exe: Option<String> = row.get(11)?;
-    let autostart: i64 = row.get(12)?;
-    let created_secs: i64 = row.get(13)?;
-    let created_nanos: i64 = row.get(14)?;
+    let extra_port: Option<i64> = row.get(5)?;
+    let status: String = row.get(6)?;
+    let auth: String = row.get(7)?;
+    let superuser: String = row.get(8)?;
+    let pid: Option<i64> = row.get(9)?;
+    let started_secs: Option<i64> = row.get(10)?;
+    let started_nanos: Option<i64> = row.get(11)?;
+    let exe: Option<String> = row.get(12)?;
+    let autostart: i64 = row.get(13)?;
+    let created_secs: i64 = row.get(14)?;
+    let created_nanos: i64 = row.get(15)?;
 
     let built = build_instance(InstanceRow {
         id,
@@ -51,6 +52,7 @@ pub(crate) fn instance(row: &rusqlite::Row<'_>) -> rusqlite::Result<Instance> {
         engine,
         version,
         port,
+        extra_port,
         status,
         auth,
         superuser,
@@ -71,6 +73,7 @@ struct InstanceRow {
     engine: String,
     version: String,
     port: i64,
+    extra_port: Option<i64>,
     status: String,
     auth: String,
     superuser: String,
@@ -89,6 +92,13 @@ fn build_instance(row: InstanceRow) -> crate::Result<Instance> {
     let engine = row.engine.parse::<EngineKey>()?;
     let port_number = u16::try_from(row.port).map_err(|_| out_of_range("port"))?;
     let port = Port::new(port_number)?;
+    let extra_port = match row.extra_port {
+        Some(value) => {
+            let num = u16::try_from(value).map_err(|_| out_of_range("extra_port"))?;
+            Some(Port::new(num)?)
+        }
+        None => None,
+    };
     let status = status_from_str(&row.status)?;
     let auth = row.auth.parse::<AuthMode>()?;
     let created_at = decode(row.created_secs, nanos(row.created_nanos)?)?;
@@ -104,9 +114,17 @@ fn build_instance(row: InstanceRow) -> crate::Result<Instance> {
     };
 
     let spec = InstanceSpec::new(name, engine, row.version, Some(port), auth)?
-        .with_autostart(row.autostart != 0);
+        .with_autostart(row.autostart != 0)
+        .with_extra_port(extra_port);
     let mut instance = Instance::new(&spec, id, status, created_at);
-    if instance.superuser() != row.superuser {
+    if engine == EngineKey::Rustfs {
+        if row.superuser.trim().is_empty() || row.superuser == "rustfsadmin" {
+            return Err(DblError::Storage {
+                reason: "stored RustFS access key is empty or default".to_owned(),
+            });
+        }
+        instance = instance.with_superuser(row.superuser);
+    } else if instance.superuser() != row.superuser {
         return Err(DblError::Storage {
             reason: format!(
                 "stored superuser {:?} does not match engine default {:?}",

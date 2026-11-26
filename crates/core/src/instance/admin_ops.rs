@@ -75,7 +75,9 @@ pub fn default_admin_factory(paths: crate::paths::DblPaths) -> AdminFactory {
         // Valkey and Redis have no named databases or login roles; the engine gate rejects
         // them before this factory is called, but returning Unsupported here keeps
         // the factory total rather than panicking.
-        EngineKey::Valkey | EngineKey::Redis => Err(UserFacingError::from(AdminError::Unsupported)),
+        EngineKey::Valkey | EngineKey::Redis | EngineKey::Rustfs => {
+            Err(UserFacingError::from(AdminError::Unsupported))
+        }
     })
 }
 
@@ -183,7 +185,10 @@ fn with_admin<T>(
 /// something else (a stopped MySQL's freed 3306, say). Refusing here means an
 /// admin call to a non-`Running` row never reads the password and never dials.
 fn executor_for(inner: &Inner, instance: &Instance) -> ServiceResult<Box<dyn AdminExecutor>> {
-    if matches!(instance.engine(), EngineKey::Valkey | EngineKey::Redis) {
+    if matches!(
+        instance.engine(),
+        EngineKey::Valkey | EngineKey::Redis | EngineKey::Rustfs
+    ) {
         // Valkey and Redis have no named databases or login roles: a typed "not supported",
         // not an empty list. PostgreSQL, MySQL and MariaDB are all supported.
         return Err(AdminError::Unsupported.into());

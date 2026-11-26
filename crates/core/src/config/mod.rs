@@ -42,6 +42,7 @@ pub fn config_file_name(engine: crate::model::EngineKey) -> &'static str {
         crate::model::EngineKey::Mysql | crate::model::EngineKey::Mariadb => "my.cnf",
         crate::model::EngineKey::Valkey => "valkey.conf",
         crate::model::EngineKey::Redis => "redis.conf",
+        crate::model::EngineKey::Rustfs => "rustfs.env",
     }
 }
 
@@ -50,7 +51,9 @@ pub fn dialect_for(engine: crate::model::EngineKey) -> Dialect {
     match engine {
         crate::model::EngineKey::Postgresql => Dialect::Postgresql,
         crate::model::EngineKey::Mysql | crate::model::EngineKey::Mariadb => Dialect::Ini,
-        crate::model::EngineKey::Valkey | crate::model::EngineKey::Redis => Dialect::Valkey,
+        crate::model::EngineKey::Valkey
+        | crate::model::EngineKey::Redis
+        | crate::model::EngineKey::Rustfs => Dialect::Valkey,
     }
 }
 

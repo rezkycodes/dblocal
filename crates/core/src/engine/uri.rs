@@ -112,6 +112,7 @@ fn uri_with(
             let authority = userinfo(&user, password);
             SecretString::new(format!("mysql://{authority}@127.0.0.1:{port}/"))
         }
+        EngineKey::Rustfs => SecretString::new(format!("http://127.0.0.1:{port}")),
     }
 }
 
@@ -178,6 +179,13 @@ fn dotenv_with(
             let _ = writeln!(out, "DB_USERNAME={username}");
             if let Some(password) = password {
                 let _ = writeln!(out, "DB_PASSWORD={}", password.expose());
+            }
+        }
+        EngineKey::Rustfs => {
+            let _ = writeln!(out, "AWS_ENDPOINT_URL={}", uri.expose());
+            let _ = writeln!(out, "AWS_ACCESS_KEY_ID={username}");
+            if let Some(password) = password {
+                let _ = writeln!(out, "AWS_SECRET_ACCESS_KEY={}", password.expose());
             }
         }
     }

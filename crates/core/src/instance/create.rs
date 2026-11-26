@@ -16,7 +16,7 @@ use super::helpers::{
     blocking, db_async, emit_changed, emit_stage, ensure_port_is_free, finish_operation,
     runtime_dir_for, secret_for, validate_spec_boundary,
 };
-use super::read_ops::suggest_port;
+use super::read_ops::{suggest_extra_port, suggest_port};
 use super::service::{Inner, RuntimeSource};
 
 pub(crate) fn create_instance(inner: &Arc<Inner>, spec: InstanceSpec) -> Result<OperationId> {
@@ -74,7 +74,28 @@ async fn run_create(
         None => suggest_port(&inner, spec.engine())?,
     };
     ensure_port_is_free(&inner, port, None)?;
-    let spec = spec.with_port(Some(port));
+    let mut spec = spec.with_port(Some(port));
+
+    // Optional secondary port (RustFS web console, OFF by default).
+    if spec.engine() == crate::model::EngineKey::Rustfs
+        && (spec.console_enabled() || spec.extra_port().is_some())
+    {
+        let extra = match spec.extra_port() {
+            Some(extra) => {
+                if extra == port {
+                    return Err(DblError::InvalidInput {
+                        field: "extra_port",
+                        reason: "console port must differ from the S3 API port".to_owned(),
+                    }
+                    .into());
+                }
+                ensure_port_is_free(&inner, extra, None)?;
+                extra
+            }
+            None => suggest_extra_port(&inner, crate::consts::PORT_RUSTFS_CONSOLE, port)?,
+        };
+        spec = spec.with_extra_port(Some(extra));
+    }
 
     let source = if runtime_is_installed(&inner, &spec) {
         None
@@ -88,14 +109,18 @@ async fn run_create(
     } else {
         InstanceStatus::Initializing
     };
-    let instance = Instance::new(&spec, id.clone(), initial, SystemTime::now());
+    let mut instance = Instance::new(&spec, id.clone(), initial, SystemTime::now());
+    if spec.engine() == crate::model::EngineKey::Rustfs {
+        instance = instance.with_superuser(crate::engine::generate_rustfs_access_key());
+    }
+    let superuser = instance.superuser().to_owned();
     {
         let row = instance.clone();
         db_async(&inner, move |store| store.insert_instance(&row)).await?;
     }
     emit_changed(&inner, &id);
 
-    match create_body(&inner, op, &spec, &id, source.as_ref(), &token).await {
+    match create_body(&inner, op, &spec, &id, &superuser, source.as_ref(), &token).await {
         Ok(()) => Ok(()),
         Err(failure) => {
             rollback(&inner, &id, &spec).await;
@@ -109,6 +134,7 @@ async fn create_body(
     op: &OperationId,
     spec: &InstanceSpec,
     id: &InstanceId,
+    superuser: &str,
     source: Option<&RuntimeSource>,
     token: &CancellationToken,
 ) -> super::helpers::OpResult<()> {
@@ -150,7 +176,7 @@ async fn create_body(
         port: spec
             .port()
             .unwrap_or_else(|| Port::assume_valid(spec.engine().canonical_port())),
-        superuser: spec.engine().default_superuser().to_owned(),
+        superuser: superuser.to_owned(),
         auth: spec.auth(),
         password: password.clone(),
     };
@@ -163,13 +189,9 @@ async fn create_body(
 
     // The secret is stored before the row can claim the instance exists.
     if let Some(secret) = password.as_ref() {
-        let placeholder = credential_ref_for(
-            id,
-            CredentialBackend::File,
-            spec.engine().default_superuser(),
-        );
+        let placeholder = credential_ref_for(id, CredentialBackend::File, superuser);
         let backend = inner.secrets.set(&placeholder, secret)?;
-        let reference = credential_ref_for(id, backend, spec.engine().default_superuser());
+        let reference = credential_ref_for(id, backend, superuser);
         db_async(inner, move |store| store.set_credential(&reference)).await?;
     }
 
@@ -297,14 +319,18 @@ fn expected_binaries(engine: crate::model::EngineKey) -> Vec<String> {
 /// [`expected_binaries`] with the platform passed in, so both spellings are
 /// testable on any host.
 fn expected_binaries_for(engine: crate::model::EngineKey, windows: bool) -> Vec<String> {
+    let suffix = if windows { ".exe" } else { "" };
+    if engine == crate::model::EngineKey::Rustfs {
+        return vec![format!("rustfs{suffix}")];
+    }
     let bases: &[&str] = match engine {
         crate::model::EngineKey::Postgresql => &["postgres", "initdb", "pg_ctl"],
         crate::model::EngineKey::Valkey => &["valkey-server"],
         crate::model::EngineKey::Redis => &["redis-check-rdb", "redis-cli"],
         crate::model::EngineKey::Mysql => &["mysqld"],
         crate::model::EngineKey::Mariadb => &["mariadbd", "mysqld"],
+        crate::model::EngineKey::Rustfs => unreachable!(),
     };
-    let suffix = if windows { ".exe" } else { "" };
     bases
         .iter()
         .map(|base| format!("bin/{base}{suffix}"))
@@ -387,6 +413,7 @@ mod expected_binaries_tests {
                 EngineKey::Redis => &["redis-check-rdb", "redis-cli"],
                 EngineKey::Mysql => &["mysqld"],
                 EngineKey::Mariadb => &["mariadbd", "mysqld"],
+                EngineKey::Rustfs => return vec![crate::engine::uri::exe_name("rustfs")],
             };
             bases
                 .iter()

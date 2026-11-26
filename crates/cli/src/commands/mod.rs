@@ -56,7 +56,8 @@ pub fn dispatch(ctx: &mut Ctx<'_>, command: &Command) -> u8 {
             name,
             port,
             no_password,
-        } => create::run(ctx, engine, version, name, *port, *no_password),
+            console,
+        } => create::run(ctx, engine, version, name, *port, *no_password, *console),
         Command::Delete { name, yes, purge } => delete::run(ctx, name, *yes, *purge),
         Command::Logs {
             name,
