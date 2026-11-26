@@ -599,6 +599,12 @@ jobs:
       - build-windows
       - package-msi
     steps:
+      - name: Checkout release signing public keys
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: |
+            packaging/release-signing/public-keys.txt
+
       - name: Download all artifacts
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
@@ -661,6 +667,69 @@ jobs:
           rm -f files.list
           echo "checksums.txt:"
           cat checksums.txt
+
+      - name: Sign checksums.txt (Ed25519)
+        shell: bash
+        env:
+          RELEASE_SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${RELEASE_SIGNING_KEY:-}" ]; then
+            echo "::error::RELEASE_SIGNING_KEY secret is not configured; refusing to publish an unsigned tag release."
+            exit 1
+          fi
+
+          pub_file="packaging/release-signing/public-keys.txt"
+          if [ ! -f "$pub_file" ]; then
+            echo "::error::Missing committed public key file: ${pub_file}"
+            exit 1
+          fi
+
+          mapfile -t pub_keys < <(grep -Ev '^[[:space:]]*(#|$)' "$pub_file" | tr -d '\r')
+          if [ "${#pub_keys[@]}" -eq 0 ]; then
+            echo "::error::No trusted Ed25519 public key is committed in ${pub_file}; run packaging/release-signing/generate-key.sh and commit the public key first."
+            exit 1
+          fi
+
+          sign_dir="$(mktemp -d "${RUNNER_TEMP}/dblocal-sign.XXXXXX")"
+          chmod 0700 "$sign_dir"
+          cleanup_sign() { rm -rf "$sign_dir"; }
+          trap cleanup_sign EXIT
+
+          key_file="${sign_dir}/signing.key.pem"
+          ( umask 077; printf '%s\n' "$RELEASE_SIGNING_KEY" > "$key_file" )
+          chmod 0600 "$key_file"
+
+          openssl pkeyutl -sign -inkey "$key_file" -rawin \
+            -in release/checksums.txt -out release/checksums.txt.sig
+          rm -f "$key_file"
+
+          sig_size="$(stat -c%s release/checksums.txt.sig)"
+          if [ "$sig_size" -ne 64 ]; then
+            echo "::error::Unexpected Ed25519 signature size: ${sig_size} bytes (expected 64)"
+            exit 1
+          fi
+
+          verified=0
+          for hex in "${pub_keys[@]}"; do
+            if [[ ! "$hex" =~ ^[0-9a-fA-F]{64}$ ]]; then
+              echo "::error::Invalid 64-char hex public key entry in ${pub_file}"
+              exit 1
+            fi
+            pub_der="${sign_dir}/pub.der"
+            # RFC 8410 SubjectPublicKeyInfo ASN.1 DER prefix for Ed25519 (12 bytes) + 32-byte raw key.
+            python3 -c 'import sys; sys.stdout.buffer.write(bytes.fromhex("302a300506032b6570032100" + sys.argv[1]))' "$hex" > "$pub_der"
+            if openssl pkeyutl -verify -pubin -keyform DER -inkey "$pub_der" -rawin \
+              -in release/checksums.txt -sigfile release/checksums.txt.sig >/dev/null 2>&1; then
+              verified=1
+              break
+            fi
+          done
+          if [ "$verified" -ne 1 ]; then
+            echo "::error::checksums.txt.sig failed verification against all committed public keys in ${pub_file}"
+            exit 1
+          fi
+          echo "Signed release/checksums.txt -> release/checksums.txt.sig (64 bytes, verified against committed public key)."
 
       - name: Generate build provenance attestations
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
