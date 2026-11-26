@@ -178,6 +178,96 @@ fn create_valkey_on_windows_is_unsupported_and_creates_nothing() {
 }
 
 #[test]
+fn create_redis_on_windows_is_unsupported_and_creates_nothing() {
+    let svc = MockService::with_config(
+        dblocal_core::service::mock::MockConfig::deterministic().with_platform(
+            dblocal_core::platform::Platform::new(
+                dblocal_core::platform::Os::Windows,
+                dblocal_core::platform::Arch::X86_64,
+            ),
+        ),
+    );
+    let (code, out, err) = run_cmd(
+        &svc,
+        &Command::Create {
+            engine: "redis".into(),
+            version: "7.4.12".into(),
+            name: "rd-win".into(),
+            port: None,
+            no_password: false,
+        },
+        false,
+    );
+    assert_eq!(code, EXIT_BAD_ARGS, "stderr: {err}");
+    assert!(err.contains("DBL-6001"), "stderr: {err}");
+    assert!(out.is_empty(), "no URI on stdout: {out}");
+    assert!(svc.list_instances().unwrap().is_empty(), "no row left");
+}
+
+#[test]
+fn redis_cli_create_status_uri_and_stop_round_trip() {
+    let svc = MockService::deterministic();
+    let (code, out, err) = run_cmd(
+        &svc,
+        &Command::Create {
+            engine: "redis".into(),
+            version: "7.4.12".into(),
+            name: "rd-cache".into(),
+            port: Some(46380),
+            no_password: false,
+        },
+        false,
+    );
+    assert_eq!(code, EXIT_OK, "stderr: {err}");
+    assert!(
+        out.trim().starts_with("redis://default:"),
+        "expected redis:// URI, got: {out}"
+    );
+    assert!(out.contains("127.0.0.1:46380/0"), "got: {out}");
+
+    let (code, out, err) = run_cmd(
+        &svc,
+        &Command::Status {
+            name: "rd-cache".into(),
+        },
+        false,
+    );
+    assert_eq!(code, EXIT_GENERAL, "stopped status exits 1; stderr: {err}");
+    assert!(out.contains("stopped"), "got: {out}");
+
+    let (code, out, err) = run_cmd(
+        &svc,
+        &Command::Uri {
+            name: "rd-cache".into(),
+            env: true,
+        },
+        false,
+    );
+    assert_eq!(code, EXIT_OK, "stderr: {err}");
+    assert!(out.contains("REDIS_URL=redis://default:"), "got: {out}");
+    assert!(out.contains("REDIS_PORT=46380"), "got: {out}");
+
+    let (code, _, err) = run_cmd(
+        &svc,
+        &Command::Start {
+            name: "rd-cache".into(),
+            timeout: 10,
+        },
+        false,
+    );
+    assert_eq!(code, EXIT_OK, "stderr: {err}");
+
+    let (code, _, err) = run_cmd(
+        &svc,
+        &Command::Stop {
+            name: "rd-cache".into(),
+        },
+        false,
+    );
+    assert_eq!(code, EXIT_OK, "stderr: {err}");
+}
+
+#[test]
 fn create_duplicate_name_is_bad_arguments() {
     let svc = MockService::deterministic();
     svc.seed_instance(

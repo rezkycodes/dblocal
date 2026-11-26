@@ -21,11 +21,11 @@ use crate::platform::{Arch, Os};
 /// A payload advertising anything else is rejected: a higher version may carry
 /// semantics we do not know, a lower one is no longer produced (F-CAT-01 AC4).
 ///
-/// Bumped to 2 alongside the move to `catalog/engines-v2.json`: released
-/// v0.1.x clients read `catalog/engines.json` (`schema_version: 1`) and do not
-/// render EOL/status badges or the "latest only" filter, while upgraded clients
-/// automatically discard any cached v1 catalog and switch to v2.
-pub const CATALOG_SCHEMA_VERSION: u32 = 2;
+/// Bumped to 3 alongside the move to `catalog/engines-v3.json`: released
+/// v0.1.3/v0.1.4 clients read `catalog/engines-v2.json` (`schema_version: 2`)
+/// and reject unknown engine keys (`redis`) and unknown archive formats (`deb`),
+/// so Redis is published exclusively in v3 while v1 and v2 stay frozen.
+pub const CATALOG_SCHEMA_VERSION: u32 = 3;
 
 /// One released engine version.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -57,6 +57,9 @@ pub struct CatalogVersion {
     /// Additive and optional, as `line` is.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub status: Option<String>,
+    /// Upstream license expression (e.g. `RSALv2 / SSPLv1` for Redis 7.4).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub license: Option<String>,
 }
 
 /// One downloadable build for one `(os, arch)` pair.
@@ -134,7 +137,8 @@ impl CatalogDocument {
                 entry.release_date.clone(),
                 entry.eol,
             )?
-            .with_status(status);
+            .with_status(status)
+            .with_license(entry.license.clone());
             if version.major_line() != entry.major_line {
                 return Err(invalid(
                     "major_line",
@@ -258,6 +262,7 @@ pub(crate) mod tests {
                 eol: false,
                 line: Some("18".to_owned()),
                 status: None,
+                license: None,
             }],
             artifacts: vec![CatalogArtifact {
                 id: "postgresql-18.7.0-linux-x86_64".to_owned(),
@@ -313,6 +318,7 @@ pub(crate) mod tests {
             eol: false,
             line: Some("19".to_owned()),
             status: Some("innovation".to_owned()),
+            license: None,
         });
         let text = serde_json::to_string(&document).expect("serialize");
 

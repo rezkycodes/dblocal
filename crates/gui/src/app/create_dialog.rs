@@ -150,7 +150,7 @@ fn render_engine_cards(
         let card = v_flex()
             .id(SharedString::from(format!("engine-{}", engine.as_str())))
             .flex_1()
-            .min_w(px(140.))
+            .min_w(px(120.))
             .gap_2()
             .p(px(12.))
             .rounded(px(8.))

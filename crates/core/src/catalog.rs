@@ -10,10 +10,11 @@ mod view;
 
 /// Bundled catalog JSON snapshot, compiled into the binary.
 ///
-/// Lives in `engines-v2.json` (`schema_version: 2`) so released v0.1.x clients
-/// keep reading `engines.json` (`schema_version: 1`) without seeing unbadged
-/// EOL, Innovation or Rolling entries.
-pub const BUNDLED_CATALOG_JSON: &str = include_str!("../../../catalog/engines-v2.json");
+/// Lives in `engines-v3.json` (`schema_version: 3`) so released v0.1.3/v0.1.4
+/// clients keep reading `engines-v2.json` (`schema_version: 2`) without seeing
+/// `redis` or `deb` entries that their validator rejects, and older v0.1.x
+/// clients keep reading `engines.json` (`schema_version: 1`).
+pub const BUNDLED_CATALOG_JSON: &str = include_str!("../../../catalog/engines-v3.json");
 
 pub use cache::catalog_cache_path;
 pub use dto::{CATALOG_SCHEMA_VERSION, CatalogArtifact, CatalogDocument, CatalogVersion};

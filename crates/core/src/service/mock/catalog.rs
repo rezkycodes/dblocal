@@ -82,6 +82,11 @@ fn rows(engine: EngineKey) -> Vec<VersionRow> {
                 size_bytes: 12_582_912,
             },
         ],
+        EngineKey::Redis => vec![VersionRow {
+            version: "7.4.12",
+            eol: false,
+            size_bytes: 1_586_598,
+        }],
     }
 }
 
@@ -95,6 +100,7 @@ pub(crate) fn unavailable_reason(engine: EngineKey, os: Os, arch: Arch) -> Optio
         EngineKey::Valkey if os == Os::Windows => {
             Some(strings::CATALOG_ENGINE_UNAVAILABLE_PLATFORM)
         }
+        EngineKey::Redis if os != Os::Linux => Some(strings::CATALOG_ENGINE_UNAVAILABLE_PLATFORM),
         _ => None,
     }
 }
@@ -154,7 +160,7 @@ mod tests {
             &nothing_installed(),
         );
         assert!(view.banner.is_none());
-        assert_eq!(view.engines.len(), 4);
+        assert_eq!(view.engines.len(), 5);
     }
 
     #[test]

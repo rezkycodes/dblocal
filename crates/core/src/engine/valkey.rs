@@ -5,7 +5,9 @@
 //! `SHUTDOWN`, parses the pidfile and diagnoses start failures — including
 //! causes that only appear in the logfile (C-10).
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
+#[cfg(test)]
+use std::path::PathBuf;
 use std::process::Command;
 
 use crate::consts;
@@ -75,21 +77,25 @@ impl EngineAdapter for ValkeyAdapter {
 }
 
 /// Renders the managed `valkey.conf`. Secret because it may carry `requirepass`.
+#[cfg(test)]
 pub fn render_config(params: &ConfigParams<'_>) -> SecretString {
     resp::render_config(&BRAND, params)
 }
 
 /// Path of the generated config inside the run directory.
+#[cfg(test)]
 pub fn config_path(run_dir: &Path) -> PathBuf {
     resp::config_path(&BRAND, run_dir)
 }
 
 /// Path of the server pidfile.
+#[cfg(test)]
 pub fn pidfile_path(run_dir: &Path) -> PathBuf {
     resp::pidfile_path(&BRAND, run_dir)
 }
 
 /// Path of the server logfile.
+#[cfg(test)]
 pub fn logfile_path(logs_dir: &Path) -> PathBuf {
     resp::logfile_path(&BRAND, logs_dir)
 }
@@ -105,6 +111,7 @@ pub fn sync_port(run_dir: &Path, port: u16) -> Result<()> {
 }
 
 /// Returns `data_dir`'s sibling directory `leaf` (`run`, `logs`).
+#[cfg(test)]
 pub fn sibling_dir(data_dir: &Path, leaf: &str) -> PathBuf {
     resp::sibling_dir(data_dir, leaf)
 }
@@ -127,10 +134,10 @@ pub fn diagnose_failure_text(output: &str) -> StartFailure {
 
 #[cfg(test)]
 mod tests {
-    use std::fs;
     use super::*;
-    use crate::model::{AuthMode, Port};
     use crate::error::DblError;
+    use crate::model::{AuthMode, Port};
+    use std::fs;
     use tempfile::tempdir;
 
     fn params<'a>(password: Option<&'a SecretString>, auth: AuthMode) -> ConfigParams<'a> {

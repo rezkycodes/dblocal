@@ -418,7 +418,9 @@ pub(crate) fn identity_of(instance: &Instance) -> Option<ProcessIdentity> {
 
 pub(crate) fn start_timeout(engine: EngineKey) -> Duration {
     match engine {
-        EngineKey::Valkey | EngineKey::Redis => Duration::from_secs(consts::START_TIMEOUT_VALKEY_SECS),
+        EngineKey::Valkey | EngineKey::Redis => {
+            Duration::from_secs(consts::START_TIMEOUT_VALKEY_SECS)
+        }
         _ => Duration::from_secs(consts::START_TIMEOUT_SECS),
     }
 }

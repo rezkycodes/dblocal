@@ -4,9 +4,11 @@
 > repository describes the Phase 1 target; commands and downloads below will 404 until the first tag
 > is published.
 
-DBLocal is a Rust desktop app (GPUI) that installs and runs **PostgreSQL, MySQL, MariaDB and
-Valkey** servers **on your own machine**, several versions side by side, with no containers and no
+DBLocal is a Rust desktop app (GPUI) that installs and runs **PostgreSQL, MySQL, MariaDB,
+Valkey and Redis** servers **on your own machine**, several versions side by side, with no containers and no
 `sudo`. Pick a version, press Create, get a working connection string you can paste into `.env`.
+
+> **Redis note:** Redis `7.4.12` is available on **Linux only** (`x86_64` and `aarch64`, downloaded directly from Redis's official APT repository `packages.redis.io/deb`, requiring `libssl3`/`openssl-libs` and `libsystemd0`/`systemd-libs`). Redis 7.4 is dual-licensed **RSALv2 / SSPLv1**; DBLocal does not host or redistribute Redis binaries.
 
 It manages **servers**, not **data**: no table browser, no SQL editor. For that, DBLocal has an
 "Open in…" button for DBDelve, TablePlus, DBeaver or `psql`.

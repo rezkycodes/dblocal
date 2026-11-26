@@ -5,7 +5,9 @@
 //! invoked as `redis-server`), with a Linux shared-library preflight check for
 //! `libssl.so.3`, `libcrypto.so.3` and `libsystemd.so.0`.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
+#[cfg(test)]
+use std::path::PathBuf;
 use std::process::Command;
 
 use crate::consts;
@@ -17,7 +19,9 @@ use crate::model::{EngineKey, StartFailure};
 use crate::secret::SecretString;
 use crate::service::UriFormat;
 
-pub use crate::engine::resp::{ConfigParams, ServerIdentity};
+#[cfg(test)]
+pub use crate::engine::resp::ConfigParams;
+pub use crate::engine::resp::ServerIdentity;
 
 /// Brand parameters for Redis.
 pub const BRAND: RespBrand = RespBrand {
@@ -79,21 +83,25 @@ impl EngineAdapter for RedisAdapter {
 }
 
 /// Renders the managed `redis.conf`.
+#[cfg(test)]
 pub fn render_config(params: &ConfigParams<'_>) -> SecretString {
     resp::render_config(&BRAND, params)
 }
 
 /// Path of the generated `redis.conf` inside `run_dir`.
+#[cfg(test)]
 pub fn config_path(run_dir: &Path) -> PathBuf {
     resp::config_path(&BRAND, run_dir)
 }
 
 /// Path of `redis.pid` inside `run_dir`.
+#[cfg(test)]
 pub fn pidfile_path(run_dir: &Path) -> PathBuf {
     resp::pidfile_path(&BRAND, run_dir)
 }
 
 /// Path of `redis.log` inside `logs_dir`.
+#[cfg(test)]
 pub fn logfile_path(logs_dir: &Path) -> PathBuf {
     resp::logfile_path(&BRAND, logs_dir)
 }
@@ -206,9 +214,7 @@ mod tests {
         };
         let cmd = RedisAdapter.spawn_command(&ctx);
         assert!(
-            cmd.get_program()
-                .to_string_lossy()
-                .contains("redis-server"),
+            cmd.get_program().to_string_lossy().contains("redis-server"),
             "program was {:?}",
             cmd.get_program()
         );

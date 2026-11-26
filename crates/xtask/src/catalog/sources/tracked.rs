@@ -120,6 +120,9 @@ pub const VALKEY: &[TrackedVersion] = &[
     v("7.2.16", "7.2"),
 ];
 
+/// Redis: 7.4.12 only (Linux `jammy` APT package; 7.0 is EOL and not offered).
+pub const REDIS: &[TrackedVersion] = &[v("7.4.12", "7.4")];
+
 /// The tracked table for one engine.
 pub fn for_engine(engine: EngineKey) -> &'static [TrackedVersion] {
     match engine {
@@ -127,6 +130,7 @@ pub fn for_engine(engine: EngineKey) -> &'static [TrackedVersion] {
         EngineKey::Mysql => MYSQL,
         EngineKey::Mariadb => MARIADB,
         EngineKey::Valkey => VALKEY,
+        EngineKey::Redis => REDIS,
         // `EngineKey` is `#[non_exhaustive]`; a new engine gets its own table.
         _ => &[],
     }
@@ -214,6 +218,7 @@ mod tests {
                 EngineKey::Valkey,
                 &["9.2.0", "8.1.12", "8.0.13", "7.2.16"][..],
             ),
+            (EngineKey::Redis, &["7.4.12"][..]),
         ] {
             let table = for_engine(engine);
             for tag in tags {

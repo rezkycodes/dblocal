@@ -19,7 +19,7 @@ pub enum CatalogCommand {
     },
     /// Validates a catalog JSON file offline.
     Validate {
-        /// Path to validate (defaults to `catalog/engines-v2.json`).
+        /// Path to validate (defaults to `catalog/engines-v3.json`).
         #[arg(long)]
         file: Option<PathBuf>,
     },
@@ -47,7 +47,7 @@ pub fn run_with(
             }
         },
         CatalogCommand::Validate { file } => {
-            let path = file.unwrap_or_else(|| PathBuf::from("catalog/engines-v2.json"));
+            let path = file.unwrap_or_else(|| PathBuf::from("catalog/engines-v3.json"));
             match validate::run(&path) {
                 Ok(msg) => {
                     println!("{msg}");
@@ -75,11 +75,11 @@ mod tests {
 
     #[test]
     fn build_argument_matches_the_workflow_command() {
-        let cli = Cli::try_parse_from(["catalog", "build", "--output", "catalog/engines-v2.json"])
+        let cli = Cli::try_parse_from(["catalog", "build", "--output", "catalog/engines-v3.json"])
             .expect("parse");
         match cli.command {
             CatalogCommand::Build { output } => {
-                assert_eq!(output, PathBuf::from("catalog/engines-v2.json"));
+                assert_eq!(output, PathBuf::from("catalog/engines-v3.json"));
             }
             other => panic!("unexpected {other:?}"),
         }
@@ -120,7 +120,7 @@ mod tests {
     fn validate_subcommand_reports_success_and_failure() {
         let bundled = PathBuf::from(concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/../../catalog/engines-v2.json"
+            "/../../catalog/engines-v3.json"
         ));
         assert_eq!(
             run(CatalogCommand::Validate {

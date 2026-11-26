@@ -670,9 +670,10 @@ mod tests {
             (EngineKey::Mysql, 3306),
             (EngineKey::Mariadb, 3307),
             (EngineKey::Valkey, 6379),
+            (EngineKey::Redis, 6379),
         ] {
             let credential = Credential::new(
-                if engine == EngineKey::Valkey {
+                if matches!(engine, EngineKey::Valkey | EngineKey::Redis) {
                     "default"
                 } else {
                     "root"

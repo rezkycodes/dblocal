@@ -37,6 +37,7 @@ pub fn engine_colour(engine: EngineKey, theme: &Theme) -> Hsla {
         EngineKey::Mysql => theme.chart_3,
         EngineKey::Mariadb => theme.info,
         EngineKey::Valkey => theme.danger,
+        EngineKey::Redis => theme.danger,
         _ => theme.muted_foreground,
     }
 }

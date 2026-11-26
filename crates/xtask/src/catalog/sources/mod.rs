@@ -9,6 +9,7 @@ mod helpers;
 mod mariadb;
 mod mysql;
 mod postgresql;
+mod redis;
 mod tracked;
 mod valkey;
 
@@ -18,6 +19,7 @@ pub use mariadb::{mariadb_from_api, mariadb_release_from_api};
 pub use mysql::md5_hex as mysql_md5_hex;
 pub use mysql::{MysqlBuild, mysql_artifact, mysql_builds_for, mysql_target_optional};
 pub use postgresql::{GithubRelease, postgresql_from_releases};
+pub use redis::redis_from_apt;
 #[cfg(test)]
 pub use tracked::find as find_tracked;
 pub use tracked::{TrackedVersion, for_engine as tracked_for_engine};
@@ -36,11 +38,12 @@ pub fn mariadb_api_url(version: &str) -> String {
 
 /// Where the runtime refreshes the catalog from.
 ///
-/// Published at `catalog/engines-v2.json` (`schema_version: 2`) so released
-/// v0.1.x clients keep reading `catalog/engines.json` (`schema_version: 1`)
-/// without seeing unbadged EOL, Innovation or Rolling entries.
+/// Published at `catalog/engines-v3.json` (`schema_version: 3`) so released
+/// v0.1.3/v0.1.4 clients keep reading `catalog/engines-v2.json` without
+/// rejecting `redis` or `deb` entries, and older v0.1.x clients keep reading
+/// `catalog/engines.json` (`schema_version: 1`).
 pub const CATALOG_SOURCE_URL: &str =
-    "https://raw.githubusercontent.com/rezkycodes/dblocal/main/catalog/engines-v2.json";
+    "https://raw.githubusercontent.com/rezkycodes/dblocal/main/catalog/engines-v3.json";
 
 /// Failure of a source adapter.
 #[derive(Debug)]

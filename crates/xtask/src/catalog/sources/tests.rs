@@ -364,6 +364,7 @@ fn assemble_is_sorted_deterministically() {
             eol: false,
             line: None,
             status: None,
+            license: None,
         },
         CatalogVersion {
             engine: "postgresql".to_owned(),
@@ -373,6 +374,7 @@ fn assemble_is_sorted_deterministically() {
             eol: false,
             line: None,
             status: None,
+            license: None,
         },
         CatalogVersion {
             engine: "postgresql".to_owned(),
@@ -382,6 +384,7 @@ fn assemble_is_sorted_deterministically() {
             eol: false,
             line: None,
             status: None,
+            license: None,
         },
     ];
     let doc = assemble(

@@ -75,6 +75,7 @@ pub fn postgresql_from_releases(
             eol: tracked.eol,
             line: Some(tracked.line.to_owned()),
             status: tracked.status.map(|status| status.as_str().to_owned()),
+            license: None,
         });
 
         for (os, arch, triple) in POSTGRES_TARGETS {

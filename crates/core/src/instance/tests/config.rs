@@ -339,14 +339,11 @@ fn created_with_runtime(engine: EngineKey) -> (Harness, InstanceId, PathBuf) {
                     "my.cnf"
                 }),
             EngineKey::Mysql | EngineKey::Valkey | EngineKey::Redis => {
-                harness
-                    .paths
-                    .run_dir(instance.name())
-                    .join(match engine {
-                        EngineKey::Mysql => "my.cnf",
-                        EngineKey::Valkey => "valkey.conf",
-                        _ => "redis.conf",
-                    })
+                harness.paths.run_dir(instance.name()).join(match engine {
+                    EngineKey::Mysql => "my.cnf",
+                    EngineKey::Valkey => "valkey.conf",
+                    _ => "redis.conf",
+                })
             }
         };
     (harness, id, path)

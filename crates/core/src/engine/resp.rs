@@ -104,10 +104,9 @@ pub fn initialize(brand: &RespBrand, ctx: &InitContext) -> Result<()> {
 pub fn spawn_command(brand: &RespBrand, ctx: &RunContext) -> Command {
     let primary = ctx.runtime_dir.join("bin").join(exe_name(brand.server_bin));
     let (program, use_arg0) = match brand.multicall_bin {
-        Some(multicall) if !primary.exists() => (
-            ctx.runtime_dir.join("bin").join(exe_name(multicall)),
-            true,
-        ),
+        Some(multicall) if !primary.exists() => {
+            (ctx.runtime_dir.join("bin").join(exe_name(multicall)), true)
+        }
         _ => (primary, false),
     };
     let mut cmd = Command::new(&program);

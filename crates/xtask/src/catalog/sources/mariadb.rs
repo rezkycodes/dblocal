@@ -242,6 +242,7 @@ pub fn mariadb_from_api(
         eol: tracked.eol,
         line: Some(tracked.line.to_owned()),
         status: tracked.status.map(|status| status.as_str().to_owned()),
+        license: None,
     }];
     Ok((versions, artifacts))
 }

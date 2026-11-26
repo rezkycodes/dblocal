@@ -622,6 +622,17 @@ impl Workspace {
         workspace
     }
 
+    /// Preview of the create modal with Redis selected (Linux, 7.4.12).
+    pub fn preview_create_redis(
+        service: Arc<dyn DblService>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let mut workspace = Self::preview_create(service, window, cx);
+        workspace.choose_engine_action(dblocal_core::model::EngineKey::Redis, window, cx);
+        workspace
+    }
+
     /// Preview of the create modal with an engine unavailable on this platform.
     pub fn preview_create_unavailable(
         service: Arc<dyn DblService>,

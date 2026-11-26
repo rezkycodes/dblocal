@@ -9,11 +9,12 @@ use dblocal_core::strings;
 
 use super::*;
 
-/// The engine order the create dialog draws (`D-25` prototype: PostgreSQL,
-/// Valkey, MySQL, MariaDB). The catalog and the dock keep the domain order.
-pub const CREATE_ENGINE_ORDER: [EngineKey; 4] = [
+/// The engine order the create dialog draws (PostgreSQL, Valkey, Redis, MySQL,
+/// MariaDB). The catalog and the dock keep the domain order.
+pub const CREATE_ENGINE_ORDER: [EngineKey; 5] = [
     EngineKey::Postgresql,
     EngineKey::Valkey,
+    EngineKey::Redis,
     EngineKey::Mysql,
     EngineKey::Mariadb,
 ];

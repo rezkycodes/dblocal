@@ -95,13 +95,14 @@ pub fn can_delete(status: InstanceStatus) -> bool {
     matches!(status, InstanceStatus::Stopped | InstanceStatus::Failed)
 }
 
-/// Two-letter monogram the engine badge draws (`PG`, `MY`, `MA`, `VK`).
+/// Two-letter monogram the engine badge draws (`PG`, `MY`, `MA`, `VK`, `RD`).
 pub fn engine_monogram(engine: EngineKey) -> &'static str {
     match engine {
         EngineKey::Postgresql => "PG",
         EngineKey::Mysql => "MY",
         EngineKey::Mariadb => "MA",
         EngineKey::Valkey => "VK",
+        EngineKey::Redis => "RD",
         _ => "??",
     }
 }
@@ -663,6 +664,7 @@ pub fn suggested_name(engine: EngineKey, version: &str) -> String {
         EngineKey::Mysql => "mysql",
         EngineKey::Mariadb => "mariadb",
         EngineKey::Valkey => "valkey",
+        EngineKey::Redis => "redis",
         _ => "instance",
     };
     let major = version.split('.').next().unwrap_or(version);

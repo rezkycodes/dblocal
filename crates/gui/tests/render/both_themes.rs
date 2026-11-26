@@ -77,3 +77,35 @@ fn renders_create_dialog_with_all_versions_in_both_themes() {
         "create-all-versions light frame is not lighter than dark"
     );
 }
+
+#[test]
+fn renders_create_dialog_with_redis_in_both_themes() {
+    let dark = render(
+        true,
+        "create-redis-dark.png",
+        Workspace::preview_create_redis,
+    );
+    let light = render(
+        false,
+        "create-redis-light.png",
+        Workspace::preview_create_redis,
+    );
+    eprintln!(
+        "CREATE-REDIS: dark_colours={} light_colours={}",
+        dark.colours, light.colours
+    );
+    assert!(
+        dark.colours > 24,
+        "create-redis dark render too flat ({})",
+        dark.colours
+    );
+    assert!(
+        light.colours > 24,
+        "create-redis light render too flat ({})",
+        light.colours
+    );
+    assert!(
+        light.mean_luminance() > dark.mean_luminance(),
+        "create-redis light frame is not lighter than dark"
+    );
+}

@@ -26,10 +26,36 @@ mod tests {
     fn validates_the_bundled_catalog() {
         let path = Path::new(concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/../../catalog/engines-v2.json"
+            "/../../catalog/engines-v3.json"
         ));
         let summary = run(path).expect("bundled catalog must validate");
-        assert!(summary.starts_with("catalog valid: schema 2, "));
+        assert!(summary.starts_with("catalog valid: schema 3, "));
+    }
+
+    #[test]
+    fn frozen_v1_and_v2_catalogs_never_contain_redis_or_deb() {
+        // Released v0.1.3/v0.1.4 clients reject unknown engine keys ("redis")
+        // and unknown archive formats ("deb") across the entire file. Guard
+        // both frozen catalog files so a future edit can never break old users.
+        for (rel, expected_schema) in [
+            ("../../catalog/engines.json", 1u32),
+            ("../../catalog/engines-v2.json", 2u32),
+        ] {
+            let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(rel);
+            let text = std::fs::read_to_string(&path).expect("read frozen catalog");
+            let doc: CatalogDocument = serde_json::from_str(&text).expect("parse frozen catalog");
+            assert_eq!(doc.schema_version, expected_schema, "{rel}");
+            assert!(
+                !doc.versions.iter().any(|v| v.engine == "redis"),
+                "{rel} must not contain redis versions"
+            );
+            assert!(
+                !doc.artifacts
+                    .iter()
+                    .any(|a| a.engine == "redis" || a.format == "deb"),
+                "{rel} must not contain redis or deb artifacts"
+            );
+        }
     }
 
     #[test]

@@ -232,8 +232,9 @@ mod tests {
     fn fails_with_clear_debian_and_fedora_hints_when_libssl_missing() {
         let dir = tempdir().expect("tempdir");
         fs::write(dir.path().join("libsystemd.so.0"), b"ELF").expect("write");
-        let err = check_libraries_in_dirs("Redis", REDIS_REQUIRED_LIBS, &[dir.path().to_path_buf()])
-            .unwrap_err();
+        let err =
+            check_libraries_in_dirs("Redis", REDIS_REQUIRED_LIBS, &[dir.path().to_path_buf()])
+                .unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains("libssl.so.3"), "{msg}");
         assert!(msg.contains("libcrypto.so.3"), "{msg}");
@@ -245,13 +246,17 @@ mod tests {
     #[test]
     fn deduplicates_packages_and_lists_all_missing_libraries() {
         let dir = tempdir().expect("tempdir");
-        let err = check_libraries_in_dirs("Redis", REDIS_REQUIRED_LIBS, &[dir.path().to_path_buf()])
-            .unwrap_err();
+        let err =
+            check_libraries_in_dirs("Redis", REDIS_REQUIRED_LIBS, &[dir.path().to_path_buf()])
+                .unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains("libssl.so.3"), "{msg}");
         assert!(msg.contains("libcrypto.so.3"), "{msg}");
         assert!(msg.contains("libsystemd.so.0"), "{msg}");
-        assert!(msg.contains("sudo apt install libssl3 libsystemd0"), "{msg}");
+        assert!(
+            msg.contains("sudo apt install libssl3 libsystemd0"),
+            "{msg}"
+        );
         assert!(
             msg.contains("sudo dnf install openssl-libs systemd-libs"),
             "{msg}"
@@ -269,8 +274,9 @@ mod tests {
         .expect("symlink");
         fs::write(dir.path().join("libcrypto.so.3"), b"ELF").expect("write");
         fs::write(dir.path().join("libsystemd.so.0"), b"ELF").expect("write");
-        let err = check_libraries_in_dirs("Redis", REDIS_REQUIRED_LIBS, &[dir.path().to_path_buf()])
-            .unwrap_err();
+        let err =
+            check_libraries_in_dirs("Redis", REDIS_REQUIRED_LIBS, &[dir.path().to_path_buf()])
+                .unwrap_err();
         assert!(err.to_string().contains("libssl.so.3"));
     }
 
@@ -279,17 +285,9 @@ mod tests {
         let dir = tempdir().expect("tempdir");
         let conf_d = dir.path().join("ld.so.conf.d");
         fs::create_dir_all(&conf_d).expect("mkdir");
-        fs::write(
-            conf_d.join("custom.conf"),
-            "# comment\n/opt/custom/lib\n",
-        )
-        .expect("write");
+        fs::write(conf_d.join("custom.conf"), "# comment\n/opt/custom/lib\n").expect("write");
         let main_conf = dir.path().join("ld.so.conf");
-        fs::write(
-            &main_conf,
-            "include ld.so.conf.d/*.conf\n/usr/local/lib\n",
-        )
-        .expect("write");
+        fs::write(&main_conf, "include ld.so.conf.d/*.conf\n/usr/local/lib\n").expect("write");
         let dirs = parse_ld_so_conf(&main_conf, 0);
         assert_eq!(
             dirs,

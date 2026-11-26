@@ -18,6 +18,8 @@ pub struct BuildSelection {
     pub postgresql: Vec<TrackedVersion>,
     /// Valkey versions to include.
     pub valkey: Vec<TrackedVersion>,
+    /// Redis versions to include (resolved from `packages.redis.io/deb`).
+    pub redis: Vec<TrackedVersion>,
     /// MariaDB releases to include, as `(api_url, tracked)`.
     pub mariadb: Vec<(String, TrackedVersion)>,
     /// MySQL builds to download and hash, as `(build, tracked)`.
@@ -32,6 +34,7 @@ impl BuildSelection {
     pub fn wave_one() -> Self {
         let postgresql = sources::tracked_for_engine(EngineKey::Postgresql).to_vec();
         let valkey = sources::tracked_for_engine(EngineKey::Valkey).to_vec();
+        let redis = sources::tracked_for_engine(EngineKey::Redis).to_vec();
         let mariadb = sources::tracked_for_engine(EngineKey::Mariadb)
             .iter()
             .map(|tracked| (mariadb_api_url(tracked.version), *tracked))
@@ -47,6 +50,7 @@ impl BuildSelection {
         Self {
             postgresql,
             valkey,
+            redis,
             mariadb,
             mysql,
         }
@@ -79,6 +83,7 @@ impl BuildSelection {
         Ok(Self {
             postgresql: pick(EngineKey::Postgresql, postgresql)?,
             valkey: pick(EngineKey::Valkey, valkey)?,
+            redis: Vec::new(),
             mariadb: mariadb_tracked
                 .into_iter()
                 .map(|tracked| (mariadb_api_url(tracked.version), tracked))
@@ -125,7 +130,10 @@ pub fn build_and_write(
     output: &Path,
     now: SystemTime,
 ) -> Result<String, String> {
-    let mut document = build(source, selection, None)?;
+    let existing = std::fs::read_to_string(output)
+        .ok()
+        .and_then(|text| serde_json::from_str::<CatalogDocument>(&text).ok());
+    let mut document = build_with_existing(source, selection, None, existing.as_ref())?;
     let today = format!("{}T00:00:00Z", utc_date(now));
     document.generated_at = Some(match read_stamp_if_unchanged(output, &document) {
         Some(existing) => existing,
@@ -184,10 +192,22 @@ fn civil_from_days(days: i64) -> (i64, u32, u32) {
 /// Every artifact is verified before it is recorded: PostgreSQL and Valkey from
 /// their `.sha256` sidecars, MariaDB from the REST API's `checksum.sha256sum`,
 /// MySQL by downloading once and cross-checking the `.md5` sidecar.
+#[cfg(test)]
 pub fn build(
     source: &dyn Source,
     selection: &BuildSelection,
     generated_at: Option<String>,
+) -> Result<CatalogDocument, String> {
+    build_with_existing(source, selection, generated_at, None)
+}
+
+/// Assembles a catalog, optionally reusing verified `(engine, version, url)`
+/// entries from `existing` to avoid re-downloading unchanged packages.
+pub fn build_with_existing(
+    source: &dyn Source,
+    selection: &BuildSelection,
+    generated_at: Option<String>,
+    existing: Option<&CatalogDocument>,
 ) -> Result<CatalogDocument, String> {
     let mut versions: Vec<CatalogVersion> = Vec::new();
     let mut artifacts: Vec<CatalogArtifact> = Vec::new();
@@ -210,6 +230,13 @@ pub fn build(
     for tracked in &selection.valkey {
         let (v, a) = sources::valkey_from_sidecars(tracked, &variants, source)
             .map_err(|err| err.to_string())?;
+        versions.extend(v);
+        artifacts.extend(a);
+    }
+
+    for tracked in &selection.redis {
+        let (v, a) =
+            sources::redis_from_apt(tracked, source, existing).map_err(|err| err.to_string())?;
         versions.extend(v);
         artifacts.extend(a);
     }
@@ -243,6 +270,7 @@ pub fn build(
                 eol: tracked.eol,
                 line: Some(tracked.line.to_owned()),
                 status: tracked.status.map(|status| status.as_str().to_owned()),
+                license: None,
             });
         }
         artifacts.push(artifact);
@@ -359,6 +387,7 @@ mod tests {
         BuildSelection {
             postgresql: vec![pg("18.7.0", "18"), pg("17.12.0", "17"), pg("16.16.0", "16")],
             valkey: vec![valkey],
+            redis: Vec::new(),
             mariadb: vec![
                 (
                     sources::mariadb_api_url("11.8.10"),
@@ -590,6 +619,7 @@ mod tests {
                 status: None,
             }],
             valkey: Vec::new(),
+            redis: Vec::new(),
             mariadb: Vec::new(),
             mysql: Vec::new(),
         };
@@ -694,6 +724,7 @@ mod tests {
         let selection = BuildSelection {
             postgresql: Vec::new(),
             valkey: Vec::new(),
+            redis: Vec::new(),
             mariadb: vec![(sources::mariadb_api_url("11.8.10"), mariadb)],
             mysql: mysql_builds_for(&tracked)
                 .into_iter()

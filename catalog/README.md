@@ -1,20 +1,32 @@
 # DBLocal engine catalog
 
 This directory is the bundled source of truth for "what can I install on this
-host". The application compiles `engines-v2.json` (`schema_version: 2`) into
-the binary and refreshes it in the background; `engines.json`
-(`schema_version: 1`) is kept frozen for released `v0.1.x` clients whose UI
-does not render EOL/status badges or the "Only show latest versions" filter. Neither
-file is edited by hand.
+host". The application compiles `engines-v3.json` (`schema_version: 3`) into
+the binary and refreshes it in the background. Older schema files are kept
+frozen so already-released clients never break:
+
+- `engines.json` (`schema_version: 1`) is kept frozen for early `v0.1.x` clients
+  whose UI does not render EOL/status badges or the "Only show latest versions"
+  filter.
+- `engines-v2.json` (`schema_version: 2`) is kept frozen for released `v0.1.3`
+  and `v0.1.4` clients. Empirically verified against an archived `v0.1.4` tree
+  (`cargo xtask catalog validate`): a `v0.1.4` client rejects the entire file on
+  either an unknown engine (`unknown engine "redis"`) or an unknown archive
+  format (`unknown archive format: deb`), causing daily refresh to degrade to
+  `Stale`/`Offline`. Therefore Redis and `.deb` artifacts are published
+  exclusively in `engines-v3.json`, and `engines.json` and `engines-v2.json`
+  remain byte-identical (guarded by a regression test in `xtask`).
+
+None of these files is edited by hand.
 
 ## Generating and validating
 
 ```sh
 # Rebuild the catalog (HTTPS; needs network, and GITHUB_TOKEN for PostgreSQL).
-cargo xtask catalog build --output catalog/engines-v2.json
+cargo xtask catalog build --output catalog/engines-v3.json
 
 # Validate any catalog file offline (used in CI).
-cargo xtask catalog validate --file catalog/engines-v2.json
+cargo xtask catalog validate --file catalog/engines-v3.json
 ```
 
 The builder output is deterministic: entries are sorted, every artifact carries a
@@ -27,11 +39,18 @@ that fails validation is never published and never replaces a good cache.
 
 - **PostgreSQL** 18.7.0, 17.12.0 and 16.16.0 from
   `theseus-rs/postgresql-binaries`, for all six `(os, arch)` targets.
-- **Valkey** 9.2.0 from `download.valkey.io`, for Linux `x86_64` and `aarch64`,
-  in the **`jammy`** build only (glibc >= 2.34).
-- **MySQL** 8.4.11, Linux `x86_64` (the minimal tarball), macOS `x86_64` and
-  `arm64` (the `macos15` builds) and Windows `x86_64`.
-- **MariaDB** 11.8.10 and 11.4.14, Linux `x86_64` and Windows `x86_64` only.
+- **Valkey** 9.2.0, 8.1.12, 8.0.13 and 7.2.16 from `download.valkey.io`, for
+  Linux `x86_64` and `aarch64`, in the **`jammy`** build only (glibc >= 2.34).
+- **Redis** 7.4.12 from the official APT repository `https://packages.redis.io/deb`
+  (`redis-tools` `7.4.12-1rl1~jammy1`, `.deb`, glibc >= 2.34), for Linux
+  `x86_64` and `aarch64` only. Redis 7.0 is EOL and not offered; no Windows
+  build exists. Redis 7.4 is dual-licensed **RSALv2 / SSPLv1** (recorded in the
+  catalog `license` field); DBLocal does not host or redistribute Redis and
+  points users' machines directly at Redis's official package.
+- **MySQL** 26.10.0, 9.7.4, 8.4.13 and 8.0.46 (EOL), Linux `x86_64` (the minimal
+  tarball), macOS and Windows `x86_64`.
+- **MariaDB** 13.1.2, 12.3.4, 11.8.10, 11.4.14 and 10.11.20, Linux `x86_64` and
+  Windows `x86_64` only.
 
 ### Why some targets are absent (never faked)
 
@@ -73,6 +92,27 @@ change to `WAVE_ONE_VARIANTS` in `sources/valkey.rs` once the objects agree.
 - **MySQL**: Oracle publishes no SHA-256, only `.md5` and a GPG signature. The
   builder downloads the archive once, computes the SHA-256 and cross-checks the
   `.md5` sidecar before recording the hash. No checksum means no entry.
+- **Redis**: the builder fetches `dists/jammy/InRelease` and
+  `dists/jammy/main/binary-{amd64,arm64}/Packages.gz` over HTTPS (`rustls`),
+  verifies that each `Packages.gz` matches the SHA-256 and byte size listed in
+  `InRelease`, parses the `redis-tools` `7.4.12-1rl1~jammy1` stanza, and
+  cross-checks the pinned `pool/` `.deb` by downloading and hashing it (reusing
+  an existing catalog entry when `(engine, version, url)` and its verified hash
+  and size are unchanged). Residual trust assumption: `InRelease` is verified
+  via HTTPS/CA trust rather than offline OpenPGP signature verification, to
+  avoid adding a heavy OpenPGP dependency.
+
+### Redis 7.4.12 Linux (`jammy` APT `redis-tools`, 2026-11-26)
+
+| Arch | URL | Size | SHA-256 |
+|---|---|---|---|
+| `x86_64` | `https://packages.redis.io/deb/pool/jammy/r/re/redis-tools_7.4.12-1rl1~jammy1_amd64.deb` | 1 586 598 bytes | `42727aa60b3595431055f11ff09c4761f52c237b013ca9d36f5c6328fe0657c2` |
+| `aarch64` | `https://packages.redis.io/deb/pool/jammy/r/re/redis-tools_7.4.12-1rl1~jammy1_arm64.deb` | 1 597 148 bytes | `29ed3d4cad317ff75ddf4b1e62be5ccaefa6fbeabf0c166bca58fc4c57f00b50` |
+
+Note: `redis-tools` links `libssl.so.3`, `libcrypto.so.3`, and `libsystemd.so.0`
+(max glibc symbol `GLIBC_2.34`). DBLocal checks for those libraries before start
+and prints actionable Debian/Ubuntu (`libssl3`, `libsystemd0`) and Fedora
+(`openssl-libs`, `systemd-libs`) install instructions if any are missing.
 
 ### MySQL 8.4.11 Linux x86_64: recorded hash and cross-check (2026-11-22)
 

@@ -86,6 +86,7 @@ pub struct EngineVersion {
     release_date: Option<String>,
     eol: bool,
     status: Option<VersionStatus>,
+    license: Option<String>,
 }
 
 impl EngineVersion {
@@ -108,6 +109,7 @@ impl EngineVersion {
             release_date,
             eol,
             status: None,
+            license: None,
         })
     }
 
@@ -155,6 +157,17 @@ impl EngineVersion {
     /// Returns a copy with the EOL flag changed.
     pub fn with_eol(mut self, eol: bool) -> Self {
         self.eol = eol;
+        self
+    }
+
+    /// Upstream license expression, if the catalog records one.
+    pub fn license(&self) -> Option<&str> {
+        self.license.as_deref()
+    }
+
+    /// Returns a copy carrying a license expression.
+    pub fn with_license(mut self, license: Option<String>) -> Self {
+        self.license = license;
         self
     }
 }

@@ -80,7 +80,7 @@ pub enum Command {
     },
     /// Create a new instance without prompting.
     Create {
-        /// Engine: postgresql, mysql, mariadb or valkey.
+        /// Engine: postgresql, mysql, mariadb, valkey or redis.
         #[arg(long)]
         engine: String,
         /// Engine version tag, e.g. 18.7.0.

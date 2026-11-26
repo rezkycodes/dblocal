@@ -83,9 +83,9 @@ fn locate_data_member<R: Read + Seek>(
     caps: &ExtractCaps,
 ) -> Result<DataMember> {
     let mut magic = [0u8; 8];
-    reader.read_exact(&mut magic).map_err(|_| {
-        invalid_archive("not a valid .deb archive: truncated or missing ar magic")
-    })?;
+    reader
+        .read_exact(&mut magic)
+        .map_err(|_| invalid_archive("not a valid .deb archive: truncated or missing ar magic"))?;
     if &magic != AR_MAGIC {
         return Err(invalid_archive(
             "not a valid .deb archive: wrong ar magic header",
@@ -190,7 +190,9 @@ fn locate_data_member<R: Read + Seek>(
 
 fn parse_ar_header(header: &[u8; AR_HEADER_LEN]) -> Result<(String, u64)> {
     if &header[58..60] != AR_HEADER_END {
-        return Err(invalid_archive("malformed ar member header trailer in .deb"));
+        return Err(invalid_archive(
+            "malformed ar member header trailer in .deb",
+        ));
     }
     let raw_name = std::str::from_utf8(&header[0..16])
         .map_err(|_| invalid_archive("non-UTF-8 ar member name in .deb"))?;
@@ -372,7 +374,16 @@ mod tests {
         let path = dir.path().join("bad.deb");
         std::fs::write(&path, b"not-an-ar-archive").expect("write");
         let err = extract_deb(&path, dir.path(), None, &default_caps()).unwrap_err();
-        assert!(matches!(err, DblError::InvalidInput { field: "archive", .. }), "{err:?}");
+        assert!(
+            matches!(
+                err,
+                DblError::InvalidInput {
+                    field: "archive",
+                    ..
+                }
+            ),
+            "{err:?}"
+        );
     }
 
     #[test]
@@ -386,7 +397,16 @@ mod tests {
         let path = dir.path().join("trunc.deb");
         std::fs::write(&path, &deb).expect("write");
         let err = extract_deb(&path, dir.path(), Some("usr"), &default_caps()).unwrap_err();
-        assert!(matches!(err, DblError::InvalidInput { field: "archive", .. }), "{err:?}");
+        assert!(
+            matches!(
+                err,
+                DblError::InvalidInput {
+                    field: "archive",
+                    ..
+                }
+            ),
+            "{err:?}"
+        );
     }
 
     #[test]
@@ -461,6 +481,9 @@ mod tests {
         let path_abs = dir.path().join("abs.deb");
         std::fs::write(&path_abs, &deb_abs).expect("write");
         let err_abs = extract_deb(&path_abs, dir.path(), None, &default_caps()).unwrap_err();
-        assert!(matches!(err_abs, DblError::UnsafeArchive { .. }), "{err_abs:?}");
+        assert!(
+            matches!(err_abs, DblError::UnsafeArchive { .. }),
+            "{err_abs:?}"
+        );
     }
 }
