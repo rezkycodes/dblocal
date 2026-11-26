@@ -654,3 +654,6 @@ pub use admin::*;
 
 mod config;
 pub use config::*;
+
+mod update;
+pub use update::*;
