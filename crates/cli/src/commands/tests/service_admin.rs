@@ -132,7 +132,7 @@ fn db_drop_without_confirmation_is_refused_non_interactively() {
         false,
     );
     assert_eq!(code, EXIT_BAD_ARGS);
-    assert!(err.contains("konfirmasi") || err.contains("--yes"), "{err}");
+    assert!(err.contains("--confirm") || err.contains("--yes"), "{err}");
 }
 
 #[test]

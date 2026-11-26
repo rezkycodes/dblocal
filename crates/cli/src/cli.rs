@@ -234,7 +234,7 @@ pub enum DbCommand {
         instance: String,
         /// Database name.
         name: String,
-        /// Lewati konfirmasi.
+        /// Skip confirmation.
         #[arg(long)]
         yes: bool,
         /// Retype the database name here; must match `name`.
@@ -282,7 +282,7 @@ pub enum UpdateCommand {
     },
     /// Download, verify and install an update.
     Apply {
-        /// Lewati konfirmasi.
+        /// Skip confirmation.
         #[arg(long)]
         yes: bool,
     },

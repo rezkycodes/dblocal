@@ -239,7 +239,7 @@ fn show_prints_human_units_not_raw_seconds() {
     );
     assert_eq!(code, EXIT_OK, "stderr: {err}");
     // A size setting shows the size words, never the primitive `bytes`, and the
-    // The `seconds` unit becomes the word the user types.
+    // `seconds` unit is shown as the word the user types.
     assert!(out.contains(messages::UNIT_SIZE), "{out}");
     assert!(
         !out.contains("bytes"),
