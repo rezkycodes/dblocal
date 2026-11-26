@@ -824,8 +824,22 @@ impl DblService for MockService {
         super::update::check_update(&self.inner)
     }
 
+    fn check_update_if_due(
+        &self,
+    ) -> crate::service::ServiceResult<Option<crate::service::UpdateStatus>> {
+        super::update::check_update_if_due(&self.inner)
+    }
+
+    fn start_update(&self) -> crate::service::ServiceResult<OperationId> {
+        super::update::start_update(&self.inner)
+    }
+
     fn apply_update(&self) -> crate::service::ServiceResult<()> {
         super::update::apply_update(&self.inner)
+    }
+
+    fn restart_for_update(&self) -> crate::service::ServiceResult<()> {
+        Ok(())
     }
 
     // --- Open in client (F-OPN) ---------------------------------------------

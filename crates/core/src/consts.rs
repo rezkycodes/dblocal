@@ -106,6 +106,18 @@ pub const UPDATE_REPO: &str = "rezkycodes/dblocal";
 pub const DIR_UPDATE_STAGING: &str = "update";
 /// Timeout for the update check request, in seconds.
 pub const UPDATE_CHECK_TIMEOUT_SECS: u64 = 15;
+/// How often background update checks refresh from GitHub (6 hours).
+pub const UPDATE_CHECK_INTERVAL_SECS: u64 = 6 * 60 * 60;
+/// SQLite `settings` key for whether automatic update checks are enabled.
+pub const SETTING_AUTO_UPDATE_CHECK: &str = "update.auto_check";
+/// SQLite `settings` key for the Unix timestamp of the last update check.
+pub const SETTING_UPDATE_LAST_CHECKED_AT: &str = "update.last_checked_at";
+/// SQLite `settings` key for the cached JSON of the last update check result.
+pub const SETTING_UPDATE_CACHED_RELEASE: &str = "update.cached_release";
+/// Lock file name inside [`DIR_UPDATE_STAGING`] preventing concurrent updates.
+pub const UPDATE_LOCK_FILE: &str = "update.lock";
+/// Hidden CLI flag used by the detached Windows update helper after exit.
+pub const APPLY_UPDATE_FLAG: &str = "--apply-update";
 /// Connect timeout for admin operations against a running instance, in seconds.
 pub const ADMIN_CONNECT_TIMEOUT_SECS: u64 = 5;
 /// Statement timeout for admin operations, in seconds.

@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use crate::platform::Os;
 
 use super::error::{UpdateError, UpdateResult};
+use super::model::UpdateAssetKind;
 
 /// How the running binary was installed.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -13,35 +14,54 @@ use super::error::{UpdateError, UpdateResult};
 pub enum InstallKind {
     /// Linux AppImage (`$APPIMAGE` points at the mounted file).
     AppImage { appimage_path: PathBuf },
-    /// Portable tarball or generic binary on Linux.
+    /// Portable tarball or per-user `install.sh` binary on Linux.
     PortableTarball { exe_path: PathBuf },
-    /// Windows zip install; binary can be swapped via helper.
+    /// Windows zip/portable install; binary can be swapped in place or via helper.
     WindowsZip { exe_path: PathBuf },
-    /// Windows MSI install; managed by Windows Installer.
+    /// Windows MSI install (`%LOCALAPPDATA%\DBLocal` is per-user and self-updatable;
+    /// `Program Files` is per-machine and refused without elevation).
     WindowsMsi { exe_path: PathBuf },
-    /// macOS .app bundle.
+    /// macOS `.app` bundle (self-update deferred).
     MacApp { bundle_path: PathBuf },
-    /// Installed by a distro package manager.
+    /// Installed by a distro package manager (`/usr/bin/dblocal`).
     DistPackage {
         exe_path: PathBuf,
         hint: PackageManagerHint,
     },
     /// Installed by Homebrew.
     Homebrew { exe_path: PathBuf },
-    /// Could not determine; self-update refused.
+    /// Could not determine, development build, or read-only location; self-update refused.
     Unknown { exe_path: PathBuf, reason: String },
 }
 
 impl InstallKind {
-    /// Returns true when this install can be self-updated by DBLocal.
+    /// Returns true when this install can be self-updated by DBLocal without elevation.
     pub fn can_self_update(&self) -> bool {
-        matches!(
-            self,
-            Self::AppImage { .. }
-                | Self::PortableTarball { .. }
-                | Self::WindowsZip { .. }
-                | Self::MacApp { .. }
-        )
+        match self {
+            Self::AppImage { .. } | Self::PortableTarball { .. } | Self::WindowsZip { .. } => true,
+            Self::WindowsMsi { exe_path } => is_per_user_windows_msi(exe_path),
+            Self::MacApp { .. }
+            | Self::DistPackage { .. }
+            | Self::Homebrew { .. }
+            | Self::Unknown { .. } => false,
+        }
+    }
+
+    /// Returns the preferred release asset kind matching this install method.
+    pub fn expected_asset_kind(&self) -> Option<UpdateAssetKind> {
+        match self {
+            Self::AppImage { .. } => Some(UpdateAssetKind::AppImage),
+            Self::PortableTarball { .. } => Some(UpdateAssetKind::TarGz),
+            Self::WindowsZip { .. } => Some(UpdateAssetKind::Zip),
+            Self::WindowsMsi { .. } => Some(UpdateAssetKind::Msi),
+            Self::MacApp { .. } => Some(UpdateAssetKind::Dmg),
+            Self::DistPackage { hint, .. } => match hint {
+                PackageManagerHint::Dpkg => Some(UpdateAssetKind::Deb),
+                PackageManagerHint::Rpm => Some(UpdateAssetKind::Rpm),
+                _ => None,
+            },
+            Self::Homebrew { .. } | Self::Unknown { .. } => None,
+        }
     }
 
     /// Returns the package-manager hint if self-update is disabled by manager.
@@ -67,17 +87,49 @@ impl InstallKind {
         }
     }
 
-    /// Human-readable refusal reason for unsupported kinds.
+    /// Human-readable refusal reason for install kinds that cannot self-update.
     pub fn refusal_reason(&self) -> Option<String> {
         match self {
             Self::DistPackage { hint, .. } => Some(hint.message()),
             Self::Homebrew { .. } => Some(PackageManagerHint::Homebrew.message()),
+            Self::MacApp { .. } => Some(
+                "macOS self-update is not supported yet. Download the latest release from GitHub."
+                    .to_owned(),
+            ),
+            Self::WindowsMsi { exe_path } if !is_per_user_windows_msi(exe_path) => Some(
+                "This per-machine Windows MSI install requires administrator privileges. Download and run the MSI installer manually."
+                    .to_owned(),
+            ),
             Self::Unknown { reason, .. } => Some(format!(
-                "Unknown install kind; automatic updates are refused for safety. {reason}"
+                "Automatic updates are disabled for this install location: {reason}"
             )),
             _ => None,
         }
     }
+
+    /// Formats a refusal reason enriched with the release page URL and matching asset name
+    /// when self-update is unavailable.
+    pub fn cannot_update_reason_with(
+        &self,
+        release_url: Option<&str>,
+        asset_name: Option<&str>,
+    ) -> Option<String> {
+        let base = self.refusal_reason()?;
+        let mut out = base;
+        if let Some(asset) = asset_name.filter(|s| !s.is_empty()) {
+            out.push_str(&format!(" Matching asset: {asset}."));
+        }
+        if let Some(url) = release_url.filter(|s| !s.is_empty()) {
+            out.push_str(&format!(" Release page: {url}"));
+        }
+        Some(out)
+    }
+}
+
+/// Returns true when a Windows MSI path is a per-user install under `%LOCALAPPDATA%\DBLocal`.
+pub fn is_per_user_windows_msi(exe_path: &Path) -> bool {
+    let lower = path_to_lower(exe_path);
+    lower.contains("\\appdata\\local\\dblocal\\") || lower.contains("/appdata/local/dblocal/")
 }
 
 /// User-facing hint for package-manager-managed installs.
@@ -99,16 +151,16 @@ impl PackageManagerHint {
     pub fn message(&self) -> String {
         match self {
             Self::Dpkg => {
-                "Updates are managed by the system package manager (dpkg/apt). Update DBLocal through your package manager.".to_owned()
+                "Updates are managed by the package manager (dpkg/apt). Update DBLocal through your package manager.".to_owned()
             }
             Self::Rpm => {
-                "Updates are managed by the system package manager (rpm/dnf/yum). Update DBLocal through your package manager.".to_owned()
+                "Updates are managed by the package manager (rpm/dnf/yum). Update DBLocal through your package manager.".to_owned()
             }
             Self::Homebrew => {
                 "Updates are managed by Homebrew. Update DBLocal through Homebrew.".to_owned()
             }
             Self::Other { manager } => format!(
-                "Updates are managed by the system package manager ({manager}). Update DBLocal through your package manager."
+                "Updates are managed by the package manager ({manager}). Update DBLocal through your package manager."
             ),
         }
     }
@@ -148,6 +200,15 @@ pub fn detect_install_kind_with(
         return Ok(InstallKind::DistPackage { exe_path, hint });
     }
     Ok(detect_from_path(&exe_path))
+}
+
+/// Pure OS-parameterized path detection for cross-platform tests.
+pub fn detect_for_os(exe_path: &Path, os: Os) -> InstallKind {
+    match os {
+        Os::Windows => detect_windows(exe_path),
+        Os::Macos => detect_macos(exe_path),
+        Os::Linux => detect_linux(exe_path),
+    }
 }
 
 fn current_exe_path() -> UpdateResult<PathBuf> {
@@ -198,11 +259,7 @@ fn exe_path_inside_appdir(exe_path: &Path, appdir: Option<&str>) -> bool {
 }
 
 fn detect_from_path(exe_path: &Path) -> InstallKind {
-    match Os::current() {
-        Os::Windows => detect_windows(exe_path),
-        Os::Macos => detect_macos(exe_path),
-        Os::Linux => detect_linux(exe_path),
-    }
+    detect_for_os(exe_path, Os::current())
 }
 
 fn detect_linux(exe_path: &Path) -> InstallKind {
@@ -230,7 +287,14 @@ fn detect_linux(exe_path: &Path) -> InstallKind {
 const DENIED_PREFIXES: [&str; 5] = ["/nix/store/", "/snap/", "/app/", "/usr/", "/opt/"];
 /// Build/tooling suffixes: a binary inside a build tree or a cargo bin dir is
 /// never the installed copy. Allowed to match anywhere in the path.
-const DENIED_SUFFIXES: [&str; 3] = ["/.cargo/bin/", "/target/debug/", "/target/release/"];
+const DENIED_SUFFIXES: [&str; 6] = [
+    "/.cargo/bin/",
+    "/target/debug/",
+    "/target/release/",
+    "/debug/deps/",
+    "/release/deps/",
+    "/dblocal-target",
+];
 
 /// Why a Linux executable location cannot self-update. Typed so each rule can
 /// be asserted on its own instead of only through "some refusal".
@@ -314,11 +378,26 @@ fn canonical_or_original(path: &Path) -> PathBuf {
     std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
 }
 
+const WINDOWS_DEV_MARKERS: [&str; 6] = [
+    "\\.cargo\\bin\\",
+    "\\target\\debug\\",
+    "\\target\\release\\",
+    "\\debug\\deps\\",
+    "\\release\\deps\\",
+    "\\dblocal-target",
+];
+
 fn detect_windows(exe_path: &Path) -> InstallKind {
-    let lower = path_to_lower(exe_path);
-    if lower.contains("\\program files")
-        || lower.contains("\\program files (x86)")
-        || lower.contains("\\appdata\\local\\dblocal")
+    let lower = path_to_lower(exe_path).replace('/', "\\");
+    if let Some(marker) = WINDOWS_DEV_MARKERS.into_iter().find(|m| lower.contains(m)) {
+        return InstallKind::Unknown {
+            exe_path: exe_path.to_path_buf(),
+            reason: format!("path is in a development build location: {marker}"),
+        };
+    }
+    if lower.contains("\\program files\\")
+        || lower.contains("\\program files (x86)\\")
+        || lower.contains("\\appdata\\local\\dblocal\\")
     {
         return InstallKind::WindowsMsi {
             exe_path: exe_path.to_path_buf(),
@@ -337,7 +416,7 @@ fn detect_macos(exe_path: &Path) -> InstallKind {
     }
     InstallKind::Unknown {
         exe_path: exe_path.to_path_buf(),
-        reason: "the macOS executable path is not inside a recognized .app bundle".to_owned(),
+        reason: "macOS self-update is not supported yet".to_owned(),
     }
 }
 

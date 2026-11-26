@@ -9,6 +9,7 @@ use serde::Deserialize;
 use crate::platform::{Arch, Os};
 
 use super::error::{UpdateError, UpdateResult};
+use super::kind::InstallKind;
 use super::model::{
     AvailableUpdate, ReleaseAsset, ReleaseChannel, UpdateAssetKind, UpdateCheck,
     platform_asset_tokens,
@@ -34,6 +35,13 @@ pub struct UpdateCheckOptions {
     pub arch: Arch,
     /// Allow selecting a version <= current (default false).
     pub allow_downgrade: bool,
+    /// Detected install kind, used to select the matching release asset
+    /// (e.g. `.tar.gz` for `PortableTarball`, `.AppImage` for `AppImage`,
+    /// `.msi` for `WindowsMsi`, `.deb`/`.rpm` for distro packages).
+    pub install_kind: Option<InstallKind>,
+    /// Test/debug-only base URL override (compiled out in release builds).
+    #[cfg(any(test, debug_assertions))]
+    pub api_base_url: Option<String>,
 }
 
 impl UpdateCheckOptions {
@@ -45,6 +53,9 @@ impl UpdateCheckOptions {
             os: Os::current(),
             arch: Arch::current(),
             allow_downgrade: false,
+            install_kind: None,
+            #[cfg(any(test, debug_assertions))]
+            api_base_url: None,
         }
     }
 
@@ -64,6 +75,19 @@ impl UpdateCheckOptions {
     /// Allows downgrade selection.
     pub fn with_allow_downgrade(mut self, allow: bool) -> Self {
         self.allow_downgrade = allow;
+        self
+    }
+
+    /// Sets the install kind so asset selection matches the running installation.
+    pub fn with_install_kind(mut self, kind: InstallKind) -> Self {
+        self.install_kind = Some(kind);
+        self
+    }
+
+    /// Test/debug-only override of the GitHub API base URL (unavailable in release builds).
+    #[cfg(any(test, debug_assertions))]
+    pub fn with_api_base_url(mut self, base_url: impl Into<String>) -> Self {
+        self.api_base_url = Some(base_url.into());
         self
     }
 }
@@ -104,7 +128,9 @@ impl ReqwestUpdateFetcher {
     pub fn new() -> UpdateResult<Self> {
         let client = reqwest::Client::builder()
             .https_only(true)
-            .timeout(std::time::Duration::from_secs(15))
+            .timeout(std::time::Duration::from_secs(
+                crate::consts::UPDATE_CHECK_TIMEOUT_SECS,
+            ))
             .user_agent(format!("dblocal/{}", env!("CARGO_PKG_VERSION")))
             .redirect(reqwest::redirect::Policy::custom(|attempt| {
                 if attempt.previous().len() >= 5 {
@@ -122,6 +148,36 @@ impl ReqwestUpdateFetcher {
             .build()
             .map_err(|err| UpdateError::Network {
                 reason: format!("could not build the HTTP client: {err}"),
+            })?;
+        Ok(Self { client })
+    }
+
+    /// Test/debug-only fetcher permitting loopback HTTP (unavailable in release builds).
+    #[cfg(any(test, debug_assertions))]
+    pub fn loopback_for_tests() -> UpdateResult<Self> {
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(10))
+            .user_agent(format!("dblocal/{}", env!("CARGO_PKG_VERSION")))
+            .redirect(reqwest::redirect::Policy::custom(|attempt| {
+                if attempt.previous().len() >= 5 {
+                    return attempt.error("too many redirects");
+                }
+                let url = attempt.url();
+                let is_loopback = match url.host() {
+                    Some(url::Host::Domain(d)) => d == "localhost",
+                    Some(url::Host::Ipv4(ip)) => ip.is_loopback(),
+                    Some(url::Host::Ipv6(ip)) => ip.is_loopback(),
+                    None => false,
+                };
+                if url.scheme() == "http" && is_loopback {
+                    attempt.follow()
+                } else {
+                    attempt.error("redirect host not allowed")
+                }
+            }))
+            .build()
+            .map_err(|err| UpdateError::Network {
+                reason: format!("could not build the test HTTP client: {err}"),
             })?;
         Ok(Self { client })
     }
@@ -169,7 +225,7 @@ pub async fn check(
     fetcher: &dyn UpdateFetcher,
     options: &UpdateCheckOptions,
 ) -> UpdateResult<UpdateCheck> {
-    let url = releases_url(&options.repo)?;
+    let url = releases_url_for_options(options)?;
     let response = fetcher.get(url).await.map_err(map_network)?;
     let releases = parse_releases_response(&response)?;
     let selected = select_release(current, &releases, options)?;
@@ -181,7 +237,19 @@ pub async fn check(
     }
 }
 
-fn releases_url(repo: &str) -> UpdateResult<String> {
+fn releases_url_for_options(options: &UpdateCheckOptions) -> UpdateResult<String> {
+    let (owner, name) = parse_repo(&options.repo)?;
+    #[cfg(any(test, debug_assertions))]
+    if let Some(base) = options.api_base_url.as_deref() {
+        let base = base.trim_end_matches('/');
+        return Ok(format!("{base}/repos/{owner}/{name}/releases?per_page=20"));
+    }
+    Ok(format!(
+        "https://api.github.com/repos/{owner}/{name}/releases?per_page=20"
+    ))
+}
+
+fn parse_repo(repo: &str) -> UpdateResult<(&str, &str)> {
     let repo = repo.trim().trim_matches('/');
     if repo.is_empty()
         || repo.contains("..")
@@ -205,6 +273,12 @@ fn releases_url(repo: &str) -> UpdateResult<String> {
             reason: "repository name contains invalid characters".to_owned(),
         });
     }
+    Ok((owner, name))
+}
+
+#[cfg(test)]
+fn releases_url(repo: &str) -> UpdateResult<String> {
+    let (owner, name) = parse_repo(repo)?;
     Ok(format!(
         "https://api.github.com/repos/{owner}/{name}/releases?per_page=20"
     ))
@@ -231,15 +305,11 @@ fn parse_releases_response(response: &FetchResponse) -> UpdateResult<Vec<GhRelea
         if looks_rate_limited(response.status, &reason) {
             return Err(UpdateError::RateLimited { reason });
         }
-        // A 403 that is not a rate limit is a source problem (repository private
-        // or gone), not a connection problem: the request reached GitHub.
         return Err(UpdateError::SourceNotFound {
             reason: format!("the GitHub API returned status {}", response.status),
         });
     }
     if response.status == 404 {
-        // The repository named in the release source does not exist or is not
-        // public; reporting "check your connection" would be wrong.
         return Err(UpdateError::SourceNotFound {
             reason: format!("the GitHub API returned status {}", response.status),
         });
@@ -334,17 +404,44 @@ fn release_to_update(
     let Some(checksums_asset) = checksums else {
         return Ok(None);
     };
-    let Some(asset) = select_platform_asset(&release.assets, options.os, options.arch)? else {
+    let preferred_kind = options
+        .install_kind
+        .as_ref()
+        .and_then(InstallKind::expected_asset_kind);
+    let Some(asset) =
+        select_platform_asset(&release.assets, options.os, options.arch, preferred_kind)?
+    else {
         return Ok(None);
     };
     let notes = sanitize_release_notes(release.body.as_deref().unwrap_or_default());
-    Ok(Some(AvailableUpdate::new(
-        version,
-        release.tag_name.clone(),
-        notes,
-        asset,
-        checksums_asset,
-    )))
+    let release_url = resolve_release_url(
+        release.html_url.as_deref(),
+        &options.repo,
+        &release.tag_name,
+    );
+    Ok(Some(
+        AvailableUpdate::new(
+            version,
+            release.tag_name.clone(),
+            notes,
+            asset,
+            checksums_asset,
+        )
+        .with_release_url(release_url),
+    ))
+}
+
+fn resolve_release_url(html_url: Option<&str>, repo: &str, tag: &str) -> String {
+    if let Some(raw) = html_url
+        && let Ok(parsed) = reqwest::Url::parse(raw)
+        && parsed.scheme() == "https"
+        && parsed
+            .host_str()
+            .is_some_and(|h| h.eq_ignore_ascii_case("github.com"))
+    {
+        return parsed.to_string();
+    }
+    format!("https://github.com/{repo}/releases/tag/{tag}")
 }
 
 fn is_checksums_asset(name: &str) -> bool {
@@ -356,11 +453,14 @@ fn select_platform_asset(
     assets: &[GhAsset],
     os: Os,
     arch: Arch,
+    preferred: Option<UpdateAssetKind>,
 ) -> UpdateResult<Option<ReleaseAsset>> {
     let tokens = platform_asset_tokens(os, arch).ok_or_else(|| UpdateError::AssetMissing {
         reason: format!("unsupported platform: {os}-{arch}"),
     })?;
-    let mut selected: Option<ReleaseAsset> = None;
+    let mut exact_match: Option<ReleaseAsset> = None;
+    let mut fallback: Option<ReleaseAsset> = None;
+
     for asset in assets {
         let Some(kind) = classify_install_asset(&asset.name, os) else {
             continue;
@@ -370,11 +470,34 @@ fn select_platform_asset(
             continue;
         }
         let candidate = asset_from_gh(asset)?.with_kind(kind);
-        if should_replace_asset(selected.as_ref(), &candidate) {
-            selected = Some(candidate);
+        if preferred == Some(kind) {
+            exact_match = Some(candidate);
+            break;
+        }
+        // Without a preferred kind, only pick self-updatable/portable assets as fallback
+        // (never pick .deb/.rpm when a tarball/AppImage exists).
+        if should_replace_asset(fallback.as_ref(), &candidate) {
+            fallback = Some(candidate);
         }
     }
-    Ok(selected)
+
+    if exact_match.is_some() {
+        return Ok(exact_match);
+    }
+    // If the caller specifically requires an exact self-updatable format (e.g. AppImage or TarGz),
+    // do not silently fall back to a mismatched format like AppImage for PortableTarball.
+    if matches!(
+        preferred,
+        Some(
+            UpdateAssetKind::AppImage
+                | UpdateAssetKind::TarGz
+                | UpdateAssetKind::Zip
+                | UpdateAssetKind::Msi
+        )
+    ) {
+        return Ok(None);
+    }
+    Ok(fallback)
 }
 
 fn should_replace_asset(current: Option<&ReleaseAsset>, candidate: &ReleaseAsset) -> bool {
@@ -391,6 +514,8 @@ fn asset_priority(kind: UpdateAssetKind) -> u8 {
         UpdateAssetKind::Dmg => 40,
         UpdateAssetKind::Zip => 30,
         UpdateAssetKind::Msi => 20,
+        UpdateAssetKind::Deb => 10,
+        UpdateAssetKind::Rpm => 10,
         UpdateAssetKind::Checksums => 0,
     }
 }
@@ -403,6 +528,10 @@ fn classify_install_asset(name: &str, os: Os) -> Option<UpdateAssetKind> {
                 Some(UpdateAssetKind::AppImage)
             } else if lower.ends_with(".tar.gz") || lower.ends_with(".tgz") {
                 Some(UpdateAssetKind::TarGz)
+            } else if lower.ends_with(".deb") {
+                Some(UpdateAssetKind::Deb)
+            } else if lower.ends_with(".rpm") {
+                Some(UpdateAssetKind::Rpm)
             } else {
                 None
             }
@@ -442,22 +571,6 @@ fn asset_from_gh(asset: &GhAsset) -> UpdateResult<ReleaseAsset> {
         asset.size.max(0) as u64,
         kind,
     ))
-}
-
-trait ReleaseAssetKindExt {
-    fn with_kind(self, kind: UpdateAssetKind) -> Self;
-}
-
-impl ReleaseAssetKindExt for ReleaseAsset {
-    fn with_kind(mut self, kind: UpdateAssetKind) -> Self {
-        self = ReleaseAsset::new(
-            self.name().to_owned(),
-            self.url().to_owned(),
-            self.size_bytes(),
-            kind,
-        );
-        self
-    }
 }
 
 fn validate_asset_name(name: &str) -> UpdateResult<()> {
@@ -517,6 +630,8 @@ struct GhRelease {
     prerelease: bool,
     #[serde(default)]
     body: Option<String>,
+    #[serde(default)]
+    html_url: Option<String>,
     #[serde(default)]
     assets: Vec<GhAsset>,
 }

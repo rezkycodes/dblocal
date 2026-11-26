@@ -60,7 +60,9 @@ pub struct AvailableUpdateView {
     pub tag: String,
     /// Sanitized, bounded release notes.
     pub release_notes: String,
-    /// Platform-matching asset name, for diagnostics.
+    /// Public GitHub release page URL (e.g. `https://github.com/rezkycodes/dblocal/releases/tag/v0.2.0`).
+    pub release_url: String,
+    /// Platform-matching asset name, for diagnostics or manual package-manager download.
     pub asset_name: String,
     /// Declared asset size in bytes.
     pub size_bytes: u64,
@@ -77,9 +79,14 @@ pub struct UpdateStatus {
     pub available: Option<AvailableUpdateView>,
     /// How this binary was installed, which decides whether applying is allowed.
     pub install_kind: crate::update::InstallKind,
-    /// Where the user must update instead, when self-update is refused
-    /// (`F-PKG-05` AC2).
+    /// Where the user must update instead, when self-update is refused by a
+    /// package manager (`F-PKG-05` AC2).
     pub package_manager_hint: Option<String>,
+    /// Human-readable reason why one-click self-update is unavailable (package
+    /// manager with release URL + asset name, macOS deferred, dev build,
+    /// read-only directory, or unknown layout). `None` when `can_self_update()`
+    /// is true.
+    pub cannot_update_reason: Option<String>,
 }
 
 /// Identifier of a long-running operation, such as an install or a start.
@@ -239,6 +246,13 @@ pub enum ServiceEvent {
         /// package manager instead.
         can_self_update: bool,
     },
+    /// Progress update while downloading, verifying, or installing an app update.
+    UpdateProgress {
+        /// Operation id returned by [`DblService::start_update`].
+        id: OperationId,
+        /// Current update progress stage.
+        progress: crate::update::UpdateProgress,
+    },
     /// The config file of one instance changed (`F-CFG-01`), so the Config tab
     /// re-reads it through [`DblService::config_view`].
     ///
@@ -367,18 +381,50 @@ pub trait DblService: Send + Sync + 'static {
 
     // --- Updates (F-PKG-05) -------------------------------------------------
 
-    /// Checks GitHub Releases for a newer version, only when the caller asks.
-    ///
-    /// There is no timer and no startup check; the caller decides when to call
-    /// this. The result carries the [`crate::update::InstallKind`] so a
-    /// package-manager install can be pointed at its manager (`F-PKG-05` AC2).
+    /// Checks GitHub Releases for a newer version immediately, bypassing the
+    /// 6-hour cache and refreshing it.
     fn check_update(&self) -> ServiceResult<UpdateStatus> {
         not_implemented()
     }
 
-    /// Downloads, verifies and applies an available update. Refused for an
-    /// install kind that a package manager owns.
+    /// Background/startup update check: respects [`Self::auto_update_check_enabled`],
+    /// returns the cached result if checked within the last 6 hours, and returns
+    /// `Ok(None)` quietly when offline or rate-limited.
+    fn check_update_if_due(&self) -> ServiceResult<Option<UpdateStatus>> {
+        Ok(None)
+    }
+
+    /// Whether automatic update checks (at startup and every 6 hours) are enabled.
+    /// Defaults to `true`.
+    fn auto_update_check_enabled(&self) -> Result<bool> {
+        Ok(true)
+    }
+
+    /// Enables or disables automatic update checks in the local settings store.
+    fn set_auto_update_check(&self, enabled: bool) -> Result<()> {
+        let _ = enabled;
+        Ok(())
+    }
+
+    /// Starts downloading, verifying, and installing an available update
+    /// asynchronously.
+    ///
+    /// Progress arrives as [`ServiceEvent::UpdateProgress`] and completion as
+    /// [`ServiceEvent::OperationFinished`]. Call [`Self::cancel_operation`] with
+    /// the returned [`OperationId`] to cancel while downloading.
+    fn start_update(&self) -> ServiceResult<OperationId> {
+        not_implemented()
+    }
+
+    /// Downloads, verifies and applies an available update synchronously.
+    /// Refused for an install kind that cannot self-update.
     fn apply_update(&self) -> ServiceResult<()> {
+        not_implemented()
+    }
+
+    /// Spawns the updated binary (or detached Windows upgrade helper) so the
+    /// caller can exit cleanly without disturbing running database servers.
+    fn restart_for_update(&self) -> ServiceResult<()> {
         not_implemented()
     }
 

@@ -35,7 +35,7 @@ pub use extract::{ExtractOptions, extract_runtime};
 pub use fetch::{
     CancellationToken, DownloadEvent, DownloadOptions, ProgressSink, UrlPolicy, download_artifact,
 };
-pub use space::{DISK_SPACE_MULTIPLIER, DiskSpace, check_disk_space};
+pub use space::{DISK_SPACE_MULTIPLIER, DiskSpace, FreeSpaceFn, check_disk_space};
 pub use verify::sha256_file;
 
 use std::path::Path;

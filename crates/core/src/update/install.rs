@@ -1,22 +1,29 @@
-//! Install planning and application for self-updates.
+//! Install planning, atomic application, desktop/icon sync, rollback, and restart
+//! for self-updates.
 //!
-//! Planning is pure: it produces an [`InstallPlan`] describing steps. Applying
-//! executes the plan. Windows/macOS apply are represented as plans; Linux apply
-//! is implemented for AppImage/tarball.
+//! Replacing DBLocal never touches or signals any running database server: engine
+//! processes are spawned detached and adopted on next startup by reconciliation.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use semver::Version;
 
+use super::download::StagedUpdate;
 use super::error::{UpdateError, UpdateResult};
+use super::extract::{
+    ExtractedLinuxTarball, ensure_private_dir, extract_linux_tarball, extract_windows_zip,
+};
 use super::kind::InstallKind;
+use super::model::{RestartAction, UpdateAssetKind};
 
 const SMOKE_TIMEOUT: Duration = Duration::from_secs(10);
 /// How long to keep retrying a spawn that failed with ETXTBSY.
 const EXEC_BUSY_RETRY_WINDOW: Duration = Duration::from_secs(5);
 /// Delay between ETXTBSY spawn retries.
 const EXEC_BUSY_RETRY_DELAY: Duration = Duration::from_millis(20);
+/// Maximum time the detached Windows helper waits for the parent process to exit.
+const WINDOWS_HELPER_WAIT_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// A pure, serializable-ish description of how to apply an update.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -79,9 +86,9 @@ pub enum InstallStep {
     RenameOver { src: PathBuf, dst: PathBuf },
     /// Keep backup until next successful start.
     KeepBackup { backup: PathBuf },
-    /// Spawn detached Windows helper to swap after exit.
+    /// Spawn detached Windows helper to swap or run MSI after exit.
     SpawnWindowsHelper { command: Vec<String> },
-    /// macOS bundle replacement plan (not executed).
+    /// macOS bundle replacement plan (deferred; not executed).
     ReplaceMacBundle { bundle: PathBuf, staged: PathBuf },
     /// Refuse because install kind cannot self-update.
     Refuse { reason: String },
@@ -117,11 +124,11 @@ pub fn plan_install(
         InstallKind::WindowsZip { exe_path } => {
             plan_windows_helper(staged_file, exe_path, target_version)
         }
-        InstallKind::MacApp { bundle_path } => vec![InstallStep::ReplaceMacBundle {
-            bundle: bundle_path.clone(),
-            staged: staged_file.to_path_buf(),
-        }],
-        InstallKind::WindowsMsi { .. }
+        InstallKind::WindowsMsi { exe_path } => {
+            let cmd = windows_msi_helper_command(exe_path, staged_file, std::process::id());
+            vec![InstallStep::SpawnWindowsHelper { command: cmd }]
+        }
+        InstallKind::MacApp { .. }
         | InstallKind::DistPackage { .. }
         | InstallKind::Homebrew { .. }
         | InstallKind::Unknown { .. } => {
@@ -199,10 +206,7 @@ fn plan_windows_helper(staged_file: &Path, exe_path: &Path, target: &Version) ->
     vec![InstallStep::SpawnWindowsHelper { command: cmd }]
 }
 
-/// Builds the command line for the Windows swap helper.
-///
-/// The helper is a mode of the `dblocal` binary (`--apply-update ...`); CLI
-/// wiring is owned by the CLI worker. This function only constructs args.
+/// Builds the command line for the Windows zip swap helper.
 pub fn windows_helper_command(
     current_exe: &Path,
     staged_file: &Path,
@@ -211,7 +215,7 @@ pub fn windows_helper_command(
 ) -> Vec<String> {
     vec![
         current_exe.display().to_string(),
-        "--apply-update".to_owned(),
+        crate::consts::APPLY_UPDATE_FLAG.to_owned(),
         "--pid".to_owned(),
         pid.to_string(),
         "--staged".to_owned(),
@@ -223,12 +227,35 @@ pub fn windows_helper_command(
     ]
 }
 
+/// Builds the command line for the Windows per-user MSI upgrade helper.
+pub fn windows_msi_helper_command(current_exe: &Path, msi_file: &Path, pid: u32) -> Vec<String> {
+    vec![
+        current_exe.display().to_string(),
+        crate::consts::APPLY_UPDATE_FLAG.to_owned(),
+        "--pid".to_owned(),
+        pid.to_string(),
+        "--msi".to_owned(),
+        msi_file.display().to_string(),
+        "--target".to_owned(),
+        current_exe.display().to_string(),
+    ]
+}
+
 fn sibling_temp_path(target: &Path) -> PathBuf {
     let name = target
         .file_name()
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_else(|| "dblocal".to_owned());
     target.with_file_name(format!(".{name}.update-{}", std::process::id()))
+}
+
+fn sibling_extract_dir(target: &Path) -> PathBuf {
+    let nonce: u64 = rand::random();
+    let name = target
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| "dblocal".to_owned());
+    target.with_file_name(format!(".{name}.stage-{}-{nonce:016x}", std::process::id()))
 }
 
 fn backup_path(target: &Path) -> PathBuf {
@@ -239,18 +266,327 @@ fn backup_path(target: &Path) -> PathBuf {
     target.with_file_name(format!("{name}.old"))
 }
 
+/// Applies a verified [`StagedUpdate`] for `kind`, returning the [`RestartAction`]
+/// that launches the new version.
+///
+/// - `PortableTarball`: extracts `.tar.gz` into a fresh private directory on the
+///   same filesystem as the target binary, runs `--version` smoke check **before**
+///   swapping, atomically replaces the binary (keeping `<exe>.old`), and
+///   atomically updates the desktop entry and hicolor icons under `data_home`
+///   (or `$XDG_DATA_HOME` / `$HOME/.local/share`).
+/// - `AppImage`: copies into a sibling temp file, runs `--version` smoke check
+///   **before** swapping, backs up `<appimage>.old`, and atomically renames over
+///   `$APPIMAGE`.
+/// - `WindowsZip`: extracts `dblocal.exe`, attempts in-place rename swap, or
+///   falls back to [`RestartAction::RunWindowsZipHelper`].
+/// - `WindowsMsi` (per-user): stages the `.msi` and returns
+///   [`RestartAction::RunWindowsMsi`].
+pub fn apply_staged_update(
+    kind: &InstallKind,
+    staged: &StagedUpdate,
+    current_exe: &Path,
+    data_home_override: Option<&Path>,
+) -> UpdateResult<RestartAction> {
+    if !kind.can_self_update() {
+        return Err(UpdateError::UnsupportedInstallKind {
+            reason: kind.refusal_reason().unwrap_or_else(|| {
+                "Automatic updates are not available for this install method.".to_owned()
+            }),
+        });
+    }
+
+    match kind {
+        InstallKind::PortableTarball { exe_path } => {
+            apply_linux_tarball(exe_path, staged, data_home_override)
+        }
+        InstallKind::AppImage { appimage_path } => apply_linux_appimage(appimage_path, staged),
+        InstallKind::WindowsZip { exe_path } => apply_windows_zip(exe_path, current_exe, staged),
+        InstallKind::WindowsMsi { exe_path } => Ok(RestartAction::RunWindowsMsi {
+            helper_exe: current_exe.to_path_buf(),
+            msi_path: staged.staged_path().to_path_buf(),
+            relaunch_exe: exe_path.clone(),
+        }),
+        _ => Err(UpdateError::UnsupportedInstallKind {
+            reason: "this install kind does not support self-update".to_owned(),
+        }),
+    }
+}
+
+fn apply_linux_tarball(
+    exe_path: &Path,
+    staged: &StagedUpdate,
+    data_home_override: Option<&Path>,
+) -> UpdateResult<RestartAction> {
+    let target = std::fs::canonicalize(exe_path).unwrap_or_else(|_| exe_path.to_path_buf());
+    ensure_target_writable(&target)?;
+
+    let extract_dir = sibling_extract_dir(&target);
+    let outcome = (|| -> UpdateResult<RestartAction> {
+        ensure_private_dir(&extract_dir)?;
+        let extracted = match staged.asset_kind() {
+            UpdateAssetKind::TarGz => extract_linux_tarball(staged.staged_path(), &extract_dir)?,
+            _ => {
+                return Err(UpdateError::ApplyFailed {
+                    reason: format!(
+                        "expected a .tar.gz asset for portable Linux install, got {}",
+                        staged.asset_kind()
+                    ),
+                });
+            }
+        };
+
+        // Verify the extracted candidate binary BEFORE touching the live installation.
+        smoke_check(&extracted.binary, staged.version())?;
+
+        // Atomically swap binary using the proven plan/backup/rollback path.
+        let plan = plan_install(
+            &InstallKind::PortableTarball {
+                exe_path: target.clone(),
+            },
+            &extracted.binary,
+            &target,
+            staged.version(),
+        )?;
+        apply_linux(&plan)?;
+
+        // Atomically update desktop entry and hicolor icons if shipped in the tarball.
+        if let Some(data_home) = resolve_linux_data_home(data_home_override) {
+            install_desktop_and_icons(&extracted, &target, &data_home)?;
+        }
+
+        Ok(RestartAction::Relaunch { exe_path: target })
+    })();
+
+    let _ = std::fs::remove_dir_all(&extract_dir);
+    outcome
+}
+
+fn apply_linux_appimage(
+    appimage_path: &Path,
+    staged: &StagedUpdate,
+) -> UpdateResult<RestartAction> {
+    let target =
+        std::fs::canonicalize(appimage_path).unwrap_or_else(|_| appimage_path.to_path_buf());
+    ensure_target_writable(&target)?;
+
+    // Stage into a private directory on the same filesystem so we can chmod and
+    // smoke-check before touching the live AppImage.
+    let stage_dir = sibling_extract_dir(&target);
+    let outcome = (|| -> UpdateResult<RestartAction> {
+        ensure_private_dir(&stage_dir)?;
+        let candidate = stage_dir.join("dblocal.AppImage");
+        copy_with_mode(staged.staged_path(), &candidate, &target)?;
+        ensure_executable(&candidate)?;
+        fsync_path(&candidate)?;
+        smoke_check(&candidate, staged.version())?;
+
+        let plan = plan_install(
+            &InstallKind::AppImage {
+                appimage_path: target.clone(),
+            },
+            &candidate,
+            &target,
+            staged.version(),
+        )?;
+        apply_linux(&plan)?;
+        Ok(RestartAction::Relaunch { exe_path: target })
+    })();
+
+    let _ = std::fs::remove_dir_all(&stage_dir);
+    outcome
+}
+
+fn apply_windows_zip(
+    exe_path: &Path,
+    current_exe: &Path,
+    staged: &StagedUpdate,
+) -> UpdateResult<RestartAction> {
+    let target = std::fs::canonicalize(exe_path).unwrap_or_else(|_| exe_path.to_path_buf());
+    ensure_target_writable(&target)?;
+
+    let extract_dir = staged.run_dir().join("extracted");
+    let extracted_exe = extract_windows_zip(staged.staged_path(), &extract_dir)?;
+
+    #[cfg(windows)]
+    {
+        smoke_check(&extracted_exe, staged.version())?;
+        // On Windows, a running .exe can be renamed to .old so the new .exe
+        // can take its place immediately. If locked by AV/indexer, fall back
+        // to the detached post-exit helper.
+        let backup = backup_path(&target);
+        let _ = std::fs::remove_file(&backup);
+        if std::fs::rename(&target, &backup).is_ok() {
+            match std::fs::copy(&extracted_exe, &target) {
+                Ok(_) => {
+                    let _ = fsync_path(&target);
+                    return Ok(RestartAction::Relaunch { exe_path: target });
+                }
+                Err(_) => {
+                    let _ = std::fs::rename(&backup, &target);
+                }
+            }
+        }
+    }
+
+    Ok(RestartAction::RunWindowsZipHelper {
+        helper_exe: current_exe.to_path_buf(),
+        staged_exe: extracted_exe,
+        target_exe: target,
+        version: staged.version().clone(),
+    })
+}
+
+fn resolve_linux_data_home(override_dir: Option<&Path>) -> Option<PathBuf> {
+    if let Some(dir) = override_dir {
+        return Some(dir.to_path_buf());
+    }
+    if let Ok(xdg) = std::env::var("XDG_DATA_HOME")
+        && !xdg.is_empty()
+    {
+        return Some(PathBuf::from(xdg));
+    }
+    if let Ok(home) = std::env::var("HOME")
+        && !home.is_empty()
+    {
+        return Some(PathBuf::from(home).join(".local/share"));
+    }
+    None
+}
+
+fn install_desktop_and_icons(
+    extracted: &ExtractedLinuxTarball,
+    installed_bin: &Path,
+    data_home: &Path,
+) -> UpdateResult<()> {
+    let Some(desktop_src) = &extracted.desktop_entry else {
+        return Ok(());
+    };
+    let abs_bin = installed_bin.to_string_lossy();
+    let path_safe = !abs_bin.is_empty()
+        && abs_bin.chars().all(|c| {
+            c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '/' | '+' | '@' | '~' | '-')
+        });
+    if !path_safe {
+        tracing::warn!(
+            path = %abs_bin,
+            "skipping desktop entry update: binary path contains characters outside [A-Za-z0-9._/+@~-]"
+        );
+        return Ok(());
+    }
+
+    let raw_desktop =
+        std::fs::read_to_string(desktop_src).map_err(|source| UpdateError::ApplyFailed {
+            reason: format!("could not read extracted desktop entry: {source}"),
+        })?;
+    let mut rewritten = String::with_capacity(raw_desktop.len() + 64);
+    for line in raw_desktop.lines() {
+        if line.starts_with("Exec=") {
+            rewritten.push_str("Exec=");
+            rewritten.push_str(&abs_bin);
+        } else if line.starts_with("TryExec=") {
+            rewritten.push_str("TryExec=");
+            rewritten.push_str(&abs_bin);
+        } else {
+            rewritten.push_str(line);
+        }
+        rewritten.push('\n');
+    }
+
+    let apps_dir = data_home.join("applications");
+    atomic_write_file(
+        &apps_dir.join("dev.dblocal.DBLocal.desktop"),
+        rewritten.as_bytes(),
+        0o644,
+    )?;
+
+    if let Some(svg_src) = &extracted.svg_icon {
+        let bytes = std::fs::read(svg_src).map_err(|source| UpdateError::ApplyFailed {
+            reason: format!("could not read extracted SVG icon: {source}"),
+        })?;
+        atomic_write_file(
+            &data_home.join("icons/hicolor/scalable/apps/dblocal.svg"),
+            &bytes,
+            0o644,
+        )?;
+    }
+
+    for (size, png_src) in &extracted.png_icons {
+        let bytes = std::fs::read(png_src).map_err(|source| UpdateError::ApplyFailed {
+            reason: format!("could not read extracted {size}x{size} PNG icon: {source}"),
+        })?;
+        let dest = data_home.join(format!("icons/hicolor/{size}x{size}/apps/dblocal.png"));
+        atomic_write_file(&dest, &bytes, 0o644)?;
+    }
+
+    refresh_linux_desktop_caches(data_home, &apps_dir);
+    Ok(())
+}
+
+fn atomic_write_file(dest: &Path, bytes: &[u8], mode: u32) -> UpdateResult<()> {
+    let Some(parent) = dest.parent() else {
+        return Err(UpdateError::ApplyFailed {
+            reason: format!("invalid destination path: {}", dest.display()),
+        });
+    };
+    std::fs::create_dir_all(parent).map_err(|source| UpdateError::ApplyFailed {
+        reason: format!("could not create directory {}: {source}", parent.display()),
+    })?;
+    let tmp = sibling_temp_path(dest);
+    let write_res = (|| -> UpdateResult<()> {
+        std::fs::write(&tmp, bytes).map_err(|source| UpdateError::ApplyFailed {
+            reason: format!("could not write {}: {source}", tmp.display()),
+        })?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(mode)).map_err(
+                |source| UpdateError::ApplyFailed {
+                    reason: format!("could not chmod {}: {source}", tmp.display()),
+                },
+            )?;
+        }
+        #[cfg(not(unix))]
+        let _ = mode;
+        fsync_path(&tmp)?;
+        std::fs::rename(&tmp, dest).map_err(|source| UpdateError::ApplyFailed {
+            reason: format!("could not place {}: {source}", dest.display()),
+        })?;
+        Ok(())
+    })();
+    if write_res.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    write_res
+}
+
+fn refresh_linux_desktop_caches(data_home: &Path, apps_dir: &Path) {
+    let hicolor = data_home.join("icons/hicolor");
+    if hicolor.join("icon-theme.cache").is_file() {
+        let _ = std::process::Command::new("gtk-update-icon-cache")
+            .args(["-q", "-t", "-f"])
+            .arg(&hicolor)
+            .status();
+    }
+    let _ = std::process::Command::new("update-desktop-database")
+        .arg("-q")
+        .arg(apps_dir)
+        .status();
+}
+
 /// Applies an install plan. Linux AppImage/tarball are applied for real;
 /// Windows/macOS are refused at apply time with a clear plan-only error.
 pub fn apply(plan: &InstallPlan) -> UpdateResult<()> {
     match plan.kind() {
         InstallKind::AppImage { .. } | InstallKind::PortableTarball { .. } => apply_linux(plan),
-        InstallKind::WindowsZip { .. } => Err(UpdateError::ApplyFailed {
-            reason: "applying a Windows update needs the runtime helper; use the planned commands"
-                .to_owned(),
-        }),
-        InstallKind::MacApp { .. } => Err(UpdateError::ApplyFailed {
-            reason: "macOS update application is not executed in this module; use an install plan"
-                .to_owned(),
+        InstallKind::WindowsZip { .. } | InstallKind::WindowsMsi { .. } => {
+            Err(UpdateError::ApplyFailed {
+                reason:
+                    "applying a Windows update needs the runtime helper; use the planned commands"
+                        .to_owned(),
+            })
+        }
+        InstallKind::MacApp { .. } => Err(UpdateError::UnsupportedInstallKind {
+            reason: "macOS self-update is not supported yet".to_owned(),
         }),
         _ => Err(UpdateError::UnsupportedInstallKind {
             reason: "this install kind does not support self-update".to_owned(),
@@ -266,8 +602,6 @@ fn apply_linux(plan: &InstallPlan) -> UpdateResult<()> {
     let mut created_backup = false;
     for step in plan.steps() {
         if let Err(err) = apply_step(step, &mut created_backup) {
-            // A failure before the rename leaves our staged sibling behind; the
-            // install directory must look untouched to the user.
             let _ = std::fs::remove_file(&temp);
             if created_backup {
                 let _ = restore_backup(&backup, &target);
@@ -359,6 +693,29 @@ pub fn inject_fail_after_write_for_test() {
     FAIL_AFTER_WRITE.with(|flag| flag.set(true));
 }
 
+fn ensure_executable(path: &Path) -> UpdateResult<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(path)
+            .map_err(|source| UpdateError::ApplyFailed {
+                reason: format!("could not read staged file permissions: {source}"),
+            })?
+            .permissions()
+            .mode();
+        if mode & 0o111 == 0 {
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode | 0o755)).map_err(
+                |source| UpdateError::ApplyFailed {
+                    reason: format!("could not mark staged binary executable: {source}"),
+                },
+            )?;
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = path;
+    Ok(())
+}
+
 fn copy_with_mode(src: &Path, dst: &Path, mode_source: &Path) -> UpdateResult<()> {
     std::fs::copy(src, dst).map_err(|source| UpdateError::ApplyFailed {
         reason: format!("could not copy the update file: {source}"),
@@ -422,8 +779,7 @@ fn smoke_or_rollback(target: &Path, backup: &Path, expected: &Version) -> Update
     }
 }
 
-/// Restores `backup` over `target`. Kept for the "next successful start"
-/// recovery flow (wiring owned by CLI/GUI later).
+/// Restores `backup` over `target`.
 pub fn restore_backup(backup: &Path, target: &Path) -> UpdateResult<()> {
     if !backup.exists() {
         return Err(UpdateError::ApplyFailed {
@@ -452,10 +808,151 @@ pub fn cleanup_backup(current_exe: &Path) -> UpdateResult<()> {
     Ok(())
 }
 
-/// Runs `--version` on the installed binary and checks it reports expected version.
+/// Spawns the updated binary (or detached Windows helper) so the caller can exit
+/// cleanly without signalling or disrupting any running database servers.
+pub fn execute_restart(action: &RestartAction) -> UpdateResult<()> {
+    let mut cmd = match action {
+        RestartAction::Relaunch { exe_path } => std::process::Command::new(exe_path),
+        RestartAction::RunWindowsMsi {
+            helper_exe,
+            msi_path,
+            relaunch_exe,
+        } => {
+            let mut c = std::process::Command::new(helper_exe);
+            c.args([
+                crate::consts::APPLY_UPDATE_FLAG,
+                "--pid",
+                &std::process::id().to_string(),
+                "--msi",
+            ])
+            .arg(msi_path)
+            .arg("--target")
+            .arg(relaunch_exe);
+            c
+        }
+        RestartAction::RunWindowsZipHelper {
+            helper_exe,
+            staged_exe,
+            target_exe,
+            version,
+        } => {
+            let mut c = std::process::Command::new(helper_exe);
+            c.args([
+                crate::consts::APPLY_UPDATE_FLAG,
+                "--pid",
+                &std::process::id().to_string(),
+                "--staged",
+            ])
+            .arg(staged_exe)
+            .arg("--target")
+            .arg(target_exe)
+            .arg("--version")
+            .arg(version.to_string());
+            c
+        }
+    };
+
+    cmd.stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const DETACHED_PROCESS: u32 = 0x0000_0008;
+        const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+        cmd.creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP);
+    }
+
+    cmd.spawn().map_err(|source| UpdateError::ApplyFailed {
+        reason: format!("could not launch the updated application: {source}"),
+    })?;
+    Ok(())
+}
+
+/// Parsed arguments for the detached Windows `--apply-update` helper mode.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WindowsHelperArgs {
+    /// Parent process ID to wait for before replacing/upgrading.
+    pub pid: u32,
+    /// Verified `.msi` installer path (mutually exclusive with `staged`).
+    pub msi: Option<PathBuf>,
+    /// Verified extracted `dblocal.exe` path (mutually exclusive with `msi`).
+    pub staged: Option<PathBuf>,
+    /// Installed executable path to replace and/or relaunch.
+    pub target: PathBuf,
+    /// Expected version string (for zip swap smoke check).
+    pub version: Option<String>,
+}
+
+/// Executes the detached post-exit helper (`dblocal --apply-update ...`).
 ///
-/// This is the rollback smoke check. It executes a local binary path from the
-/// install plan, not from release metadata.
+/// Waits up to 60 seconds for `args.pid` to exit, then either runs
+/// `msiexec.exe /i <msi> /passive` (per-user, no elevation) or swaps `staged`
+/// over `target` with backup + rollback, and finally relaunches `target`.
+pub fn run_windows_apply_helper(args: &WindowsHelperArgs) -> UpdateResult<()> {
+    wait_for_pid_exit(args.pid, WINDOWS_HELPER_WAIT_TIMEOUT);
+
+    if let Some(msi) = &args.msi {
+        let status = std::process::Command::new("msiexec.exe")
+            .arg("/i")
+            .arg(msi)
+            .arg("/passive")
+            .status()
+            .map_err(|source| UpdateError::ApplyFailed {
+                reason: format!("could not run msiexec.exe: {source}"),
+            })?;
+        if !status.success() {
+            return Err(UpdateError::ApplyFailed {
+                reason: format!("msiexec.exe exited with {status}"),
+            });
+        }
+    } else if let Some(staged) = &args.staged {
+        let backup = backup_path(&args.target);
+        create_backup(&args.target, &backup)?;
+        if let Err(err) = copy_with_mode(staged, &args.target, &args.target) {
+            let _ = restore_backup(&backup, &args.target);
+            return Err(err);
+        }
+        if let Some(ver_str) = &args.version {
+            let ver = Version::parse(ver_str).map_err(|err| UpdateError::Malformed {
+                reason: format!("invalid expected version '{ver_str}': {err}"),
+            })?;
+            smoke_or_rollback(&args.target, &backup, &ver)?;
+        }
+    } else {
+        return Err(UpdateError::Malformed {
+            reason: "--apply-update requires either --msi or --staged".to_owned(),
+        });
+    }
+
+    if args.target.is_file() {
+        let _ = execute_restart(&RestartAction::Relaunch {
+            exe_path: args.target.clone(),
+        });
+    }
+    Ok(())
+}
+
+fn wait_for_pid_exit(pid: u32, timeout: Duration) {
+    if pid == 0 {
+        return;
+    }
+    let start = std::time::Instant::now();
+    let target = sysinfo::Pid::from_u32(pid);
+    let Ok(mut sys) = sysinfo::System::new() else {
+        return;
+    };
+    while start.elapsed() < timeout {
+        sys.refresh_processes(sysinfo::ProcessesToUpdate::Some(&[target]), true);
+        if sys.process(target).is_none() {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
+/// Runs `--version` on the installed binary and checks it reports expected version.
 pub fn smoke_check(binary: &Path, expected: &Version) -> UpdateResult<()> {
     let mut cmd = std::process::Command::new(binary);
     cmd.arg("--version");
@@ -495,9 +992,6 @@ fn run_with_timeout(
     use std::process::Stdio;
     use std::time::Instant;
 
-    // A concurrent fork in the same process can briefly keep a write descriptor
-    // to the freshly written binary open, so exec fails with ETXTBSY (26).
-    // Retry within a bounded window instead of failing the whole update.
     let spawn_deadline = Instant::now() + EXEC_BUSY_RETRY_WINDOW;
     let mut child = loop {
         match cmd.stdout(Stdio::piped()).stderr(Stdio::piped()).spawn() {

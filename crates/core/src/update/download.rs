@@ -1,15 +1,18 @@
-//! Download update assets with HTTPS-only, host allowlist, size cap, and SHA-256 verification.
+//! Download update assets with HTTPS-only, host allowlist, size cap, disk-space
+//! preflight, progress reporting, cancellation, and SHA-256 verification.
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Duration;
 
-use reqwest::StatusCode;
-use reqwest::header::{ACCEPT_ENCODING, RANGE};
+use reqwest::header::ACCEPT_ENCODING;
 use tokio::io::AsyncWriteExt;
 
+use crate::download::{CancellationToken, FreeSpaceFn, check_disk_space};
+
 use super::error::{UpdateError, UpdateResult};
-use super::model::AvailableUpdate;
-use super::verify::{Checksums, verify_sha256_file};
+use super::model::{AvailableUpdate, UpdateAssetKind, UpdateProgress};
+use super::verify::{Checksums, ReleaseVerifier, Sha256ReleaseVerifier, verify_sha256_file};
 
 /// Hosts allowed for update downloads/redirects.
 pub const ALLOWED_HOSTS: &[&str] = &[
@@ -29,13 +32,27 @@ const STAGED_ASSET_NAME: &str = "dblocal-update.bin";
 /// Fixed staged checksums file name.
 const STAGED_CHECKSUMS_NAME: &str = "checksums.txt";
 
+/// Callback receiving [`UpdateProgress`] updates during download and verification.
+pub type UpdateProgressSink = Arc<dyn Fn(UpdateProgress) + Send + Sync>;
+
 /// Options for update download.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct UpdateDownloadOptions {
-    /// Allow only loopback http in tests.
+    /// Allow only loopback http in tests/debug builds.
     allow_loopback_http: bool,
     /// Max bytes allowed.
     max_bytes: u64,
+    /// Optional disk-space probe override for tests.
+    free_space_probe: Option<FreeSpaceFn>,
+}
+
+impl std::fmt::Debug for UpdateDownloadOptions {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("UpdateDownloadOptions")
+            .field("allow_loopback_http", &self.allow_loopback_http)
+            .field("max_bytes", &self.max_bytes)
+            .finish_non_exhaustive()
+    }
 }
 
 impl Default for UpdateDownloadOptions {
@@ -43,41 +60,60 @@ impl Default for UpdateDownloadOptions {
         Self {
             allow_loopback_http: false,
             max_bytes: MAX_UPDATE_BYTES,
+            free_space_probe: None,
         }
     }
 }
 
 impl UpdateDownloadOptions {
-    /// Test-only constructor that allows loopback plain HTTP.
-    #[cfg(test)]
+    /// Test/debug-only constructor that allows loopback plain HTTP (unavailable in release builds).
+    #[cfg(any(test, debug_assertions))]
     pub fn loopback_for_tests() -> Self {
         Self {
             allow_loopback_http: true,
             max_bytes: MAX_UPDATE_BYTES,
+            free_space_probe: None,
         }
     }
 
-    /// Test-only constructor with a custom max-bytes cap.
-    #[cfg(test)]
+    /// Test/debug-only constructor with a custom max-bytes cap (unavailable in release builds).
+    #[cfg(any(test, debug_assertions))]
     pub fn loopback_for_tests_with_max(max_bytes: u64) -> Self {
         Self {
             allow_loopback_http: true,
             max_bytes,
+            free_space_probe: None,
         }
+    }
+
+    /// Injects a disk-space probe (for tests).
+    #[cfg(any(test, debug_assertions))]
+    pub fn with_free_space_probe(mut self, probe: FreeSpaceFn) -> Self {
+        self.free_space_probe = Some(probe);
+        self
     }
 
     /// Returns true when loopback plain HTTP is allowed.
     pub(crate) fn allows_loopback_http(&self) -> bool {
-        self.allow_loopback_http
+        #[cfg(not(any(test, debug_assertions)))]
+        {
+            false
+        }
+        #[cfg(any(test, debug_assertions))]
+        {
+            self.allow_loopback_http
+        }
     }
 }
 
-/// A verified update asset staged inside a caller-provided directory.
+/// A verified update asset staged inside a fresh private directory.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StagedUpdate {
     version: semver::Version,
     staged_path: PathBuf,
+    run_dir: PathBuf,
     asset_name: String,
+    asset_kind: UpdateAssetKind,
 }
 
 impl StagedUpdate {
@@ -91,26 +127,123 @@ impl StagedUpdate {
         &self.staged_path
     }
 
+    /// Private staging directory created for this attempt.
+    pub fn run_dir(&self) -> &Path {
+        &self.run_dir
+    }
+
     /// Original asset name from release metadata, for diagnostics only.
     pub fn asset_name(&self) -> &str {
         &self.asset_name
     }
+
+    /// Kind of the staged asset (e.g. `TarGz`, `AppImage`, `Zip`, `Msi`).
+    pub fn asset_kind(&self) -> UpdateAssetKind {
+        self.asset_kind
+    }
+
+    /// Removes the private staging directory for this attempt.
+    pub fn cleanup(&self) {
+        let _ = std::fs::remove_dir_all(&self.run_dir);
+    }
+
+    #[cfg(all(test, unix))]
+    pub(crate) fn new_for_test(
+        version: semver::Version,
+        staged_path: PathBuf,
+        run_dir: PathBuf,
+        asset_name: String,
+        asset_kind: UpdateAssetKind,
+    ) -> Self {
+        Self {
+            version,
+            staged_path,
+            run_dir,
+            asset_name,
+            asset_kind,
+        }
+    }
 }
 
 /// Downloads checksums and asset for `update`, verifies SHA-256, and stages the
-/// asset under a fixed file name inside `staging_dir`.
+/// asset under a fresh private directory inside `staging_dir`.
 pub async fn download_update(
     update: &AvailableUpdate,
     staging_dir: &Path,
     options: &UpdateDownloadOptions,
 ) -> UpdateResult<StagedUpdate> {
+    let verifier = Sha256ReleaseVerifier;
+    let cancel = CancellationToken::new();
+    download_update_with_progress(update, staging_dir, options, &verifier, &cancel, None).await
+}
+
+/// Full download-and-verify pipeline with progress reporting, cancellation,
+/// disk-space preflight, and pluggable [`ReleaseVerifier`].
+///
+/// Any error or cancellation deletes the fresh private staging directory so no
+/// partial downloads are left behind.
+pub async fn download_update_with_progress(
+    update: &AvailableUpdate,
+    staging_dir: &Path,
+    options: &UpdateDownloadOptions,
+    verifier: &dyn ReleaseVerifier,
+    cancel: &CancellationToken,
+    on_progress: Option<&UpdateProgressSink>,
+) -> UpdateResult<StagedUpdate> {
+    if cancel.is_cancelled() {
+        return Err(UpdateError::Cancelled);
+    }
+
+    let declared_size = update.asset().size_bytes();
+    let max_bytes = effective_max(declared_size, options.max_bytes)?;
+
     tokio::fs::create_dir_all(staging_dir)
         .await
         .map_err(|source| UpdateError::ApplyFailed {
             reason: format!("could not create the update staging directory: {source}"),
         })?;
 
-    let checksums = fetch_checksums(update, staging_dir, options).await?;
+    check_disk_space(
+        staging_dir,
+        declared_size,
+        options.free_space_probe.as_ref(),
+    )
+    .map_err(|err| UpdateError::DiskSpace {
+        reason: err.to_string(),
+    })?;
+
+    let run_dir = fresh_private_run_dir(staging_dir)?;
+    let outcome = download_into_run_dir(
+        update,
+        &run_dir,
+        max_bytes,
+        options,
+        verifier,
+        cancel,
+        on_progress,
+    )
+    .await;
+
+    match outcome {
+        Ok(staged) => Ok(staged),
+        Err(err) => {
+            let _ = tokio::fs::remove_dir_all(&run_dir).await;
+            Err(err)
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn download_into_run_dir(
+    update: &AvailableUpdate,
+    run_dir: &Path,
+    max_bytes: u64,
+    options: &UpdateDownloadOptions,
+    verifier: &dyn ReleaseVerifier,
+    cancel: &CancellationToken,
+    on_progress: Option<&UpdateProgressSink>,
+) -> UpdateResult<StagedUpdate> {
+    let checksums = fetch_checksums(update, run_dir, options, verifier, cancel).await?;
     let expected = checksums.digest_for(update.asset().name()).ok_or_else(|| {
         UpdateError::ChecksumMetadata {
             reason: format!(
@@ -120,29 +253,54 @@ pub async fn download_update(
         }
     })?;
 
-    let staged_path = staging_dir.join(STAGED_ASSET_NAME);
-    download_and_verify(
-        update.asset().url(),
+    let staged_path = run_dir.join(STAGED_ASSET_NAME);
+    let parsed_url = parse_and_validate_url(update.asset().url(), options)?;
+    download_to_file_with_progress(
+        &parsed_url,
         &staged_path,
-        expected,
-        update.asset().size_bytes(),
+        max_bytes,
+        Some(update.asset().size_bytes()),
         options,
+        cancel,
+        on_progress,
     )
     .await?;
+
+    if cancel.is_cancelled() {
+        return Err(UpdateError::Cancelled);
+    }
+
+    if let Some(sink) = on_progress {
+        sink(UpdateProgress::Verifying);
+    }
+    verifier
+        .verify_artifact(&staged_path, expected, update.asset().name())
+        .await?;
 
     Ok(StagedUpdate {
         version: update.version().clone(),
         staged_path,
+        run_dir: run_dir.to_path_buf(),
         asset_name: update.asset().name().to_owned(),
+        asset_kind: update.asset().kind(),
     })
+}
+
+fn fresh_private_run_dir(staging_dir: &Path) -> UpdateResult<PathBuf> {
+    let nonce: u64 = rand::random();
+    let dir = staging_dir.join(format!("run-{}-{nonce:016x}", std::process::id()));
+    super::extract::ensure_private_dir(&dir)?;
+    Ok(dir)
 }
 
 async fn fetch_checksums(
     update: &AvailableUpdate,
-    staging_dir: &Path,
+    run_dir: &Path,
     options: &UpdateDownloadOptions,
+    verifier: &dyn ReleaseVerifier,
+    cancel: &CancellationToken,
 ) -> UpdateResult<Checksums> {
-    let checksums_path = staging_dir.join(STAGED_CHECKSUMS_NAME);
+    let checksums_path = run_dir.join(STAGED_CHECKSUMS_NAME);
     let url = parse_and_validate_url(update.checksums_asset().url(), options)?;
     let declared = update.checksums_asset().size_bytes();
     let hard_cap = super::check::MAX_CHECKSUMS_BODY_BYTES as u64;
@@ -152,13 +310,22 @@ async fn fetch_checksums(
         });
     }
     let max_bytes = declared.saturating_add(1024).min(hard_cap);
-    download_to_file(&url, &checksums_path, max_bytes, options).await?;
-    let body = read_bounded_text(&checksums_path, hard_cap).await?;
+    download_to_file_with_progress(
+        &url,
+        &checksums_path,
+        max_bytes,
+        None,
+        options,
+        cancel,
+        None,
+    )
+    .await?;
+    let bytes = read_bounded_bytes(&checksums_path, hard_cap).await?;
     let _ = tokio::fs::remove_file(&checksums_path).await;
-    Checksums::parse(&body)
+    verifier.verify_manifest(&bytes, None)
 }
 
-async fn read_bounded_text(path: &Path, max_bytes: u64) -> UpdateResult<String> {
+async fn read_bounded_bytes(path: &Path, max_bytes: u64) -> UpdateResult<Vec<u8>> {
     let meta = tokio::fs::metadata(path)
         .await
         .map_err(|source| UpdateError::ChecksumMetadata {
@@ -170,14 +337,11 @@ async fn read_bounded_text(path: &Path, max_bytes: u64) -> UpdateResult<String> 
             reason: format!("checksums.txt exceeds the limit of {} bytes", max_bytes),
         });
     }
-    let bytes = tokio::fs::read(path)
+    tokio::fs::read(path)
         .await
         .map_err(|source| UpdateError::ChecksumMetadata {
             reason: format!("could not read checksums.txt: {source}"),
-        })?;
-    String::from_utf8(bytes).map_err(|_| UpdateError::ChecksumMetadata {
-        reason: "checksums.txt is not valid UTF-8".to_owned(),
-    })
+        })
 }
 
 /// Downloads `url` to `dest`, verifies sha256 from `expected_hex`, deletes on mismatch.
@@ -190,7 +354,8 @@ pub async fn download_and_verify(
 ) -> UpdateResult<()> {
     let parsed = parse_and_validate_url(url, options)?;
     let max_bytes = effective_max(declared_size, options.max_bytes)?;
-    download_to_file(&parsed, dest, max_bytes, options).await?;
+    let cancel = CancellationToken::new();
+    download_to_file_with_progress(&parsed, dest, max_bytes, None, options, &cancel, None).await?;
     verify_sha256_file(dest, expected_hex, url_label(url)).await
 }
 
@@ -204,13 +369,12 @@ fn effective_max(declared: u64, hard_cap: u64) -> UpdateResult<u64> {
             reason: "invalid update asset size".to_owned(),
         });
     }
-    let max = declared.saturating_add(1024 * 1024); // 1MB slack over metadata
-    let max = max.min(hard_cap);
     if declared > hard_cap {
         return Err(UpdateError::Malformed {
             reason: format!("the update asset size exceeds the limit: {declared}"),
         });
     }
+    let max = declared.saturating_add(1024 * 1024).min(hard_cap);
     Ok(max)
 }
 
@@ -238,7 +402,7 @@ pub fn validate_url(url: &reqwest::Url, options: &UpdateDownloadOptions) -> Upda
 /// Pure policy check for download URLs and redirect targets.
 ///
 /// HTTPS is allowed only for hosts in [`ALLOWED_HOSTS`]. Plain HTTP is allowed
-/// only for loopback hosts when `allow_loopback_http` is true (tests).
+/// only for loopback hosts when `allow_loopback_http` is true (tests/debug).
 pub fn redirect_allowed(url: &reqwest::Url, allow_loopback_http: bool) -> bool {
     let scheme = url.scheme();
     if scheme == "https" {
@@ -294,12 +458,18 @@ fn build_client(options: &UpdateDownloadOptions) -> UpdateResult<reqwest::Client
         })
 }
 
-async fn download_to_file(
+async fn download_to_file_with_progress(
     url: &reqwest::Url,
     dest: &Path,
     max_bytes: u64,
+    declared_hint: Option<u64>,
     options: &UpdateDownloadOptions,
+    cancel: &CancellationToken,
+    on_progress: Option<&UpdateProgressSink>,
 ) -> UpdateResult<()> {
+    if cancel.is_cancelled() {
+        return Err(UpdateError::Cancelled);
+    }
     if let Some(parent) = dest.parent() {
         tokio::fs::create_dir_all(parent)
             .await
@@ -308,44 +478,14 @@ async fn download_to_file(
             })?;
     }
     let client = build_client(options)?;
-    let existing = tokio::fs::metadata(dest)
+    let resp = client
+        .get(url.clone())
+        .header(ACCEPT_ENCODING, "identity")
+        .send()
         .await
-        .map(|m| m.len())
-        .unwrap_or(0);
-    let mut offset = existing.min(max_bytes);
-    if existing > max_bytes {
-        let _ = tokio::fs::remove_file(dest).await;
-        offset = 0;
-    }
-
-    let mut request = client.get(url.clone()).header(ACCEPT_ENCODING, "identity");
-    let appending = offset > 0;
-    if appending {
-        request = request.header(RANGE, format!("bytes={offset}-"));
-    }
-    let response = request.send().await.map_err(|e| UpdateError::Network {
-        reason: e.to_string(),
-    })?;
-    let status = response.status();
-    let mut append = appending;
-    let mut resp = response;
-    if appending && status == StatusCode::OK {
-        let _ = tokio::fs::remove_file(dest).await;
-        offset = 0;
-        append = false;
-    } else if appending && status == StatusCode::RANGE_NOT_SATISFIABLE {
-        let _ = tokio::fs::remove_file(dest).await;
-        offset = 0;
-        append = false;
-        resp = client
-            .get(url.clone())
-            .header(ACCEPT_ENCODING, "identity")
-            .send()
-            .await
-            .map_err(|e| UpdateError::Network {
-                reason: e.to_string(),
-            })?;
-    }
+        .map_err(|e| UpdateError::Network {
+            reason: e.to_string(),
+        })?;
 
     let status = resp.status();
     if !status.is_success() {
@@ -353,23 +493,37 @@ async fn download_to_file(
             reason: format!("unexpected HTTP status: {status}"),
         });
     }
-    enforce_declared_size(&resp, offset, max_bytes, dest).await?;
+    let content_length = resp.content_length();
+    if let Some(total) = content_length
+        && total > max_bytes
+    {
+        return Err(UpdateError::Network {
+            reason: format!("the update response exceeds the limit of {max_bytes} bytes"),
+        });
+    }
+    let total_for_progress = content_length.or(declared_hint);
+    if let Some(sink) = on_progress {
+        sink(UpdateProgress::Downloading {
+            received_bytes: 0,
+            total_bytes: total_for_progress,
+        });
+    }
 
     let mut file = tokio::fs::OpenOptions::new()
         .create(true)
         .write(true)
-        .truncate(!append)
-        .append(append)
+        .truncate(true)
         .open(dest)
         .await
         .map_err(|source| UpdateError::ApplyFailed {
             reason: format!("could not open the download file: {source}"),
         })?;
-    let mut downloaded = offset;
+    let mut downloaded: u64 = 0;
     let mut stream = resp;
-    while let Some(chunk) = stream.chunk().await.map_err(|e| UpdateError::Network {
-        reason: e.to_string(),
-    })? {
+    loop {
+        let Some(chunk) = next_chunk_or_cancel(&mut stream, cancel).await? else {
+            break;
+        };
         let next = downloaded.saturating_add(chunk.len() as u64);
         if next > max_bytes {
             drop(file);
@@ -384,7 +538,26 @@ async fn download_to_file(
                 reason: format!("could not write the download file: {source}"),
             })?;
         downloaded = next;
+        if let Some(sink) = on_progress {
+            sink(UpdateProgress::Downloading {
+                received_bytes: downloaded,
+                total_bytes: total_for_progress,
+            });
+        }
     }
+
+    if let Some(expected_len) = content_length
+        && downloaded < expected_len
+    {
+        drop(file);
+        let _ = tokio::fs::remove_file(dest).await;
+        return Err(UpdateError::Network {
+            reason: format!(
+                "truncated update download: received {downloaded} of {expected_len} bytes"
+            ),
+        });
+    }
+
     file.flush()
         .await
         .map_err(|source| UpdateError::ApplyFailed {
@@ -398,42 +571,30 @@ async fn download_to_file(
     Ok(())
 }
 
-async fn enforce_declared_size(
-    resp: &reqwest::Response,
-    offset: u64,
-    max_bytes: u64,
-    dest: &Path,
-) -> UpdateResult<()> {
-    let declared_total = declared_total_bytes(resp, offset);
-    if let Some(total) = declared_total
-        && total > max_bytes
-    {
-        let _ = tokio::fs::remove_file(dest).await;
-        return Err(UpdateError::Network {
-            reason: format!("the update response exceeds the limit of {max_bytes} bytes"),
-        });
+async fn next_chunk_or_cancel(
+    stream: &mut reqwest::Response,
+    cancel: &CancellationToken,
+) -> UpdateResult<Option<Vec<u8>>> {
+    if cancel.is_cancelled() {
+        return Err(UpdateError::Cancelled);
     }
-    Ok(())
-}
-
-fn declared_total_bytes(resp: &reqwest::Response, offset: u64) -> Option<u64> {
-    if let Some(total) = content_range_total(resp.headers().get(reqwest::header::CONTENT_RANGE)) {
-        return Some(total);
+    let cancel_wait = async {
+        loop {
+            if cancel.is_cancelled() {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    };
+    tokio::select! {
+        biased;
+        () = cancel_wait => Err(UpdateError::Cancelled),
+        chunk = stream.chunk() => chunk
+            .map(|opt| opt.map(|b| b.to_vec()))
+            .map_err(|e| UpdateError::Network {
+                reason: e.to_string(),
+            }),
     }
-    resp.headers()
-        .get(reqwest::header::CONTENT_LENGTH)
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.parse::<u64>().ok())
-        .map(|len| offset.saturating_add(len))
-}
-
-fn content_range_total(value: Option<&reqwest::header::HeaderValue>) -> Option<u64> {
-    let text = value?.to_str().ok()?;
-    let (_, total) = text.rsplit_once('/')?;
-    if total == "*" {
-        return None;
-    }
-    total.parse::<u64>().ok()
 }
 
 #[cfg(test)]

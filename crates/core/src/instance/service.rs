@@ -211,6 +211,15 @@ pub struct ServiceOptions {
     pub current_version: Option<semver::Version>,
     /// GitHub repository the update check queries. Defaults to [`consts::UPDATE_REPO`].
     pub update_repo: Option<String>,
+    /// Test/debug-only override for the GitHub Releases API base URL (compiled out in release).
+    #[cfg(any(test, debug_assertions))]
+    pub update_api_base_url: Option<String>,
+    /// Test/debug-only override for update download options (compiled out in release).
+    #[cfg(any(test, debug_assertions))]
+    pub update_download_options: Option<crate::update::UpdateDownloadOptions>,
+    /// Test/debug-only override for Linux XDG data home during update apply.
+    #[cfg(any(test, debug_assertions))]
+    pub update_data_home_override: Option<std::path::PathBuf>,
     /// Builds the admin executor (production: `PgAdmin`; tests: a fake).
     pub admin_factory: Option<admin_ops::AdminFactory>,
     /// OS default-handler launcher for "open the raw config" (`F-CFG-02`).
@@ -357,8 +366,13 @@ pub(crate) struct Inner {
     pub current_version: semver::Version,
     /// GitHub repository the update check queries.
     pub update_repo: String,
+    /// Test/debug-only override for the GitHub API base URL.
+    #[cfg(any(test, debug_assertions))]
+    pub update_api_base_url: Option<String>,
     /// Pre-detected install kind; when `None`, detected on first `check_update`.
     pub install_kind: Option<InstallKind>,
+    /// Pending restart action prepared by `start_update` / `apply_update`.
+    pub pending_restart: Mutex<Option<crate::update::RestartAction>>,
     /// Builds the admin executor (production: `PgAdmin`; tests: a fake).
     pub admin_factory: admin_ops::AdminFactory,
     /// OS default-handler launcher for the raw config file (`F-CFG-02`).
@@ -585,11 +599,25 @@ impl LocalService {
             spawner,
             update_installer: match options.update_installer.clone() {
                 Some(installer) => installer,
-                None => Arc::new(update_ops::DownloadInstaller::new(
-                    inner_paths.clone(),
-                    runtime.handle.clone(),
-                    current_exe_path(),
-                )),
+                None => {
+                    let installer = update_ops::DownloadInstaller::new(
+                        inner_paths.clone(),
+                        runtime.handle.clone(),
+                        current_exe_path(),
+                    );
+                    #[cfg(any(test, debug_assertions))]
+                    let installer = {
+                        let installer = match options.update_download_options.clone() {
+                            Some(dl) => installer.with_download_options(dl),
+                            None => installer,
+                        };
+                        match options.update_data_home_override.clone() {
+                            Some(dir) => installer.with_data_home_override(dir),
+                            None => installer,
+                        }
+                    };
+                    Arc::new(installer)
+                }
             },
             update_fetcher,
             current_version,
@@ -597,7 +625,10 @@ impl LocalService {
                 .update_repo
                 .clone()
                 .unwrap_or_else(|| consts::UPDATE_REPO.to_owned()),
+            #[cfg(any(test, debug_assertions))]
+            update_api_base_url: options.update_api_base_url.clone(),
             install_kind: options.install_kind.clone(),
+            pending_restart: Mutex::new(None),
             admin_factory: options
                 .admin_factory
                 .clone()
@@ -940,8 +971,30 @@ impl DblService for LocalService {
         update_ops::check_update(&self.inner)
     }
 
+    fn check_update_if_due(
+        &self,
+    ) -> crate::service::ServiceResult<Option<crate::service::UpdateStatus>> {
+        update_ops::check_update_if_due(&self.inner)
+    }
+
+    fn auto_update_check_enabled(&self) -> Result<bool> {
+        update_ops::auto_update_check_enabled(&self.inner)
+    }
+
+    fn set_auto_update_check(&self, enabled: bool) -> Result<()> {
+        update_ops::set_auto_update_check(&self.inner, enabled)
+    }
+
+    fn start_update(&self) -> crate::service::ServiceResult<OperationId> {
+        update_ops::start_update(&self.inner)
+    }
+
     fn apply_update(&self) -> crate::service::ServiceResult<()> {
         update_ops::apply_update(&self.inner)
+    }
+
+    fn restart_for_update(&self) -> crate::service::ServiceResult<()> {
+        update_ops::restart_for_update(&self.inner)
     }
 
     fn detect_clients(

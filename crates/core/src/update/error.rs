@@ -29,6 +29,14 @@ pub const CODE_UPDATE_APPLY_FAILED: &str = "DBL-8010";
 /// Distinguished from [`CODE_UPDATE_NETWORK`]: the request reached GitHub and was
 /// answered with 404/403, so the connection is fine and the source is wrong.
 pub const CODE_UPDATE_SOURCE_NOT_FOUND: &str = "DBL-8011";
+/// Stable code: the update was cancelled by the caller while downloading.
+pub const CODE_UPDATE_CANCELLED: &str = "DBL-8012";
+/// Stable code: another update is already in progress.
+pub const CODE_UPDATE_IN_PROGRESS: &str = "DBL-8013";
+/// Stable code: not enough free disk space to download and extract the update.
+pub const CODE_UPDATE_DISK_SPACE: &str = "DBL-8014";
+/// Stable code: the update archive failed safety validation.
+pub const CODE_UPDATE_UNSAFE_ARCHIVE: &str = "DBL-8015";
 
 /// Result alias for update operations.
 pub type UpdateResult<T> = std::result::Result<T, UpdateError>;
@@ -59,6 +67,14 @@ pub enum UpdateError {
     ApplyFailed { reason: String },
     /// The release source (GitHub repository) does not exist or is not public.
     SourceNotFound { reason: String },
+    /// The caller cancelled the update before installation began.
+    Cancelled,
+    /// Another update is already running.
+    InProgress { reason: String },
+    /// Not enough free disk space on the target filesystem.
+    DiskSpace { reason: String },
+    /// The update archive contained a disallowed or unsafe entry.
+    UnsafeArchive { reason: String },
 }
 
 impl UpdateError {
@@ -75,6 +91,10 @@ impl UpdateError {
             Self::AssetMissing { .. } => CODE_UPDATE_ASSET_MISSING,
             Self::ApplyFailed { .. } => CODE_UPDATE_APPLY_FAILED,
             Self::SourceNotFound { .. } => CODE_UPDATE_SOURCE_NOT_FOUND,
+            Self::Cancelled => CODE_UPDATE_CANCELLED,
+            Self::InProgress { .. } => CODE_UPDATE_IN_PROGRESS,
+            Self::DiskSpace { .. } => CODE_UPDATE_DISK_SPACE,
+            Self::UnsafeArchive { .. } => CODE_UPDATE_UNSAFE_ARCHIVE,
         }
     }
 
@@ -113,6 +133,17 @@ impl UpdateError {
             Self::SourceNotFound { .. } => {
                 "The update release source was not found or is not public.".to_owned()
             }
+            Self::Cancelled => "The update download was cancelled.".to_owned(),
+            Self::InProgress { .. } => {
+                "Another update is already in progress. Wait for it to finish.".to_owned()
+            }
+            Self::DiskSpace { .. } => {
+                "There is not enough free disk space to install the update.".to_owned()
+            }
+            Self::UnsafeArchive { .. } => {
+                "The update archive was rejected because it contains an unsafe or unexpected entry."
+                    .to_owned()
+            }
         }
     }
 
@@ -132,8 +163,12 @@ impl UpdateError {
             | Self::DowngradeRefused { reason }
             | Self::UnsupportedInstallKind { reason }
             | Self::AssetMissing { reason }
-            | Self::ApplyFailed { reason } => reason,
-            Self::SourceNotFound { reason } => reason,
+            | Self::ApplyFailed { reason }
+            | Self::SourceNotFound { reason }
+            | Self::InProgress { reason }
+            | Self::DiskSpace { reason }
+            | Self::UnsafeArchive { reason } => reason,
+            Self::Cancelled => "cancelled by caller",
         }
     }
 }
@@ -175,8 +210,20 @@ impl From<UpdateError> for DblError {
                 kind: "update_source",
                 name: reason.clone(),
             },
-            UpdateError::ApplyFailed { reason } => DblError::Io {
-                source: std::io::Error::other(reason.clone()),
+            UpdateError::ApplyFailed { reason } | UpdateError::DiskSpace { reason } => {
+                DblError::Io {
+                    source: std::io::Error::other(reason.clone()),
+                }
+            }
+            UpdateError::Cancelled => DblError::Cancelled {
+                operation: "update".to_owned(),
+            },
+            UpdateError::InProgress { .. } => DblError::InvalidTransition {
+                from: "updating",
+                to: "updating",
+            },
+            UpdateError::UnsafeArchive { reason } => DblError::UnsafeArchive {
+                entry: reason.clone(),
             },
         }
     }

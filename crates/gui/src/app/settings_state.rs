@@ -18,6 +18,7 @@ use super::login_item::LoginStatus;
 
 /// The last update check, as the Updates section renders it.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[allow(clippy::large_enum_variant)]
 pub enum UpdateCheckState {
     /// No check was made yet.
     #[default]
@@ -223,6 +224,7 @@ mod tests {
             version: "0.9.0".to_owned(),
             tag: "v0.9.0".to_owned(),
             release_notes: "Notes".to_owned(),
+            release_url: "https://github.com/rezkycodes/dblocal/releases/tag/v0.9.0".to_owned(),
             asset_name: "dblocal-linux-x86_64.tar.gz".to_owned(),
             size_bytes: 1024,
             can_self_update,
@@ -230,12 +232,14 @@ mod tests {
     }
 
     fn status(available_update: Option<AvailableUpdateView>, kind: InstallKind) -> UpdateStatus {
+        let cannot_update_reason = kind.refusal_reason();
         UpdateStatus {
             current: "0.8.0".to_owned(),
             available: available_update,
             package_manager_hint: kind
                 .package_manager_hint()
                 .map(dblocal_core::update::PackageManagerHint::message),
+            cannot_update_reason,
             install_kind: kind,
         }
     }

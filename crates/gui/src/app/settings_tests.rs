@@ -247,6 +247,7 @@ fn package_manager_status() -> UpdateStatus {
             version: "0.9.0".to_owned(),
             tag: "v0.9.0".to_owned(),
             release_notes: "Notes".to_owned(),
+            release_url: "https://github.com/rezkycodes/dblocal/releases/tag/v0.9.0".to_owned(),
             asset_name: "dblocal-linux-x86_64.tar.gz".to_owned(),
             size_bytes: 1024,
             can_self_update: false,
@@ -256,6 +257,7 @@ fn package_manager_status() -> UpdateStatus {
             hint: dblocal_core::update::PackageManagerHint::Dpkg,
         },
         package_manager_hint: Some(dblocal_core::update::PackageManagerHint::Dpkg.message()),
+        cannot_update_reason: Some(dblocal_core::update::PackageManagerHint::Dpkg.message()),
     }
 }
 

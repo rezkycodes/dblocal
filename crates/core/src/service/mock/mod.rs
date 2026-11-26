@@ -152,6 +152,7 @@ enum OpKind {
     Start,
     Stop,
     Delete,
+    Update,
 }
 
 #[derive(Debug, Clone)]

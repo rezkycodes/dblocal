@@ -1,15 +1,73 @@
-//! SHA-256 verification for update artifacts.
+//! Integrity verification seam for update artifacts.
 //!
-//! The digest comes from the release's `checksums.txt`. Verification is
-//! constant-time and happens before any install step. A mismatch deletes the
-//! downloaded file.
+//! All release verification goes through [`ReleaseVerifier`]. Today the
+//! production verifier ([`Sha256ReleaseVerifier`]) validates `checksums.txt`
+//! syntax and verifies the downloaded artifact's SHA-256 in constant time,
+//! deleting the file on mismatch.
+//!
+//! Keeping manifest verification behind [`ReleaseVerifier::verify_manifest`]
+//! allows a future `Ed25519ReleaseVerifier` to require and check a detached
+//! `checksums.txt.sig` signature over `checksums.txt` without changing any
+//! caller above this module.
 
+use std::future::Future;
 use std::path::Path;
+use std::pin::Pin;
 
 use sha2::{Digest, Sha256};
 use tokio::io::AsyncReadExt;
 
 use super::error::{UpdateError, UpdateResult};
+
+/// Verification seam for release manifests (`checksums.txt`) and downloaded
+/// artifacts.
+pub trait ReleaseVerifier: Send + Sync {
+    /// Verifies and parses `checksums.txt`.
+    ///
+    /// `signature_bytes` is reserved for future detached signature verification
+    /// (e.g. Ed25519 over `checksums.txt`).
+    fn verify_manifest(
+        &self,
+        checksums_bytes: &[u8],
+        signature_bytes: Option<&[u8]>,
+    ) -> UpdateResult<Checksums>;
+
+    /// Verifies that the downloaded file at `path` matches `expected_hex`.
+    /// Implementations must delete `path` on mismatch.
+    fn verify_artifact<'a>(
+        &'a self,
+        path: &'a Path,
+        expected_hex: &'a str,
+        label: &'a str,
+    ) -> Pin<Box<dyn Future<Output = UpdateResult<()>> + Send + 'a>>;
+}
+
+/// Default release verifier: parses `checksums.txt` and checks SHA-256 digests.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct Sha256ReleaseVerifier;
+
+impl ReleaseVerifier for Sha256ReleaseVerifier {
+    fn verify_manifest(
+        &self,
+        checksums_bytes: &[u8],
+        _signature_bytes: Option<&[u8]>,
+    ) -> UpdateResult<Checksums> {
+        let text =
+            std::str::from_utf8(checksums_bytes).map_err(|_| UpdateError::ChecksumMetadata {
+                reason: "checksums.txt is not valid UTF-8".to_owned(),
+            })?;
+        Checksums::parse(text)
+    }
+
+    fn verify_artifact<'a>(
+        &'a self,
+        path: &'a Path,
+        expected_hex: &'a str,
+        label: &'a str,
+    ) -> Pin<Box<dyn Future<Output = UpdateResult<()>> + Send + 'a>> {
+        Box::pin(verify_sha256_file(path, expected_hex, label))
+    }
+}
 
 /// Parsed `checksums.txt` entries: file name -> lowercase hex sha256.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
