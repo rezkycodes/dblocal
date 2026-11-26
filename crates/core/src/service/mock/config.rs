@@ -112,7 +112,7 @@ pub(crate) fn apply(
     let mut text = state.text.clone().unwrap_or_default();
     for edit in &edits {
         text = apply_edit(dialect, &text, edit)
-            .map_err(|_| UserFacingError::from(ConfigError::InvalidValue("edit ditolak")))?;
+            .map_err(|_| UserFacingError::from(ConfigError::InvalidValue("edit rejected")))?;
     }
     state.text = Some(text);
     state.last_backup_secs += 1;

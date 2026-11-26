@@ -180,7 +180,7 @@ pub(crate) fn apply(
     let mut text = original;
     for edit in &edits {
         text = apply_edit(dialect, &text, edit)
-            .map_err(|_| UserFacingError::from(ConfigError::InvalidValue("edit ditolak")))?;
+            .map_err(|_| UserFacingError::from(ConfigError::InvalidValue("edit rejected")))?;
     }
     crate::fsutil::write_private_file_atomic(&path, text.as_bytes())
         .map_err(|_| UserFacingError::from(ConfigError::Io))?;

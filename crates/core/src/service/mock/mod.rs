@@ -450,7 +450,7 @@ impl MockService {
         g.logs.insert(
             id.clone(),
             VecDeque::from([format!(
-                "[info] {} {} siap",
+                "[info] {} {} is ready",
                 instance.engine().display_name(),
                 instance.name()
             )]),

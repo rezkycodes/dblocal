@@ -167,7 +167,7 @@ async fn read_bounded_text(path: &Path, max_bytes: u64) -> UpdateResult<String> 
     if meta.len() > max_bytes {
         let _ = tokio::fs::remove_file(path).await;
         return Err(UpdateError::ChecksumMetadata {
-            reason: format!("checksums.txt melebihi batas {} byte", max_bytes),
+            reason: format!("checksums.txt exceeds the limit of {} bytes", max_bytes),
         });
     }
     let bytes = tokio::fs::read(path)
@@ -176,7 +176,7 @@ async fn read_bounded_text(path: &Path, max_bytes: u64) -> UpdateResult<String> 
             reason: format!("could not read checksums.txt: {source}"),
         })?;
     String::from_utf8(bytes).map_err(|_| UpdateError::ChecksumMetadata {
-        reason: "checksums.txt bukan UTF-8 yang valid".to_owned(),
+        reason: "checksums.txt is not valid UTF-8".to_owned(),
     })
 }
 
@@ -208,7 +208,7 @@ fn effective_max(declared: u64, hard_cap: u64) -> UpdateResult<u64> {
     let max = max.min(hard_cap);
     if declared > hard_cap {
         return Err(UpdateError::Malformed {
-            reason: format!("ukuran asset update melebihi batas: {declared}"),
+            reason: format!("the update asset size exceeds the limit: {declared}"),
         });
     }
     Ok(max)
@@ -231,7 +231,7 @@ pub fn validate_url(url: &reqwest::Url, options: &UpdateDownloadOptions) -> Upda
         return Ok(());
     }
     Err(UpdateError::Network {
-        reason: format!("URL update ditolak: {}", redact_url(url)),
+        reason: format!("update URL rejected: {}", redact_url(url)),
     })
 }
 
@@ -375,7 +375,7 @@ async fn download_to_file(
             drop(file);
             let _ = tokio::fs::remove_file(dest).await;
             return Err(UpdateError::Network {
-                reason: format!("respons update melebihi batas {max_bytes} byte"),
+                reason: format!("the update response exceeds the limit of {max_bytes} bytes"),
             });
         }
         file.write_all(&chunk)
@@ -410,7 +410,7 @@ async fn enforce_declared_size(
     {
         let _ = tokio::fs::remove_file(dest).await;
         return Err(UpdateError::Network {
-            reason: format!("respons update melebihi batas {max_bytes} byte"),
+            reason: format!("the update response exceeds the limit of {max_bytes} bytes"),
         });
     }
     Ok(())

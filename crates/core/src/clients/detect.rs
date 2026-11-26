@@ -166,7 +166,7 @@ impl OpenMenu {
         &self.clients
     }
 
-    /// Whether the menu should show "Salin URI" instead of an empty list.
+    /// Whether the menu should show "Copy URI" instead of an empty list.
     pub fn copy_uri_fallback(&self) -> bool {
         self.copy_uri_fallback
     }

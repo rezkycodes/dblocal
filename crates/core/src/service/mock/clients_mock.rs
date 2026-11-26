@@ -25,7 +25,7 @@ pub(crate) fn detect(
     refresh: bool,
 ) -> ServiceResult<Vec<DetectedClient>> {
     let _ = refresh;
-    // `set_no_clients(true)` makes the menu show "Salin URI" instead of a list
+    // `set_no_clients(true)` makes the menu show "Copy URI" instead of a list
     // (`F-OPN-01` AC2), so the demo build and the GUI tests can render that
     // state without a machine where nothing is installed.
     if lock(inner).no_clients {

@@ -83,7 +83,7 @@ const WP_LOG: [&str; 2] = [
 
 const HR_LOG: [&str; 2] = [
     "mysqld: ready for connections",
-    "engine berhenti (shutdown bersih)",
+    "engine stopped (clean shutdown)",
 ];
 
 const LEGACY_LOG: [&str; 2] = [

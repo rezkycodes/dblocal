@@ -243,14 +243,14 @@ fn backup_path(target: &Path) -> PathBuf {
 /// Windows/macOS are refused at apply time with a clear plan-only error.
 pub fn apply(plan: &InstallPlan) -> UpdateResult<()> {
     match plan.kind() {
-        InstallKind::AppImage { .. } | InstallKind::PortableTarball { .. } => {
-            apply_linux(plan)
-        }
+        InstallKind::AppImage { .. } | InstallKind::PortableTarball { .. } => apply_linux(plan),
         InstallKind::WindowsZip { .. } => Err(UpdateError::ApplyFailed {
-            reason: "penerapan update Windows membutuhkan helper runtime; gunakan command yang direncanakan".to_owned(),
+            reason: "applying a Windows update needs the runtime helper; use the planned commands"
+                .to_owned(),
         }),
         InstallKind::MacApp { .. } => Err(UpdateError::ApplyFailed {
-            reason: "macOS update application is not executed in this module; use an install plan".to_owned(),
+            reason: "macOS update application is not executed in this module; use an install plan"
+                .to_owned(),
         }),
         _ => Err(UpdateError::UnsupportedInstallKind {
             reason: "this install kind does not support self-update".to_owned(),
@@ -533,7 +533,7 @@ fn run_with_timeout(
             let _ = child.kill();
             let _ = child.wait();
             return Err(UpdateError::ApplyFailed {
-                reason: format!("{label} melebihi batas waktu {} detik", timeout.as_secs()),
+                reason: format!("{label} timed out after {} seconds", timeout.as_secs()),
             });
         }
         std::thread::sleep(Duration::from_millis(20));

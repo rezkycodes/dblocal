@@ -84,7 +84,7 @@ fn wait_for_running(
             None => {}
         }
         if std::time::Instant::now() >= deadline {
-            return Err("[DBL-8401] waktu tunggu autostart habis".to_owned());
+            return Err("[DBL-8401] the autostart wait timed out".to_owned());
         }
         std::thread::sleep(Duration::from_millis(consts::AUTOSTART_WAIT_POLL_MS));
     }
@@ -218,7 +218,7 @@ mod tests {
         }
         fn wait_started(&self, _id: &InstanceId, timeout: Duration) -> Result<(), String> {
             if self.delay > timeout {
-                return Err("[DBL-8401] waktu tunggu autostart habis".to_owned());
+                return Err("[DBL-8401] the autostart wait timed out".to_owned());
             }
             std::thread::sleep(self.delay);
             self.completed

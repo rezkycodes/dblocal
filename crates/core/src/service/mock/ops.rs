@@ -113,7 +113,7 @@ fn finish_cancelled(
             g.instances
                 .insert(id.clone(), inst.with_status(InstanceStatus::Failed));
         }
-        g.push_log(id, "[warn] dibatalkan".to_owned());
+        g.push_log(id, "[warn] cancelled".to_owned());
         g.sync_view(id);
     }
     let _ = tx;
@@ -252,7 +252,7 @@ impl DblService for MockService {
             g.logs.insert(
                 id.clone(),
                 std::collections::VecDeque::from([format!(
-                    "[info] membuat instance {} ({})",
+                    "[info] creating instance {} ({})",
                     spec.name(),
                     spec.version()
                 )]),
@@ -347,7 +347,7 @@ impl DblService for MockService {
             {
                 let mut g = lock(&inner);
                 if g.apply(&iid, InstanceEvent::InitSucceeded) {
-                    g.push_log(&iid, "[info] inisialisasi selesai".to_owned());
+                    g.push_log(&iid, "[info] initialization finished".to_owned());
                     g.sync_view(&iid);
                 }
             }
@@ -466,7 +466,7 @@ impl DblService for MockService {
             if let Ok(next) = inst.status().apply(InstanceEvent::StopRequested) {
                 g.instances.insert(id.clone(), inst.with_status(next));
             }
-            g.push_log(id, "[info] menghentikan engine".to_owned());
+            g.push_log(id, "[info] stopping the engine".to_owned());
             g.sync_view(id);
             (
                 op,
@@ -493,7 +493,7 @@ impl DblService for MockService {
             {
                 let mut g = lock(&inner);
                 if g.apply(&iid, InstanceEvent::ShutdownClean) {
-                    g.push_log(&iid, "[info] engine berhenti".to_owned());
+                    g.push_log(&iid, "[info] engine stopped".to_owned());
                     g.sync_view(&iid);
                 }
             }
@@ -523,7 +523,10 @@ impl DblService for MockService {
             if let Ok(next) = inst.status().apply(InstanceEvent::DeleteRequested) {
                 g.instances.insert(id.clone(), inst.with_status(next));
             }
-            g.push_log(id, format!("[info] menghapus instance ({})", mode.as_str()));
+            g.push_log(
+                id,
+                format!("[info] deleting the instance ({})", mode.as_str()),
+            );
             g.sync_view(id);
             (op, g.step_delay, g.tx.clone(), Arc::clone(&self.inner))
         };
@@ -536,13 +539,13 @@ impl DblService for MockService {
                 if mode == DeleteMode::ArchiveData
                     && let Some(inst) = g.instances.get(&iid).cloned()
                 {
-                    let archive_id = g.det.gen_id("arsip");
+                    let archive_id = g.det.gen_id("archive");
                     let archived = crate::model::ArchivedData::new(
                         archive_id,
                         inst.name().clone(),
                         inst.engine(),
                         inst.version().to_owned(),
-                        std::path::PathBuf::from(format!("/tmp/arsip/{}", inst.name())),
+                        std::path::PathBuf::from(format!("/tmp/archive/{}", inst.name())),
                         41 * 1024 * 1024,
                         g.det.now(),
                     );
@@ -586,7 +589,7 @@ impl DblService for MockService {
             }
         }
         g.instances.insert(id.clone(), inst.with_port(port));
-        g.push_log(id, format!("[info] port diubah ke {}", port.get()));
+        g.push_log(id, format!("[info] port changed to {}", port.get()));
         g.sync_view(id);
         Ok(())
     }

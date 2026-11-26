@@ -7,7 +7,7 @@ use crate::DblError;
 /// A start failure the UI can turn into an actionable hint (PRD `F-LOG-02`).
 ///
 /// Adapters classify the raw engine output; the GUI maps each variant to a
-/// specific action such as "Pindah port" or "Pasang ulang runtime".
+/// specific action such as "Change port" or "Reinstall runtime".
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[non_exhaustive]
 pub enum StartFailure {

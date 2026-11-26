@@ -116,7 +116,7 @@ mod tests {
         vec![
             ConfigError::UnknownKey,
             ConfigError::ManagedKey,
-            ConfigError::InvalidValue("nilai salah"),
+            ConfigError::InvalidValue("invalid value"),
             ConfigError::Io,
             ConfigError::Busy,
             ConfigError::NoBackup,
