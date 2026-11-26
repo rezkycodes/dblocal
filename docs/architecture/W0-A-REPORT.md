@@ -75,7 +75,7 @@
 - `cargo run -p dblocal-cli` (no args): **PASS** (exit 0)
   - GUI stub `dblocal_gui::run()` returns `Ok(())` per Phase 0 behavior/evidence requirement
 - `cargo run -p dblocal-cli -- list`: **PASS contract behavior** (stub subcommand, exit 1)
-  - `[DBL-9001] Fitur ini belum tersedia di versi ini.` / `RC:1`
+  - `[DBL-9001] This feature is not available in this version yet.` / `RC:1`
 - `cargo run -p dblocal-cli -- bogus` (unknown subcommand): **PASS contract behavior** (exit 2)
   - `error: unrecognized subcommand 'bogus'` / `RC:2`
 - `cargo run -p xtask -- catalog`: **PASS stub contract** (exit 1, prints `not implemented`)

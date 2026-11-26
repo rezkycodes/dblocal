@@ -23,8 +23,8 @@ blank slate once; after that DBLocal edits lines in place.
 
 ## 2. How a user edit coexists with the managed lines
 
-The rule is PRD `F-CFG-02` AC1: "komentar serta baris yang tidak dikenal app tidak
-pernah ditulis ulang atau dihapus". So the editor is **line-level**, not
+The rule is PRD `F-CFG-02` AC1: "comments and lines the app does not recognize are never
+rewritten or deleted". So the editor is **line-level**, not
 parse-and-re-render (`crate::config::editor`):
 
 - it changes only the line of the key it was asked to change;

@@ -245,7 +245,7 @@ Valkey has no databases/users in this sense: it has numbered logical databases
 (`SELECT n`) and an ACL system, not a named database and a login role with
 table privileges. This task proposes **no admin ops for Valkey v1**; the
 Databases tab shows nothing for a Valkey instance. This matches the PRD's
-`admin_ops()` comment ("None untuk Valkey v1").
+`admin_ops()` comment ("None for Valkey v1").
 
 ## W3-A fix round 1 findings
 
@@ -426,7 +426,7 @@ and limits:
   the bind are not atomic.
 - **The running gate (W4-A3 fix 1).** `instance/admin_ops.rs::executor_for`
   refuses any instance whose status is not `Running` with `AdminError::Connect`
-  (`DBL-8100`, "Pastikan server sedang berjalan") — the same answer a stopped
+  (`DBL-8100`, "Make sure the server is running") — the same answer a stopped
   server already produced by failing to connect. The gate runs **before** the
   credential read and **before** the factory builds an executor, so an admin call
   to a Stopped, Starting, Stopping or Failed row never reads the superuser

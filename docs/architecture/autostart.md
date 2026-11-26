@@ -92,14 +92,14 @@ Without `DISPLAY`/`WAYLAND_DISPLAY` (exactly a systemd user unit at boot before
   concurrently and one hanging engine never serializes the rest.
 - `bound = engine start timeout + AUTOSTART_START_MARGIN_SECS` (15 s), both
   values from `consts` — never an invented number.
-- One stderr line per flagged instance: `autostart: <name> mulai berjalan` or
-  `autostart: <name> gagal berjalan — [DBL-xxxx] …`.
+- One stderr line per flagged instance: `autostart: <name> started` or
+  `autostart: <name> failed to start — [DBL-xxxx] …`.
 - Exit 0 only when every flagged instance started; exit 1 otherwise. This is the
   visible failure channel for a login item: there is no modal and no tray at
   boot, so `systemctl --user status dblocal` (and the journal) show the failure.
 
-A one-line note `Autostart: tray tidak tersedia; instance tetap berjalan tanpa
-jendela.` is written once, then the process exits — but only *after* the engines
+A one-line note `Autostart: the tray is unavailable; the instances keep running without a
+window.` is written once, then the process exits — but only *after* the engines
 are up, so the detached engines outlive it.
 
 ### GUI path (a display is present)
@@ -248,7 +248,7 @@ panicked at crates/core/src/autostart/runner.rs:182:58: run: PlanFailed { .. }
 % flock -w 3600 "$HOME/.cache/dblocal-e2e.lock" DBLOCAL_E2E=1 \
     cargo test -p dblocal-core --test service_e2e -- --ignored --test-threads=1 \
     --nocapture autostart_two_flagged_one_blocked
-auto-blocked failed with [DBL-1005] Port itu sedang dipakai proses lain. (PortInUse)
+auto-blocked failed with [DBL-1005] That port is already used by another process. (PortInUse)
 test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 15 filtered out; finished in 2.13s
 ```
 
@@ -276,8 +276,8 @@ stopped. Before the fix: exit 0 in 0 s, row left `starting`, no process.
 
 ```text
 % env -u DISPLAY -u WAYLAND_DISPLAY dblocal --autostart
-autostart: instance mulai berjalan: vk-auto
-Autostart: tray tidak tersedia; instance tetap berjalan tanpa jendela.
+autostart: instance started: vk-auto
+Autostart: the tray is unavailable; the instances keep running without a window.
 exit=0 elapsed=0.37s
 store: [('vk-auto', 'running', 3241730)]
 LISTEN 127.0.0.1:20501   LISTEN [::1]:20501
@@ -289,9 +289,9 @@ Two flagged valkey instances; a foreign listener holds `20502`.
 
 ```text
 % env -u DISPLAY -u WAYLAND_DISPLAY dblocal --autostart
-autostart: instance mulai berjalan: vk-auto
-autostart: instance gagal berjalan: vk-blocked — [DBL-1005] Port itu sedang dipakai proses lain.
-Autostart: tray tidak tersedia; instance tetap berjalan tanpa jendela.
+autostart: instance started: vk-auto
+autostart: instance failed to start: vk-blocked — [DBL-1005] That port is already used by another process.
+Autostart: the tray is unavailable; the instances keep running without a window.
 exit=1 elapsed=0.32s
 store: [('vk-auto', 'running', 3278370), ('vk-blocked', 'failed', None)]
 valkey: 3278370 .../valkey-server 127.0.0.1:20501
@@ -328,14 +328,14 @@ display, so the tray path is reachable (D3).
 Private session bus (no StatusNotifierWatcher):
 
 ```text
-Autostart: tray tidak tersedia, jendela dibuka.
+Autostart: the tray is unavailable, the window was opened.
 windows: 0x01000001   (a mapped window exists)
 ```
 
 Real session bus (tray host present):
 
 ```text
-Autostart: tray aktif, tanpa jendela.
+Autostart: tray active, no window.
 windows: (no dblocal window)
 ```
 

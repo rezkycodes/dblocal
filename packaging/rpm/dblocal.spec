@@ -96,7 +96,6 @@ fi
 if [ "$1" -eq 0 ]; then
   cat >&2 <<'MSG'
 dblocal: Package files removed. User data in ~/.dblocal was kept intentionally.
-dblocal: Berkas paket dihapus. Data pengguna di ~/.dblocal sengaja dipertahankan.
 MSG
 fi
 

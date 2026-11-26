@@ -33,7 +33,7 @@ that fails validation is never published and never replaces a good cache.
 ### Why some targets are absent (never faked)
 
 The catalog only lists a combination whose artifact upstream really publishes
-(PRD D-24); everything else is reported as "tidak tersedia di platform ini" by
+(PRD D-24); everything else is reported as "not available on this platform" by
 the read model, not by an invented URL.
 
 - **MariaDB**: the project publishes no macOS build and no arm64 Linux tarball,

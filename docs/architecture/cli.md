@@ -145,17 +145,17 @@ start of the file (13 in total).
 
 `start` and `stop` both see a concrete status, either in their first
 `list_instances` or as the `from` of a refused compare-and-set. The loser cases
-differ, and treating them alike is what produced a false "sudah berjalan"
+differ, and treating them alike is what produced a false "already running"
 followed by a 60 s wait:
 
 | Command | Concrete status | Exit | Message |
 |---|---|---|---|
-| `start` | `busy` | 0 after waiting, or 4 on timeout | `sudah berjalan` |
-| `start` | `starting` | 0 after waiting, or 4 on timeout | `sudah berjalan` |
-| `start` | `running` | 0 | `sudah berjalan` |
-| `start` | `stopping` | 1 | `[DBL-1004] sedang dihentikan oleh proses lain` |
-| `stop` | `stopped` | 0 | `sudah berhenti` |
-| `stop` | `stopping` | 0 after the wait, 1 on timeout | `[DBL-1004] sedang dihentikan oleh proses lain`, then `Siap.` |
+| `start` | `busy` | 0 after waiting, or 4 on timeout | `already running` |
+| `start` | `starting` | 0 after waiting, or 4 on timeout | `already running` |
+| `start` | `running` | 0 | `already running` |
+| `start` | `stopping` | 1 | `[DBL-1004] another process is stopping it` |
+| `stop` | `stopped` | 0 | `already stopped` |
+| `stop` | `stopping` | 0 after the wait, 1 on timeout | `[DBL-1004] another process is stopping it`, then `Ready.` |
 
 `busy`/`starting`/`running` are the race **winners** a loser waits for: the
 winner is on its way to `running`, so the loser waits on the shared store and
@@ -236,10 +236,10 @@ The I/O contract is unchanged: stdout is data, stderr the rest, module-local
 | Command | stdout | stderr |
 |---|---|---|
 | `db list <instance> [--json]` | the aligned NAME/OWNER/SIZE table, or one JSON array of `{name, owner, size_bytes}` | empty on success |
-| `db create <instance> <name>` | nothing | `Database dibuat.` |
-| `db drop <instance> <name> [--yes \| --confirm <name>]` | nothing | `Database dihapus.` |
-| `user create <instance> <name> --db <db> --level ro\|rw` | the generated password, once | `User dibuat. Simpan password ini…` |
-| `password reset <instance>` | the new connect URI, once | `Password superuser diganti…` |
+| `db create <instance> <name>` | nothing | `Database created.` |
+| `db drop <instance> <name> [--yes \| --confirm <name>]` | nothing | `Database deleted.` |
+| `user create <instance> <name> --db <db> --level ro\|rw` | the generated password, once | `User created. Save this password…` |
+| `password reset <instance>` | the new connect URI, once | `Superuser password changed…` |
 | `update check [--json]` | the available version or "up to date"; JSON with `--json` | the package-manager hint, when managed |
 | `update apply [--yes]` | nothing | `Pembaruan dipasang.` |
 | `open <instance> --client <kind> [--dry-run]` | the plan, only with `--dry-run` | the plan header / `Client dibuka.` |
@@ -247,7 +247,7 @@ The I/O contract is unchanged: stdout is data, stderr the rest, module-local
 - **`db drop` typed-name confirmation (`F-DBU-01` AC3).** Without `--yes`, the
   database name must be typed again: `--confirm <name>` must equal `<name>`, or,
   in an interactive session, the prompt reads it. A mismatch is exit 2 with
-  `Penghapusan dibatalkan: nama database tidak cocok.`; a non-interactive session
+  `Delete cancelled: the database name does not match.`; a non-interactive session
   with no `--yes`/`--confirm` is exit 2 too.
 - **`user create`** prints the password once to stdout and nothing else, like
   `uri`; `--level` accepts only `ro`/`rw` (anything else is exit 2). A failed
@@ -321,7 +321,7 @@ test result: FAILED. 83 passed; 8 failed; 0 ignored; 0 measured; 0 filtered out
 ```
 
 **3. `stopping` back in the loser list** — `start.rs`, add `| "stopping"` to the
-`InvalidTransition` arm that prints `sudah berjalan`:
+`InvalidTransition` arm that prints `already running`:
 
 ```text
 % cargo test -p dblocal-cli --lib

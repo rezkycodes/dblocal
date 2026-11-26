@@ -696,7 +696,7 @@ backend — an instance DBLocal could never log in to.
 ### F2 — `user create` with an unknown database
 
 `create_user` checks the target database exists **before** creating the role, so
-a missing database is `DBL-8105` (Database tidak ditemukan) instead of the GRANT
+a missing database is `DBL-8105` (Database not found) instead of the GRANT
 step's connect failure (`DBL-8100`, "server unreachable"). `map_connect_error`
 also maps SQLSTATE `3D000` on connect to `DatabaseNotFound`, so a database
 dropped between the check and the grant still answers correctly. No role is left
@@ -707,14 +707,14 @@ behind either way (the check precedes `create_user`).
 `executor_for` used to gate on `engine != Postgresql || auth != Password`, so a
 no-password PostgreSQL instance answered `DBL-8111` "not supported for this
 engine". The gate is now split: a non-PostgreSQL engine is `DBL-8111`, and a
-PostgreSQL instance created without a password is the new `DBL-8117` ("instance
-ini dibuat tanpa password, …"), which names what to do.
+PostgreSQL instance created without a password is the new `DBL-8117` ("this instance
+was created without a password, …"), which names what to do.
 
 ### Update source not found (`dblocal update check`)
 
 An HTTP 404 (and a 403 that is not a rate limit) from the releases API is the
 repository missing or private, not a connection failure. It now maps to
-`DBL-8011` "sumber rilis tidak ditemukan atau tidak publik", instead of
+`DBL-8011` "the update release source was not found or is not public", instead of
 `DBL-8004` "periksa koneksi".
 
 ### Mutation checks (each reverted, red pasted, restored, `git status --short` empty)
@@ -735,10 +735,10 @@ repository missing or private, not a connection failure. It now maps to
 - Real binary on an isolated `DBLOCAL_HOME` with a real PostgreSQL 18.7.0:
   - F3: `dblocal create --engine postgresql --version 18.7.0 --name nopw
     --port 25432 --no-password`, then `db list nopw` and `password reset nopw`
-    both print `[DBL-8117] Instance ini dibuat tanpa password, …` (exit 1), not
+    both print `[DBL-8117] This instance was created without a password, …` (exit 1), not
     `DBL-8111`.
   - F2: `dblocal user create pg1 u9 --db nosuchdb --level ro` prints
-    `[DBL-8105] Database tidak ditemukan.` (exit 2) with the server running;
+    `[DBL-8105] Database not found.` (exit 2) with the server running;
     `SELECT count(*) FROM pg_roles WHERE rolname='u9'` is `0` (no role left
     behind); `db drop pg1 nosuchdb --yes` still reports `DBL-8105`; `user create`
     into an existing `appdb` succeeds.
@@ -790,7 +790,7 @@ repository missing or private, not a connection failure. It now maps to
      that, refusing when `ops.is_busy(id)` is the one-line version, but it has a
      TOCTOU window the lock does not. It is not implemented in this round.
 3. **`update check` against a missing/private repo** is answered in code above:
-   `DBL-8011` "sumber rilis tidak ditemukan atau tidak publik", with a fake-fetcher
+   `DBL-8011` "the update release source was not found or is not public", with a fake-fetcher
    test. `consts::UPDATE_REPO` now names the real repository,
    `rezkycodes/dblocal`, but that repository is private, so a production check
    still hits `DBL-8011` until it is made public (or releases are published

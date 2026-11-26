@@ -42,8 +42,8 @@ upstream, not from the catalog hiding them:
 - MySQL publishes no arm64 Linux `minimal` tarball (only `x86_64`), and its macOS
   builds are `macos15`.
 
-A combination with no artifact is shown by the read model as "tidak tersedia di
-platform ini" (F-CAT-02 AC2), never as an error and never with an invented URL.
+A combination with no artifact is shown by the read model as "not available on this
+platform" (F-CAT-02 AC2), never as an error and never with an invented URL.
 
 Combinations with no artifact are reported as unavailable on that platform.
 They are never hidden and never treated as an error.

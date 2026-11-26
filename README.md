@@ -89,7 +89,7 @@ The first release targets **Linux and Windows**. macOS is deferred, not dropped.
 
 Not every engine has a build for every OS. The matrix below is what the catalog
 (`catalog/engines.json`) ships. A combination with no build is shown in the app as
-**"Tidak tersedia di platform ini"** — never as a hidden engine or a download that fails later. The
+**"Not available on this platform"** — never as a hidden engine or a download that fails later. The
 CLI refuses the same combination with the `DBL-6001` code. The macOS column lists catalog coverage
 only; macOS is not in the first release.
 

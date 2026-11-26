@@ -58,7 +58,7 @@ Coverage totals are from `cargo llvm-cov -p dblocal-gui`. Layout-heavy files (`a
 3. The GPUI app spawns an async task: `while let Ok(ev) = rx.recv_async().await { view.update(...); cx.notify(); }`. It parks on the channel, so an idle app consumes no CPU.
 4. Log streaming is opt-in per opened instance via `watch_logs(id, true/false)`. Each open tab owns its own buffer in a `LogStore` keyed by `InstanceId`, so a line for instance B can never appear under instance A; closing the tab drops it. The Logs tab renders through `uniform_list` over that buffer, and lines are stored as `SharedString`, so a frame clones pointers, never text.
 5. **Removal and forced stop (addendum G).** `InstanceRemoved` goes through `ShellState::apply_removed`, which drops the row, closes its tab, clears the selection if it pointed there and drops its log buffer; the workspace then calls `watch_logs(id, false)`. An unknown id is a no-op. The mock emits it when a delete completes (before `OperationFinished`) and when a create rolls back; both are tested. `StopForced` (a scripted `StopNeedsForce`) is emitted before the final `InstanceChanged` and raises the Indonesian toast `UI_TOAST_STOP_FORCED`; a render test proves a deleted instance leaves the dock (status-dot pixels 540 → 360, 113 sidebar rows differ).
-6. **Resync on lag.** `broadcast` drops the oldest events of a slow receiver. When the bridge sees `RecvError::Lagged` it emits `UiEvent::Resync`; the workspace then re-reads `list_instances()` and the catalog, so a row can never stay "berjalan" after missed `InstanceChanged` events.
+6. **Resync on lag.** `broadcast` drops the oldest events of a slow receiver. When the bridge sees `RecvError::Lagged` it emits `UiEvent::Resync`; the workspace then re-reads `list_instances()` and the catalog, so a row can never stay "running" after missed `InstanceChanged` events.
 
 ## Focus model and keyboard (`F-PLH-01`, W4-G)
 
@@ -402,7 +402,7 @@ Events drive everything (`app.rs::apply_event` / `apply_event_with_cx`):
 #### Real-window run at `01cafe0` (reviewer, before W2-B-fix2)
 
 Close with a tray really closed the window and the process, tray and both engines stayed up (RSS
-195 MB -> 75 MB). "Buka DBLocal" opened a window showing "2 berjalan" and the "Pilih instance" empty
+195 MB -> 75 MB). "Open DBLocal" opened a window showing "2 running" and the "Select an instance" empty
 state. With the window open, tray "Keluar" showed the dialog and "Hentikan semua lalu keluar" kept the
 window until both engines were down (Valkey at 1.3 s, PostgreSQL at 1.6 s, exit at 2.5 s). Relaunch
 re-adopted the running engines. Two defects were confirmed there and are fixed in the section above:
@@ -471,7 +471,7 @@ Window behaviour: on Linux `cx.hide()` is not implemented in gpui-pre, so with a
 window is actually closed and the app-level runtime (service, tray, bridge, quit state owner) stays
 alive via `QuitMode::Explicit`. "Buka DBLocal" opens a fresh window attached to the same service; if
 a main window already exists it is focused instead of opening a second one. Without a tray the close
-goes through the quit flow. The quit dialog's default (primary) button is "Biarkan tetap berjalan"
+goes through the quit flow. The quit dialog's default (primary) button is "Leave them running"
 (AC2, AC3); "Hentikan semua lalu keluar" disables actions while stopping and only exits after
 operation completion, failure, timeout, or explicit force-exit confirmation.
 
@@ -538,7 +538,7 @@ existing `start_tray_action_pump` in `bootstrap.rs` consumes it. No polling, no 
 
 `desktop::start()` returns `TrayStartup::none()` on any `tray-icon` error — no shell tray area,
 a restricted session, `NSStatusBar` failure. Then `TrayHandle::is_available()` is `false`, the
-status bar shows `UI_TRAY_UNAVAILABLE` (`Tray tidak tersedia`) and the one-time
+status bar shows `UI_TRAY_UNAVAILABLE` (`Tray unavailable`) and the one-time
 `UI_TRAY_UNAVAILABLE_NOTE`, `set_quit_mode` becomes `LastWindowClosed`, and closing the window
 goes through the quit flow — the F-TRY-01 AC3 fallback. No panic.
 
