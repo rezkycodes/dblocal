@@ -459,3 +459,18 @@ fn enabling_auto_check_runs_a_check_now(cx: &mut TestAppContext) {
         "the switch checks right away"
     );
 }
+
+/// The startup loop runs one check immediately and keeps the icon in sync.
+#[gpui_kit::test]
+fn the_check_loop_checks_once_at_startup(cx: &mut TestAppContext) {
+    let (view, service, cx) = fixture(cx);
+    service.set(|script| script.check_due = Ok(Some(status(Some(available(true)), portable()))));
+    view.update(cx, |this, cx| this.start_update_check_loop(cx));
+    settle(cx);
+    assert_eq!(service.counts().check_due, 1, "one check at startup");
+    assert!(view.read_with(cx, |this, _| this.update_state().icon_visible()));
+    // A second call must not install a second loop or fire another check.
+    view.update(cx, |this, cx| this.start_update_check_loop(cx));
+    settle(cx);
+    assert_eq!(service.counts().check_due, 1, "the loop is installed once");
+}
