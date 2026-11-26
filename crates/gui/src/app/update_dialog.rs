@@ -32,7 +32,12 @@ pub(super) fn title_bar_button(
     if !state.icon_visible() {
         return None;
     }
-    let label = state.headline();
+    // The tooltip names the version, as the icon is the only hint that a newer
+    // release exists (`F-PKG-05`).
+    let label = state
+        .available_version()
+        .map(strings::update_tooltip)
+        .unwrap_or_else(|| state.headline());
     Some(
         Button::new("title-update")
             .ghost()

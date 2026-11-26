@@ -123,8 +123,6 @@ pub const UI_SETTINGS_UPDATES: &str = "Updates";
 pub const UI_SETTINGS_CURRENT_VERSION: &str = "Current version";
 /// Settings updates: how the app was installed.
 pub const UI_SETTINGS_INSTALL_KIND: &str = "How it was installed";
-/// Settings updates: the manual check action.
-pub const UI_SETTINGS_CHECK_NOW: &str = "Check now";
 /// Settings updates: the check is in flight.
 pub const UI_SETTINGS_CHECKING: &str = "Checking…";
 /// Settings updates: no newer release.
