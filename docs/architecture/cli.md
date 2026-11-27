@@ -203,6 +203,32 @@ Exit codes: 0 success, 2 unknown action, 1 backend failure (the `DBL-85xx` code
 is printed on stderr). The mechanism per OS (systemd `--user`, XDG desktop,
 LaunchAgent, `HKCU\...\Run`) is documented in `docs/architecture/autostart.md`.
 
+## `runtime` (F-RTM-04)
+
+Removing an unused engine runtime is a disk-reclaim action, not an instance
+action, so it lives under its own `runtime` subcommand. `runtime use` does not
+exist: a runtime is installed implicitly by `create` when it is missing.
+
+| Command | stdout | stderr |
+|---|---|---|
+| `runtime list` | aligned `ENGINE VERSION ARCH SIZE USERS` table; `USERS` names the instances, or `unused` | empty |
+| `runtime list --json` | one JSON line: array of `{engine, version, arch, size_bytes, users}` (`users` is an array of names) | empty |
+| `runtime remove <engine> <version> --yes` | empty | `Runtime removed.` |
+| `runtime remove <engine> <version>` (interactive) | empty | the prompt, then the result |
+
+The runtime is addressed by `<engine> <version>` — the two values `runtime list`
+prints — not by the store's internal id. `remove` refuses a runtime that an
+instance still uses (`F-RTM-04` AC2): the core returns `DBL-1006` and the CLI
+then prints `Used by: <names>` so the user knows what to delete first. It also
+refuses a runtime that is being installed or removed by another process
+(`DBL-1007`), and a row that points outside the install directory (`DBL-2003`).
+
+Exit codes: 0 removed, 2 unknown engine or a refused/mismatched confirmation,
+3 no installed runtime matches the engine and version, 1 a removal that the
+filesystem refused (`DBL-3004`) and can be retried. Like `delete`, a
+non-interactive call without `--yes` exits 2; an interactive call prompts for the
+exact version and cancels on a mismatch.
+
 The hidden `autostart-run` subcommand and the raw `--autostart` flag (which the
 login item passes) run the login mode: the GUI opens tray-only and starts the
 flagged instances, or the CLI starts them headless and exits with a clear

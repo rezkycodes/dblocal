@@ -174,6 +174,12 @@ in your OS keychain (Secret Service / Keychain / Credential Manager), never in t
 
 Uninstalling DBLocal **does not delete** `~/.dblocal/`; your databases survive.
 
+Each downloaded engine version stays under `runtimes/` even after you delete every instance that
+used it. To reclaim that space, remove an unused runtime from the dock's **RUNTIMES** section, or
+run `dblocal runtime list` to see what is installed and `dblocal runtime remove <engine> <version>
+--yes` to delete one. A runtime still used by an instance is refused; a removed engine is simply
+downloaded again the next time you create an instance of that version.
+
 ## License
 
 DBLocal is free software under the **GNU General Public License v3.0 only** (`GPL-3.0-only`). See

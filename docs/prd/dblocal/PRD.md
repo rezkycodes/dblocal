@@ -262,6 +262,7 @@ graph TD
   **F-RTM-04 — Reclaim disk**
   - AC1: Given a runtime is no longer referenced by any instance, When the user opens Settings → Storage, Then that runtime is listed as "Unused" with its size and can be deleted.
   - AC2: Given a runtime is still referenced by at least one instance, Then its delete button is disabled with the list of instances using it.
+  - *Status (v0.3): implemented in the dock's RUNTIMES section (not Settings → Storage) and as `dblocal runtime list|remove`; unused runtimes show their size and a remove control, used ones a disabled control. Removal is refused while an instance uses the runtime, is mutually exclusive with a concurrent create/install across processes, re-validates the path, and is retryable after a partial failure.*
   - Entities: Runtime, Instance
 
 - **Edge cases:** not enough disk (check free space ≥ `size_bytes × 3` before starting, not after failing) · Windows antivirus locks a file during extraction (retry with backoff, then a message naming antivirus) · paths longer than 260 characters on Windows (use `\\?\` verbatim paths).
