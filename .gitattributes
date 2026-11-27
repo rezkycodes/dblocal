@@ -12,6 +12,12 @@ crates/xtask/tests/fixtures/mysql-archive.bin -text
 # host-independent diffs when the catalog automation regenerates them.
 crates/xtask/tests/fixtures/*.json text eol=lf
 
+# Shipped catalog files are compared byte-for-byte by the build tests
+# (`crates/xtask/src/catalog/build/mod.rs`): a CRLF checkout on Windows would
+# not equal the LF bytes the builder serializes, so force LF on every host.
+catalog/*.json text eol=lf
+
+
 # Shell scripts and desktop entries must keep LF endings: a CRLF shebang makes
 # the kernel/EISDIR herald fail on Linux (bad interpreter) and a CRLF `Exec=`
 # line breaks the desktop entry parser.
