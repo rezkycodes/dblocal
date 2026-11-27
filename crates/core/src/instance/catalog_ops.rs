@@ -163,8 +163,12 @@ pub(crate) fn source_for(inner: &Inner, spec: &InstanceSpec) -> Result<RuntimeSo
 /// The check asks the engine layout, never a fixed `bin/` path: RustFS unpacks
 /// its single `rustfs` binary at the runtime root, so a `bin/` test made every
 /// second RustFS create re-download and then collide with the existing
-/// directory. It also requires the same files extraction verified, so a
-/// half-written tree is re-installed rather than launched from.
+/// directory. It requires the same files extraction verified, so an incomplete
+/// tree is not treated as installed — and because extraction refuses to write
+/// over an existing final directory (`DBL-1003`), the installer then refuses to
+/// overwrite it rather than silently repairing it. The app never produces such a
+/// tree: extraction verifies the expected binaries in a staging directory and
+/// only then renames it into place.
 pub(crate) fn runtime_is_installed(inner: &Inner, spec: &InstanceSpec) -> bool {
     let Ok(dir) = inner
         .paths
