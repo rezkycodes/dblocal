@@ -148,6 +148,7 @@ macro_rules! case_tests {
 
 case_tests! {
     shell_is_unique => "shell", Workspace::preview;
+    launcher_is_unique => "launcher", Workspace::preview_launcher;
     quit_dialog_is_unique => "quit dialog", Workspace::preview_quit;
     quit_stop_failed_is_unique => "quit stop failed", Workspace::preview_quit_stop_failed;
     new_instance_dialog_is_unique => "new instance dialog", Workspace::preview_create;

@@ -13,7 +13,7 @@ use gpui_kit::component::button::ButtonVariants;
 use gpui_kit::component::label::Label;
 use gpui_kit::component::{ActiveTheme, Sizable, TitleBar, h_flex};
 use gpui_kit::prelude::*;
-use gpui_kit::{Context, IntoElement, ParentElement, Styled, div, px};
+use gpui_kit::{Context, IntoElement, ParentElement, SharedString, Styled, Window, div, px};
 
 use crate::format;
 
@@ -24,7 +24,11 @@ use super::design;
 use crate::theme::tokens;
 
 /// Renders the client-side title bar.
-pub(super) fn render(workspace: &Workspace, cx: &mut Context<Workspace>) -> impl IntoElement {
+pub(super) fn render(
+    workspace: &Workspace,
+    window: &mut Window,
+    cx: &mut Context<Workspace>,
+) -> impl IntoElement {
     let theme = cx.theme().clone();
     let selected = workspace
         .tabs
@@ -67,7 +71,7 @@ pub(super) fn render(workspace: &Workspace, cx: &mut Context<Workspace>) -> impl
                 )
                 .when_some(selected, |this, view| this.child(breadcrumb(view, &theme)))
                 .child(div().flex_1().min_w(px(12.)))
-                .child(search_button(&theme, cx))
+                .child(search_button(&theme, window, cx))
                 .child(div().flex_1().min_w(px(12.)))
                 .child(
                     design::chip("catalog", freshness.to_owned(), freshness_colour).child(icon(
@@ -115,10 +119,13 @@ pub(super) fn render(workspace: &Workspace, cx: &mut Context<Workspace>) -> impl
 /// as `Ctrl/Cmd+K`.
 fn search_button(
     theme: &gpui_kit::component::Theme,
+    window: &mut Window,
     cx: &mut Context<Workspace>,
 ) -> impl IntoElement {
     let keys = [actions::modifier_label(), "K"];
-    h_flex()
+    let focus =
+        super::components::keyed_focus(SharedString::from("title-search-focus"), window, cx);
+    let button = h_flex()
         .id("title-search")
         .flex_none()
         .w(px(340.))
@@ -145,7 +152,8 @@ fn search_button(
                 .text_xs()
                 .text_color(theme.muted_foreground),
         )
-        .child(design::kbd("title-search", &keys, theme))
+        .child(design::kbd("title-search", &keys, theme));
+    super::components::apply_focus_ring(button, &focus, window, cx)
 }
 
 /// The rounded app mark: a database glyph on the accent fill.

@@ -44,7 +44,7 @@ impl Workspace {
     ) -> impl IntoElement {
         let theme = cx.theme().clone();
         if self.tabs.is_empty() {
-            return self.render_launcher(cx).into_any_element();
+            return self.render_launcher(window, cx).into_any_element();
         }
 
         v_flex()

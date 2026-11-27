@@ -725,7 +725,7 @@ impl Render for Workspace {
                 this.close_modals();
                 cx.notify();
             }))
-            .child(self.render_title_bar(cx))
+            .child(self.render_title_bar(window, cx))
             .when_some(self.offline_banner(cx), |this, banner| this.child(banner))
             .child(
                 h_flex()
@@ -771,8 +771,8 @@ impl Render for Workspace {
 }
 
 impl Workspace {
-    fn render_title_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        title_bar::render(self, cx)
+    fn render_title_bar(&self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        title_bar::render(self, window, cx)
     }
 
     fn render_status_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {

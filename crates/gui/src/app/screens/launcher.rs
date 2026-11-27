@@ -20,7 +20,7 @@ use gpui_kit::assets::IconName;
 use gpui_kit::component::label::Label;
 use gpui_kit::component::{ActiveTheme, Theme, h_flex, v_flex};
 use gpui_kit::prelude::*;
-use gpui_kit::{Context, IntoElement, ParentElement, SharedString, Styled, div, px};
+use gpui_kit::{Context, IntoElement, ParentElement, SharedString, Styled, Window, div, px};
 
 use crate::format;
 use crate::theme::tokens;
@@ -58,7 +58,11 @@ impl Workspace {
     }
 
     /// The launcher for an empty centre pane (see the module docs).
-    pub(crate) fn render_launcher(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    pub(crate) fn render_launcher(
+        &self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
         let theme = cx.theme().clone();
         let empty = self.instances().is_empty();
         let (title, subtitle) = if empty {
@@ -72,11 +76,11 @@ impl Workspace {
 
         let mut card = design::group_card("launcher", &theme)
             .w(px(LAUNCHER_W))
-            .child(self.render_quick_create(&theme, cx));
+            .child(self.render_quick_create(&theme, window, cx));
         if !empty {
-            card = card.child(self.render_launcher_instances(&theme, cx));
+            card = card.child(self.render_launcher_instances(&theme, window, cx));
         }
-        card = card.child(self.render_launcher_actions(empty, &theme, cx));
+        card = card.child(self.render_launcher_actions(empty, &theme, window, cx));
 
         div()
             .id(if empty { "welcome" } else { "select-instance" })
@@ -122,7 +126,12 @@ impl Workspace {
     }
 
     /// The engine tiles, three per row.
-    fn render_quick_create(&self, theme: &Theme, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_quick_create(
+        &self,
+        theme: &Theme,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
         let engines: Vec<EngineKey> = self
             .catalog()
             .engines
@@ -132,32 +141,43 @@ impl Workspace {
             .collect();
         let mut grid = h_flex().flex_wrap().gap_1();
         for engine in engines {
-            grid = grid.child(
-                h_flex()
-                    .id(SharedString::from(format!(
-                        "launch-engine-{}",
-                        engine.as_str()
-                    )))
-                    .w(px((LAUNCHER_W - 32.0 - 8.0) / 3.0))
-                    .h(px(40.))
-                    .px(px(8.))
-                    .gap_2p5()
-                    .rounded(px(6.))
-                    .cursor_pointer()
-                    .hover(|s| s.bg(tokens::hover(theme)))
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        this.quick_create(engine, window, cx);
-                    }))
-                    .child(engine_badge(engine, 28.0, theme))
-                    .child(
-                        Label::new(engine.display_name())
-                            .id(SharedString::from(format!(
-                                "launch-engine-name-{}",
-                                engine.as_str()
-                            )))
-                            .truncate(),
-                    ),
+            let focus = crate::app::components::keyed_focus(
+                SharedString::from(format!("launch-engine-focus-{}", engine.as_str())),
+                window,
+                cx,
             );
+            let tile = h_flex()
+                .id(SharedString::from(format!(
+                    "launch-engine-{}",
+                    engine.as_str()
+                )))
+                .w(px((LAUNCHER_W - 32.0 - 8.0) / 3.0))
+                .h(px(40.))
+                .px(px(8.))
+                .gap_2p5()
+                .rounded(px(6.))
+                .cursor_pointer()
+                .aria_label(format!(
+                    "{} {}",
+                    strings::UI_NEW_INSTANCE,
+                    engine.display_name()
+                ))
+                .hover(|s| s.bg(tokens::hover(theme)))
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    this.quick_create(engine, window, cx);
+                }))
+                .child(engine_badge(engine, 28.0, theme))
+                .child(
+                    Label::new(engine.display_name())
+                        .id(SharedString::from(format!(
+                            "launch-engine-name-{}",
+                            engine.as_str()
+                        )))
+                        .truncate(),
+                );
+            grid = grid.child(crate::app::components::apply_focus_ring(
+                tile, &focus, window, cx,
+            ));
         }
         v_flex()
             .id("launcher-quick-create")
@@ -175,7 +195,12 @@ impl Workspace {
     }
 
     /// The first few instances, one row each, like the dock.
-    fn render_launcher_instances(&self, theme: &Theme, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_launcher_instances(
+        &self,
+        theme: &Theme,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
         let mut list = v_flex()
             .id("launcher-instances")
             .gap_0p5()
@@ -193,44 +218,52 @@ impl Workspace {
             );
         for view in self.instances().iter().take(LAUNCHER_INSTANCES) {
             let id = view.id.clone();
-            list = list.child(
-                h_flex()
-                    .id(SharedString::from(format!("launch-instance-{}", view.id)))
-                    .h(px(34.))
-                    .px(px(8.))
-                    .gap_2p5()
-                    .rounded(px(6.))
-                    .cursor_pointer()
-                    .hover(|s| s.bg(tokens::hover(theme)))
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.open_tab(id.clone(), cx);
-                        cx.notify();
-                    }))
-                    .child(engine_icon(view.engine, 16.0, theme))
-                    .child(
-                        Label::new(view.name.clone())
-                            .id(SharedString::from(format!("launch-name-{}", view.id)))
-                            .flex_1()
-                            .truncate(),
-                    )
-                    .child(status_glyph(view.status, 7.0, theme))
-                    .child(
-                        Label::new(format::status_label(view.status))
-                            .id(SharedString::from(format!("launch-status-{}", view.id)))
-                            .w(px(64.))
-                            .text_xs()
-                            .text_color(theme.muted_foreground),
-                    )
-                    .child(
-                        Label::new(format!("{} · :{}", format::dock_version(view), view.port))
-                            .id(SharedString::from(format!("launch-port-{}", view.id)))
-                            .w(px(96.))
-                            .text_right()
-                            .text_xs()
-                            .font_family(theme.mono_font_family.clone())
-                            .text_color(theme.muted_foreground),
-                    ),
+            let accessible = format!("{} — {}", view.name, format::status_label(view.status));
+            let focus = crate::app::components::keyed_focus(
+                SharedString::from(format!("launch-instance-focus-{}", view.id)),
+                window,
+                cx,
             );
+            let row = h_flex()
+                .id(SharedString::from(format!("launch-instance-{}", view.id)))
+                .h(px(34.))
+                .px(px(8.))
+                .gap_2p5()
+                .rounded(px(6.))
+                .cursor_pointer()
+                .aria_label(accessible)
+                .hover(|s| s.bg(tokens::hover(theme)))
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.open_tab(id.clone(), cx);
+                    cx.notify();
+                }))
+                .child(engine_icon(view.engine, 16.0, theme))
+                .child(
+                    Label::new(view.name.clone())
+                        .id(SharedString::from(format!("launch-name-{}", view.id)))
+                        .flex_1()
+                        .truncate(),
+                )
+                .child(status_glyph(view.status, 7.0, theme))
+                .child(
+                    Label::new(format::status_label(view.status))
+                        .id(SharedString::from(format!("launch-status-{}", view.id)))
+                        .w(px(64.))
+                        .text_xs()
+                        .text_color(theme.muted_foreground),
+                )
+                .child(
+                    Label::new(format!("{} · :{}", format::dock_version(view), view.port))
+                        .id(SharedString::from(format!("launch-port-{}", view.id)))
+                        .w(px(96.))
+                        .text_right()
+                        .text_xs()
+                        .font_family(theme.mono_font_family.clone())
+                        .text_color(theme.muted_foreground),
+                );
+            list = list.child(crate::app::components::apply_focus_ring(
+                row, &focus, window, cx,
+            ));
         }
         list
     }
@@ -240,6 +273,7 @@ impl Workspace {
         &self,
         empty: bool,
         theme: &Theme,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let rows = [
@@ -278,35 +312,42 @@ impl Workspace {
             } else {
                 SharedString::from(format!("launch-action-{index}"))
             };
-            list = list.child(
-                h_flex()
-                    .id(element_id)
-                    .h(px(38.))
-                    .px(px(8.))
-                    .gap_2p5()
-                    .rounded(px(6.))
-                    .cursor_pointer()
-                    .hover(|s| s.bg(tokens::hover(theme)))
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        match action {
-                            LaunchAction::NewInstance => this.open_new_instance(window, cx),
-                            LaunchAction::Palette => this.toggle_palette_in(window, cx),
-                            LaunchAction::Settings => this.open_settings(window, cx),
-                        }
-                        cx.notify();
-                    }))
-                    .child(design::icon_tile(glyph, 28.0, theme.foreground, theme))
-                    .child(
-                        Label::new(label)
-                            .id(SharedString::from(format!("launch-action-label-{index}")))
-                            .flex_1(),
-                    )
-                    .child(design::kbd(
-                        &format!("launch-{index}"),
-                        &[modifier_label(), key],
-                        theme,
-                    )),
+            let focus = crate::app::components::keyed_focus(
+                SharedString::from(format!("launch-action-focus-{index}")),
+                window,
+                cx,
             );
+            let row = h_flex()
+                .id(element_id)
+                .h(px(38.))
+                .px(px(8.))
+                .gap_2p5()
+                .rounded(px(6.))
+                .cursor_pointer()
+                .aria_label(label)
+                .hover(|s| s.bg(tokens::hover(theme)))
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    match action {
+                        LaunchAction::NewInstance => this.open_new_instance(window, cx),
+                        LaunchAction::Palette => this.toggle_palette_in(window, cx),
+                        LaunchAction::Settings => this.open_settings(window, cx),
+                    }
+                    cx.notify();
+                }))
+                .child(design::icon_tile(glyph, 28.0, theme.foreground, theme))
+                .child(
+                    Label::new(label)
+                        .id(SharedString::from(format!("launch-action-label-{index}")))
+                        .flex_1(),
+                )
+                .child(design::kbd(
+                    &format!("launch-{index}"),
+                    &[modifier_label(), key],
+                    theme,
+                ));
+            list = list.child(crate::app::components::apply_focus_ring(
+                row, &focus, window, cx,
+            ));
         }
         list
     }
