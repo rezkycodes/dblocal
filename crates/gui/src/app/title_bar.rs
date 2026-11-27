@@ -13,9 +13,7 @@ use gpui_kit::component::button::ButtonVariants;
 use gpui_kit::component::label::Label;
 use gpui_kit::component::{ActiveTheme, Sizable, TITLE_BAR_HEIGHT, TitleBar, h_flex};
 use gpui_kit::prelude::*;
-use gpui_kit::{
-    Context, Decorations, IntoElement, ParentElement, SharedString, Styled, Window, div, px,
-};
+use gpui_kit::{Context, IntoElement, ParentElement, SharedString, Styled, Window, div, px};
 
 use crate::format;
 
@@ -70,7 +68,10 @@ pub(super) fn client_window_controls_width(window: &Window) -> f32 {
         return 0.0;
     }
     #[cfg(target_os = "linux")]
-    if !matches!(window.window_decorations(), Decorations::Client { .. }) {
+    if !matches!(
+        window.window_decorations(),
+        gpui_kit::Decorations::Client { .. }
+    ) {
         return 0.0;
     }
     let supported = window.window_controls();
