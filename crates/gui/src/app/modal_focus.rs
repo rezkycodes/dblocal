@@ -36,6 +36,10 @@ impl Workspace {
             self.restore_dialog_focus_after_close();
             return;
         }
+        if self.runtime_remove_target.take().is_some() {
+            self.restore_dialog_focus_after_close();
+            return;
+        }
         if self.drop_dialog.take().is_some() {
             self.restore_dialog_focus_after_close();
             return;
@@ -74,6 +78,7 @@ impl Workspace {
             || self.reset_confirm.is_some()
             || self.secret_dialog.is_some()
             || self.config_restore_confirm.is_some()
+            || self.runtime_remove_target.is_some()
             || self.quit.is_confirming()
     }
 

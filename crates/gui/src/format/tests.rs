@@ -521,6 +521,16 @@ fn runtime_rows_name_users_or_say_unused() {
 }
 
 #[test]
+fn runtime_row_carries_the_id_its_remove_control_addresses() {
+    // `F-RTM-04`: the dock's remove control needs the store id, so the row must
+    // carry the same one the service's `remove_runtime` accepts.
+    let rt = runtime(EngineKey::Valkey, "8.1.0");
+    let row = runtime_row(&rt, &[]);
+    assert_eq!(row.id, rt.id());
+    assert!(row.unused, "a runtime with no instances is removable");
+}
+
+#[test]
 fn form_validation_rejects_short_names_and_low_ports() {
     let bad_name = validate_form("a", "5432", &[]);
     assert!(bad_name.name_error.is_some());

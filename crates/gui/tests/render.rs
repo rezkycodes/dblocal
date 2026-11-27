@@ -146,6 +146,9 @@ fn light_primary() -> [u8; 3] {
 fn light_warning() -> [u8; 3] {
     token(false, "warning.background")
 }
+fn light_danger() -> [u8; 3] {
+    token(false, "danger.background")
+}
 
 fn seeded_service() -> Arc<dyn DblService> {
     Arc::new(MockService::demo())
@@ -927,6 +930,31 @@ fn renders_create_dialog_with_a_download_and_an_unavailable_version() {
 }
 
 #[test]
+fn renders_dock_with_runtime_remove_controls_in_both_themes() {
+    // `F-RTM-04`: the dock's RUNTIMES rows carry a remove control. Render the
+    // whole shell in both themes so the control and its placement are on record;
+    // the dock is the left column.
+    for (dark, name) in [(true, "dock-dark.png"), (false, "dock-light.png")] {
+        let frame = render(dark, name, Workspace::preview);
+        let dock = (0, 70, DOCK as u32, LOGICAL_H - 40);
+        let (sidebar, warning) = if dark {
+            (dark_sidebar(), dark_warning())
+        } else {
+            (light_sidebar(), light_warning())
+        };
+        let chrome = frame.count_near(dock, sidebar, 10);
+        // The "unused" label paints in the warning colour.
+        let unused = frame.count_near(dock, warning, 20);
+        eprintln!("{name} chrome={chrome} unused={unused}");
+        assert!(chrome > 5000, "{name}: dock column not painted ({chrome})");
+        assert!(
+            unused > 20,
+            "{name}: no unused-runtime label to pair with a remove control ({unused})"
+        );
+    }
+}
+
+#[test]
 fn renders_dock_with_the_filter_applied() {
     let full = render(true, "dock-all-dark.png", Workspace::preview);
     let filtered = render(true, "dock-filtered-dark.png", Workspace::preview_filtered);
@@ -958,6 +986,38 @@ fn renders_palette_and_delete_dialog() {
         + delete.count_near((w / 4, h / 4, w * 3 / 4, h * 3 / 4), light_sidebar(), 8);
     eprintln!("DELETE panel={panel}");
     assert!(panel > 2000, "delete panel missing ({panel})");
+}
+
+#[test]
+fn renders_runtime_remove_dialog_in_both_themes() {
+    // `F-RTM-04`: an unused runtime's confirm dialog must paint a centred panel
+    // with its body text and a danger confirm button, in dark and light.
+    for (dark, name) in [
+        (true, "runtime-remove-dark.png"),
+        (false, "runtime-remove-light.png"),
+    ] {
+        let frame = render(dark, name, Workspace::preview_runtime_remove);
+        let (w, h) = (LOGICAL_W, LOGICAL_H);
+        let region = (w / 4, h / 4, w * 3 / 4, h * 3 / 4);
+        let (sidebar, danger) = if dark {
+            (dark_sidebar(), dark_danger())
+        } else {
+            (light_sidebar(), light_danger())
+        };
+        let panel = frame.count_near(region, [255, 255, 255], 8)
+            + frame.count_near(region, [35, 36, 47], 10)
+            + frame.count_near(region, sidebar, 10);
+        let danger_px = frame.count_near(region, danger, 18);
+        eprintln!("{name} panel={panel} danger={danger_px}");
+        assert!(
+            panel > 2000,
+            "{name}: runtime-remove panel missing ({panel})"
+        );
+        assert!(
+            danger_px > 60,
+            "{name}: danger confirm button missing ({danger_px})"
+        );
+    }
 }
 
 #[test]

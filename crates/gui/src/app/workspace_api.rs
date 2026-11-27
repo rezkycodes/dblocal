@@ -289,6 +289,48 @@ impl Workspace {
         self.delete_name_input.as_ref()
     }
 
+    /// The runtime the open remove-dialog targets, for rendering and assertions.
+    pub(crate) fn runtime_remove_runtime(&self) -> Option<dblocal_core::model::Runtime> {
+        super::runtime_dialog::target_runtime(self)
+    }
+
+    /// Opens the confirm-remove dialog for an unused runtime (`F-RTM-04`).
+    pub(crate) fn open_runtime_remove_dialog(
+        &mut self,
+        runtime_id: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.runtime_remove_target = Some(runtime_id);
+        self.begin_modal(window, cx);
+        self.focus_modal_root();
+        cx.notify();
+    }
+
+    /// Runs the removal the confirm dialog approved, then refreshes the dock and
+    /// the status-bar size (`F-RTM-04`), or reports the error like other actions.
+    pub(crate) fn confirm_runtime_remove(&mut self, cx: &mut Context<Self>) {
+        let Some(runtime_id) = self.runtime_remove_target.take() else {
+            return;
+        };
+        self.restore_dialog_focus_after_close();
+        let service = self.service.clone();
+        self.bg(cx, move || {
+            let result = service.remove_runtime(&runtime_id);
+            move |this: &mut Workspace, cx: &mut Context<Workspace>| {
+                match result {
+                    Ok(()) => {
+                        this.toast = Some(SharedString::from(strings::UI_TOAST_RUNTIME_REMOVED));
+                        this.refresh_instances_bg(cx);
+                        this.refresh_home_size_bg(cx);
+                    }
+                    Err(err) => this.report_error(&err),
+                }
+                cx.notify();
+            }
+        });
+    }
+
     /// The instance header's "Delete" button handle (`F-INS-05`), so a keyboard
     /// test can walk Tab onto it and confirm the real control opens the dialog.
     #[cfg(test)]

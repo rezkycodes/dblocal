@@ -67,6 +67,7 @@ mod quit_flow;
 #[cfg(test)]
 #[path = "app/quit_flow_tests.rs"]
 mod quit_flow_tests;
+mod runtime_dialog;
 mod screens;
 #[cfg(test)]
 mod scripted_service;
@@ -205,6 +206,8 @@ pub struct Workspace {
     delete_typed_name: Option<String>,
     delete_mode: DeleteMode,
     delete_size: u64,
+    /// A runtime the confirm-removal dialog targets (`F-RTM-04`), by id.
+    runtime_remove_target: Option<String>,
     /// Per-instance Databases tab state (`F-DBU-01..03`).
     admin: admin_state::AdminState,
     /// Per-instance Config tab state (`F-CFG-01`, `F-CFG-02`).
@@ -481,6 +484,7 @@ impl Workspace {
             delete_typed_name: None,
             delete_mode: DeleteMode::ArchiveData,
             delete_size: 0,
+            runtime_remove_target: None,
             admin: admin_state::AdminState::default(),
             config: config_state::ConfigState::default(),
             config_restore_confirm: None,
@@ -745,6 +749,9 @@ impl Render for Workspace {
             })
             .when(deleting, |this| {
                 this.child(delete_dialog::render(self, window, cx))
+            })
+            .when(self.runtime_remove_target.is_some(), |this| {
+                this.child(runtime_dialog::render(self, window, cx))
             })
             .when(self.palette_open, |this| {
                 this.child(palette::render(self, window, cx))

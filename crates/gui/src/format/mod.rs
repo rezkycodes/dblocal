@@ -540,6 +540,8 @@ pub fn delete_needs_stop(status: InstanceStatus) -> bool {
 /// One runtime row in the dock: what the row shows and how it is worded.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RuntimeRow {
+    /// Store id, so the row's remove control can address the runtime.
+    pub id: String,
     /// Engine this runtime belongs to (for its service icon).
     pub engine: EngineKey,
     /// `PostgreSQL 17.4`, as the row prints it.
@@ -565,6 +567,7 @@ pub fn runtime_row(runtime: &Runtime, instances: &[InstanceView]) -> RuntimeRow 
         format!("{users} {}", strings::UI_RUNTIME_INSTANCE_COUNT)
     };
     RuntimeRow {
+        id: runtime.id().to_owned(),
         engine: runtime.engine(),
         title: format!("{} {}", runtime.engine().display_name(), runtime.version()),
         users,

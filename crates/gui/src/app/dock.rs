@@ -9,9 +9,11 @@ use gpui_kit::assets::IconName;
 use gpui_kit::component::button::Button;
 use gpui_kit::component::button::ButtonVariants;
 use gpui_kit::component::label::Label;
-use gpui_kit::component::{ActiveTheme, Sizable, Theme, h_flex, input::Input, v_flex};
+use gpui_kit::component::{ActiveTheme, Disableable, Sizable, Theme, h_flex, input::Input, v_flex};
 use gpui_kit::prelude::*;
-use gpui_kit::{Context, Div, IntoElement, ParentElement, SharedString, Styled, Window, div, px};
+use gpui_kit::{
+    AnyElement, Context, Div, IntoElement, ParentElement, SharedString, Styled, Window, div, px,
+};
 
 use crate::format::{self, StatusGlyph};
 use crate::theme::tokens;
@@ -96,7 +98,7 @@ impl Workspace {
                 None => div().into_any_element(),
             })
             .child(tree)
-            .child(self.render_runtimes(&theme))
+            .child(self.render_runtimes(&theme, cx))
             .child(
                 Button::new("dock-create")
                     .outline()
@@ -260,8 +262,11 @@ impl Workspace {
         super::components::apply_focus_ring(row, &row_focus, window, cx)
     }
 
-    /// The runtime list: title, instance count, an "unused" chip.
-    fn render_runtimes(&self, theme: &Theme) -> impl IntoElement {
+    /// The runtime list: title, instance count, an "unused" chip when unused, and a
+    /// remove control on each row. An unused runtime gets a live control
+    /// (`F-RTM-04` AC1); a used one gets a disabled control whose tooltip names
+    /// what it needs (AC2).
+    fn render_runtimes(&self, theme: &Theme, cx: &mut Context<Self>) -> impl IntoElement {
         let rows = format::runtime_rows(self.runtimes(), &self.state.instances);
         let mut list = v_flex()
             .id("runtime-list")
@@ -303,6 +308,7 @@ impl Workspace {
                     .text_color(theme.muted_foreground)
                     .into_any_element()
             };
+            let remove = self.render_runtime_remove_control(index, row, cx);
             list = list.child(
                 h_flex()
                     .id(SharedString::from(format!("runtime-row-{index}")))
@@ -318,10 +324,41 @@ impl Workspace {
                             .flex_1()
                             .text_xs(),
                     )
-                    .child(usage),
+                    .child(usage)
+                    .child(remove),
             );
         }
         list
+    }
+
+    /// One row's remove control. Unused: enabled, opens the confirm dialog.
+    /// Used: disabled, with a tooltip naming the reason (`F-RTM-04` AC2).
+    fn render_runtime_remove_control(
+        &self,
+        index: usize,
+        row: &format::RuntimeRow,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let button = Button::new(SharedString::from(format!("runtime-remove-{index}")))
+            .ghost()
+            .xsmall()
+            .compact()
+            .icon(IconName::Delete)
+            .accessibility_label(strings::UI_RUNTIME_REMOVE);
+        if row.unused {
+            let id = row.id.clone();
+            button
+                .tooltip(strings::UI_RUNTIME_REMOVE)
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    this.open_runtime_remove_dialog(id.clone(), window, cx);
+                }))
+                .into_any_element()
+        } else {
+            button
+                .disabled(true)
+                .tooltip(strings::UI_RUNTIME_IN_USE)
+                .into_any_element()
+        }
     }
 }
 

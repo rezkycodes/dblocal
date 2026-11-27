@@ -820,6 +820,30 @@ impl Workspace {
         workspace
     }
 
+    /// Preview with the confirm-remove-runtime dialog open on an unused runtime
+    /// (`F-RTM-04`), so a render test can prove the dialog and its focus trap.
+    pub fn preview_runtime_remove(
+        service: Arc<dyn DblService>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let mut workspace = Self::preview(service, window, cx);
+        // Seed an unused runtime so the dialog has a concrete engine and size.
+        let unused = dblocal_core::model::Runtime::new(
+            "rustfs-1.0.7-x86_64",
+            dblocal_core::model::EngineKey::Rustfs,
+            "1.0.7",
+            dblocal_core::platform::Arch::X86_64,
+            std::path::PathBuf::from("/runtimes/rustfs/1.0.7/x86_64"),
+            289 * 1024 * 1024,
+            std::time::SystemTime::UNIX_EPOCH,
+            dblocal_core::model::RuntimeState::Installed,
+        );
+        workspace.runtimes.push(unused.clone());
+        workspace.runtime_remove_target = Some(unused.id().to_owned());
+        workspace
+    }
+
     /// Preview with the quit dialog open on a running instance (F-TRY-02 AC2).
     pub fn preview_quit(
         service: Arc<dyn DblService>,

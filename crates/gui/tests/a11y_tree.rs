@@ -154,6 +154,7 @@ case_tests! {
     new_instance_dialog_is_unique => "new instance dialog", Workspace::preview_create;
     create_unavailable_is_unique => "create unavailable", Workspace::preview_create_unavailable;
     delete_confirmation_is_unique => "delete confirmation", Workspace::preview_delete;
+    runtime_remove_is_unique => "runtime remove", Workspace::preview_runtime_remove;
     command_palette_is_unique => "command palette", Workspace::preview_palette;
     status_bar_downloads_is_unique => "status bar downloads", Workspace::preview_pending;
     logs_are_unique => "logs", Workspace::preview_logs;

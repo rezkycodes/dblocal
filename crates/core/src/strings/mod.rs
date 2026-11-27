@@ -243,6 +243,23 @@ pub const UI_DELETE_TYPE_NAME: &str = "Type the instance name to confirm deletin
 /// Placeholder for the name confirmation field.
 pub const UI_DELETE_NAME_PLACEHOLDER: &str = "Instance name";
 
+// --- Remove runtime dialog (F-RTM-04) ---------------------------------------
+
+/// Remove-runtime dialog title.
+pub const UI_RUNTIME_REMOVE_TITLE: &str = "Remove engine runtime";
+/// Accessibility label of the dock's per-runtime remove control.
+pub const UI_RUNTIME_REMOVE: &str = "Remove unused runtime";
+/// The confirm dialog's body: what is removed and that it can be downloaded again.
+pub const UI_RUNTIME_REMOVE_BODY: &str = "This deletes the engine files from disk. If you create an instance of this engine and version again, DBLocal asks before downloading it once more.";
+/// Label in front of the space the removal frees.
+pub const UI_RUNTIME_REMOVE_SPACE: &str = "Frees";
+/// Confirm button in the remove-runtime dialog.
+pub const UI_RUNTIME_REMOVE_CONFIRM: &str = "Remove runtime";
+/// Toast after a runtime is removed.
+pub const UI_TOAST_RUNTIME_REMOVED: &str = "Engine runtime removed";
+/// Tooltip when a runtime still has instances, naming them.
+pub const UI_RUNTIME_IN_USE: &str = "Used by an instance; remove those instances first";
+
 // --- Failure / diagnostics (F-LOG-02) ---------------------------------------
 
 /// Heading shown in a failure state.
