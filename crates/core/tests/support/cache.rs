@@ -12,6 +12,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
+use dblocal_core::engine::layout::runtime_is_installed;
 use dblocal_core::model::EngineKey;
 use dblocal_core::paths::DblPaths;
 use dblocal_core::platform::Arch;
@@ -57,11 +58,11 @@ pub fn seed_cache_from(paths: &DblPaths, engine: EngineKey, version: &str) {
     let Ok(source) = paths.runtime_dir(engine, version, Arch::current()) else {
         return;
     };
-    if !source.join("bin").is_dir() {
+    if !runtime_is_installed(&source, engine) {
         return;
     }
     let target = cached_runtime(engine, version);
-    if target.join("bin").is_dir() {
+    if runtime_is_installed(&target, engine) {
         return;
     }
     if let Some(parent) = target.parent() {
@@ -78,11 +79,11 @@ pub fn seed_runtime(paths: &DblPaths, engine: EngineKey, version: &str) -> bool 
     let Ok(target) = paths.runtime_dir(engine, version, Arch::current()) else {
         return false;
     };
-    if target.join("bin").is_dir() {
+    if runtime_is_installed(&target, engine) {
         return true;
     }
     let source = cached_runtime(engine, version);
-    if !source.join("bin").is_dir() {
+    if !runtime_is_installed(&source, engine) {
         return false;
     }
     if let Some(parent) = target.parent() {
@@ -115,7 +116,7 @@ pub fn extract_archive_to_runtime(
     let Ok(target) = paths.runtime_dir(engine, version, Arch::current()) else {
         return false;
     };
-    if target.join("bin").is_dir() {
+    if runtime_is_installed(&target, engine) {
         return true;
     }
     let cache = real_home().join(".cache/dblocal-dev");
@@ -152,7 +153,7 @@ pub fn extract_archive_to_runtime(
         archive.display()
     );
     fs::rename(&staging, &target).expect("rename the extracted runtime into place");
-    target.join("bin").is_dir()
+    runtime_is_installed(&target, engine)
 }
 
 /// Recursively copies `from` to `to`, preserving permissions (the executable

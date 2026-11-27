@@ -155,10 +155,15 @@ non-terminal status forever, and each has an explicit settle step:
    `RuntimeSource` injected through options wins, which is how tests drive the
    real downloader over a loopback server.
 4. Insert the row as `Provisioning` (download needed) or `Initializing` (runtime
-   already installed) so the name and port are taken immediately.
+   already installed) so the name and port are taken immediately. "Installed"
+   means every binary `engine::layout::expected_binaries` names for this engine
+   exists in the runtime directory — `bin/<name>` for most engines, a
+   root-level `rustfs` for RustFS, whose archive has no `bin/`. A bare `bin/`
+   directory is never enough.
 5. If the runtime is missing: download, verify, extract with progress and the
    disk-space preflight, then record the runtime. `F-RTM-03` AC3: an installed
-   runtime skips all of this.
+   runtime skips all of this, and is recorded too, so a tree left by an older
+   build without a row becomes listable and removable instead of orphaned.
 6. Create the data, log and run directories, generate the password through
    `secrets` (or the explicit no-password value), and call the adapter's
    `initialize`.

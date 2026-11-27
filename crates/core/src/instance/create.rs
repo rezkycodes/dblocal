@@ -159,6 +159,11 @@ async fn create_body(
         )
         .await?;
     } else {
+        // The runtime is already unpacked here. Reusing it is what makes a
+        // second instance of an engine cheap, and recording it repairs a tree an
+        // older build installed without a store row (the RustFS regression), so
+        // it shows up in runtime listing and removal instead of being orphaned.
+        record_runtime(inner, spec)?;
         emit_stage(inner, op, OperationStage::Initializing);
     }
 
@@ -256,7 +261,7 @@ async fn install_runtime(
     // download is done and verification is starting. `Verifying` is emitted only
     // once the bytes have arrived, so a failed download never claims to verify.
     let expected: Vec<String> = if source.expected_binaries.is_empty() {
-        expected_binaries(spec.engine())
+        crate::engine::layout::expected_binaries(spec.engine())
     } else {
         source.expected_binaries.clone()
     };
@@ -310,33 +315,6 @@ async fn install_runtime(
     Ok(())
 }
 
-/// Binaries the extracted runtime must contain, relative to its root, named as
-/// the engine drivers launch them (`exe_name`: `.exe` on Windows).
-fn expected_binaries(engine: crate::model::EngineKey) -> Vec<String> {
-    expected_binaries_for(engine, cfg!(windows))
-}
-
-/// [`expected_binaries`] with the platform passed in, so both spellings are
-/// testable on any host.
-fn expected_binaries_for(engine: crate::model::EngineKey, windows: bool) -> Vec<String> {
-    let suffix = if windows { ".exe" } else { "" };
-    if engine == crate::model::EngineKey::Rustfs {
-        return vec![format!("rustfs{suffix}")];
-    }
-    let bases: &[&str] = match engine {
-        crate::model::EngineKey::Postgresql => &["postgres", "initdb", "pg_ctl"],
-        crate::model::EngineKey::Valkey => &["valkey-server"],
-        crate::model::EngineKey::Redis => &["redis-check-rdb", "redis-cli"],
-        crate::model::EngineKey::Mysql => &["mysqld"],
-        crate::model::EngineKey::Mariadb => &["mariadbd", "mysqld"],
-        crate::model::EngineKey::Rustfs => unreachable!(),
-    };
-    bases
-        .iter()
-        .map(|base| format!("bin/{base}{suffix}"))
-        .collect()
-}
-
 fn check_cancel(token: &CancellationToken) -> super::helpers::OpResult<()> {
     if token.is_cancelled() {
         Err(DblError::Cancelled {
@@ -357,75 +335,5 @@ async fn rollback(inner: &Arc<Inner>, id: &InstanceId, spec: &InstanceSpec) {
     let removed = super::helpers::rollback_create(inner, id, spec.name()).await;
     if removed {
         super::helpers::emit_removed(inner, id);
-    }
-}
-
-#[cfg(test)]
-mod expected_binaries_tests {
-    use super::expected_binaries_for;
-    use crate::model::EngineKey;
-
-    const ENGINES: [EngineKey; 5] = [
-        EngineKey::Postgresql,
-        EngineKey::Valkey,
-        EngineKey::Redis,
-        EngineKey::Mysql,
-        EngineKey::Mariadb,
-    ];
-
-    /// The install check looks for these files inside the extracted archive. A
-    /// Windows archive ships `bin/postgres.exe`, so a name without the suffix made
-    /// every Windows install fail with `DBL-1001` ("missing expected binary").
-    #[test]
-    fn windows_names_carry_the_exe_suffix() {
-        for engine in ENGINES {
-            let names = expected_binaries_for(engine, true);
-            assert!(!names.is_empty(), "{engine:?} must expect a binary");
-            for name in names {
-                assert!(
-                    name.starts_with("bin/") && name.ends_with(".exe"),
-                    "{engine:?}: `{name}` must be `bin/<name>.exe` on Windows"
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn unix_names_have_no_suffix() {
-        for engine in ENGINES {
-            for name in expected_binaries_for(engine, false) {
-                assert!(
-                    name.starts_with("bin/") && !name.ends_with(".exe"),
-                    "{engine:?}: `{name}` must be a bare `bin/<name>` on unix"
-                );
-            }
-        }
-    }
-
-    /// The names must be the ones the engine drivers launch (`exe_name`), so the
-    /// install check and the start path cannot drift apart.
-    #[test]
-    fn the_install_check_matches_what_the_drivers_launch() {
-        let launched = |engine: EngineKey| -> Vec<String> {
-            let bases: &[&str] = match engine {
-                EngineKey::Postgresql => &["postgres", "initdb", "pg_ctl"],
-                EngineKey::Valkey => &["valkey-server"],
-                EngineKey::Redis => &["redis-check-rdb", "redis-cli"],
-                EngineKey::Mysql => &["mysqld"],
-                EngineKey::Mariadb => &["mariadbd", "mysqld"],
-                EngineKey::Rustfs => return vec![crate::engine::uri::exe_name("rustfs")],
-            };
-            bases
-                .iter()
-                .map(|base| format!("bin/{}", crate::engine::uri::exe_name(base)))
-                .collect()
-        };
-        for engine in ENGINES {
-            assert_eq!(
-                expected_binaries_for(engine, cfg!(windows)),
-                launched(engine),
-                "{engine:?}"
-            );
-        }
     }
 }

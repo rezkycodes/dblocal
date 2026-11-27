@@ -6,6 +6,7 @@
 
 pub(crate) mod admin_shutdown;
 pub mod glibc;
+pub mod layout;
 pub mod mariadb;
 mod mysql;
 mod postgres;

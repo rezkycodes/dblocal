@@ -17,6 +17,8 @@ mod mutations;
 mod port_sync;
 mod races;
 mod recovery;
+mod runtime_fixture;
+mod runtime_reuse;
 mod safety;
 mod service_admin;
 

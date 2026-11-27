@@ -242,25 +242,11 @@ fn remove_runtime_refuses_while_an_instance_uses_it() {
     let port = test_port();
     let spec = h.spec("app-dev", EngineKey::Postgresql, port);
     h.create(spec);
-    // The harness never records a real runtime, so plant one.
-    let dir = h
-        .paths
-        .runtimes_dir()
-        .join("postgresql")
-        .join("18.7")
-        .join("x86_64");
-    std::fs::create_dir_all(dir.join("bin")).expect("runtime dir");
-    let runtime = crate::model::Runtime::new(
-        "postgresql-18.7-x86_64",
-        EngineKey::Postgresql,
-        "18.7",
-        crate::platform::Arch::X86_64,
-        dir,
-        1,
-        std::time::SystemTime::UNIX_EPOCH,
-        crate::model::RuntimeState::Installed,
-    );
-    h.store().add_runtime(&runtime).expect("record runtime");
+    // The harness pre-installs the runtime, so `create` takes the reuse path and
+    // records it: it is now known to the store and owned by the instance above.
+    let runtimes = h.service.list_runtimes().expect("runtimes");
+    assert_eq!(runtimes.len(), 1, "reuse records the runtime");
+    let runtime = runtimes[0].clone();
 
     let err = h
         .service

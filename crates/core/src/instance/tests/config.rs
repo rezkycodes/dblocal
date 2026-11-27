@@ -317,12 +317,8 @@ fn restore_available_is_false_without_a_file_or_a_backup() {
 /// skips the download path. Returns the harness, id and config path.
 fn created_with_runtime(engine: EngineKey) -> (Harness, InstanceId, PathBuf) {
     let harness = Harness::new(engine);
-    // Seed the runtime `create` looks for (`<home>/runtimes/<engine>/18.7/<arch>/bin`).
-    let dir = harness
-        .paths
-        .runtime_dir(engine, "18.7", crate::platform::Arch::X86_64)
-        .expect("runtime dir");
-    fs::create_dir_all(dir.join("bin")).expect("runtime bin");
+    // Seed the runtime `create` looks for, in the engine's real archive layout.
+    super::runtime_fixture::plant_runtime(&harness.paths, engine);
     let port = test_port();
     let spec = harness.spec("cfg", engine, port);
     harness.create(spec);

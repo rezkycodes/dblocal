@@ -158,7 +158,13 @@ pub(crate) fn source_for(inner: &Inner, spec: &InstanceSpec) -> Result<RuntimeSo
     })
 }
 
-/// The directory a runtime unpacks into for this host.
+/// Whether the runtime for this engine and version is already unpacked here.
+///
+/// The check asks the engine layout, never a fixed `bin/` path: RustFS unpacks
+/// its single `rustfs` binary at the runtime root, so a `bin/` test made every
+/// second RustFS create re-download and then collide with the existing
+/// directory. It also requires the same files extraction verified, so a
+/// half-written tree is re-installed rather than launched from.
 pub(crate) fn runtime_is_installed(inner: &Inner, spec: &InstanceSpec) -> bool {
     let Ok(dir) = inner
         .paths
@@ -166,7 +172,7 @@ pub(crate) fn runtime_is_installed(inner: &Inner, spec: &InstanceSpec) -> bool {
     else {
         return false;
     };
-    dir.join("bin").is_dir()
+    crate::engine::layout::runtime_is_installed(&dir, spec.engine())
 }
 
 /// Records an installed runtime if the store does not have it yet.

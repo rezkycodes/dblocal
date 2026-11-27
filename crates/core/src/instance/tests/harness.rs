@@ -121,16 +121,10 @@ impl Harness {
         };
 
         // Pre-install the runtime so create skips the download path
-        // (F-RTM-03 AC3). The download path has its own test.
-        for (engine_key, version) in [(EngineKey::Postgresql, "18.7"), (EngineKey::Valkey, "18.7")]
-        {
-            if engine_key == engine {
-                let dir = paths
-                    .runtime_dir(engine_key, version, crate::platform::Arch::X86_64)
-                    .expect("runtime dir");
-                std::fs::create_dir_all(dir.join("bin")).expect("runtime bin");
-            }
-        }
+        // (F-RTM-03 AC3). The download path has its own test. The tree mirrors
+        // the engine's real archive layout, so the installed check is honoured
+        // for every engine (RustFS in particular has no `bin/`).
+        super::runtime_fixture::plant_runtime(&paths, engine);
 
         // Wait for startup reconciliation on the fresh empty home before
         // returning: otherwise a test that seeds a `Running` row immediately
@@ -428,10 +422,7 @@ impl Harness {
         };
         tweak(&mut options);
 
-        let runtime_dir = paths
-            .runtime_dir(engine, "18.7", crate::platform::Arch::X86_64)
-            .expect("runtime dir");
-        std::fs::create_dir_all(runtime_dir.join("bin")).expect("runtime bin");
+        super::runtime_fixture::plant_runtime(&paths, engine);
 
         // Wait for startup reconciliation on the fresh empty home before
         // returning: otherwise a test that seeds a `Running` row immediately
@@ -759,10 +750,7 @@ fn build_inner(
     };
 
     // Pre-install the runtime so create skips the download path (F-RTM-03 AC3).
-    let runtime_dir = paths
-        .runtime_dir(EngineKey::Postgresql, "18.7", crate::platform::Arch::X86_64)
-        .expect("runtime dir");
-    std::fs::create_dir_all(runtime_dir.join("bin")).expect("runtime bin");
+    super::runtime_fixture::plant_runtime(&paths, EngineKey::Postgresql);
 
     let service = LocalService::new(paths.clone(), options).expect("service");
     let startup_receiver = service.subscribe();

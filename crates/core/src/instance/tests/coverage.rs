@@ -88,7 +88,7 @@ fn a_recorded_runtime_is_listed_and_removable_when_unused() {
         .join("postgresql")
         .join("16.16")
         .join("x86_64");
-    std::fs::create_dir_all(dir.join("bin")).expect("runtime");
+    super::runtime_fixture::plant_runtime_at(&dir, EngineKey::Postgresql);
     let runtime = Runtime::new(
         "postgresql-16.16-x86_64",
         EngineKey::Postgresql,
