@@ -132,7 +132,7 @@ impl Workspace {
         let header_focus = self.dock_group_focus(engine);
         let header = h_flex()
             .id(SharedString::from(format!("group-{}", engine.as_str())))
-            .h(px(30.))
+            .h(px(28.))
             .px(px(6.))
             .gap_2()
             .rounded(px(5.))
@@ -198,8 +198,8 @@ impl Workspace {
         );
         let row = h_flex()
             .id(SharedString::from(format!("row-{}", view.id)))
-            .h(px(30.))
-            .pl(px(36.))
+            .h(px(28.))
+            .pl(px(32.))
             .pr(px(10.))
             .gap_2()
             .rounded(px(5.))
@@ -218,7 +218,7 @@ impl Workspace {
                 this.open_tab(id.clone(), cx);
             }))
             .child(status_glyph(view.status, 9.0, theme))
-            .child(engine_icon(view.engine, 14.0, theme))
+            .child(engine_icon(view.engine, 16.0, theme))
             .child(div().flex_1().min_w_0().truncate().child(view.name.clone()))
             .child(
                 div()
@@ -268,7 +268,7 @@ impl Workspace {
                     .h(px(26.))
                     .px(px(10.))
                     .gap_2()
-                    .child(engine_icon(row.engine, 14.0, theme))
+                    .child(engine_icon(row.engine, 16.0, theme))
                     .child(
                         Label::new(row.title.clone())
                             .id(SharedString::from(format!("runtime-title-{index}")))

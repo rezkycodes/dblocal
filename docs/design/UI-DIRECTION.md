@@ -82,6 +82,24 @@ Everything else is DBDelve's value: the five planes, text, on-accent, cursor, su
 
 Focus stays a ring in `theme.ring` and clears 3:1 on every surface it is drawn on (`focus_ring_pairs`). Status is never colour alone: glyph shape plus the status word (F-PLH-02 AC2).
 
+### Tidiness: one scale, one density
+
+DBDelve is calm because everything sits on one small scale. DBLocal now does the same; none of it changes behaviour.
+
+| Rule | Value | Where it lives |
+|---|---|---|
+| Base text | `font.size` 14 (the window rem size), so `text_sm` is 12.25px and `text_xs` is 10.5px | both theme files |
+| Radii | 5px controls, 8px cards, dialogs and wells (`radius`, `radius.lg`) | both theme files, `components::card` |
+| Card | 16px padding, 12px gap, one hairline, card plane, a semibold title that is the only heading | `components::card` |
+| Field rows | 120px label column, muted label, value in the text colour | `components::kv` |
+| Page gutters | 24px, with 16px above the header and 8px above the sub-tabs | `screens.rs` |
+| Tabs | the open instance is a pill with the active wash; the sub-tabs are one segmented control that hugs its labels | `screens.rs` |
+| Dock rows | 28px, 16px icons, the version label is the engine's full version (RustFS `1.0.7`, not `1.0`) | `dock.rs`, `format::dock_version` |
+| Status bar | 24px, 12px side padding | `status_bar.rs` |
+| Status pill | 20px high, 8px side padding, glyph and word | `components::status_pill` |
+
+A card has one heading. Where a card needs an action beside its heading (Overview, Recent logs) the heading row carries both and the card is built without its own title.
+
 ## Keyboard and accessibility
 
 - `Ctrl/Cmd+N` new instance, `Ctrl/Cmd+Shift+C` copy URI, `Ctrl/Cmd+Enter` start/stop, `Ctrl/Cmd+K`/`Ctrl/Cmd+Shift+P` command palette, `Ctrl/Cmd+,` Settings, `Escape` closes the top overlay.

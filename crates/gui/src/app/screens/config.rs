@@ -426,7 +426,7 @@ impl Workspace {
                             &setting.key,
                         )))
                         .font_family(mono.clone())
-                        .text_sm()
+                        .text_xs()
                         .text_color(theme.muted_foreground),
                 );
             // The unit lives under the default, inside the same fixed cell.

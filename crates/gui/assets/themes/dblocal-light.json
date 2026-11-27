@@ -6,8 +6,9 @@
       "is_default": false,
       "name": "DBLocal Light",
       "mode": "light",
-      "radius": 6,
-      "radius.lg": 10,
+      "font.size": 14,
+      "radius": 5,
+      "radius.lg": 8,
       "shadow": false,
       "colors": {
         "accent.background": "#e3e5e7",
