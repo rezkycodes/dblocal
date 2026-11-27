@@ -18,6 +18,15 @@ each step in one transaction together with its version bump. A database newer
 than the binary is refused with `DblError::Storage` (code `DBL-3003`); the file
 is never modified or deleted.
 
+Before the first pending step of an on-disk database that is already at version
+`1` or higher, the pre-upgrade database is copied next to itself as
+`<file name>.v<old>.bak` (`store::backup`) while the migrating connection holds
+its `BEGIN IMMEDIATE` lock. The copy uses `VACUUM INTO` (so WAL-only rows are
+included), is verified (`user_version` and `PRAGMA quick_check`) and renamed into
+place; if it cannot be produced the migration is abandoned with the database
+left at its old version. Fresh (`0`), up-to-date and in-memory databases get no
+backup.
+
 | Table | Columns | Notes |
 |---|---|---|
 | `instances` | `id` TEXT PK, `name` TEXT NOT NULL UNIQUE COLLATE NOCASE, `engine` TEXT NOT NULL, `version` TEXT NOT NULL, `port` INTEGER NOT NULL UNIQUE, `status` TEXT NOT NULL, `auth` TEXT NOT NULL, `superuser` TEXT NOT NULL, `pid` INTEGER, `process_started_at_secs` INTEGER, `process_started_at_nanos` INTEGER, `process_exe` TEXT, `autostart` INTEGER NOT NULL (0/1), `created_at_secs` INTEGER NOT NULL, `created_at_nanos` INTEGER NOT NULL | `port` in 1024..=65535. Process identity columns are all NULL or all NOT NULL (PID-reuse verification, invariant 7). |

@@ -5,6 +5,7 @@
 //! `docs/architecture/store.md` for the schema and invariants.
 
 mod api;
+mod backup;
 mod error;
 mod migrations;
 mod rows;
@@ -13,5 +14,7 @@ mod time;
 
 pub use api::Store;
 
+#[cfg(test)]
+mod backup_tests;
 #[cfg(test)]
 mod tests;

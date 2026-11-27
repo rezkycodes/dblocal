@@ -17,6 +17,23 @@ Valkey, Redis and RustFS** servers **on your own machine**, several versions sid
 It manages **servers**, not **data**: no table browser, no SQL editor. For that, DBLocal has an
 "Open in…" button for DBDelve, TablePlus, DBeaver or `psql`.
 
+## Upgrading and going back
+
+Before DBLocal upgrades `~/.dblocal/state.db` to a newer schema it writes a complete copy of the
+database as it was, named after the version it found: upgrading from schema version 1 leaves
+`state.db.v1.bak` next to `state.db`. If the copy cannot be written and verified, DBLocal does not
+migrate and reports the error instead, so the old database is never half-upgraded.
+
+To go back to v0.1.x after upgrading:
+
+1. Stop every instance and quit DBLocal (both the app and any `dblocal` CLI command).
+2. Delete `state.db-wal` and `state.db-shm` in `~/.dblocal/`.
+3. Copy `state.db.v1.bak` over `state.db`.
+4. Start the old version.
+
+The restored database is the one from before the upgrade: instances created after upgrading are not
+in it.
+
 ## Why not Docker or a system package?
 
 | Today | What breaks |

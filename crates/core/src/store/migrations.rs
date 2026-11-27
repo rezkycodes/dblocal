@@ -11,6 +11,7 @@ use rusqlite::{Connection, Transaction, TransactionBehavior};
 
 use crate::DblError;
 
+use super::backup;
 use super::error::map_sql;
 use super::schema::{LATEST_USER_VERSION, MIGRATIONS};
 
@@ -30,6 +31,11 @@ pub(crate) fn apply(conn: &Connection) -> crate::Result<()> {
     // Slow path: at least one step is pending. Take the write lock, then
     // re-read the version so a concurrent opener that already migrated lets us
     // skip the work instead of replaying `CREATE TABLE`.
+    //
+    // A database that already holds data (`version >= 1`) is backed up once,
+    // at the version found inside the first lock, before its first pending
+    // step. A fresh database (`version == 0`) gets no backup.
+    let mut backed_up = false;
     loop {
         let tx =
             Transaction::new_unchecked(conn, TransactionBehavior::Immediate).map_err(map_sql)?;
@@ -37,6 +43,12 @@ pub(crate) fn apply(conn: &Connection) -> crate::Result<()> {
         ensure_supported(version)?;
         if version == LATEST_USER_VERSION {
             return Ok(());
+        }
+        if !backed_up {
+            if version >= 1 {
+                backup::before_migration(&tx, version)?;
+            }
+            backed_up = true;
         }
         let step = usize::try_from(version)
             .ok()
