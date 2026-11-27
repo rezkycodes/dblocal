@@ -20,7 +20,8 @@ use crate::format;
 use super::Workspace;
 use super::hint_row;
 use super::page;
-use crate::app::components::{card, icon, kv, mono_themed};
+use crate::app::components::{card, icon, mono_themed};
+use crate::app::design;
 
 impl Workspace {
     pub(crate) fn render_overview(
@@ -39,6 +40,7 @@ impl Workspace {
             content = content.child(self.render_restore_banner(view, &theme, cx));
         }
         content
+            .child(self.render_stat_strip(view, &theme))
             .child(self.render_connection(view, &theme, cx))
             .child(
                 h_flex()
@@ -273,12 +275,15 @@ impl Workspace {
                             .border_1()
                             .border_color(theme.border)
                             .bg(theme.background)
+                            .gap_2()
                             .font_family(theme.mono_font_family.clone())
                             .overflow_hidden()
+                            .child(icon(IconName::Link, 14.0, theme.muted_foreground))
                             .child(Label::new(uri).truncate()),
                     )
                     .child(
                         Button::new("reveal-uri")
+                            .outline()
                             .icon(if revealed {
                                 IconName::EyeOff
                             } else {
@@ -311,7 +316,8 @@ impl Workspace {
                     )
                     .child(
                         Button::new("copy-env")
-                            .icon(IconName::Copy)
+                            .outline()
+                            .icon(IconName::FileCode)
                             .label(strings::UI_COPY_DOTENV)
                             .on_click(cx.listener(move |this, _, window, cx| {
                                 this.copy_uri(
@@ -392,7 +398,81 @@ impl Workspace {
             ))
     }
 
-    /// The Detail card: engine, superuser, port, data dir and data size.
+    /// The stat strip: four tiles that answer "is it up, which version, where,
+    /// how big" before the reader reaches any card.
+    fn render_stat_strip(
+        &self,
+        view: &dblocal_core::service::InstanceView,
+        theme: &Theme,
+    ) -> impl IntoElement {
+        let status_colour = crate::app::components::status_colour(view.status, theme);
+        let size = self
+            .data_size(&view.id)
+            .map(format::format_bytes)
+            .unwrap_or_else(|| strings::UI_VALUE_UNKNOWN.to_owned());
+        let canonical = format::is_canonical_port(view);
+        let mono = theme.mono_font_family.clone();
+        h_flex()
+            .id("stat-strip")
+            .gap_3()
+            .flex_wrap()
+            .child(design::stat_tile(
+                "status",
+                IconName::Activity,
+                strings::UI_STAT_STATUS,
+                Label::new(format::status_label(view.status))
+                    .id("stat-value-status")
+                    .font_weight(gpui_kit::FontWeight::SEMIBOLD)
+                    .text_color(status_colour),
+                status_colour,
+                theme,
+            ))
+            .child(design::stat_tile(
+                "version",
+                IconName::Layers,
+                strings::UI_STAT_VERSION,
+                Label::new(format::dock_version(view))
+                    .id("stat-value-version")
+                    .font_weight(gpui_kit::FontWeight::SEMIBOLD),
+                theme.primary,
+                theme,
+            ))
+            .child(design::stat_tile(
+                "port",
+                IconName::Plug,
+                strings::UI_OVERVIEW_PORT,
+                h_flex()
+                    .gap_1p5()
+                    .child(
+                        Label::new(view.port.to_string())
+                            .id("stat-value-port")
+                            .font_family(mono)
+                            .font_weight(gpui_kit::FontWeight::SEMIBOLD),
+                    )
+                    .when(canonical, |this| {
+                        this.child(
+                            Label::new(strings::UI_OVERVIEW_CANONICAL_PORT)
+                                .id("stat-port-canonical")
+                                .text_xs()
+                                .text_color(theme.muted_foreground),
+                        )
+                    }),
+                theme.info,
+                theme,
+            ))
+            .child(design::stat_tile(
+                "size",
+                IconName::HardDrive,
+                strings::UI_OVERVIEW_DATA_SIZE,
+                Label::new(size)
+                    .id("stat-value-size")
+                    .font_weight(gpui_kit::FontWeight::SEMIBOLD),
+                theme.warning,
+                theme,
+            ))
+    }
+
+    /// The Detail group: engine, superuser, port, data dir and data size.
     fn render_detail(
         &self,
         view: &dblocal_core::service::InstanceView,
@@ -404,18 +484,23 @@ impl Workspace {
             .map(format::format_bytes)
             .unwrap_or_else(|| strings::UI_VALUE_UNKNOWN.to_owned());
         let canonical = format::is_canonical_port(view);
-        card(Some(strings::UI_OVERVIEW_DETAIL), None, theme)
-            .child(kv(
+        let card = design::group_card("detail", theme)
+            .child(design::group_row(
+                "engine",
                 strings::UI_OVERVIEW_ENGINE,
                 Label::new(format::engine_detail(view, arch)),
+                true,
                 theme,
             ))
-            .child(kv(
+            .child(design::group_row(
+                "superuser",
                 strings::UI_OVERVIEW_SUPERUSER,
                 mono_themed(view.engine.default_superuser(), theme),
+                false,
                 theme,
             ))
-            .child(kv(
+            .child(design::group_row(
+                "port",
                 strings::UI_OVERVIEW_PORT,
                 h_flex()
                     .gap_1()
@@ -426,9 +511,11 @@ impl Workspace {
                                 .text_color(theme.muted_foreground),
                         )
                     }),
+                false,
                 theme,
             ))
-            .child(kv(
+            .child(design::group_row(
+                "data-dir",
                 strings::UI_OVERVIEW_DATA_DIR,
                 Label::new(format::data_dir(
                     self.home_root(),
@@ -437,13 +524,24 @@ impl Workspace {
                 ))
                 .font_family(theme.mono_font_family.clone())
                 .truncate(),
+                false,
                 theme,
             ))
-            .child(kv(strings::UI_OVERVIEW_DATA_SIZE, Label::new(size), theme))
+            .child(design::group_row(
+                "data-size",
+                strings::UI_OVERVIEW_DATA_SIZE,
+                Label::new(size),
+                false,
+                theme,
+            ));
+        v_flex()
+            .gap_2()
+            .child(design::group_heading(strings::UI_OVERVIEW_DETAIL, theme))
+            .child(card)
     }
 
-    /// The Process card: PID, health, process mode, credential reference and
-    /// the autostart checkbox (`set_autostart`).
+    /// The Process group: PID, health, process mode, credential reference and
+    /// the autostart switch (`set_autostart`).
     fn render_process(
         &self,
         view: &dblocal_core::service::InstanceView,
@@ -460,33 +558,49 @@ impl Workspace {
             _ => (strings::UI_OVERVIEW_HEALTH_OFFLINE, theme.muted_foreground),
         };
         let id = view.id.clone();
-        card(Some(strings::UI_OVERVIEW_PROCESS), None, theme)
-            .child(kv(
+        let card = design::group_card("process", theme)
+            .child(design::group_row(
+                "pid",
                 strings::UI_OVERVIEW_PID,
                 Label::new(pid).font_family(theme.mono_font_family.clone()),
+                true,
                 theme,
             ))
-            .child(kv(
+            .child(design::group_row(
+                "health",
                 strings::UI_OVERVIEW_HEALTH,
-                Label::new(health).text_color(health_colour),
+                h_flex()
+                    .gap_2()
+                    .child(crate::app::components::status_glyph(
+                        view.status,
+                        7.0,
+                        theme,
+                    ))
+                    .child(Label::new(health).text_color(health_colour)),
+                false,
                 theme,
             ))
-            .child(kv(
+            .child(design::group_row(
+                "mode",
                 strings::UI_OVERVIEW_PROCESS_MODE,
                 Label::new(strings::UI_OVERVIEW_PROCESS_DETACHED),
+                false,
                 theme,
             ))
-            .child(kv(
+            .child(design::group_row(
+                "credential",
                 strings::UI_OVERVIEW_CREDENTIAL,
                 Label::new(format::credential_ref(&view.name))
                     .font_family(theme.mono_font_family.clone()),
+                false,
                 theme,
             ))
             .child(
                 div()
-                    .pt_2()
+                    .px(px(design::ROW_PAD_X))
+                    .py(px(10.))
                     .border_t_1()
-                    .border_color(theme.table_row_border)
+                    .border_color(crate::theme::tokens::hairline(theme))
                     .child(
                         Checkbox::new("autostart")
                             .label(strings::UI_OVERVIEW_AUTOSTART)
@@ -495,7 +609,11 @@ impl Workspace {
                                 this.set_autostart(&id, *checked, cx);
                             })),
                     ),
-            )
+            );
+        v_flex()
+            .gap_2()
+            .child(design::group_heading(strings::UI_OVERVIEW_PROCESS, theme))
+            .child(card)
     }
 
     /// The last few log lines, with a link into the Logs tab.

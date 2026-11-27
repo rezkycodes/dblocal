@@ -380,6 +380,24 @@ fn choose_engine_switches_the_form(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn launcher_quick_create_opens_the_dialog_on_that_engine(cx: &mut TestAppContext) {
+    let (view, _service, cx) = fixture(cx);
+    view.update_in(cx, |this, window, cx| {
+        this.quick_create(EngineKey::Valkey, window, cx);
+    });
+    cx.run_until_parked();
+    let (engine, category) = view.read_with(cx, |this, _| {
+        let form = this.create_form();
+        (form.map(|f| f.engine), form.map(|f| f.category))
+    });
+    assert_eq!(engine, Some(EngineKey::Valkey));
+    assert_eq!(
+        category,
+        Some(crate::format::EngineCategory::for_engine(EngineKey::Valkey))
+    );
+}
+
+#[gpui_kit::test]
 fn purge_refuses_without_the_typed_name(cx: &mut TestAppContext) {
     let (view, service, cx) = fixture(cx);
     let id = service.id_with(InstanceStatus::Stopped);

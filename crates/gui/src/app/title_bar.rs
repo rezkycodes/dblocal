@@ -19,7 +19,9 @@ use crate::format;
 
 use super::Workspace;
 use super::actions;
-use super::components::icon;
+use super::components::{engine_icon, icon, status_glyph};
+use super::design;
+use crate::theme::tokens;
 
 /// Renders the client-side title bar.
 pub(super) fn render(workspace: &Workspace, cx: &mut Context<Workspace>) -> impl IntoElement {
@@ -34,7 +36,6 @@ pub(super) fn render(workspace: &Workspace, cx: &mut Context<Workspace>) -> impl
         dblocal_core::model::CatalogStatus::Stale => theme.warning,
         _ => theme.danger,
     };
-    let hint = actions::palette_hint();
     let primary = theme.primary;
 
     TitleBar::new()
@@ -55,7 +56,7 @@ pub(super) fn render(workspace: &Workspace, cx: &mut Context<Workspace>) -> impl
             h_flex()
                 .id("title-bar-content")
                 .w_full()
-                .gap_3()
+                .gap_2()
                 .pr_2()
                 .items_center()
                 .child(app_mark(primary, theme.primary_foreground))
@@ -64,28 +65,16 @@ pub(super) fn render(workspace: &Workspace, cx: &mut Context<Workspace>) -> impl
                         .text_sm()
                         .font_weight(gpui_kit::FontWeight::SEMIBOLD),
                 )
-                .when_some(selected, |this, view| {
-                    let engine = view.engine.display_name();
-                    this.child(breadcrumb(
-                        engine,
-                        &view.name,
-                        theme.muted_foreground,
-                        theme.foreground,
-                    ))
-                })
-                .child(div().flex_1())
+                .when_some(selected, |this, view| this.child(breadcrumb(view, &theme)))
+                .child(div().flex_1().min_w(px(12.)))
+                .child(search_button(&theme, cx))
+                .child(div().flex_1().min_w(px(12.)))
                 .child(
-                    h_flex()
-                        .gap_1p5()
-                        .text_xs()
-                        .text_color(theme.muted_foreground)
-                        .child(icon(IconName::CircleCheck, 13.0, freshness_colour))
-                        .child(Label::new(freshness.to_owned())),
-                )
-                .child(
-                    Label::new(hint)
-                        .text_xs()
-                        .text_color(theme.muted_foreground),
+                    design::chip("catalog", freshness.to_owned(), freshness_colour).child(icon(
+                        IconName::CircleCheck,
+                        12.0,
+                        freshness_colour,
+                    )),
                 )
                 .when_some(
                     super::update_dialog::title_bar_button(workspace, cx),
@@ -121,6 +110,44 @@ pub(super) fn render(workspace: &Workspace, cx: &mut Context<Workspace>) -> impl
         )
 }
 
+/// The command search field in the middle of the title bar. It is a button:
+/// a click (or Enter/Space when focused) opens the command palette, the same
+/// as `Ctrl/Cmd+K`.
+fn search_button(
+    theme: &gpui_kit::component::Theme,
+    cx: &mut Context<Workspace>,
+) -> impl IntoElement {
+    let keys = [actions::modifier_label(), "K"];
+    h_flex()
+        .id("title-search")
+        .flex_none()
+        .w(px(340.))
+        .h(px(24.))
+        .px(px(8.))
+        .gap_2()
+        .items_center()
+        .rounded(px(6.))
+        .border_1()
+        .border_color(theme.border)
+        .bg(tokens::hover(theme))
+        .cursor_pointer()
+        .aria_label(strings::UI_TITLE_SEARCH)
+        .hover(|s| s.bg(tokens::active(theme)))
+        .on_click(cx.listener(|this, _, window, cx| {
+            this.toggle_palette_in(window, cx);
+            cx.notify();
+        }))
+        .child(icon(IconName::Search, 13.0, theme.muted_foreground))
+        .child(
+            Label::new(strings::UI_TITLE_SEARCH)
+                .flex_1()
+                .truncate()
+                .text_xs()
+                .text_color(theme.muted_foreground),
+        )
+        .child(design::kbd("title-search", &keys, theme))
+}
+
 /// The rounded app mark: a database glyph on the accent fill.
 fn app_mark(fill: gpui_kit::Hsla, on_fill: gpui_kit::Hsla) -> impl IntoElement {
     div()
@@ -134,18 +161,38 @@ fn app_mark(fill: gpui_kit::Hsla, on_fill: gpui_kit::Hsla) -> impl IntoElement {
         .child(icon(IconName::Database, 14.0, on_fill))
 }
 
-/// `Engine › instance` for the selected tab.
+/// `/ [icon] Engine / ● instance` for the selected tab, DBDelve style.
 fn breadcrumb(
-    engine: &str,
-    name: &str,
-    muted: gpui_kit::Hsla,
-    bright: gpui_kit::Hsla,
+    view: &dblocal_core::service::InstanceView,
+    theme: &gpui_kit::component::Theme,
 ) -> impl IntoElement {
+    let muted = theme.muted_foreground;
     h_flex()
         .id("breadcrumb")
-        .gap_1p5()
+        .gap_2()
+        .pl_1()
         .text_xs()
-        .child(Label::new(engine.to_owned()).text_color(muted))
-        .child(Label::new(strings::UI_BREADCRUMB_SEPARATOR.to_owned()).text_color(muted))
-        .child(Label::new(name.to_owned()).text_color(bright))
+        .child(
+            Label::new(strings::UI_BREADCRUMB_SEPARATOR)
+                .id("crumb-sep-0")
+                .text_color(muted),
+        )
+        .child(engine_icon(view.engine, 14.0, theme))
+        .child(
+            Label::new(view.engine.display_name().to_owned())
+                .id("crumb-engine")
+                .text_color(muted),
+        )
+        .child(
+            Label::new(strings::UI_BREADCRUMB_SEPARATOR)
+                .id("crumb-sep-1")
+                .text_color(muted),
+        )
+        .child(status_glyph(view.status, 7.0, theme))
+        .child(
+            Label::new(view.name.clone())
+                .id("crumb-instance")
+                .font_weight(gpui_kit::FontWeight::MEDIUM)
+                .text_color(theme.foreground),
+        )
 }

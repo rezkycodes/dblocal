@@ -16,6 +16,7 @@ use crate::format;
 
 use super::Workspace;
 use super::components::{icon, status_glyph};
+use super::design;
 use gpui_kit::assets::IconName;
 
 /// Renders the bottom status bar.
@@ -32,11 +33,11 @@ pub(super) fn render(workspace: &Workspace, cx: &mut Context<Workspace>) -> impl
 
     h_flex()
         .id("status-bar")
-        .h(px(24.))
+        .h(px(26.))
         .w_full()
         .flex_none()
         .items_center()
-        .gap_3()
+        .gap_2p5()
         .px(px(12.))
         .bg(theme.status_bar)
         .border_t_1()
@@ -58,6 +59,7 @@ pub(super) fn render(workspace: &Workspace, cx: &mut Context<Workspace>) -> impl
         .when(counts.failed > 0, |this| {
             this.child(count_pill(counts.failed, strings::UI_FAILED, &theme, true))
         })
+        .child(design::vrule(&theme))
         .child(
             h_flex()
                 .gap_1p5()
@@ -77,7 +79,9 @@ pub(super) fn render(workspace: &Workspace, cx: &mut Context<Workspace>) -> impl
                     strings::UI_CREDENTIAL_BACKEND
                 ))),
         )
+        .child(design::vrule(&theme))
         .child(Label::new(platform))
+        .child(design::vrule(&theme))
         .when(workspace.pending(), |this| {
             this.child(
                 Label::new(strings::UI_PENDING)
@@ -106,11 +110,15 @@ pub(super) fn render(workspace: &Workspace, cx: &mut Context<Workspace>) -> impl
                     .max_w(px(320.)),
             )
         })
-        .child(Label::new(format!(
-            "{}{}",
-            strings::UI_VERSION_PREFIX,
-            workspace.version()
-        )))
+        .child(design::vrule(&theme))
+        .child(
+            Label::new(format!(
+                "{}{}",
+                strings::UI_VERSION_PREFIX,
+                workspace.version()
+            ))
+            .font_family(theme.mono_font_family.clone()),
+        )
 }
 
 /// One status-bar count: glyph plus the number and word.

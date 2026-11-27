@@ -28,7 +28,8 @@ use super::Workspace;
 use super::create_dialog::overlay;
 use super::settings_state::{LoginState, install_kind_label};
 use super::update_state::UpdateState;
-use crate::app::components::{icon, section_label};
+use crate::app::components::icon;
+use crate::app::design;
 
 /// Renders the Settings dialog.
 pub(super) fn render(
@@ -39,44 +40,47 @@ pub(super) fn render(
     let theme = cx.theme().clone();
     let update = workspace.update_state();
 
+    let mut version_value = h_flex().gap_2().items_center().child(
+        Label::new(workspace.version())
+            .id("settings-version-value")
+            .font_family(theme.mono_font_family.clone()),
+    );
+    if let Some(kind) = update.install_kind.clone() {
+        version_value = version_value.child(design::chip(
+            "install-kind",
+            install_kind_label(&kind),
+            theme.info,
+        ));
+    }
+
     let updates = v_flex()
         .id("settings-updates")
         .gap_2()
-        .child(section_label(strings::UI_SETTINGS_UPDATES).text_color(theme.muted_foreground))
+        .child(design::group_heading(strings::UI_SETTINGS_UPDATES, &theme))
         .child(
-            h_flex()
-                .gap_2()
-                .child(
-                    Label::new(strings::UI_SETTINGS_CURRENT_VERSION)
-                        .text_xs()
-                        .text_color(theme.muted_foreground),
-                )
-                .child(Label::new(workspace.version()).text_xs()),
-        )
-        .when_some(update.install_kind.clone(), |this, kind| {
-            this.child(
-                h_flex()
-                    .gap_2()
-                    .child(
-                        Label::new(strings::UI_SETTINGS_INSTALL_KIND)
-                            .text_xs()
-                            .text_color(theme.muted_foreground),
-                    )
-                    .child(Label::new(install_kind_label(&kind)).text_xs()),
-            )
-        })
-        .child(render_update_result(update, workspace, &theme, cx));
+            design::group_card("settings-updates", &theme)
+                .child(design::group_row(
+                    "settings-version",
+                    strings::UI_SETTINGS_CURRENT_VERSION,
+                    version_value,
+                    true,
+                    &theme,
+                ))
+                .child(render_auto_check(update, &theme, cx))
+                .child(render_update_result(update, workspace, &theme, cx)),
+        );
 
     let login = v_flex()
         .id("settings-login")
         .gap_2()
-        .child(section_label(strings::UI_SETTINGS_AUTOSTART).text_color(theme.muted_foreground))
+        .child(design::group_heading(
+            strings::UI_SETTINGS_AUTOSTART,
+            &theme,
+        ))
         .child(
-            Label::new(strings::UI_SETTINGS_AUTOSTART_BODY)
-                .text_xs()
-                .text_color(theme.muted_foreground),
-        )
-        .child(render_login_section(workspace, &theme, cx));
+            design::group_card("settings-login", &theme)
+                .child(render_login_section(workspace, &theme, cx)),
+        );
 
     overlay(
         "settings-overlay",
@@ -88,35 +92,36 @@ pub(super) fn render(
             .text_color(theme.popover_foreground)
             .border_1()
             .border_color(theme.border)
-            .rounded(px(10.))
+            .rounded(px(12.))
+            .shadow_lg()
             .overflow_hidden()
             .child(
-                h_flex()
-                    .px(px(20.))
-                    .py(px(14.))
-                    .border_b_1()
-                    .border_color(theme.border)
-                    .justify_between()
-                    .child(
-                        Label::new(strings::UI_SETTINGS_TITLE)
-                            .text_sm()
-                            .font_weight(gpui_kit::FontWeight::SEMIBOLD),
-                    )
-                    .child(
-                        Button::new("settings-close")
-                            .ghost()
-                            .small()
-                            .compact()
-                            .label(strings::UI_SETTINGS_CLOSE)
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.close_settings(cx);
-                            })),
-                    ),
+                design::dialog_header(
+                    "settings",
+                    gpui_kit::assets::IconName::Settings,
+                    strings::UI_SETTINGS_TITLE,
+                    Some(strings::UI_SETTINGS_SUBTITLE),
+                    &theme,
+                )
+                .border_b_1()
+                .border_color(theme.border)
+                .child(
+                    Button::new("settings-close")
+                        .ghost()
+                        .small()
+                        .compact()
+                        .icon(gpui_kit::assets::IconName::Close)
+                        .tooltip(strings::UI_SETTINGS_CLOSE)
+                        .accessibility_label(strings::UI_SETTINGS_CLOSE)
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.close_settings(cx);
+                        })),
+                ),
             )
             .child(
                 v_flex()
                     .id("settings-body")
-                    .gap_6()
+                    .gap_5()
                     .p(px(20.))
                     .child(updates)
                     .child(login),
@@ -127,51 +132,86 @@ pub(super) fn render(
     )
 }
 
-/// The update check's answer, its automatic switch, and the actions it allows.
+/// The automatic-check switch as a setting row, with its typed error.
+fn render_auto_check(
+    update: &UpdateState,
+    theme: &gpui_kit::component::Theme,
+    cx: &mut Context<Workspace>,
+) -> AnyElement {
+    let row = design::setting_row(
+        "settings-auto-check",
+        strings::UI_SETTINGS_AUTO_CHECK,
+        Some(strings::UI_SETTINGS_AUTO_CHECK_BODY),
+        Switch::new("settings-auto-check-switch")
+            .accessibility_label(strings::UI_SETTINGS_AUTO_CHECK)
+            .checked(update.auto_check.unwrap_or(true))
+            .disabled(update.auto_check_busy)
+            .on_click(cx.listener(|this, checked: &bool, _, cx| {
+                this.set_auto_update_check(*checked, cx);
+            })),
+        false,
+        theme,
+    );
+    match &update.auto_check_error {
+        Some(error) => v_flex()
+            .child(row)
+            .child(
+                Label::new(error.clone())
+                    .id(SharedString::from("settings-auto-check-error"))
+                    .px(px(design::ROW_PAD_X))
+                    .pb(px(10.))
+                    .text_xs()
+                    .text_color(theme.danger),
+            )
+            .into_any_element(),
+        None => row.into_any_element(),
+    }
+}
+
+/// The update check's answer and the actions it allows.
 fn render_update_result(
     update: &UpdateState,
     workspace: &Workspace,
     theme: &gpui_kit::component::Theme,
     cx: &mut Context<Workspace>,
 ) -> AnyElement {
-    let mut column = v_flex().id("settings-check").gap_2();
-
-    // The automatic-check switch, with its own explanation.
-    column = column.child(
-        Switch::new("settings-auto-check-switch")
-            .label(strings::UI_SETTINGS_AUTO_CHECK)
-            .checked(update.auto_check.unwrap_or(true))
-            .disabled(update.auto_check_busy)
-            .on_click(cx.listener(|this, checked: &bool, _, cx| {
-                this.set_auto_update_check(*checked, cx);
-            })),
-    );
-    column = column.child(
-        Label::new(strings::UI_SETTINGS_AUTO_CHECK_BODY)
-            .id(SharedString::from("settings-auto-check-body"))
-            .text_xs()
-            .text_color(theme.muted_foreground),
-    );
-    if let Some(error) = &update.auto_check_error {
-        column = column.child(
-            Label::new(error.clone())
-                .id(SharedString::from("settings-auto-check-error"))
-                .text_xs()
-                .text_color(theme.danger),
-        );
-    }
+    let mut column = v_flex()
+        .id("settings-check")
+        .gap_2()
+        .px(px(design::ROW_PAD_X))
+        .py(px(12.))
+        .border_t_1()
+        .border_color(crate::theme::tokens::hairline(theme));
 
     if update.icon_visible() {
         column = column.child(
-            Label::new(update.headline())
-                .id(SharedString::from("settings-update-headline"))
-                .text_sm(),
+            h_flex()
+                .gap_2()
+                .child(icon(
+                    gpui_kit::assets::IconName::CircleArrowUp,
+                    14.0,
+                    theme.primary,
+                ))
+                .child(
+                    Label::new(update.headline())
+                        .id(SharedString::from("settings-update-headline"))
+                        .text_sm(),
+                ),
         );
     } else if update.checked_once {
         column = column.child(
-            Label::new(strings::UI_SETTINGS_UP_TO_DATE)
-                .id(SharedString::from("settings-up-to-date"))
-                .text_sm(),
+            h_flex()
+                .gap_2()
+                .child(icon(
+                    gpui_kit::assets::IconName::CircleCheck,
+                    14.0,
+                    theme.success,
+                ))
+                .child(
+                    Label::new(strings::UI_SETTINGS_UP_TO_DATE)
+                        .id(SharedString::from("settings-up-to-date"))
+                        .text_sm(),
+                ),
         );
     }
 
@@ -196,6 +236,8 @@ fn render_update_result(
             .items_center()
             .child(
                 Button::new("settings-check-now")
+                    .outline()
+                    .icon(gpui_kit::assets::IconName::RefreshCw)
                     .label(if checking {
                         strings::UI_SETTINGS_CHECKING
                     } else {
@@ -248,38 +290,62 @@ fn render_login_section(
     let state = workspace.settings_state();
     let busy = matches!(state.login, LoginState::Busy(_));
     let enabled = state.login_enabled();
-    let mut column = v_flex().id("settings-login-body").gap_2();
+    let mut column = v_flex().id("settings-login-body");
 
-    column = column.child(
+    column = column.child(design::setting_row(
+        "settings-login",
+        strings::UI_SETTINGS_AUTOSTART_SWITCH,
+        Some(strings::UI_SETTINGS_AUTOSTART_BODY),
         Switch::new("settings-login-switch")
-            .label(strings::UI_SETTINGS_AUTOSTART_SWITCH)
+            .accessibility_label(strings::UI_SETTINGS_AUTOSTART_SWITCH)
             .checked(enabled)
             .disabled(busy)
             .on_click(cx.listener(|this, checked: &bool, _, cx| {
                 this.set_login_item(*checked, cx);
             })),
-    );
+        true,
+        theme,
+    ));
 
     // The confirmed state renders whenever one was read, whatever the section's
     // status: a failed write keeps the switch on the machine's real state and
     // shows the typed error under it (F2).
+    let mut detail = v_flex()
+        .gap_1p5()
+        .px(px(design::ROW_PAD_X))
+        .py(px(12.))
+        .border_t_1()
+        .border_color(crate::theme::tokens::hairline(theme));
     match state.login_known() {
         Some(status) => {
-            column = column.child(
-                Label::new(if status.enabled {
-                    strings::UI_SETTINGS_AUTOSTART_ON
-                } else {
-                    strings::UI_SETTINGS_AUTOSTART_OFF
-                })
-                .id(SharedString::from("settings-login-state"))
-                .text_xs()
-                .text_color(if status.enabled {
-                    theme.success
-                } else {
-                    theme.muted_foreground
-                }),
+            detail = detail.child(
+                h_flex()
+                    .gap_2()
+                    .child(crate::app::components::status_glyph(
+                        if status.enabled {
+                            dblocal_core::model::InstanceStatus::Running
+                        } else {
+                            dblocal_core::model::InstanceStatus::Stopped
+                        },
+                        7.0,
+                        theme,
+                    ))
+                    .child(
+                        Label::new(if status.enabled {
+                            strings::UI_SETTINGS_AUTOSTART_ON
+                        } else {
+                            strings::UI_SETTINGS_AUTOSTART_OFF
+                        })
+                        .id(SharedString::from("settings-login-state"))
+                        .text_xs()
+                        .text_color(if status.enabled {
+                            theme.success
+                        } else {
+                            theme.muted_foreground
+                        }),
+                    ),
             );
-            column = column.child(
+            detail = detail.child(
                 h_flex()
                     .gap_2()
                     .child(
@@ -291,12 +357,13 @@ fn render_login_section(
                         Label::new(status.location.display().to_string())
                             .id(SharedString::from("settings-login-location"))
                             .text_xs()
+                            .truncate()
                             .font_family(theme.mono_font_family.clone()),
                     ),
             );
         }
         None => {
-            column = column.child(
+            detail = detail.child(
                 Label::new(strings::UI_SETTINGS_AUTOSTART_UNKNOWN)
                     .id(SharedString::from("settings-login-unknown"))
                     .text_xs()
@@ -306,10 +373,10 @@ fn render_login_section(
     }
 
     if let Some(err) = state.login_error() {
-        column = column.child(error_line(&err.code, &err.message, theme));
+        detail = detail.child(error_line(&err.code, &err.message, theme));
     }
     if busy {
-        column = column.child(
+        detail = detail.child(
             Label::new(strings::UI_PENDING)
                 .id(SharedString::from("settings-login-busy"))
                 .text_xs()
@@ -317,7 +384,7 @@ fn render_login_section(
         );
     }
 
-    column.into_any_element()
+    column.child(detail).into_any_element()
 }
 
 /// One typed failure line: code plus the message.

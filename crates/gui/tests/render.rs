@@ -922,3 +922,23 @@ fn renders_stale_banner_and_revealed_uri() {
     );
     assert!(revealed.colours > 40, "revealed render too flat");
 }
+
+#[test]
+fn renders_the_launcher_when_no_tab_is_open() {
+    for (dark, name) in [(true, "launcher-dark.png"), (false, "launcher-light.png")] {
+        let frame = render(dark, name, Workspace::preview_launcher);
+        let bg = if dark { dark_bg() } else { light_bg() };
+        // The launcher card paints text and tiles in the centre pane.
+        let text = frame.count_not_near((DOCK + 200, 120, LOGICAL_W - 200, LOGICAL_H - 60), bg, 16);
+        eprintln!("LAUNCHER {name} text={text}");
+        assert!(text > 5000, "{name}: launcher did not render ({text})");
+        // The app mark carries the accent colour.
+        let primary = if dark {
+            dark_primary()
+        } else {
+            light_primary()
+        };
+        let mark = frame.count_near((DOCK, 70, LOGICAL_W, LOGICAL_H - 40), primary, 16);
+        assert!(mark > 200, "{name}: launcher mark missing ({mark})");
+    }
+}

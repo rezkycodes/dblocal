@@ -11,8 +11,8 @@ use gpui_kit::assets::IconName;
 use gpui_kit::component::label::Label;
 use gpui_kit::component::{ActiveTheme as _, Theme, ThemeStyled as _, h_flex, v_flex};
 use gpui_kit::{
-    Div, FocusHandle, Hsla, InteractiveElement, IntoElement, ParentElement, SharedString, Styled,
-    Window, div, px, svg,
+    Div, FocusHandle, Hsla, InteractiveElement, ParentElement, SharedString, Styled, Window, div,
+    px, svg,
 };
 
 use dblocal_core::model::{EngineKey, InstanceStatus};
@@ -242,25 +242,6 @@ pub fn card(title: Option<&str>, key: Option<&str>, theme: &Theme) -> gpui_kit::
         );
     }
     base
-}
-
-/// A `label — value` row for the detail cards.
-///
-/// A11y: the row root and its label carry the field name, so the same call
-/// site can serve every field of every card without colliding.
-pub fn kv(label: &str, value: impl IntoElement, theme: &Theme) -> gpui_kit::Stateful<Div> {
-    h_flex()
-        .id(SharedString::from(format!("kv-{label}")))
-        .gap_3()
-        .items_start()
-        .child(
-            Label::new(label.to_owned())
-                .id(SharedString::from(format!("kv-label-{label}")))
-                .w(px(120.))
-                .flex_none()
-                .text_color(theme.muted_foreground),
-        )
-        .child(div().flex_1().min_w_0().child(value))
 }
 
 /// Monospace text in the theme's mono family, used for URIs, ports and logs.

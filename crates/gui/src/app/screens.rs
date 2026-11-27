@@ -12,6 +12,7 @@
 
 mod config;
 mod databases;
+mod launcher;
 mod logs;
 mod overview;
 
@@ -31,7 +32,7 @@ use gpui_kit::{Context, IntoElement, ParentElement, SharedString, Styled, Window
 use crate::format;
 
 use super::Workspace;
-use super::components::{engine_badge, icon, status_glyph, status_pill};
+use super::components::{engine_badge, engine_icon, icon, status_glyph, status_pill};
 use super::state::InnerTab;
 
 impl Workspace {
@@ -43,10 +44,7 @@ impl Workspace {
     ) -> impl IntoElement {
         let theme = cx.theme().clone();
         if self.tabs.is_empty() {
-            if self.instances().is_empty() {
-                return self.render_welcome(&theme, cx).into_any_element();
-            }
-            return self.render_select_instance(&theme).into_any_element();
+            return self.render_launcher(cx).into_any_element();
         }
 
         v_flex()
@@ -59,64 +57,6 @@ impl Workspace {
             .when_some(self.catalog_banner_el(cx), |this, b| this.child(b))
             .child(self.render_selected(cx))
             .into_any_element()
-    }
-
-    /// The empty state: a welcome heading and the first-instance call to action.
-    fn render_welcome(&self, theme: &Theme, cx: &mut Context<Self>) -> impl IntoElement {
-        div()
-            .id("welcome")
-            .flex_1()
-            .h_full()
-            .min_w_0()
-            .bg(theme.background)
-            .flex()
-            .flex_col()
-            .items_center()
-            .justify_center()
-            .gap_3()
-            .child(
-                Label::new(strings::UI_WELCOME_TITLE)
-                    .text_xl()
-                    .font_weight(gpui_kit::FontWeight::SEMIBOLD),
-            )
-            .child(
-                Label::new(strings::UI_WELCOME_SUBTITLE)
-                    .text_sm()
-                    .text_color(theme.muted_foreground),
-            )
-            .child(
-                Button::new("welcome-create")
-                    .label(strings::UI_CREATE_FIRST)
-                    .primary()
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        this.open_new_instance(window, cx);
-                    })),
-            )
-    }
-
-    /// Instances exist but none is selected: prompt to pick one.
-    fn render_select_instance(&self, theme: &Theme) -> impl IntoElement {
-        div()
-            .id("select-instance")
-            .flex_1()
-            .h_full()
-            .min_w_0()
-            .bg(theme.background)
-            .flex()
-            .flex_col()
-            .items_center()
-            .justify_center()
-            .gap_2()
-            .child(
-                Label::new(strings::UI_SELECT_INSTANCE_TITLE)
-                    .text_xl()
-                    .font_weight(gpui_kit::FontWeight::SEMIBOLD),
-            )
-            .child(
-                Label::new(strings::UI_SELECT_INSTANCE_SUBTITLE)
-                    .text_sm()
-                    .text_color(theme.muted_foreground),
-            )
     }
 
     /// One tab per opened instance, with its status glyph and a close button.
@@ -136,6 +76,7 @@ impl Workspace {
             .items_center()
             .gap_1()
             .px(px(8.))
+            .overflow_x_hidden()
             .bg(theme.tab_bar)
             .border_b_1()
             .border_color(theme.border)
@@ -148,6 +89,7 @@ impl Workspace {
                 let status = view
                     .map(|view| view.status)
                     .unwrap_or(InstanceStatus::Stopped);
+                let engine = view.map(|view| view.engine);
                 let id = tab.instance.clone();
                 let tab_focus = super::components::keyed_focus(
                     SharedString::from(format!("itab-focus-{index}")),
@@ -162,7 +104,7 @@ impl Workspace {
                     .gap_2()
                     .pl(px(10.))
                     .pr(px(4.))
-                    .rounded(px(5.))
+                    .rounded(px(6.))
                     .cursor_pointer()
                     .when(active, |s| {
                         s.bg(theme.tab_active)
@@ -178,8 +120,11 @@ impl Workspace {
                         this.select_tab(index, cx);
                         cx.notify();
                     }))
-                    .child(status_glyph(status, 8.0, theme))
+                    .when_some(engine, |row, engine| {
+                        row.child(engine_icon(engine, 14.0, theme))
+                    })
                     .child(Label::new(name))
+                    .child(status_glyph(status, 7.0, theme))
                     .child(
                         Button::new(SharedString::from(format!("close-tab-{index}")))
                             .ghost()
@@ -258,10 +203,17 @@ impl Workspace {
             .flex_wrap()
             .gap_4()
             .px(px(24.))
-            .pt(px(16.))
-            .pb(px(4.))
-            .items_start()
-            .child(engine_badge(view.engine, 36.0, &theme))
+            .pt(px(18.))
+            .pb(px(6.))
+            .items_center()
+            .child(
+                div()
+                    .p(px(3.))
+                    .rounded(px(12.))
+                    .border_1()
+                    .border_color(theme.border)
+                    .child(engine_badge(view.engine, 40.0, &theme)),
+            )
             .child(
                 v_flex()
                     .flex_1()
@@ -273,7 +225,7 @@ impl Workspace {
                             .items_center()
                             .child(
                                 Label::new(view.name.clone())
-                                    .text_size(px(18.))
+                                    .text_size(px(20.))
                                     .font_weight(gpui_kit::FontWeight::SEMIBOLD),
                             )
                             .child(status_pill(view.status, &theme)),
@@ -289,6 +241,8 @@ impl Workspace {
                     .gap_2()
                     .child(
                         Button::new("header-run")
+                            .when(!running, |b| b.primary())
+                            .when(running, |b| b.outline())
                             .icon(if running {
                                 IconName::Square
                             } else {
@@ -308,7 +262,8 @@ impl Workspace {
                     )
                     .child(
                         Button::new("header-restart")
-                            .icon(IconName::RefreshCw)
+                            .outline()
+                            .icon(IconName::RotateCw)
                             .label(strings::UI_ACTION_RESTART)
                             .disabled(!format::can_restart(view.status) || busy)
                             .on_click(cx.listener(move |this, _, _, cx| {
@@ -325,8 +280,10 @@ impl Workspace {
                     .child(
                         Button::new("header-delete")
                             .ghost()
-                            .icon(IconName::Delete)
-                            .label(strings::UI_DELETE)
+                            .icon(IconName::Trash)
+                            .tooltip(strings::UI_DELETE)
+                            .accessibility_label(strings::UI_DELETE)
+                            .text_color(theme.danger)
                             .track_focus(&self.delete_focus.clone().tab_stop(true))
                             .on_click(cx.listener(move |this, _, window, cx| {
                                 this.open_delete_dialog(id_delete.clone(), window, cx);
@@ -367,6 +324,7 @@ impl Workspace {
         let detection_failed = self.clients.as_ref().is_some_and(|result| result.is_err());
 
         DropdownButton::new(SharedString::from(format!("{slot}-open-in")))
+            .outline()
             .button(
                 Button::new(SharedString::from(format!("{slot}-open-in-main")))
                     .icon(IconName::ExternalLink)
@@ -453,11 +411,21 @@ impl Workspace {
                                 );
                                 cx.notify();
                             }))
-                            .children(
-                                InnerTab::ALL
-                                    .iter()
-                                    .map(|tab| Tab::new().label(tab.label())),
-                            ),
+                            .children(InnerTab::ALL.iter().map(|tab| {
+                                Tab::new().aria_label(tab.label()).child(
+                                    h_flex()
+                                        .gap_1p5()
+                                        .items_center()
+                                        .child(icon(
+                                            subtab_icon(*tab),
+                                            14.0,
+                                            theme.muted_foreground,
+                                        ))
+                                        .child(Label::new(tab.label()).id(SharedString::from(
+                                            format!("subtab-{}", tab.label()),
+                                        ))),
+                                )
+                            })),
                     ),
                 ),
             )
@@ -476,6 +444,16 @@ impl Workspace {
             InnerTab::Databases => self.render_databases(view, cx).into_any_element(),
             InnerTab::Config => self.render_config(view, cx).into_any_element(),
         }
+    }
+}
+
+/// The icon drawn in front of each sub-tab label.
+fn subtab_icon(tab: InnerTab) -> IconName {
+    match tab {
+        InnerTab::Overview => IconName::LayoutDashboard,
+        InnerTab::Logs => IconName::ScrollText,
+        InnerTab::Databases => IconName::Database,
+        InnerTab::Config => IconName::SlidersHorizontal,
     }
 }
 

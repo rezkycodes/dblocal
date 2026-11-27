@@ -83,6 +83,23 @@ pub const UI_SELECT_INSTANCE_TITLE: &str = "Select an instance";
 /// Subtitle for the select-instance empty state.
 pub const UI_SELECT_INSTANCE_SUBTITLE: &str =
     "Select an instance in the left panel to see its details.";
+/// Launcher card: heading above the engine quick-create grid.
+pub const UI_LAUNCHER_QUICK_CREATE: &str = "Quick create";
+/// Launcher card: heading above the instance shortcuts.
+pub const UI_LAUNCHER_INSTANCES: &str = "Open an instance";
+/// Launcher card: the command palette row.
+pub const UI_LAUNCHER_PALETTE: &str = "Command palette";
+/// Launcher card: footer hint under the card.
+pub const UI_LAUNCHER_FOOTER: &str =
+    "Every runtime is verified with SHA-256 and listens on loopback only.";
+/// Title bar: the command search button.
+pub const UI_TITLE_SEARCH: &str = "Search instances and commands";
+/// Overview stat strip: version tile.
+pub const UI_STAT_VERSION: &str = "Version";
+/// Overview stat strip: status tile.
+pub const UI_STAT_STATUS: &str = "Status";
+/// Settings dialog subtitle.
+pub const UI_SETTINGS_SUBTITLE: &str = "Updates and how DBLocal starts with your session";
 /// Instances panel header.
 pub const UI_INSTANCES: &str = "INSTANCES";
 /// Instances panel footer button.
@@ -347,7 +364,7 @@ pub const UI_TOAST_STOP_FORCED: &str =
 // --- Workspace chrome (D-25 prototype port) ---------------------------------
 
 /// Breadcrumb separator between the engine and the instance name.
-pub const UI_BREADCRUMB_SEPARATOR: &str = "›";
+pub const UI_BREADCRUMB_SEPARATOR: &str = "/";
 /// Dock section header above the engine groups.
 pub const UI_DOCK_INSTANCES: &str = "INSTANCES";
 /// Dock section header above the installed runtimes.

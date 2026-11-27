@@ -44,6 +44,7 @@ mod databases_support;
 #[path = "app/databases_tests.rs"]
 mod databases_tests;
 mod delete_dialog;
+mod design;
 mod dialog_focus;
 mod dock;
 mod events;

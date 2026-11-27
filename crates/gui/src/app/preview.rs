@@ -48,6 +48,19 @@ impl Workspace {
         workspace
     }
 
+    /// Preview with no tab open: the centre pane shows the launcher.
+    pub fn preview_launcher(
+        service: Arc<dyn DblService>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let mut workspace = Self::new_preview(service, window, cx);
+        workspace.demo_content = true;
+        workspace.tray_note = None;
+        workspace.tray_note_shown = true;
+        workspace
+    }
+
     /// Preview with the command palette open.
     pub fn preview_palette(
         service: Arc<dyn DblService>,

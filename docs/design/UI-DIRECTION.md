@@ -100,6 +100,23 @@ DBDelve is calm because everything sits on one small scale. DBLocal now does the
 
 A card has one heading. Where a card needs an action beside its heading (Overview, Recent logs) the heading row carries both and the card is built without its own title.
 
+### Refresh (27 Nov 2026): grouped cards, launcher, command bar
+
+A second pass on the same palette, closer to DBDelve's layout language. Behaviour and information architecture are unchanged; the primitives live in `crates/gui/src/app/design.rs`.
+
+| Surface | Change | Where |
+|---|---|---|
+| Title bar | Breadcrumb `/ [engine icon] Engine / ● instance`; a centred command field ("Search instances and commands", `Ctrl/Cmd K` key caps) that opens the palette; catalog freshness as a tinted chip | `title_bar.rs` |
+| Dock | Heading with a total count badge; group headers use the engine icon and a count badge; the open instance has a 3px accent bar; runtimes sit under a hairline with an "unused" warning chip; the footer button is outlined with `Ctrl/Cmd N` key caps instead of a second primary blue | `dock.rs` |
+| Empty centre pane | The launcher (DBDelve's "Connect a database" card): app mark, heading, Quick create (one tile per available engine, opens New instance with it chosen), Open an instance (first four), and New instance / Command palette / Settings with key caps | `screens/launcher.rs` |
+| Instance header | 40px engine badge in a framed tile, 20px name; Start is the primary button when stopped, Stop/Restart/Open in are outlined, Delete is an icon button in the danger colour (tooltip + accessible name "Delete") | `screens.rs` |
+| Sub-tabs | Each segment carries an icon: Overview, Logs, Databases, Config | `screens.rs` |
+| Overview | A stat strip (Status, Version, Port, Data size); Details and Process are grouped cards with an uppercase heading outside the card and rows split by hairlines; the URI well has a link icon | `screens/overview.rs` |
+| Dialogs | New instance and Settings open with an icon-tile header (title + subtitle + close); engine cards are compact horizontal tiles with a check badge; category tabs are one segmented control; the footer note has an icon; Settings rows are "title + description left, switch right" | `create_dialog.rs`, `settings_dialog.rs` |
+| Status bar | Groups split by thin vertical rules, version in mono | `status_bar.rs` |
+
+Rules added: one grouped-card radius (10px) and row scale (36px minimum, 16px side padding, 128px label column), enforced by a compile-time assertion in `design.rs`; key caps are drawn only for shortcuts that are actually bound.
+
 ## Keyboard and accessibility
 
 - `Ctrl/Cmd+N` new instance, `Ctrl/Cmd+Shift+C` copy URI, `Ctrl/Cmd+Enter` start/stop, `Ctrl/Cmd+K`/`Ctrl/Cmd+Shift+P` command palette, `Ctrl/Cmd+,` Settings, `Escape` closes the top overlay.

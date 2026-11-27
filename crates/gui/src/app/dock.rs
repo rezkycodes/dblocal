@@ -17,7 +17,8 @@ use crate::format::{self, StatusGlyph};
 use crate::theme::tokens;
 
 use super::Workspace;
-use super::components::{engine_badge, engine_icon, icon, section_label, status_glyph};
+use super::components::{engine_icon, icon, section_label, status_glyph};
+use super::design;
 
 /// Width of the dock in logical pixels; the render tests sample this region.
 pub const DOCK_WIDTH: f32 = 272.0;
@@ -65,12 +66,14 @@ impl Workspace {
             .child(
                 h_flex()
                     .pl(px(8.))
+                    .gap_2()
                     .items_center()
                     .child(
                         section_label(strings::UI_DOCK_INSTANCES)
-                            .flex_1()
                             .text_color(theme.muted_foreground),
                     )
+                    .child(count_badge("instances", self.state.instances.len(), &theme))
+                    .child(div().flex_1())
                     .child(
                         Button::new("dock-new")
                             .ghost()
@@ -93,15 +96,20 @@ impl Workspace {
                 None => div().into_any_element(),
             })
             .child(tree)
-            .child(div().h(px(1.)).bg(theme.sidebar_border))
             .child(self.render_runtimes(&theme))
             .child(
                 Button::new("dock-create")
-                    .primary()
+                    .outline()
                     .small()
                     .w_full()
                     .icon(IconName::Plus)
                     .label(strings::UI_NEW_INSTANCE_FOOTER)
+                    .child(div().flex_1())
+                    .child(design::kbd(
+                        "dock-create",
+                        &[super::actions::modifier_label(), "N"],
+                        &theme,
+                    ))
                     .on_click(cx.listener(|this, _, window, cx| {
                         this.open_new_instance(window, cx);
                     })),
@@ -135,23 +143,18 @@ impl Workspace {
             .h(px(28.))
             .px(px(6.))
             .gap_2()
-            .rounded(px(5.))
+            .rounded(px(6.))
             .cursor_pointer()
-            .font_weight(gpui_kit::FontWeight::MEDIUM)
+            .font_weight(gpui_kit::FontWeight::SEMIBOLD)
             .hover(|s| s.bg(tokens::hover(theme)))
             .on_click(cx.listener(move |this, _, _, cx| {
                 this.toggle_collapsed(engine);
                 cx.notify();
             }))
-            .child(icon(header_icon, 14.0, theme.muted_foreground))
-            .child(engine_badge(engine, 20.0, theme))
-            .child(div().flex_1().child(group.label))
-            .child(
-                div()
-                    .text_xs()
-                    .text_color(theme.muted_foreground)
-                    .child(format!("{count}")),
-            );
+            .child(icon(header_icon, 12.0, theme.muted_foreground))
+            .child(engine_icon(engine, 16.0, theme))
+            .child(div().flex_1().text_sm().child(group.label))
+            .child(count_badge(engine.as_str(), count, theme));
         // `G2`: an inset full outline (all four edges), not the outside ring the
         // dock's clipping can reduce to a single line.
         let header = match &header_focus {
@@ -198,11 +201,12 @@ impl Workspace {
         );
         let row = h_flex()
             .id(SharedString::from(format!("row-{}", view.id)))
-            .h(px(28.))
-            .pl(px(32.))
-            .pr(px(10.))
+            .relative()
+            .h(px(30.))
+            .pl(px(30.))
+            .pr(px(8.))
             .gap_2()
-            .rounded(px(5.))
+            .rounded(px(6.))
             .cursor_pointer()
             .aria_label(accessible)
             .tooltip(move |_window, cx| {
@@ -212,14 +216,32 @@ impl Workspace {
             .when(selected, |s| {
                 s.bg(tokens::active(theme))
                     .text_color(theme.sidebar_accent_foreground)
+                    // The accent bar marks the open instance at a glance.
+                    .child(
+                        div()
+                            .absolute()
+                            .left(px(2.))
+                            .top(px(8.))
+                            .w(px(3.))
+                            .h(px(14.))
+                            .rounded_full()
+                            .bg(theme.primary),
+                    )
             })
             .when(!selected, |s| s.hover(|s| s.bg(tokens::hover(theme))))
             .on_click(cx.listener(move |this, _, _, cx| {
                 this.open_tab(id.clone(), cx);
             }))
-            .child(status_glyph(view.status, 9.0, theme))
-            .child(engine_icon(view.engine, 16.0, theme))
-            .child(div().flex_1().min_w_0().truncate().child(view.name.clone()))
+            .child(status_glyph(view.status, 8.0, theme))
+            .child(engine_icon(view.engine, 14.0, theme))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .when(selected, |s| s.font_weight(gpui_kit::FontWeight::MEDIUM))
+                    .child(view.name.clone()),
+            )
             .child(
                 div()
                     .text_xs()
@@ -228,7 +250,7 @@ impl Workspace {
             )
             .child(
                 div()
-                    .w(px(46.))
+                    .w(px(44.))
                     .text_right()
                     .text_xs()
                     .font_family(mono)
@@ -238,16 +260,26 @@ impl Workspace {
         super::components::apply_focus_ring(row, &row_focus, window, cx)
     }
 
-    /// The runtime list: title, instance count, "tak terpakai" when unused.
+    /// The runtime list: title, instance count, an "unused" chip.
     fn render_runtimes(&self, theme: &Theme) -> impl IntoElement {
         let rows = format::runtime_rows(self.runtimes(), &self.state.instances);
-        let mut list =
-            v_flex()
-                .id("runtime-list")
-                .gap_0p5()
-                .child(div().px(px(8.)).pb_1().child(
-                    section_label(strings::UI_DOCK_RUNTIMES).text_color(theme.muted_foreground),
-                ));
+        let mut list = v_flex()
+            .id("runtime-list")
+            .gap_0p5()
+            .pt(px(10.))
+            .border_t_1()
+            .border_color(theme.sidebar_border)
+            .child(
+                h_flex()
+                    .px(px(8.))
+                    .pb_1()
+                    .gap_2()
+                    .items_center()
+                    .child(
+                        section_label(strings::UI_DOCK_RUNTIMES).text_color(theme.muted_foreground),
+                    )
+                    .child(count_badge("runtimes", rows.len(), theme)),
+            );
         if rows.is_empty() {
             list = list.child(
                 Label::new(strings::UI_RUNTIME_UNUSED)
@@ -257,32 +289,59 @@ impl Workspace {
             );
         }
         for (index, row) in rows.iter().enumerate() {
-            let usage_colour = if row.unused {
-                theme.warning
+            let usage = if row.unused {
+                design::chip(
+                    &format!("runtime-usage-{index}"),
+                    row.usage.clone(),
+                    theme.warning,
+                )
+                .into_any_element()
             } else {
-                theme.muted_foreground
+                Label::new(row.usage.clone())
+                    .id(SharedString::from(format!("runtime-usage-{index}")))
+                    .text_xs()
+                    .text_color(theme.muted_foreground)
+                    .into_any_element()
             };
             list = list.child(
                 h_flex()
                     .id(SharedString::from(format!("runtime-row-{index}")))
-                    .h(px(26.))
-                    .px(px(10.))
+                    .h(px(28.))
+                    .px(px(8.))
                     .gap_2()
-                    .child(engine_icon(row.engine, 16.0, theme))
+                    .rounded(px(6.))
+                    .hover(|s| s.bg(tokens::hover(theme)))
+                    .child(engine_icon(row.engine, 14.0, theme))
                     .child(
                         Label::new(row.title.clone())
                             .id(SharedString::from(format!("runtime-title-{index}")))
                             .flex_1()
                             .text_xs(),
                     )
-                    .child(
-                        Label::new(row.usage.clone())
-                            .id(SharedString::from(format!("runtime-usage-{index}")))
-                            .text_xs()
-                            .text_color(usage_colour),
-                    ),
+                    .child(usage),
             );
         }
         list
     }
+}
+
+/// A small rounded count beside a heading or a group name.
+fn count_badge(key: &str, count: usize, theme: &Theme) -> impl IntoElement {
+    div()
+        .flex_none()
+        .min_w(px(18.))
+        .h(px(16.))
+        .px(px(5.))
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded_full()
+        .bg(tokens::active(theme))
+        .child(
+            Label::new(count.to_string())
+                .id(SharedString::from(format!("count-{key}")))
+                .text_size(px(10.5))
+                .font_weight(gpui_kit::FontWeight::MEDIUM)
+                .text_color(theme.muted_foreground),
+        )
 }

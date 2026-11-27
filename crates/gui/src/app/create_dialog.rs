@@ -16,7 +16,7 @@ use dblocal_core::strings;
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::label::Label;
-use gpui_kit::component::{ActiveTheme, Theme, h_flex, input::Input, v_flex};
+use gpui_kit::component::{ActiveTheme, Sizable, Theme, h_flex, input::Input, v_flex};
 use gpui_kit::{
     AnyElement, Context, InteractiveElement, IntoElement, MouseButton, ParentElement, SharedString,
     Styled, Window, div, prelude::*, px,
@@ -61,8 +61,8 @@ pub(super) fn render(
     let body = v_flex()
         .gap_5()
         .p(px(20.))
+        .pt(px(4.))
         .text_size(px(13.))
-        .child(Label::new(strings::UI_CREATE_INTRO).text_color(theme.muted_foreground))
         .child(
             v_flex()
                 .gap_2()
@@ -88,7 +88,18 @@ pub(super) fn render(
         .child(render_fields(workspace, &form, &theme, cx))
         .child(render_engine_options(&form, &theme, cx));
 
-    let footer = render_footer(&form, installed, &theme, cx);
+    let footer = render_footer(&form, installed, &theme, cx).into_any_element();
+    let close = Button::new("ni-close")
+        .ghost()
+        .small()
+        .compact()
+        .icon(IconName::Close)
+        .tooltip(strings::UI_CLOSE)
+        .accessibility_label(strings::UI_CLOSE)
+        .on_click(cx.listener(|this, _, _, cx| {
+            this.cancel_create_action();
+            cx.notify();
+        }));
     overlay(
         "create-overlay",
         "create-panel",
@@ -99,19 +110,20 @@ pub(super) fn render(
             .text_color(theme.popover_foreground)
             .border_1()
             .border_color(theme.border)
-            .rounded(px(10.))
+            .rounded(px(12.))
+            .shadow_lg()
             .overflow_hidden()
             .child(
-                h_flex()
-                    .px(px(20.))
-                    .py(px(14.))
-                    .border_b_1()
-                    .border_color(theme.border)
-                    .child(
-                        Label::new(strings::UI_CREATE_TITLE)
-                            .text_sm()
-                            .font_weight(gpui_kit::FontWeight::SEMIBOLD),
-                    ),
+                super::design::dialog_header(
+                    "create",
+                    IconName::DatabaseZap,
+                    strings::UI_CREATE_TITLE,
+                    Some(strings::UI_CREATE_INTRO),
+                    &theme,
+                )
+                .border_b_1()
+                .border_color(theme.border)
+                .child(close),
             )
             .child(
                 div()
@@ -151,17 +163,13 @@ fn render_category_tabs(
                 category.slug()
             )))
             .px(px(12.))
-            .py(px(6.))
+            .py(px(5.))
             .rounded(px(6.))
-            .border_1()
             .cursor_pointer()
-            .border_color(if active { theme.primary } else { theme.border })
-            .bg(if active {
-                crate::theme::tokens::tint(theme.primary, 0.12)
-            } else {
-                theme.background
+            .when(active, |tab| tab.bg(crate::theme::tokens::active(theme)))
+            .when(!active, |tab| {
+                tab.hover(|s| s.bg(crate::theme::tokens::hover(theme)))
             })
-            .hover(|s| s.border_color(theme.primary))
             .on_click(cx.listener(move |this, _, window, cx| {
                 this.choose_category_action(category, window, cx);
             }))
@@ -188,7 +196,16 @@ fn render_category_tabs(
             None => tab,
         }
     });
-    h_flex().gap_2().children(tabs)
+    h_flex()
+        .flex_none()
+        .self_start()
+        .gap_1()
+        .p(px(3.))
+        .rounded(px(8.))
+        .border_1()
+        .border_color(theme.border)
+        .bg(theme.background)
+        .children(tabs)
 }
 
 /// The engine cards for the active category tab: icon, name, canonical port, and the disabled reason.
@@ -212,13 +229,14 @@ fn render_engine_cards(
         let selected = engine == form.engine;
         let disabled = !entry.available;
         let reason = format::engine_unavailable_reason(entry).map(str::to_owned);
-        let card = v_flex()
+        let card = h_flex()
             .id(SharedString::from(format!("engine-{}", engine.as_str())))
+            .relative()
             .w(px(218.))
             .flex_none()
-            .gap_2()
+            .gap_3()
             .p(px(12.))
-            .rounded(px(8.))
+            .rounded(px(10.))
             .border_1()
             .cursor_pointer()
             .border_color(if selected {
@@ -231,32 +249,50 @@ fn render_engine_cards(
             } else {
                 theme.background
             })
+            .when(disabled, |this| this.opacity(0.7))
             .hover(|s| s.border_color(theme.primary))
             .on_click(cx.listener(move |this, _, window, cx| {
                 if !disabled {
                     this.choose_engine_action(engine, window, cx);
                 }
             }))
+            .child(engine_badge(engine, 34.0, theme))
             .child(
-                h_flex()
-                    .items_center()
-                    .child(engine_badge(engine, 28.0, theme))
-                    .child(div().flex_1())
-                    .when(selected, |this| {
-                        this.child(icon(IconName::Check, 16.0, theme.primary))
+                v_flex()
+                    .flex_1()
+                    .min_w_0()
+                    .gap_0p5()
+                    .child(
+                        Label::new(engine.display_name())
+                            .font_weight(gpui_kit::FontWeight::SEMIBOLD),
+                    )
+                    .child(
+                        Label::new(format!(":{}", engine.canonical_port()))
+                            .text_xs()
+                            .font_family(theme.mono_font_family.clone())
+                            .text_color(theme.muted_foreground),
+                    )
+                    .when_some(reason, |this, reason| {
+                        this.child(
+                            Label::new(reason)
+                                .text_xs()
+                                .text_color(theme.muted_foreground),
+                        )
                     }),
             )
-            .child(Label::new(engine.display_name()).font_weight(gpui_kit::FontWeight::SEMIBOLD))
-            .child(
-                Label::new(format!("Canonical port {}", engine.canonical_port()))
-                    .text_xs()
-                    .text_color(theme.muted_foreground),
-            )
-            .when_some(reason, |this, reason| {
+            .when(selected, |this| {
                 this.child(
-                    Label::new(reason)
-                        .text_xs()
-                        .text_color(theme.muted_foreground),
+                    div()
+                        .absolute()
+                        .top(px(8.))
+                        .right(px(8.))
+                        .size(px(18.))
+                        .rounded_full()
+                        .bg(theme.primary)
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .child(icon(IconName::Check, 12.0, theme.primary_foreground)),
                 )
             });
         match (disabled, focus) {
@@ -627,6 +663,16 @@ fn render_footer(
         .py(px(12.))
         .border_t_1()
         .border_color(theme.border)
+        .bg(crate::theme::tokens::hover(theme))
+        .child(icon(
+            if installed {
+                IconName::CircleCheck
+            } else {
+                IconName::Download
+            },
+            14.0,
+            note_colour,
+        ))
         .child(Label::new(note).flex_1().text_xs().text_color(note_colour))
         .child(
             Button::new("ni-cancel")
