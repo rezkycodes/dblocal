@@ -135,12 +135,8 @@ fn verify(path: &Path, expected: i32) -> crate::Result<()> {
 }
 
 fn publish(temp: &Path, backup: &Path) -> crate::Result<()> {
-    #[cfg(windows)]
-    match std::fs::remove_file(backup) {
-        Ok(()) => {}
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
-        Err(source) => return Err(DblError::Io { source }),
-    }
+    // `rename` replaces an existing destination atomically on Unix and Windows,
+    // so an older good backup is never deleted before the new one is in place.
     std::fs::rename(temp, backup).map_err(|source| DblError::Io { source })
 }
 
