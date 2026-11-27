@@ -82,6 +82,16 @@ Everything else is DBDelve's value: the five planes, text, on-accent, cursor, su
 
 Focus stays a ring in `theme.ring` and clears 3:1 on every surface it is drawn on (`focus_ring_pairs`). Status is never colour alone: glyph shape plus the status word (F-PLH-02 AC2). The ring shows for keyboard focus only (`components::focus_ring_visible`: focus held and the window's last input was a key press); a mouse click focuses a row or tab without drawing it, and the Settings switches take `focus_ring(keyboard)` for the same reason.
 
+### Destructive actions
+
+Delete is always the trash glyph (`IconName::Trash`), never the backspace-style `delete.svg`. Red is reserved for the one destructive entry point that is always visible, and for the pointer everywhere else:
+
+- **Instance header Delete:** icon-only, ghost (no fill at rest), the glyph in `theme.danger`, tooltip and accessible name "Delete". Hover and press lay a low-alpha danger wash under it (`tokens::destructive_hover`, `tokens::destructive_active`). Focus stays the keyboard-only `ring`.
+- **Databases row and dock RUNTIMES row:** a neutral ghost trash in the muted text colour at rest; only the hover and press wash is danger-tinted, so a row of trash cans does not read as a wall of red. A disabled control (a system database, a runtime that still has instances) keeps the muted look and, for the runtime, a tooltip with the reason.
+- Every one of them keeps a confirmation dialog; the dialog, not the button, explains the consequence.
+
+`contrast.rs` checks the danger glyph at rest and over both washes on the page plane in both themes; the wash alphas were sized to clear 4.5:1 without moving the danger token (dark 6.33 / 5.38 / 4.80, light 6.56 / 5.44 / 4.87 at rest / hover / active).
+
 ### Tidiness: one scale, one density
 
 DBDelve is calm because everything sits on one small scale. DBLocal now does the same; none of it changes behaviour.

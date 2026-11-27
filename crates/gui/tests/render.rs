@@ -158,6 +158,8 @@ type Build = fn(Arc<dyn DblService>, &mut gpui_kit::Window, &mut Context<Workspa
 
 #[path = "render/both_themes.rs"]
 mod both_themes;
+#[path = "render/delete_style.rs"]
+mod delete_style;
 #[path = "render/focus_ring.rs"]
 mod focus_ring;
 #[path = "render/frame.rs"]

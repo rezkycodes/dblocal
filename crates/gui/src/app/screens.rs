@@ -19,7 +19,7 @@ mod overview;
 use dblocal_core::model::InstanceStatus;
 use dblocal_core::strings;
 use gpui_kit::assets::IconName;
-use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::component::button::{Button, ButtonCustomVariant, ButtonVariants};
 use gpui_kit::component::label::Label;
 use gpui_kit::component::{
     ActiveTheme, Disableable, Sizable, Theme, h_flex,
@@ -30,6 +30,7 @@ use gpui_kit::prelude::*;
 use gpui_kit::{Context, IntoElement, ParentElement, SharedString, Styled, Window, div, px};
 
 use crate::format;
+use crate::theme::tokens;
 
 use super::Workspace;
 use super::components::{engine_badge, engine_icon, icon, status_glyph, status_pill};
@@ -273,17 +274,22 @@ impl Workspace {
                     )
                     .child(self.render_open_in(view, "header", &theme, cx))
                     // `F-INS-05`: the delete entry point beside the other header
-                    // actions. Ghost style like its neighbours, but danger-toned so
-                    // it reads as destructive; the dialog itself explains the
+                    // actions. Icon-only trash like the other ghost controls, in
+                    // the danger colour so it reads as destructive, with a
+                    // danger-tinted wash on hover and press and no fill at rest. The dialog itself explains the
                     // consequence, so the button is always enabled. A normal Tab
                     // stop with the ring and Enter/Space activation.
                     .child(
                         Button::new("header-delete")
-                            .ghost()
+                            .custom(
+                                ButtonCustomVariant::new(cx)
+                                    .foreground(theme.danger)
+                                    .hover(tokens::destructive_hover(&theme))
+                                    .active(tokens::destructive_active(&theme)),
+                            )
                             .icon(IconName::Trash)
                             .tooltip(strings::UI_DELETE)
                             .accessibility_label(strings::UI_DELETE)
-                            .text_color(theme.danger)
                             .track_focus(&self.delete_focus.clone().tab_stop(true))
                             .on_click(cx.listener(move |this, _, window, cx| {
                                 this.open_delete_dialog(id_delete.clone(), window, cx);

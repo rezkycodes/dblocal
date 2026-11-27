@@ -296,7 +296,7 @@ impl Workspace {
                             .ghost()
                             .small()
                             .compact()
-                            .icon(gpui_kit::assets::IconName::Delete)
+                            .icon(gpui_kit::assets::IconName::Trash)
                             .tooltip(strings::UI_DATABASES_DELETE)
                             .accessibility_label(strings::UI_DATABASES_DELETE)
                             .disabled(is_system)

@@ -275,6 +275,7 @@ pub(crate) fn check_all() -> (Vec<CheckedPair>, Vec<CheckedPair>) {
             .chain(derived_pairs(&name, &colours))
             .chain(derived_pairs_from_hsla(&name, &colours))
             .chain(tinted_pairs(&name, &colours))
+            .chain(destructive_pairs(&name, &colours))
             .chain(extra_text_pairs(&name, &colours))
             .chain(plane_pairs(&name, &colours));
         for pair in pairs {
@@ -349,6 +350,50 @@ fn tinted_pairs(theme_name: &str, colors: &HashMap<String, String>) -> Vec<Check
                 ratio: contrast_ratio(fg, fill),
             });
         }
+    }
+    out
+}
+
+/// The header Delete button: the danger label and glyph over the page plane,
+/// at rest and under the danger-tinted hover and active washes
+/// (`tokens::destructive_hover` / `destructive_active`).
+///
+/// The button is a ghost-style destructive control inside the centre pane, which
+/// paints `theme.background`; the Databases row's trash stays a neutral ghost,
+/// so this checks the page plane only rather than inventing danger text on the
+/// card or chrome planes.
+fn destructive_pairs(theme_name: &str, colors: &HashMap<String, String>) -> Vec<CheckedPair> {
+    use crate::theme::tokens::{DANGER_ACTIVE, DANGER_HOVER};
+    let Some(fg_hex) = colors.get("danger.background") else {
+        return Vec::new();
+    };
+    let Some(fg) = Rgb::parse(fg_hex) else {
+        return Vec::new();
+    };
+    let Some(base_hex) = colors.get("background") else {
+        return Vec::new();
+    };
+    let Some(base) = Rgb::parse(base_hex) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for (state, alpha) in [
+        ("rest", 0.0f64),
+        ("hover", f64::from(DANGER_HOVER)),
+        ("active", f64::from(DANGER_ACTIVE)),
+    ] {
+        let fill = if alpha == 0.0 {
+            base
+        } else {
+            composite(fg, alpha, base)
+        };
+        out.push(CheckedPair {
+            theme: theme_name.to_owned(),
+            label: format!("danger on page+{state} (destructive button)"),
+            fg: fg_hex.clone(),
+            bg: format!("#{:02x}{:02x}{:02x}", fill.r, fill.g, fill.b),
+            ratio: contrast_ratio(fg, fill),
+        });
     }
     out
 }
@@ -789,6 +834,40 @@ mod tests {
         assert!(
             failing.is_empty(),
             "tinted badge contrast failures:\n{}",
+            failing.join("\n")
+        );
+    }
+
+    #[test]
+    fn the_destructive_header_button_stays_legible_on_every_state() {
+        // `F-INS-05`: the Delete label and trash glyph paint `theme.danger` on
+        // the header plane, and a danger-tinted wash sits under them on hover
+        // and press. The wash lightens the surface, so it is checked in every
+        // state, not just at rest, as the plane matrix already does for body
+        // text.
+        let mut checked = 0;
+        let mut failing = Vec::new();
+        for (name, colours) in parse_themes() {
+            let pairs = destructive_pairs(&name, &colours);
+            assert!(
+                pairs.len() >= 3,
+                "{name}: expected rest, hover and active, got {}",
+                pairs.len()
+            );
+            for pair in pairs {
+                checked += 1;
+                if pair.ratio < MIN_RATIO {
+                    failing.push(format!(
+                        "{} / {}: {} on {} = {:.2}",
+                        pair.theme, pair.label, pair.fg, pair.bg, pair.ratio
+                    ));
+                }
+            }
+        }
+        assert!(checked >= 6, "both themes must be checked");
+        assert!(
+            failing.is_empty(),
+            "destructive button contrast failures:\n{}",
             failing.join("\n")
         );
     }

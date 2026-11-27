@@ -58,6 +58,21 @@ fn duplicates(tree: &TreeUpdate) -> Vec<(String, usize)> {
 /// Returns `None` on Windows, where the headless platform cannot open a window,
 /// so the caller skips instead of hanging or failing on a platform limit.
 fn duplicates_for(name: &str, build: Build) -> Option<(usize, Vec<(String, usize)>)> {
+    let captured = capture(name, build)?;
+    // Every frame's tree must be clean, not just the last.
+    let mut worst: Vec<(String, usize)> = Vec::new();
+    for tree in &captured {
+        let dups = duplicates(tree);
+        if dups.len() > worst.len() {
+            worst = dups;
+        }
+    }
+    Some((captured.len(), worst))
+}
+
+/// Builds one case with the a11y tree active and returns every tree update.
+/// `None` on Windows (no headless window there).
+fn capture(name: &str, build: Build) -> Option<Vec<TreeUpdate>> {
     if cfg!(target_os = "windows") {
         eprintln!(
             "{name}: skipped — a headless GPUI platform cannot open a window on Windows, \
@@ -107,16 +122,32 @@ fn duplicates_for(name: &str, build: Build) -> Option<(usize, Vec<(String, usize
         !captured.is_empty(),
         "{name}: the a11y tree was never built — the harness did not activate it"
     );
-    // Every frame's tree must be clean, not just the last.
-    let mut worst: Vec<(String, usize)> = Vec::new();
-    for tree in &captured {
-        let dups = duplicates(tree);
-        if dups.len() > worst.len() {
-            worst = dups;
-        }
-    }
     drop(app);
-    Some((captured.len(), worst))
+    Some(captured)
+}
+
+/// Accessible names of every node in the captured trees.
+fn labels(trees: &[TreeUpdate]) -> Vec<String> {
+    trees
+        .iter()
+        .flat_map(|t| t.nodes.iter())
+        .filter_map(|(_, node)| node.label().map(str::to_owned))
+        .collect()
+}
+
+/// The icon-only header trash has no visible word, so the accessible name
+/// is the only way a screen reader hears what they do.
+#[test]
+fn the_header_delete_control_is_named() {
+    let Some(shell) = capture("shell", Workspace::preview) else {
+        return;
+    };
+    let shell = labels(&shell);
+    assert!(
+        shell.iter().any(|l| l == dblocal_core::strings::UI_DELETE),
+        "the header Delete control needs the accessible name {:?}; found {shell:?}",
+        dblocal_core::strings::UI_DELETE
+    );
 }
 
 /// One `#[test]` per case: gpui's `debug_assert` panics inside the frame, so a

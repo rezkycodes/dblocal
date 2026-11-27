@@ -114,4 +114,34 @@ mod tests {
         let dark = service_brand_colour(EngineKey::Mariadb, true);
         assert!(dark.l > light.l + 0.3, "dark={dark:?} light={light:?}");
     }
+
+    /// The Delete actions draw the Lucide **trash** glyph, not `delete.svg`
+    /// (the backspace symbol). `IconName::Trash` resolves to `icons/trash.svg`,
+    /// and `DblocalAssets` must serve those bytes — including through the
+    /// release path, where only the whole `AllAssets` catalog is embedded.
+    ///
+    /// A truncated or empty asset would render as a blank icon; asserting the
+    /// `<svg>` root and the trash body proves bytes reach the renderer, and the
+    /// generated `IconName::Trash` variant proves the name exists in the binary.
+    #[test]
+    fn the_trash_glyph_is_bundled_and_is_not_the_delete_glyph() {
+        let trash = gpui_kit::assets::IconName::Trash;
+        assert_eq!(trash.path().as_ref(), "icons/trash.svg");
+        assert_ne!(
+            trash.path().as_ref(),
+            "icons/delete.svg",
+            "delete.svg is the backspace glyph; DBLocal wants the trash can"
+        );
+        let bytes = DblocalAssets
+            .load(trash.path().as_ref())
+            .expect("load trash")
+            .expect("trash.svg must be embedded, not blank");
+        let svg = std::str::from_utf8(&bytes).expect("trash.svg is utf-8");
+        assert!(svg.contains("<svg"), "trash.svg must be an SVG document");
+        // The trash can body: a lid plus the bin outline Lucide's `trash` draws.
+        assert!(
+            svg.contains("M19 6v14"),
+            "trash.svg must carry the bin body, not another glyph"
+        );
+    }
 }

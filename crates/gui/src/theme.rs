@@ -243,6 +243,11 @@ pub mod tokens {
     /// Alpha of the active wash (the soft pill under the selected tab or row).
     pub(crate) const ACTIVE_DARK: f32 = 0.09;
     pub(crate) const ACTIVE_LIGHT: f32 = 0.08;
+    /// Alpha of the danger-tinted wash under a destructive ghost button on hover
+    /// and while pressed. `pub(crate)` so [`crate::contrast`] checks the danger
+    /// label over exactly these washes.
+    pub(crate) const DANGER_HOVER: f32 = 0.10;
+    pub(crate) const DANGER_ACTIVE: f32 = 0.16;
     /// Alpha of the fill under a value that was edited and not yet applied.
     const EDITED: f32 = 0.20;
 
@@ -302,6 +307,18 @@ pub mod tokens {
             ACTIVE_LIGHT
         };
         tint(theme.foreground, alpha)
+    }
+
+    /// The wash under a destructive ghost button on hover: the danger colour at
+    /// a low alpha, so Delete reads red without a filled button breaking the
+    /// header row's hierarchy.
+    pub fn destructive_hover(theme: &Theme) -> Hsla {
+        tint(theme.danger, DANGER_HOVER)
+    }
+
+    /// The wash under a destructive ghost button while pressed.
+    pub fn destructive_active(theme: &Theme) -> Hsla {
+        tint(theme.danger, DANGER_ACTIVE)
     }
 
     /// The fill under a setting that was changed and not yet applied.
