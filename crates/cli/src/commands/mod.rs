@@ -10,6 +10,7 @@ pub mod list;
 pub mod logs;
 pub mod open;
 pub mod password;
+pub mod runtime;
 pub mod start;
 pub mod status;
 pub mod stop;
@@ -21,7 +22,7 @@ use std::io::Write;
 
 use dblocal_core::service::DblService;
 
-use crate::cli::Command;
+use crate::cli::{Command, RuntimeCommand};
 use crate::output;
 
 /// Reads the typed confirmation for `delete` when it is interactive.
@@ -89,6 +90,14 @@ pub fn dispatch(ctx: &mut Ctx<'_>, command: &Command) -> u8 {
             dry_run,
         } => open::run(ctx, instance, client, *dry_run),
         Command::Config { command } => config::dispatch(ctx, command),
+        Command::Runtime { command } => match command {
+            RuntimeCommand::List { json } => runtime::list(ctx, *json),
+            RuntimeCommand::Remove {
+                engine,
+                version,
+                yes,
+            } => runtime::remove(ctx, engine, version, *yes),
+        },
     }
 }
 

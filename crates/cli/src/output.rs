@@ -122,6 +122,11 @@ fn push_row3(out: &mut String, row: &[String; 3], widths: &[usize; 3]) {
 /// A byte count as `MB`/`KB`/`B`, rounded, for the size column.
 fn human_size(bytes: i64) -> String {
     let bytes = bytes.max(0) as u64;
+    human_size_u64(bytes)
+}
+
+/// The same rendering for an unsigned count (runtime sizes).
+pub(crate) fn human_size_u64(bytes: u64) -> String {
     const MIB: u64 = 1024 * 1024;
     const KIB: u64 = 1024;
     if bytes >= MIB {
@@ -277,6 +282,112 @@ pub fn format_list_json(instances: &[InstanceView]) -> String {
         })
         .collect();
     serde_json::Value::Array(items).to_string()
+}
+
+/// Table for `dblocal runtime list`. Columns: ENGINE, VERSION, ARCH, SIZE, USERS.
+///
+/// `USERS` names the instances that share the runtime, or `unused` so a runtime
+/// that is safe to remove is obvious.
+pub fn format_runtime_list_table(
+    runtimes: &[dblocal_core::model::Runtime],
+    instances: &[InstanceView],
+) -> String {
+    let headers = ["ENGINE", "VERSION", "ARCH", "SIZE", "USERS"];
+    let rows: Vec<Vec<String>> = runtimes
+        .iter()
+        .map(|runtime| {
+            vec![
+                runtime.engine().as_str().to_owned(),
+                runtime.version().to_owned(),
+                runtime.arch().to_string(),
+                human_size_u64(runtime.size_bytes()),
+                runtime_users(runtime, instances),
+            ]
+        })
+        .collect();
+    table(headers.iter().map(|h| (*h).to_owned()).collect(), rows)
+}
+
+/// One JSON line array of `{engine, version, arch, size_bytes, users}` for
+/// `runtime list --json`.
+pub fn format_runtime_list_json(
+    runtimes: &[dblocal_core::model::Runtime],
+    instances: &[InstanceView],
+) -> String {
+    let items: Vec<serde_json::Value> = runtimes
+        .iter()
+        .map(|runtime| {
+            let users: Vec<&str> = shared_instances(runtime, instances);
+            serde_json::json!({
+                "engine": runtime.engine().as_str(),
+                "version": runtime.version(),
+                "arch": runtime.arch().to_string(),
+                "size_bytes": runtime.size_bytes(),
+                "users": users,
+            })
+        })
+        .collect();
+    serde_json::Value::Array(items).to_string()
+}
+
+/// Sorted names of the instances that share `runtime`.
+fn shared_instances<'a>(
+    runtime: &dblocal_core::model::Runtime,
+    instances: &'a [InstanceView],
+) -> Vec<&'a str> {
+    let mut names: Vec<&str> = instances
+        .iter()
+        .filter(|view| view.engine == runtime.engine() && view.version == runtime.version())
+        .map(|view| view.name.as_str())
+        .collect();
+    names.sort_unstable();
+    names
+}
+
+/// `USERS` cell: the instance names, or `unused`.
+fn runtime_users(runtime: &dblocal_core::model::Runtime, instances: &[InstanceView]) -> String {
+    let names = shared_instances(runtime, instances);
+    if names.is_empty() {
+        messages::RUNTIME_UNUSED.to_owned()
+    } else {
+        names.join(", ")
+    }
+}
+
+/// Aligned table over an arbitrary number of columns, ragged edges untouched.
+fn table(headers: Vec<String>, rows: Vec<Vec<String>>) -> String {
+    let mut widths: Vec<usize> = headers.iter().map(String::len).collect();
+    for row in &rows {
+        for (i, cell) in row.iter().enumerate() {
+            if i < widths.len() {
+                widths[i] = widths[i].max(cell.len());
+            }
+        }
+    }
+    let mut out = String::new();
+    push_aligned(&mut out, &headers, &widths);
+    for row in &rows {
+        push_aligned(&mut out, row, &widths);
+    }
+    while out.ends_with('\n') {
+        out.pop();
+    }
+    out
+}
+
+fn push_aligned(out: &mut String, row: &[String], widths: &[usize]) {
+    for (i, cell) in row.iter().enumerate() {
+        if i > 0 {
+            out.push_str("  ");
+        }
+        out.push_str(cell);
+        if i < row.len() - 1 {
+            for _ in 0..widths[i].saturating_sub(cell.len()) {
+                out.push(' ');
+            }
+        }
+    }
+    out.push('\n');
 }
 
 pub fn is_tty_stdout() -> bool {

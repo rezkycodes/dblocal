@@ -176,6 +176,32 @@ pub enum Command {
         #[command(subcommand)]
         command: ConfigCommand,
     },
+    /// List installed engine runtimes and remove an unused one (F-RTM-04).
+    Runtime {
+        #[command(subcommand)]
+        command: RuntimeCommand,
+    },
+}
+
+/// `dblocal runtime ...` subcommands.
+#[derive(Debug, Subcommand)]
+pub enum RuntimeCommand {
+    /// List installed runtimes with their size and the instances using them.
+    List {
+        /// Print JSON that can be piped.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Remove an unused runtime and the space it takes.
+    Remove {
+        /// Engine: postgresql, mysql, mariadb, valkey, redis or rustfs.
+        engine: String,
+        /// Engine version tag, e.g. 18.7.0.
+        version: String,
+        /// Skip the confirmation.
+        #[arg(long)]
+        yes: bool,
+    },
 }
 
 /// `dblocal config ...` subcommands.
@@ -630,6 +656,9 @@ mod tests {
             &["update", "apply", "--yes"],
             &["open", "app", "--client", "tableplus"],
             &["open", "app", "--client", "psql", "--dry-run"],
+            &["runtime", "list"],
+            &["runtime", "list", "--json"],
+            &["runtime", "remove", "postgresql", "17.4", "--yes"],
         ];
         for args in cases {
             parse(args).unwrap_or_else(|err| panic!("{args:?}: {err}"));

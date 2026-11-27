@@ -141,3 +141,27 @@ pub const ERR_BAD_LEVEL: &str = "The privilege level must be `ro` or `rw`.";
 pub const ERR_UNKNOWN_CLIENT: &str = "Unknown client.";
 /// Prompt for the typed database-name confirmation.
 pub const PROMPT_DB_CONFIRM: &str = "Type the database name to confirm deletion: ";
+
+// --- runtime (F-RTM-04) ------------------------------------------------------
+
+/// `USERS` cell for a runtime no instance uses.
+pub const RUNTIME_UNUSED: &str = "unused";
+/// No installed runtime matched the engine and version.
+pub const ERR_RUNTIME_NOT_FOUND: &str = "Runtime not found";
+/// `runtime remove` requires `--yes` on a non-interactive session.
+pub const ERR_RUNTIME_REMOVE_NEEDS_YES: &str =
+    "Removing a runtime requires --yes in a non-interactive session.";
+/// The typed version did not match.
+pub const ERR_RUNTIME_CONFIRMATION: &str = "Remove cancelled: the version does not match.";
+/// The runtime was removed.
+pub const MSG_RUNTIME_REMOVED: &str = "Runtime removed.";
+
+/// Prompt for the typed version confirmation of `runtime remove`.
+pub fn runtime_remove_prompt(engine: &str, version: &str) -> String {
+    format!("Type the version ({version}) to remove {engine} {version}: ")
+}
+
+/// The line naming the instances that keep a runtime from being removed.
+pub fn runtime_used_by(users: &[String]) -> String {
+    format!("Used by: {}", users.join(", "))
+}

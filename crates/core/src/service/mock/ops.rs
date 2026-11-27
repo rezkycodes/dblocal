@@ -732,13 +732,21 @@ impl DblService for MockService {
             .iter()
             .find(|(engine, version)| format!("rt-{}-{}", engine.as_str(), version) == runtime)
             .cloned();
-        match target {
-            Some(target) => {
-                g.runtimes.remove(&target);
-                Ok(())
-            }
-            None => Err(not_found("runtime", runtime)),
+        let Some((engine, version)) = target else {
+            return Err(not_found("runtime", runtime));
+        };
+        // `F-RTM-04` AC2: refuse while an instance still uses this engine+version.
+        let users: Vec<String> = g
+            .views
+            .values()
+            .filter(|view| view.engine == engine && view.version == version)
+            .map(|view| view.name.clone())
+            .collect();
+        if !users.is_empty() {
+            return Err(crate::DblError::RuntimeInUse { users });
         }
+        g.runtimes.remove(&(engine, version));
+        Ok(())
     }
 
     fn list_archives(&self) -> Result<Vec<crate::model::ArchivedData>> {

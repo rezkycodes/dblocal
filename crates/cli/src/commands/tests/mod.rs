@@ -15,6 +15,7 @@ mod config;
 mod inspect;
 mod lifecycle;
 mod races;
+mod runtime;
 mod service_admin;
 mod statuses;
 

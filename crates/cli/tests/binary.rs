@@ -39,7 +39,7 @@ fn help_succeeds_and_lists_commands() {
     assert!(out.status.success());
     let text = String::from_utf8_lossy(&out.stdout);
     for cmd in [
-        "list", "status", "start", "stop", "uri", "create", "delete", "logs",
+        "list", "status", "start", "stop", "uri", "create", "delete", "logs", "runtime",
     ] {
         assert!(text.contains(cmd), "help missing {cmd}: {text}");
     }
