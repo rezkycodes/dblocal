@@ -554,6 +554,13 @@ pub struct RuntimeRow {
     pub usage: String,
 }
 
+/// The accessible name of a runtime row's remove control: the action plus the
+/// runtime it acts on, so a screen reader hears `PostgreSQL 17.4`, not just
+/// "Remove" three times in a row.
+pub fn runtime_remove_label(title: &str) -> String {
+    format!("{}: {title}", strings::UI_RUNTIME_REMOVE)
+}
+
 /// Builds one runtime row from the runtime list and the instance list.
 pub fn runtime_row(runtime: &Runtime, instances: &[InstanceView]) -> RuntimeRow {
     let users = instances

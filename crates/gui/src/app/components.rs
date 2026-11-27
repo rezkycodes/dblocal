@@ -8,6 +8,7 @@
 //! technology (Kit design rule A1); a bare `div().child("...")` does not.
 
 use gpui_kit::assets::IconName;
+use gpui_kit::component::button::ButtonCustomVariant;
 use gpui_kit::component::label::Label;
 use gpui_kit::component::{ActiveTheme as _, Theme, ThemeStyled as _, h_flex, v_flex};
 use gpui_kit::{
@@ -370,4 +371,16 @@ pub fn apply_inset_focus_ring<E: InteractiveElement + Styled + ParentElement + '
     } else {
         row
     }
+}
+
+/// The look of a row-level destructive control (the Databases row trash, the
+/// dock runtime remove): a neutral ghost at rest, so a column of trash cans
+/// does not read as a wall of red, and the danger wash only under the pointer
+/// or while pressed (`tokens::destructive_hover` / `destructive_active`). The
+/// header Delete is the one control that wears the danger colour at rest.
+pub fn row_destructive_variant(theme: &Theme, cx: &gpui_kit::App) -> ButtonCustomVariant {
+    ButtonCustomVariant::new(cx)
+        .foreground(theme.muted_foreground)
+        .hover(tokens::destructive_hover(theme))
+        .active(tokens::destructive_active(theme))
 }

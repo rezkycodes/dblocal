@@ -37,7 +37,7 @@ use gpui_kit::{
 use super::Workspace;
 use super::page;
 use crate::app::admin_state::{AdminAction, level_label, row_id, row_part_id, user_label};
-use crate::app::components::{card, icon, section_label};
+use crate::app::components::{card, icon, row_destructive_variant, section_label};
 use crate::format;
 
 impl Workspace {
@@ -293,7 +293,7 @@ impl Workspace {
                             Button::new(SharedString::from(row_part_id(
                                 "db-row", &view.id, &name, "delete",
                             )))
-                            .ghost()
+                            .custom(row_destructive_variant(&theme, cx))
                             .small()
                             .compact()
                             .icon(gpui_kit::assets::IconName::Trash)

@@ -965,3 +965,14 @@ fn abbreviate_home_replaces_prefix() {
         "/var/lib/dblocal"
     );
 }
+
+#[test]
+fn the_runtime_remove_control_is_named_after_its_runtime() {
+    let row = runtime_row(&runtime(EngineKey::Postgresql, "17.4"), &[]);
+    let label = runtime_remove_label(&row.title);
+    assert!(label.starts_with(dblocal_core::strings::UI_RUNTIME_REMOVE));
+    assert!(
+        label.ends_with(&row.title) && row.title.contains("17.4"),
+        "the label must name the engine and version: {label}"
+    );
+}

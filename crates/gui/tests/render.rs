@@ -931,29 +931,81 @@ fn renders_create_dialog_with_a_download_and_an_unavailable_version() {
     assert!(text > 1500, "unavailable card did not render ({text})");
 }
 
+/// Summed distance from `bg` over a logical rect: how strongly the trash glyph
+/// paints against the dock surface (a disabled glyph is a dimmer, not a smaller,
+/// shape). Pixels within `min_diff` of the surface count as nothing.
+fn strong_ink(frame: &Frame, rect: (u32, u32, u32, u32), bg: [u8; 3], min_diff: u8) -> usize {
+    let (x0, y0, x1, y1) = frame.rect(rect);
+    let mut hits = 0;
+    for y in y0..y1 {
+        for x in x0..x1 {
+            let p = frame.px(x, y);
+            let diff = (0..3).map(|i| p[i].abs_diff(bg[i])).max().unwrap_or(0);
+            if diff >= min_diff {
+                hits += usize::from(diff);
+            }
+        }
+    }
+    hits
+}
+
 #[test]
 fn renders_dock_with_runtime_remove_controls_in_both_themes() {
-    // `F-RTM-04`: the dock's RUNTIMES rows carry a remove control. Render the
-    // whole shell in both themes so the control and its placement are on record;
-    // the dock is the left column.
+    // `F-RTM-04`: the dock's RUNTIMES rows carry a trash control at the right
+    // edge of the row, after the "unused" chip or the instance count. The demo
+    // lists PostgreSQL 17.4 (used), Valkey 7.2.8 (unused), Valkey 8.1.0 (used)
+    // in that order, so rows 1 and 3 carry the disabled look and row 2 the live
+    // one: a live trash is clearly stronger than a disabled one.
     for (dark, name) in [(true, "dock-dark.png"), (false, "dock-light.png")] {
         let frame = render(dark, name, Workspace::preview);
-        let dock = (0, 70, DOCK, LOGICAL_H - 40);
-        let (sidebar, warning) = if dark {
-            (dark_sidebar(), dark_warning())
+        let sidebar = if dark {
+            dark_sidebar()
         } else {
-            (light_sidebar(), light_warning())
+            light_sidebar()
         };
-        let chrome = frame.count_near(dock, sidebar, 10);
-        // The "unused" label paints in the warning colour.
-        let unused = frame.count_near(dock, warning, 20);
-        eprintln!("{name} chrome={chrome} unused={unused}");
+        let chrome = frame.count_near((0, 70, DOCK, LOGICAL_H - 40), sidebar, 10);
         assert!(chrome > 5000, "{name}: dock column not painted ({chrome})");
+        // The control column: right of the chip, inside the dock padding.
+        let band = |centre: u32| (232, centre - 11, 258, centre + 11);
+        let used_first = strong_ink(&frame, band(683), sidebar, 12);
+        let unused = strong_ink(&frame, band(713), sidebar, 12);
+        let used_last = strong_ink(&frame, band(743), sidebar, 12);
+        eprintln!("{name} remove glyph ink: used={used_first} unused={unused} used={used_last}");
         assert!(
-            unused > 20,
-            "{name}: no unused-runtime label to pair with a remove control ({unused})"
+            unused > 2000,
+            "{name}: the unused runtime's trash is missing ({unused})"
+        );
+        assert!(
+            unused > used_first * 3 / 2 && unused > used_last * 3 / 2,
+            "{name}: a used runtime's control must look disabled ({used_first}/{used_last} vs {unused})"
         );
     }
+}
+
+#[test]
+fn the_dock_runtime_rows_hold_at_the_minimum_window_width() {
+    // The dock keeps its width when the window narrows to the minimum, so the
+    // "unused" chip, the version and the remove control must all still fit on
+    // one row: the live trash paints at the same place and strength as at
+    // 1280, and the row stays one line (28px band, no wrapped second line).
+    let wide = render(true, "dock-runtimes-1280.png", Workspace::preview);
+    let narrow = render_sized(
+        true,
+        "dock-runtimes-900.png",
+        Workspace::preview,
+        900,
+        LOGICAL_H,
+    );
+    let sidebar = dark_sidebar();
+    let band = (232u32, 713 - 11, 258u32, 713 + 11);
+    let reference = strong_ink(&wide, band, sidebar, 12);
+    let at_min = strong_ink(&narrow, band, sidebar, 12);
+    eprintln!("DOCK-900 trash ink: wide={reference} min={at_min}");
+    assert!(at_min > 2000, "the trash is clipped at 900px ({at_min})");
+    assert!(
+        at_min.abs_diff(reference) * 10 < reference,
+        "the control moved or was clipped at 900px ({at_min} vs {reference})"
+    );
 }
 
 #[test]

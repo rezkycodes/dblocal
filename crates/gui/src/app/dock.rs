@@ -19,7 +19,7 @@ use crate::format::{self, StatusGlyph};
 use crate::theme::tokens;
 
 use super::Workspace;
-use super::components::{engine_icon, icon, section_label, status_glyph};
+use super::components::{engine_icon, icon, row_destructive_variant, section_label, status_glyph};
 use super::design;
 
 /// Width of the dock in logical pixels; the render tests sample this region.
@@ -308,7 +308,7 @@ impl Workspace {
                     .text_color(theme.muted_foreground)
                     .into_any_element()
             };
-            let remove = self.render_runtime_remove_control(index, row, cx);
+            let remove = self.render_runtime_remove_control(index, row, theme, cx);
             list = list.child(
                 h_flex()
                     .id(SharedString::from(format!("runtime-row-{index}")))
@@ -337,14 +337,16 @@ impl Workspace {
         &self,
         index: usize,
         row: &format::RuntimeRow,
+        theme: &Theme,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        let label = format::runtime_remove_label(&row.title);
         let button = Button::new(SharedString::from(format!("runtime-remove-{index}")))
-            .ghost()
-            .xsmall()
+            .custom(row_destructive_variant(theme, cx))
+            .small()
             .compact()
-            .icon(IconName::Delete)
-            .accessibility_label(strings::UI_RUNTIME_REMOVE);
+            .icon(IconName::Trash)
+            .accessibility_label(label);
         if row.unused {
             let id = row.id.clone();
             button

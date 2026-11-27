@@ -250,7 +250,7 @@ pub const UI_RUNTIME_REMOVE_TITLE: &str = "Remove engine runtime";
 /// Accessibility label of the dock's per-runtime remove control.
 pub const UI_RUNTIME_REMOVE: &str = "Remove unused runtime";
 /// The confirm dialog's body: what is removed and that it can be downloaded again.
-pub const UI_RUNTIME_REMOVE_BODY: &str = "This deletes the engine files from disk. If you create an instance of this engine and version again, DBLocal asks before downloading it once more.";
+pub const UI_RUNTIME_REMOVE_BODY: &str = "This deletes the engine files from disk. It is downloaded again the next time you create an instance with it.";
 /// Label in front of the space the removal frees.
 pub const UI_RUNTIME_REMOVE_SPACE: &str = "Frees";
 /// Confirm button in the remove-runtime dialog.
