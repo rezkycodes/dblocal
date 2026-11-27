@@ -1,0 +1,11 @@
+[
+  {"is_dir": true, "full_path": "/static-php-cli/common/license/", "name": "license/", "size": "-"},
+  {"is_dir": false, "full_path": "/static-php-cli/common/README.txt", "name": "README.txt", "size": "654B"},
+  {"is_dir": false, "full_path": "/static-php-cli/common/php-8.0.30-cli-linux-x86_64.tar.gz", "name": "php-8.0.30-cli-linux-x86_64.tar.gz", "size": "15M"},
+  {"is_dir": false, "full_path": "/static-php-cli/common/php-8.4.22-cli-linux-x86_64.tar.gz", "name": "php-8.4.22-cli-linux-x86_64.tar.gz", "size": "18M"},
+  {"is_dir": false, "full_path": "/static-php-cli/common/php-8.4.23-cli-linux-x86_64.tar.gz", "name": "php-8.4.23-cli-linux-x86_64.tar.gz", "size": "18M"},
+  {"is_dir": false, "full_path": "/static-php-cli/common/php-8.4.23-cli-linux-aarch64.tar.gz", "name": "php-8.4.23-cli-linux-aarch64.tar.gz", "size": "17M"},
+  {"is_dir": false, "full_path": "/static-php-cli/common/php-8.4.23-fpm-linux-x86_64.tar.gz", "name": "php-8.4.23-fpm-linux-x86_64.tar.gz", "size": "18M"},
+  {"is_dir": false, "full_path": "/static-php-cli/common/php-8.5.8-cli-linux-x86_64.tar.gz", "name": "php-8.5.8-cli-linux-x86_64.tar.gz", "size": "19M"},
+  {"is_dir": false, "full_path": "/static-php-cli/common/php-7.4.33-cli-linux-x86_64.tar.gz", "name": "php-7.4.33-cli-linux-x86_64.tar.gz", "size": "14M"}
+]

@@ -1,0 +1,24 @@
+{
+  "stable": [
+    {
+      "path": "/download/2.11.3/composer.phar",
+      "version": "2.11.3",
+      "min-php": 70205,
+      "lts": false
+    },
+    {
+      "path": "/download/2.2.33/composer.phar",
+      "version": "2.2.33",
+      "min-php": 50300,
+      "lts": true
+    }
+  ],
+  "preview": [
+    {
+      "path": "/download/2.12.0-RC1/composer.phar",
+      "version": "2.12.0-RC1",
+      "min-php": 80100,
+      "lts": false
+    }
+  ]
+}

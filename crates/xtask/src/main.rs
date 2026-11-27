@@ -3,6 +3,7 @@
 mod catalog;
 mod e2e;
 mod limit;
+mod toolchains_catalog;
 
 use std::process::ExitCode;
 use std::time::Duration;
@@ -40,6 +41,8 @@ enum Task {
         #[command(subcommand)]
         command: catalog::CatalogCommand,
     },
+    /// Generates or checks `catalog/toolchains-v1.json` (PHP, Node.js, Composer).
+    ToolchainsCatalog(toolchains_catalog::ToolchainsCatalogArgs),
     /// Runs ignored real-engine end-to-end tests (network + cached binaries).
     ///
     /// Each test binary runs under a wall-clock limit so a hung e2e cannot block
@@ -59,6 +62,7 @@ fn main() -> ExitCode {
     match xtask.task {
         Task::Ci => ci(),
         Task::Catalog { command } => catalog::run(command),
+        Task::ToolchainsCatalog(args) => toolchains_catalog::run(args),
         Task::E2e => e2e::run(),
     }
 }
