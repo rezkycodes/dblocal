@@ -293,7 +293,7 @@ impl Workspace {
                             Button::new(SharedString::from(row_part_id(
                                 "db-row", &view.id, &name, "delete",
                             )))
-                            .custom(row_destructive_variant(&theme, cx))
+                            .custom(row_destructive_variant(theme, cx))
                             .small()
                             .compact()
                             .icon(gpui_kit::assets::IconName::Trash)
