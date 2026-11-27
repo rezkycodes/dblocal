@@ -85,6 +85,9 @@ mod test_service;
 mod tests_secret;
 mod title_bar;
 #[cfg(test)]
+#[path = "app/title_bar_layout_tests.rs"]
+mod title_bar_layout_tests;
+#[cfg(test)]
 #[path = "app/tray_close_tests.rs"]
 mod tray_close_tests;
 #[cfg(test)]

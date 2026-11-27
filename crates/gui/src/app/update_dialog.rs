@@ -40,6 +40,7 @@ pub(super) fn title_bar_button(
         .unwrap_or_else(|| state.headline());
     Some(
         Button::new("title-update")
+            .debug_selector(|| "title-update".to_owned())
             .ghost()
             .small()
             .compact()
