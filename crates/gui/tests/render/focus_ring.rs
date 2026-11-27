@@ -11,7 +11,10 @@
 //! Included from `tests/render.rs` (uses its `render`, `Build`, `Frame`).
 
 use super::frame::Frame;
-use super::{Workspace, dark_primary, light_primary, render};
+use super::{
+    DOCK, Workspace, dark_primary, light_primary, render, render_clicked,
+    render_clicked_then_keyboard, render_keyboard,
+};
 
 fn near(px: [u8; 4], rgb: [u8; 3], tol: u8) -> bool {
     px[0].abs_diff(rgb[0]) <= tol && px[1].abs_diff(rgb[1]) <= tol && px[2].abs_diff(rgb[2]) <= tol
@@ -62,7 +65,7 @@ fn new_ring_bbox(
 fn a_focused_engine_card_draws_the_theme_ring() {
     for (dark, ring) in [(true, dark_primary()), (false, light_primary())] {
         let before = render(dark, "ring-before.png", Workspace::preview_create);
-        let after = render(
+        let after = render_keyboard(
             dark,
             "ring-after.png",
             Workspace::preview_create_engine_focused,
@@ -96,7 +99,7 @@ fn a_focused_engine_card_draws_the_theme_ring() {
 fn a_focused_version_row_draws_a_full_outline() {
     for (dark, ring) in [(true, dark_primary()), (false, light_primary())] {
         let before = render(dark, "vring-before.png", Workspace::preview_create);
-        let after = render(
+        let after = render_keyboard(
             dark,
             "vring-after.png",
             Workspace::preview_version_row_focused,
@@ -132,7 +135,7 @@ fn a_focused_version_row_draws_a_full_outline() {
 fn a_focused_group_header_draws_a_full_outline() {
     for (dark, ring) in [(true, dark_primary()), (false, light_primary())] {
         let before = render(dark, "hring-before.png", Workspace::preview);
-        let after = render(
+        let after = render_keyboard(
             dark,
             "hring-after.png",
             Workspace::preview_dock_group_focused,
@@ -160,4 +163,68 @@ fn a_focused_group_header_draws_a_full_outline() {
             "dark={dark}: expected a substantial ring ({added})"
         );
     }
+}
+
+/// A point inside the selected (first) instance tab of the preview.
+const TAB_POINT: (u32, u32) = (310, 52);
+
+/// The owner's complaint: the selected tab shows a thick ring after a mouse
+/// click. After a real click the tab holds focus but draws no ring; the same tab
+/// after a keyboard event draws it. Crops go to the render dir.
+#[test]
+fn a_clicked_tab_draws_no_ring_but_a_keyboard_focused_tab_does() {
+    for (dark, ring) in [(true, dark_primary()), (false, light_primary())] {
+        let theme = if dark { "dark" } else { "light" };
+        let base = render(
+            dark,
+            &format!("tabring-base-{theme}.png"),
+            Workspace::preview,
+        );
+        let clicked = render_clicked(
+            dark,
+            &format!("tabring-after-mouse-click-{theme}.png"),
+            Workspace::preview,
+            TAB_POINT,
+        );
+        let keyed = render_clicked_then_keyboard(
+            dark,
+            &format!("tabring-after-keyboard-{theme}.png"),
+            Workspace::preview,
+            TAB_POINT,
+        );
+        let region = (DOCK, 34, DOCK + 400, 72);
+        let after_click = region_new_ring(&base, &clicked, ring, region);
+        let after_key = region_new_ring(&base, &keyed, ring, region);
+        eprintln!("TABRING dark={dark}: after click={after_click} after keyboard={after_key}");
+        assert!(
+            after_click < 40,
+            "dark={dark}: a mouse click must not draw a ring on the tab ({after_click})"
+        );
+        assert!(
+            after_key > 200,
+            "dark={dark}: keyboard focus must draw the ring on the tab ({after_key})"
+        );
+    }
+}
+
+/// Pixels inside a logical-pixel rectangle that differ between the two frames.
+///
+/// The tab ring is the theme `ring` token at partial opacity, so it is counted as
+/// any change against the unfocused frame rather than as one exact colour.
+fn region_new_ring(
+    unfocused: &Frame,
+    focused: &Frame,
+    _ring: [u8; 3],
+    (x0, y0, x1, y1): (u32, u32, u32, u32),
+) -> usize {
+    let s = focused.scale;
+    let mut hits = 0;
+    for y in (y0 * s)..(y1 * s) {
+        for x in (x0 * s)..(x1 * s) {
+            if unfocused.px(x, y) != focused.px(x, y) {
+                hits += 1;
+            }
+        }
+    }
+    hits
 }

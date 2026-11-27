@@ -268,6 +268,28 @@ pub fn banner(colour: Hsla) -> Div {
         .bg(tokens::banner_fill(colour))
 }
 
+/// Whether `focus` should draw its ring right now: it holds focus **and** the
+/// last input was the keyboard.
+///
+/// A click focuses a row, but a ring after a mouse click only spoils the look.
+/// gpui records the last input modality on the window (`KeyDown` sets keyboard,
+/// `MouseDown`/`MouseMove` set mouse) and its own `focus_visible` style reads the
+/// same flag, so the ring follows Tab and the arrow keys and never a pointer.
+/// Every ring site in `crates/gui` asks this one function, so `F-PLH-01` AC1
+/// (always see where keyboard focus is) holds without a ring on click.
+pub fn focus_ring_visible(focus: &FocusHandle, window: &Window, cx: &gpui_kit::App) -> bool {
+    window.last_input_was_keyboard() && focus.contains_focused(window, cx)
+}
+
+/// Zero-size marker a unit test can find with `debug_bounds` to prove a ring was
+/// drawn and where. It paints nothing and takes no space.
+fn ring_marker() -> Div {
+    div()
+        .absolute()
+        .size_0()
+        .debug_selector(|| "focus-ring-marker".to_owned())
+}
+
 /// Makes a clickable element a keyboard tab stop with a visible focus ring.
 ///
 /// gpui synthesises an `on_click` from Enter/Space on a *focused* element, so a
@@ -286,14 +308,14 @@ pub fn apply_focus_ring<E: InteractiveElement + Styled + ParentElement + 'static
     window: &Window,
     cx: &gpui_kit::App,
 ) -> E {
-    let focused = focus.contains_focused(window, cx);
+    let focused = focus_ring_visible(focus, window, cx);
     let stop = focus.clone().tab_stop(true);
     let row = row.track_focus(&stop);
     if focused {
         // The theme's own focus appearance: a border in `theme.ring` plus the
         // outside ring. This is the visible focus indicator `F-PLH-01` AC1
         // requires, and it is a ring/outline, not only a background tint.
-        row.focus_ring_style(window, cx)
+        row.focus_ring_style(window, cx).child(ring_marker())
     } else {
         row
     }
@@ -330,14 +352,14 @@ pub fn apply_inset_focus_ring<E: InteractiveElement + Styled + ParentElement + '
     window: &Window,
     cx: &gpui_kit::App,
 ) -> E {
-    let focused = focus.contains_focused(window, cx);
+    let focused = focus_ring_visible(focus, window, cx);
     let stop = focus.clone().tab_stop(true);
     // `relative` so the absolute inset ring below is positioned against this row,
     // not the window.
     let row = row.track_focus(&stop).relative();
     if focused {
         let ring = cx.theme().ring;
-        row.child(
+        row.child(ring_marker()).child(
             div()
                 .absolute()
                 .inset_0()

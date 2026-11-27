@@ -734,6 +734,9 @@ fn enter_on_a_disabled_palette_row_does_nothing(cx: &mut TestAppContext) {
 #[path = "page_reachability_tests.rs"]
 mod page_reachability_tests;
 
+#[path = "focus_ring_modality_tests.rs"]
+mod focus_ring_modality_tests;
+
 #[path = "keyboard_fix2_tests.rs"]
 mod keyboard_fix2_tests;
 

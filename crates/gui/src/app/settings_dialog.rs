@@ -18,7 +18,7 @@ use gpui_kit::component::button::Button;
 use gpui_kit::component::button::ButtonVariants;
 use gpui_kit::component::label::Label;
 use gpui_kit::component::switch::Switch;
-use gpui_kit::component::{ActiveTheme, Disableable, Sizable, h_flex, v_flex};
+use gpui_kit::component::{ActiveTheme, Disableable, FocusableExt as _, Sizable, h_flex, v_flex};
 use gpui_kit::prelude::*;
 use gpui_kit::{
     AnyElement, Context, IntoElement, ParentElement, SharedString, Styled, Window, div, px,
@@ -66,7 +66,12 @@ pub(super) fn render(
                     true,
                     &theme,
                 ))
-                .child(render_auto_check(update, &theme, cx))
+                .child(render_auto_check(
+                    update,
+                    &theme,
+                    window.last_input_was_keyboard(),
+                    cx,
+                ))
                 .child(render_update_result(update, workspace, &theme, cx)),
         );
 
@@ -78,8 +83,12 @@ pub(super) fn render(
             &theme,
         ))
         .child(
-            design::group_card("settings-login", &theme)
-                .child(render_login_section(workspace, &theme, cx)),
+            design::group_card("settings-login", &theme).child(render_login_section(
+                workspace,
+                &theme,
+                window.last_input_was_keyboard(),
+                cx,
+            )),
         );
 
     overlay(
@@ -136,6 +145,7 @@ pub(super) fn render(
 fn render_auto_check(
     update: &UpdateState,
     theme: &gpui_kit::component::Theme,
+    keyboard: bool,
     cx: &mut Context<Workspace>,
 ) -> AnyElement {
     let row = design::setting_row(
@@ -143,6 +153,8 @@ fn render_auto_check(
         strings::UI_SETTINGS_AUTO_CHECK,
         Some(strings::UI_SETTINGS_AUTO_CHECK_BODY),
         Switch::new("settings-auto-check-switch")
+            // A click focuses the switch; its ring is for keyboard focus only.
+            .focus_ring(keyboard)
             .accessibility_label(strings::UI_SETTINGS_AUTO_CHECK)
             .checked(update.auto_check.unwrap_or(true))
             .disabled(update.auto_check_busy)
@@ -285,6 +297,7 @@ fn render_update_result(
 fn render_login_section(
     workspace: &Workspace,
     theme: &gpui_kit::component::Theme,
+    keyboard: bool,
     cx: &mut Context<Workspace>,
 ) -> AnyElement {
     let state = workspace.settings_state();
@@ -297,6 +310,8 @@ fn render_login_section(
         strings::UI_SETTINGS_AUTOSTART_SWITCH,
         Some(strings::UI_SETTINGS_AUTOSTART_BODY),
         Switch::new("settings-login-switch")
+            // A click focuses the switch; its ring is for keyboard focus only.
+            .focus_ring(keyboard)
             .accessibility_label(strings::UI_SETTINGS_AUTOSTART_SWITCH)
             .checked(enabled)
             .disabled(busy)

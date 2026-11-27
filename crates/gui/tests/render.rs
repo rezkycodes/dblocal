@@ -242,6 +242,71 @@ fn render(mode_dark: bool, name: &str, build: Build) -> Frame {
 
 /// Renders at an explicit logical size, for the minimum-window-width checks.
 fn render_sized(mode_dark: bool, name: &str, build: Build, width: u32, height: u32) -> Frame {
+    render_input(mode_dark, name, build, width, height, Input::None)
+}
+
+/// Like `render`, after a keyboard event: the window's last input modality is
+/// the keyboard, as it is while someone tabs through the UI. Focus rings only
+/// draw for keyboard focus, so the focus-ring renders need this.
+fn render_keyboard(mode_dark: bool, name: &str, build: Build) -> Frame {
+    render_input(
+        mode_dark,
+        name,
+        build,
+        LOGICAL_W,
+        LOGICAL_H,
+        Input::Keyboard,
+    )
+}
+
+/// Like `render`, after a real left click at `at` (logical px): mouse move, down
+/// and up, so the clicked element holds focus under mouse modality.
+fn render_clicked(mode_dark: bool, name: &str, build: Build, at: (u32, u32)) -> Frame {
+    render_input(
+        mode_dark,
+        name,
+        build,
+        LOGICAL_W,
+        LOGICAL_H,
+        Input::Click(at),
+    )
+}
+
+/// A click, then a keyboard event: the clicked element keeps focus and the
+/// modality becomes keyboard, as when someone clicks and then presses a key.
+fn render_clicked_then_keyboard(
+    mode_dark: bool,
+    name: &str,
+    build: Build,
+    at: (u32, u32),
+) -> Frame {
+    render_input(
+        mode_dark,
+        name,
+        build,
+        LOGICAL_W,
+        LOGICAL_H,
+        Input::ClickThenKeyboard(at),
+    )
+}
+
+/// Input the harness sends before the capture.
+#[derive(Clone, Copy)]
+enum Input {
+    None,
+    Keyboard,
+    Click((u32, u32)),
+    ClickThenKeyboard((u32, u32)),
+}
+
+fn render_input(
+    mode_dark: bool,
+    name: &str,
+    build: Build,
+    width: u32,
+    height: u32,
+    input: Input,
+) -> Frame {
     let (guard, watchdog) = watchdog::lock_then_arm(
         &GPU,
         name,
@@ -249,7 +314,7 @@ fn render_sized(mode_dark: bool, name: &str, build: Build, width: u32, height: u
         || std::process::abort(),
     );
     let mut app = headless_app(mode_dark);
-    let frame = draw_and_capture(&mut app, name, build, width, height);
+    let frame = draw_and_capture(&mut app, name, build, width, height, input);
     // Release the render mutex before shutting the context down: shutdown parks
     // on the test scheduler, and holding the mutex through it serialises every
     // other case behind a park.
@@ -284,6 +349,7 @@ fn draw_and_capture(
     build: Build,
     width: u32,
     height: u32,
+    input: Input,
 ) -> Frame {
     let service = seeded_service();
     let handle: AnyWindowHandle = {
@@ -312,6 +378,59 @@ fn draw_and_capture(
         window.into()
     };
 
+    // Draw once so the rows exist before a pointer lands on one.
+    for _ in 0..4 {
+        app.update_window(handle, |_view, window, cx| {
+            let _ = window.draw(cx);
+        })
+        .expect("draw frame");
+        app.run_until_parked();
+    }
+    if let Input::Click(at) | Input::ClickThenKeyboard(at) = input {
+        app.update_window(handle, |_view, window, cx| {
+            let position = gpui_kit::point(px(at.0 as f32), px(at.1 as f32));
+            let modifiers = gpui_kit::Modifiers::none();
+            window.dispatch_event(
+                gpui_kit::PlatformInput::MouseMove(gpui_kit::MouseMoveEvent {
+                    position,
+                    pressed_button: None,
+                    modifiers,
+                }),
+                cx,
+            );
+            window.dispatch_event(
+                gpui_kit::PlatformInput::MouseDown(gpui_kit::MouseDownEvent {
+                    button: gpui_kit::MouseButton::Left,
+                    position,
+                    modifiers,
+                    click_count: 1,
+                    first_mouse: false,
+                }),
+                cx,
+            );
+            window.dispatch_event(
+                gpui_kit::PlatformInput::MouseUp(gpui_kit::MouseUpEvent {
+                    button: gpui_kit::MouseButton::Left,
+                    position,
+                    modifiers,
+                    click_count: 1,
+                }),
+                cx,
+            );
+        })
+        .expect("click");
+        app.run_until_parked();
+    }
+    if matches!(input, Input::Keyboard | Input::ClickThenKeyboard(_)) {
+        // A bare modifier press: no binding, but it makes the last input modality
+        // the keyboard, which is what draws a focus ring.
+        app.update_window(handle, |_view, window, cx| {
+            let key = gpui_kit::Keystroke::parse("shift").expect("valid keystroke");
+            window.dispatch_keystroke(key, cx);
+        })
+        .expect("keyboard modality");
+        app.run_until_parked();
+    }
     // uniform_list paints rows on the next frame after layout.
     for _ in 0..4 {
         app.update_window(handle, |_view, window, cx| {

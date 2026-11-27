@@ -80,7 +80,7 @@ The gate checks every text/surface pair of the previous version unchanged, and a
 
 Everything else is DBDelve's value: the five planes, text, on-accent, cursor, success (dark), warning (dark), info (its syntax-type hue), the borders and the washes. DBDelve has no `info` or `warning` token, so those two come from its syntax-type and syntax-number hues. The `base.*.light` variants are our own, one step lighter on dark and one step darker on light, and are checked on both surfaces like every other colour.
 
-Focus stays a ring in `theme.ring` and clears 3:1 on every surface it is drawn on (`focus_ring_pairs`). Status is never colour alone: glyph shape plus the status word (F-PLH-02 AC2).
+Focus stays a ring in `theme.ring` and clears 3:1 on every surface it is drawn on (`focus_ring_pairs`). Status is never colour alone: glyph shape plus the status word (F-PLH-02 AC2). The ring shows for keyboard focus only (`components::focus_ring_visible`: focus held and the window's last input was a key press); a mouse click focuses a row or tab without drawing it, and the Settings switches take `focus_ring(keyboard)` for the same reason.
 
 ### Tidiness: one scale, one density
 
