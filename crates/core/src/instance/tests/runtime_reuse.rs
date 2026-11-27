@@ -1,10 +1,13 @@
 //! Reusing an installed runtime for a second instance (`F-RTM-03` AC3).
 //!
 //! The RustFS archive is the one shipped artifact with no `bin/` directory: its
-//! zip holds a single `rustfs` entry at the archive root and the catalog sets no
-//! `strip_prefix`. This drives the real download -> verify -> extract pipeline
-//! over loopback HTTP with exactly that layout, so the installed-runtime check
-//! is exercised against the bytes upstream actually publishes.
+//! zip holds a single binary entry at the archive root (`rustfs`, `rustfs.exe` on
+//! Windows) and the catalog sets no `strip_prefix`. This drives the real
+//! download -> verify -> extract pipeline over loopback HTTP with exactly that
+//! layout, so the installed-runtime check is exercised against the bytes upstream
+//! actually publishes. Every fixture name is derived from
+//! [`crate::engine::layout::expected_binaries`], the same set extraction verifies,
+//! so the tests hold on Unix and Windows alike.
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
@@ -24,12 +27,33 @@ use crate::service::DblService;
 
 use super::harness::{Harness, RuntimeSource};
 
-/// The real RustFS archive layout: one regular file named `rustfs` at the root.
+/// The one binary the RustFS archive unpacks at its root, named as the driver
+/// launches it (`rustfs.exe` on Windows). Fixtures and assertions derive the
+/// name here so they cannot hardcode the Unix spelling and diverge from what
+/// extraction verified.
+fn rustfs_root_binary() -> String {
+    crate::engine::layout::expected_binaries(EngineKey::Rustfs)
+        .into_iter()
+        .next()
+        .expect("RustFS expects at least one binary")
+}
+
+/// The binaries extraction must find for RustFS — the product's own set, which
+/// is `[rustfs]` on Unix and `[rustfs.exe]` on Windows.
+fn rustfs_expected() -> Vec<String> {
+    crate::engine::layout::expected_binaries(EngineKey::Rustfs)
+}
+
+/// The real RustFS archive layout: one regular file at the root named after the
+/// host's binary (`rustfs`, `rustfs.exe`). No `bin/`, and the catalog sets no
+/// `strip_prefix`.
 fn rustfs_zip() -> (Vec<u8>, String) {
     use zip::write::SimpleFileOptions;
     let mut writer = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
     let options = SimpleFileOptions::default().unix_permissions(0o755);
-    writer.start_file("rustfs", options).expect("start entry");
+    writer
+        .start_file(rustfs_root_binary(), options)
+        .expect("start entry");
     writer
         .write_all(b"\x7fELF fake rustfs build")
         .expect("write entry");
@@ -97,7 +121,7 @@ fn a_second_rustfs_instance_reuses_the_installed_runtime() {
         strip_prefix: None,
         engine: EngineKey::Rustfs,
         version: "1.0.7".to_owned(),
-        expected_binaries: vec!["rustfs".to_owned()],
+        expected_binaries: rustfs_expected(),
     };
     let h = Harness::with_options(EngineKey::Rustfs, |options| {
         options.runtime_sources = vec![source];
@@ -116,8 +140,8 @@ fn a_second_rustfs_instance_reuses_the_installed_runtime() {
         .runtime_dir(EngineKey::Rustfs, "1.0.7", crate::platform::Arch::X86_64)
         .expect("runtime dir");
     assert!(
-        dir.join("rustfs").is_file(),
-        "the real archive unpacks `rustfs` at the runtime root: {}",
+        dir.join(rustfs_root_binary()).is_file(),
+        "the real archive unpacks its binary at the runtime root: {}",
         dir.display()
     );
     assert!(
@@ -174,7 +198,7 @@ fn creating_after_deleting_the_first_instance_reuses_the_runtime() {
         strip_prefix: None,
         engine: EngineKey::Rustfs,
         version: "1.0.7".to_owned(),
-        expected_binaries: vec!["rustfs".to_owned()],
+        expected_binaries: rustfs_expected(),
     };
     let h = Harness::with_options(EngineKey::Rustfs, |options| {
         options.runtime_sources = vec![source];
@@ -211,13 +235,14 @@ fn creating_after_deleting_the_first_instance_reuses_the_runtime() {
 #[test]
 fn a_runtime_left_by_the_broken_build_is_adopted_without_cleanup() {
     let h = Harness::with_options(EngineKey::Rustfs, |_| {});
-    // Exactly what the current build produced: `runtimes/rustfs/1.0.7/<arch>/rustfs`.
+    // Exactly what the current build produced: `runtimes/rustfs/1.0.7/<arch>/<binary>`
+    // (`rustfs` on Unix, `rustfs.exe` on Windows).
     let dir = h
         .paths
         .runtime_dir(EngineKey::Rustfs, "1.0.7", crate::platform::Arch::X86_64)
         .expect("runtime dir");
     std::fs::create_dir_all(&dir).expect("runtime dir");
-    std::fs::write(dir.join("rustfs"), b"\x7fELF legacy rustfs").expect("rustfs");
+    std::fs::write(dir.join(rustfs_root_binary()), b"\x7fELF legacy rustfs").expect("rustfs");
 
     assert!(
         h.service.list_runtimes().expect("runtimes").is_empty(),
@@ -252,8 +277,13 @@ fn a_runtime_left_by_the_broken_build_is_adopted_without_cleanup() {
 /// upstream publishes; this one proves the same against the real 107 MiB
 /// archive, digest-checked against `catalog/engines-v3.json` before it runs.
 ///
+/// Unix only: it pins the digest of the Linux musl asset (whose single entry is
+/// `rustfs`) and resolves the archive from `HOME`. On Windows the shipped zip
+/// holds `rustfs.exe`, a different digest, so the same flow cannot apply.
+///
 /// Run with:
 /// `cargo test -p dblocal-core --lib -- --ignored a_real_rustfs_archive_is_reused`
+#[cfg(unix)]
 #[test]
 #[ignore = "e2e: downloads the real 107 MiB RustFS archive from GitHub"]
 fn a_real_rustfs_archive_is_reused() {
@@ -291,7 +321,7 @@ fn a_real_rustfs_archive_is_reused() {
         strip_prefix: None,
         engine: EngineKey::Rustfs,
         version: "1.0.7".to_owned(),
-        expected_binaries: vec!["rustfs".to_owned()],
+        expected_binaries: rustfs_expected(),
     };
     let h = Harness::with_options(EngineKey::Rustfs, |options| {
         options.runtime_sources = vec![source];
@@ -304,7 +334,7 @@ fn a_real_rustfs_archive_is_reused() {
         .runtime_dir(EngineKey::Rustfs, "1.0.7", crate::platform::Arch::X86_64)
         .expect("runtime dir");
     assert!(
-        dir.join("rustfs").is_file(),
+        dir.join(rustfs_root_binary()).is_file(),
         "the real binary is at the root"
     );
     assert!(!dir.join("bin").exists(), "the real archive has no `bin/`");

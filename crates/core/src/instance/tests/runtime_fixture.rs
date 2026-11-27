@@ -2,8 +2,12 @@
 //!
 //! `create` takes its "already installed" path when every expected binary is
 //! present (`F-RTM-03` AC3). The fixture must therefore write the real layout —
-//! `bin/<name>` for most engines, a root-level `rustfs` for RustFS — never a
-//! bare `bin/` directory, which is exactly the assumption this task fixed.
+//! `bin/<name>` for most engines, a root-level binary for RustFS (`rustfs`, or
+//! `rustfs.exe` on Windows) — never a bare `bin/` directory, which is exactly
+//! the assumption this task fixed. Names come from [`expected_binaries`], so a
+//! fixture is correct on every host without repeating the `.exe` rule.
+//!
+//! [`expected_binaries`]: crate::engine::layout::expected_binaries
 
 use crate::model::EngineKey;
 use crate::paths::DblPaths;

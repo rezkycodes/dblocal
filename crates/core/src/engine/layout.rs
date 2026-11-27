@@ -62,8 +62,6 @@ pub fn runtime_is_installed(runtime_dir: &Path, engine: EngineKey) -> bool {
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-    use std::path::PathBuf;
-
     use tempfile::tempdir;
 
     use super::*;
@@ -170,12 +168,23 @@ mod tests {
     }
 
     /// The regression this module exists for: a runtime unpacked by the current
-    /// build for RustFS is a root-level `rustfs` file, and must be recognised so
-    /// a second create reuses it instead of re-downloading into the same path.
+    /// build for RustFS is a root-level binary file, and must be recognised so a
+    /// second create reuses it instead of re-downloading into the same path.
+    ///
+    /// The name comes from [`expected_binaries`] (so `rustfs.exe` on Windows and
+    /// the fixture matches what extraction verified); the file is deliberately
+    /// left at the root with no `bin/` so reverting the layout check fails here.
     #[test]
     fn a_rustfs_runtime_at_the_root_is_recognised() {
         let dir = tempdir().expect("tempdir");
-        std::fs::write(dir.path().join("rustfs"), b"\x7fELF").expect("rustfs");
+        let expected = expected_binaries(EngineKey::Rustfs);
+        for rel in &expected {
+            std::fs::write(dir.path().join(rel), b"\x7fELF").expect("runtime binary");
+        }
+        assert!(
+            !dir.path().join("bin").exists(),
+            "RustFS has no `bin/`; the check must look at the root"
+        );
         assert!(runtime_is_installed(dir.path(), EngineKey::Rustfs));
     }
 
@@ -207,11 +216,18 @@ mod tests {
     }
 
     /// A planted path that is a directory, not a file, is not a usable binary.
+    /// The decoy uses the host's real name (`bin/postgres`, `bin/postgres.exe`)
+    /// so it shadows the exact path the check looks for on that host.
     #[test]
     fn a_directory_named_like_a_binary_is_not_installed() {
         let dir = tempdir().expect("tempdir");
-        std::fs::create_dir_all(dir.path().join("bin/postgres")).expect("decoy");
+        let first = expected_binaries(EngineKey::Postgresql)
+            .into_iter()
+            .next()
+            .expect("PostgreSQL expects binaries");
+        let decoy = dir.path().join(first);
+        std::fs::create_dir_all(&decoy).expect("decoy");
+        assert!(decoy.is_dir(), "the decoy must be a directory");
         assert!(!runtime_is_installed(dir.path(), EngineKey::Postgresql));
-        let _ = PathBuf::new();
     }
 }
