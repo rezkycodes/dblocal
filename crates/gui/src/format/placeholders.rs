@@ -140,7 +140,7 @@ pub fn connection_title_occurrences(header: &ConnectionHeader) -> usize {
 pub fn dock_row_labels(view: &InstanceView) -> [String; 3] {
     [
         view.name.clone(),
-        short_version(&view.version),
+        dock_version(view),
         format!(":{}", view.port),
     ]
 }

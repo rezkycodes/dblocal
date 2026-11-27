@@ -224,7 +224,7 @@ impl Workspace {
                 div()
                     .text_xs()
                     .text_color(theme.muted_foreground)
-                    .child(format::short_version(&view.version)),
+                    .child(format::dock_version(view)),
             )
             .child(
                 div()

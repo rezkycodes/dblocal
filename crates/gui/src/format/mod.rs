@@ -316,7 +316,23 @@ pub fn format_eta(seconds: u64) -> String {
 
 /// The compact `version · :port` meta line of a dock row.
 pub fn dock_meta(view: &InstanceView) -> String {
-    format!("{} · :{}", short_version(&view.version), view.port)
+    format!("{} · :{}", dock_version(view), view.port)
+}
+
+/// The version a dock row shows: `major.minor`, except for RustFS.
+///
+/// RustFS releases are told apart by their patch number (`1.0.7`), so
+/// truncating to `1.0` would label every release alike.
+pub fn dock_version(view: &InstanceView) -> String {
+    match view.engine {
+        EngineKey::Rustfs => view
+            .version
+            .split('.')
+            .take(3)
+            .collect::<Vec<_>>()
+            .join("."),
+        _ => short_version(&view.version),
+    }
 }
 
 /// Truncates a version tag to its `major.minor`, as the dock row does.

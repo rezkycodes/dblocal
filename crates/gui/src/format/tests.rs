@@ -266,6 +266,24 @@ fn speed_and_eta_formatting() {
 }
 
 #[test]
+fn a_rustfs_dock_row_keeps_the_patch_number() {
+    let mut v = view_version(
+        "files",
+        EngineKey::Rustfs,
+        "1.0.7",
+        InstanceStatus::Running,
+        9000,
+    );
+    assert_eq!(dock_version(&v), "1.0.7");
+    assert_eq!(dock_meta(&v), "1.0.7 · :9000");
+    assert_eq!(dock_row_labels(&v)[1], "1.0.7");
+    // Every other engine still shows `major.minor`.
+    v.engine = EngineKey::Postgresql;
+    v.version = "17.4.2".to_owned();
+    assert_eq!(dock_version(&v), "17.4");
+}
+
+#[test]
 fn dock_meta_combines_short_version_and_port() {
     let v = view("app", EngineKey::Postgresql, InstanceStatus::Stopped, 5432);
     assert_eq!(dock_meta(&v), "17.4 · :5432");
