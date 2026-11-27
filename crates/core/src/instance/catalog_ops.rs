@@ -10,6 +10,7 @@ use crate::model::{EngineKey, InstanceSpec};
 use crate::service::{OperationId, OperationStage, ServiceEvent};
 
 use super::helpers::{emit_stage, finish_operation};
+use super::runtime_lock::runtime_id;
 use super::service::{Fetcher, Inner, RuntimeSource};
 
 /// Local newtype so the adapter type is nameable from this module.
@@ -190,12 +191,7 @@ pub(crate) fn record_runtime(inner: &Arc<Inner>, spec: &InstanceSpec) -> Result<
             field: "runtime",
             reason: "runtime path is invalid".to_owned(),
         })?;
-    let id = format!(
-        "{}-{}-{}",
-        spec.engine().as_str(),
-        spec.version(),
-        inner.arch.as_str()
-    );
+    let id = runtime_id(spec.engine(), spec.version(), inner.arch);
     let engine = spec.engine();
     let version = spec.version().to_owned();
     let arch = inner.arch;

@@ -31,6 +31,7 @@ mod fetch;
 mod space;
 mod verify;
 
+pub(crate) use extract::STAGING_MARKER;
 pub use extract::{ExtractOptions, extract_runtime};
 pub use fetch::{
     CancellationToken, DownloadEvent, DownloadOptions, ProgressSink, UrlPolicy, download_artifact,

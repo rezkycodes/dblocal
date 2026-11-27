@@ -53,6 +53,11 @@ pub const LOG_TAIL_ON_FAILURE: usize = 20;
 /// Number of log lines the GUI keeps in memory.
 pub const LOG_TAIL_LINES: usize = 1000;
 
+/// How long a create waits for another operation to finish removing its runtime.
+pub const RUNTIME_LOCK_WAIT_SECS: u64 = 30;
+/// How often a waiting create tries the runtime lock again, in milliseconds.
+pub const RUNTIME_LOCK_POLL_MS: u64 = 100;
+
 /// Length of a generated superuser password.
 pub const PASSWORD_LEN: usize = 24;
 /// Length of a generated RustFS S3 access key.
@@ -73,6 +78,8 @@ pub const DIR_RUNTIMES: &str = "runtimes";
 pub const DIR_DOWNLOADS: &str = "downloads";
 /// Sub-directory holding instances.
 pub const DIR_INSTANCES: &str = "instances";
+/// Sub-directory holding the lock files processes sharing a home agree on.
+pub const DIR_LOCKS: &str = "locks";
 /// Sub-directory holding archived data directories.
 pub const DIR_ARCHIVE: &str = "archive";
 /// Sub-directory holding config backups (`F-CFG-01` AC3).

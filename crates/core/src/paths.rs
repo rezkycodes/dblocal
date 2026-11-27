@@ -71,6 +71,12 @@ impl DblPaths {
         ])
     }
 
+    /// Lock file of one runtime: `locks/runtime-<id>.lock`. It lives outside
+    /// `runtimes/` so removing the runtime never removes its lock.
+    pub fn runtime_lock_file(&self, runtime_id: &str) -> Result<PathBuf> {
+        self.checked_join(&[consts::DIR_LOCKS, &format!("runtime-{runtime_id}.lock")])
+    }
+
     /// Directory holding every instance.
     pub fn instances_dir(&self) -> PathBuf {
         self.root.join(consts::DIR_INSTANCES)

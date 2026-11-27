@@ -17,6 +17,8 @@ mod path;
 mod tarball;
 mod zip;
 
+/// Marks a staging directory: `.<runtime dir name>.extracting-<nonce>`.
+pub(crate) const STAGING_MARKER: &str = ".extracting-";
 /// Maximum number of entries extracted from a single archive (bomb/zip-bomb cap).
 pub const MAX_EXTRACT_ENTRIES: u64 = 200_000;
 /// Multiplier for the maximum total extracted bytes relative to the archive's
@@ -132,7 +134,7 @@ fn staging_dir_path(final_dir: &Path) -> PathBuf {
         .and_then(|s| s.to_str())
         .unwrap_or("runtime");
     let nonce: u64 = rand::random();
-    final_dir.with_file_name(format!(".{name}.extracting-{nonce:016x}"))
+    final_dir.with_file_name(format!(".{name}{STAGING_MARKER}{nonce:016x}"))
 }
 
 async fn extract_into_staging(

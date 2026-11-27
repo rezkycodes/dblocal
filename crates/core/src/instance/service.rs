@@ -40,6 +40,7 @@ use super::config_ops;
 use super::helpers::buffered_events;
 use super::log_watch::LogWatchers;
 use super::registry::Ops;
+use super::runtime_files::{DiskRuntimeFiles, RuntimeFiles};
 use super::update_ops::{self, UpdateInstaller};
 
 /// One downloadable runtime the service may install.
@@ -193,6 +194,13 @@ pub struct ServiceOptions {
     pub start_timeout: Option<Duration>,
     /// Override for the supervisor poll interval (tests need it short).
     pub status_poll: Option<Duration>,
+    /// Override for how long a create waits while its runtime is being removed
+    /// (tests need it short).
+    pub runtime_lock_wait: Option<Duration>,
+    /// The file operations behind a runtime removal, replaced to simulate a
+    /// locked file.
+    #[cfg(test)]
+    pub(crate) runtime_files: Option<Arc<dyn RuntimeFiles>>,
     /// When false, reconciliation and the supervisor are not started. The caller
     /// must subscribe first if it needs startup events, then call
     /// [`LocalService::start_background`]. Defaults to true.
@@ -339,6 +347,10 @@ pub(crate) struct Inner {
     pub start_timeout: Option<Duration>,
     /// Supervisor poll interval.
     pub status_poll: Duration,
+    /// How long a create waits while its runtime is being removed.
+    pub runtime_lock_wait: Duration,
+    /// The file operations behind a runtime removal.
+    pub runtime_files: Arc<dyn RuntimeFiles>,
     /// Set when the last `LocalService` handle is dropped, so the supervisor
     /// stops instead of holding the state alive forever.
     pub stopping: std::sync::atomic::AtomicBool,
@@ -539,6 +551,9 @@ impl LocalService {
         });
         let os = options.os.unwrap_or_else(Os::current);
         let arch = options.arch.unwrap_or_else(Arch::current);
+        let runtime_files: Arc<dyn RuntimeFiles> = Arc::new(DiskRuntimeFiles);
+        #[cfg(test)]
+        let runtime_files = options.runtime_files.clone().unwrap_or(runtime_files);
 
         // Cloned before `paths` moves into `Inner`; the update installer stages
         // under this root.
@@ -591,6 +606,10 @@ impl LocalService {
             status_poll: options
                 .status_poll
                 .unwrap_or_else(|| Duration::from_secs(consts::STATUS_POLL_SECS)),
+            runtime_lock_wait: options
+                .runtime_lock_wait
+                .unwrap_or_else(|| Duration::from_secs(consts::RUNTIME_LOCK_WAIT_SECS)),
+            runtime_files,
             stopping: std::sync::atomic::AtomicBool::new(false),
             handles: std::sync::atomic::AtomicUsize::new(1),
             supervisor_alive: std::sync::atomic::AtomicBool::new(true),

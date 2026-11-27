@@ -13,16 +13,24 @@ pub const CODE_ALREADY_EXISTS: &str = "DBL-1003";
 pub const CODE_INVALID_TRANSITION: &str = "DBL-1004";
 /// Code for [`DblError::PortInUse`].
 pub const CODE_PORT_IN_USE: &str = "DBL-1005";
+/// Code for [`DblError::RuntimeInUse`].
+pub const CODE_RUNTIME_IN_USE: &str = "DBL-1006";
+/// Code for [`DblError::RuntimeBusy`].
+pub const CODE_RUNTIME_BUSY: &str = "DBL-1007";
 /// Code for [`DblError::ChecksumMismatch`].
 pub const CODE_CHECKSUM_MISMATCH: &str = "DBL-2001";
 /// Code for [`DblError::UnsafeArchive`].
 pub const CODE_UNSAFE_ARCHIVE: &str = "DBL-2002";
+/// Code for [`DblError::UnsafeRuntimePath`].
+pub const CODE_UNSAFE_RUNTIME_PATH: &str = "DBL-2003";
 /// Code for [`DblError::Io`].
 pub const CODE_IO: &str = "DBL-3001";
 /// Code for [`DblError::Network`].
 pub const CODE_NETWORK: &str = "DBL-3002";
 /// Code for [`DblError::Storage`].
 pub const CODE_STORAGE: &str = "DBL-3003";
+/// Code for [`DblError::RuntimeRemoval`].
+pub const CODE_RUNTIME_REMOVAL: &str = "DBL-3004";
 /// Code for [`DblError::Engine`].
 pub const CODE_ENGINE: &str = "DBL-4001";
 /// Code for [`DblError::Secret`].
@@ -154,6 +162,34 @@ pub enum DblError {
     /// The feature is planned but not built yet.
     #[error("not implemented: {0}")]
     NotImplemented(String),
+
+    /// An engine runtime cannot be removed while instances use it.
+    #[error("runtime still used by: {}", .users.join(", "))]
+    RuntimeInUse {
+        /// Names of the instances that use it.
+        users: Vec<String>,
+    },
+
+    /// An engine runtime is being installed or removed by another operation.
+    #[error("runtime is busy: {runtime}")]
+    RuntimeBusy {
+        /// Runtime identifier.
+        runtime: String,
+    },
+
+    /// A runtime record points somewhere DBLocal must not delete.
+    #[error("runtime path is not safe to remove: {path}")]
+    UnsafeRuntimePath {
+        /// The refused path.
+        path: String,
+    },
+
+    /// An engine runtime could not be removed completely; it can be retried.
+    #[error("could not remove the runtime: {reason}")]
+    RuntimeRemoval {
+        /// Human readable cause.
+        reason: String,
+    },
 }
 
 impl DblError {
@@ -175,6 +211,10 @@ impl DblError {
             Self::Unsupported { .. } => CODE_UNSUPPORTED,
             Self::Cancelled { .. } => CODE_CANCELLED,
             Self::NotImplemented(_) => CODE_NOT_IMPLEMENTED,
+            Self::RuntimeInUse { .. } => CODE_RUNTIME_IN_USE,
+            Self::RuntimeBusy { .. } => CODE_RUNTIME_BUSY,
+            Self::UnsafeRuntimePath { .. } => CODE_UNSAFE_RUNTIME_PATH,
+            Self::RuntimeRemoval { .. } => CODE_RUNTIME_REMOVAL,
         }
     }
 
@@ -199,6 +239,10 @@ impl DblError {
             Self::Unsupported { .. } => crate::strings::ERR_UNSUPPORTED,
             Self::Cancelled { .. } => crate::strings::ERR_CANCELLED,
             Self::NotImplemented(_) => crate::strings::ERR_NOT_IMPLEMENTED,
+            Self::RuntimeInUse { .. } => crate::strings::ERR_RUNTIME_IN_USE,
+            Self::RuntimeBusy { .. } => crate::strings::ERR_RUNTIME_BUSY,
+            Self::UnsafeRuntimePath { .. } => crate::strings::ERR_UNSAFE_RUNTIME_PATH,
+            Self::RuntimeRemoval { .. } => crate::strings::ERR_RUNTIME_REMOVAL,
         };
         text.to_owned()
     }
@@ -264,6 +308,18 @@ mod tests {
                 operation: "install".into(),
             },
             DblError::NotImplemented("catalog".into()),
+            DblError::RuntimeInUse {
+                users: vec!["app-dev".into()],
+            },
+            DblError::RuntimeBusy {
+                runtime: "rustfs-1.0.7-x86_64".into(),
+            },
+            DblError::UnsafeRuntimePath {
+                path: "/elsewhere".into(),
+            },
+            DblError::RuntimeRemoval {
+                reason: "file in use".into(),
+            },
         ]
     }
 
@@ -301,6 +357,10 @@ mod tests {
             CODE_UNSUPPORTED => strings::ERR_UNSUPPORTED.into(),
             CODE_CANCELLED => strings::ERR_CANCELLED.into(),
             CODE_NOT_IMPLEMENTED => strings::ERR_NOT_IMPLEMENTED.into(),
+            CODE_RUNTIME_IN_USE => strings::ERR_RUNTIME_IN_USE.into(),
+            CODE_RUNTIME_BUSY => strings::ERR_RUNTIME_BUSY.into(),
+            CODE_UNSAFE_RUNTIME_PATH => strings::ERR_UNSAFE_RUNTIME_PATH.into(),
+            CODE_RUNTIME_REMOVAL => strings::ERR_RUNTIME_REMOVAL.into(),
             other => panic!("unnamed code {other}"),
         }
     }

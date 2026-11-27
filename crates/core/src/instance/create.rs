@@ -17,6 +17,7 @@ use super::helpers::{
     runtime_dir_for, secret_for, validate_spec_boundary,
 };
 use super::read_ops::{suggest_extra_port, suggest_port};
+use super::runtime_lock::{runtime_id, shared_for_create};
 use super::service::{Inner, RuntimeSource};
 
 pub(crate) fn create_instance(inner: &Arc<Inner>, spec: InstanceSpec) -> Result<OperationId> {
@@ -68,6 +69,17 @@ async fn run_create(
     spec: InstanceSpec,
     token: CancellationToken,
 ) -> super::helpers::OpResult<()> {
+    // Held until this create ends, its rollback included, so no removal (here or
+    // in another process) can delete the runtime while it is being installed or
+    // initialised from. Taken first, to keep the port check close to the insert.
+    let _runtime = shared_for_create(
+        &inner.paths,
+        &runtime_id(spec.engine(), spec.version(), inner.arch),
+        inner.runtime_lock_wait,
+        &token,
+    )
+    .await?;
+
     // Port: explicit or suggested, then probed and checked against reservations.
     let port = match spec.port() {
         Some(port) => port,

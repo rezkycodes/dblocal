@@ -17,6 +17,8 @@ mod read_ops;
 mod reconcile;
 mod registry;
 mod retry;
+mod runtime_files;
+mod runtime_lock;
 mod runtime_mgmt;
 mod service;
 mod start;

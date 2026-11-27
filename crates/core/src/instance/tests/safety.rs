@@ -252,7 +252,7 @@ fn remove_runtime_refuses_while_an_instance_uses_it() {
         .service
         .remove_runtime("postgresql-18.7-x86_64")
         .expect_err("in use");
-    assert_eq!(err.code(), crate::error::CODE_INVALID_INPUT);
+    assert_eq!(err.code(), crate::error::CODE_RUNTIME_IN_USE);
     assert!(runtime.path().exists(), "the runtime must be kept");
 }
 

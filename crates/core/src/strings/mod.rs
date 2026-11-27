@@ -40,6 +40,16 @@ pub const ERR_UNSUPPORTED: &str = "This feature is not supported on this platfor
 pub const ERR_CANCELLED: &str = "The action was cancelled.";
 /// `DblError::NotImplemented`.
 pub const ERR_NOT_IMPLEMENTED: &str = "This feature is not available in this version yet.";
+/// [`crate::DblError::RuntimeInUse`].
+pub const ERR_RUNTIME_IN_USE: &str =
+    "This engine runtime is still used by an instance. Delete the instances that use it first.";
+/// [`crate::DblError::RuntimeBusy`].
+pub const ERR_RUNTIME_BUSY: &str = "This engine runtime is being installed or removed by another operation. Try again when it finishes.";
+/// [`crate::DblError::UnsafeRuntimePath`].
+pub const ERR_UNSAFE_RUNTIME_PATH: &str = "This engine runtime points outside its DBLocal folder or through a link, so nothing was removed. Remove it by hand.";
+/// [`crate::DblError::RuntimeRemoval`].
+pub const ERR_RUNTIME_REMOVAL: &str =
+    "Could not remove the engine runtime. Close any program that uses its files, then try again.";
 
 // --- Catalog status banner ---------------------------------------------------
 

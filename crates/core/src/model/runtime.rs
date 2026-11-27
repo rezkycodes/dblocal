@@ -114,6 +114,12 @@ impl Runtime {
         self.state
     }
 
+    /// Returns a copy with a new installed size.
+    pub fn with_size_bytes(mut self, size_bytes: u64) -> Self {
+        self.size_bytes = size_bytes;
+        self
+    }
+
     /// Returns a copy with a new state.
     pub fn with_state(mut self, state: RuntimeState) -> Self {
         self.state = state;
