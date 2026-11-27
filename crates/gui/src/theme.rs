@@ -1,9 +1,22 @@
 //! DBLocal themes and the tokens custom views draw with.
 //!
-//! Two themes ship, `DBLocal Dark` (base `#15161d`, the prototype palette) and
-//! `DBLocal Light` in the same visual language. The app follows the system
-//! appearance (`F-PLH-02` AC1). Both files are the same ones
-//! [`crate::contrast`] parses, so a colour that fails 4.5:1 fails the build.
+//! Two themes ship, `DBLocal Dark` and `DBLocal Light`, both on DBDelve's
+//! tonal, neutral palette: three grey planes (chrome darkest, the page one
+//! step up, cards and lists brightest), an overlay plane for dialogs and
+//! popups, a control plane for buttons, and white/black *washes* for lines and
+//! states. The app follows the system appearance (`F-PLH-02` AC1). Both files
+//! are the same ones [`crate::contrast`] parses, so a colour that fails 4.5:1
+//! fails the build.
+//!
+//! The planes map onto the `gpui_kit` theme like this, in both themes:
+//!
+//! | plane | `gpui_kit` field | what it paints |
+//! |---|---|---|
+//! | chrome | `sidebar`, `title_bar`, `status_bar`, `tab_bar`, `table_head` | dock, title bar, status bar, tab strip, list headers |
+//! | page | `background` | the centre pane, the wells inside a card |
+//! | card | `group_box`, `list`, `table` | cards, the log body, rows |
+//! | overlay | `popover` | dialogs, menus, the palette |
+//! | control | `secondary`, `button` | buttons at rest |
 //!
 //! Views must not contain colour literals: every paint comes either from a
 //! `gpui_kit::component::Theme` field or from [`tokens`], which derives its
@@ -223,8 +236,15 @@ pub mod tokens {
     const TINT: f32 = 0.14;
     /// Alpha applied to a banner border.
     const BORDER_TINT: f32 = 0.45;
-    /// Alpha of the modal scrim.
-    const SCRIM: f32 = 0.45;
+    /// Alpha of the hover wash over a dark plane (white) and a light plane (black).
+    /// `pub(crate)` so [`crate::contrast`] checks text over exactly these washes.
+    pub(crate) const HOVER_DARK: f32 = 0.05;
+    pub(crate) const HOVER_LIGHT: f32 = 0.04;
+    /// Alpha of the active wash (the soft pill under the selected tab or row).
+    pub(crate) const ACTIVE_DARK: f32 = 0.09;
+    pub(crate) const ACTIVE_LIGHT: f32 = 0.08;
+    /// Alpha of the fill under a value that was edited and not yet applied.
+    const EDITED: f32 = 0.20;
 
     /// Sets only the alpha of a theme colour.
     pub fn tint(color: Hsla, alpha: f32) -> Hsla {
@@ -233,29 +253,60 @@ pub mod tokens {
         out
     }
 
-    /// The modal backdrop.
+    /// The modal backdrop: the theme's own `overlay` colour, a black wash.
     pub fn scrim(cx: &App) -> Hsla {
-        tint(cx.theme().background, SCRIM)
+        cx.theme().overlay
     }
 
     /// The modal backdrop from a theme the caller already holds.
     pub fn scrim_from(theme: &gpui_kit::component::Theme) -> Hsla {
-        tint(theme.background, SCRIM)
+        theme.overlay
     }
 
-    /// Surface behind a raised card inside a page.
-    pub fn card(theme: &Theme) -> Hsla {
+    /// The page plane: the centre pane and the wells set into a card.
+    pub fn page(theme: &Theme) -> Hsla {
         theme.background
     }
 
-    /// Surface of a dock or a chrome strip.
+    /// The card plane, the brightest one: cards, the log body, list rows.
+    pub fn card(theme: &Theme) -> Hsla {
+        theme.group_box
+    }
+
+    /// The chrome plane, furthest back: dock, title bar, status bar, tab strip.
     pub fn panel(theme: &Theme) -> Hsla {
         theme.sidebar
     }
 
-    /// Elevated surface: popovers, banners inside cards, hover fills.
+    /// The overlay plane: dialogs, menus, the palette.
     pub fn elevated(theme: &Theme) -> Hsla {
-        theme.muted
+        theme.popover
+    }
+
+    /// The hover wash, painted over whatever plane is underneath: a white
+    /// wash on a dark theme, a black one on a light theme.
+    pub fn hover(theme: &Theme) -> Hsla {
+        let alpha = if theme.is_dark() {
+            HOVER_DARK
+        } else {
+            HOVER_LIGHT
+        };
+        tint(theme.foreground, alpha)
+    }
+
+    /// The active wash: the soft pill under the selected tab, row or segment.
+    pub fn active(theme: &Theme) -> Hsla {
+        let alpha = if theme.is_dark() {
+            ACTIVE_DARK
+        } else {
+            ACTIVE_LIGHT
+        };
+        tint(theme.foreground, alpha)
+    }
+
+    /// The fill under a setting that was changed and not yet applied.
+    pub fn edited(theme: &Theme) -> Hsla {
+        tint(theme.warning, EDITED)
     }
 
     /// A badge fill for a status colour.
@@ -275,7 +326,7 @@ pub mod tokens {
 
     /// Selection fill inside a dock or a list.
     pub fn selection(theme: &Theme) -> Hsla {
-        theme.sidebar_accent
+        active(theme)
     }
 
     /// Hairline border inside a card.
@@ -309,11 +360,35 @@ mod tests {
     }
 
     #[test]
-    fn dark_theme_uses_the_prototype_base_colour() {
+    fn the_planes_follow_the_dbdelve_ladder_in_both_themes() {
+        // Chrome is the furthest plane, the page one step up, the card plane
+        // the brightest of the three; the overlay is brighter than all of them
+        // on dark and as bright as the card plane on light.
         let merged = merged_theme_set();
         let value: serde_json::Value = serde_json::from_str(&merged).expect("valid json");
         let themes = value["themes"].as_array().expect("themes");
-        assert_eq!(themes[0]["colors"]["background"], "#15161d");
+        let dark = &themes[0]["colors"];
+        assert_eq!(dark["sidebar.background"], "#191b1c");
+        assert_eq!(dark["background"], "#232426");
+        assert_eq!(dark["group_box.background"], "#2d2e30");
+        assert_eq!(dark["popover.background"], "#393b3d");
+        assert_eq!(dark["secondary.background"], "#414244");
+        let light = &themes[1]["colors"];
+        assert_eq!(light["sidebar.background"], "#e9ebee");
+        assert_eq!(light["background"], "#f4f6f8");
+        assert_eq!(light["group_box.background"], "#ffffff");
+        assert_eq!(light["secondary.background"], "#e3e5e7");
+    }
+
+    #[test]
+    fn lines_and_states_are_washes_not_solid_greys() {
+        let merged = merged_theme_set();
+        let value: serde_json::Value = serde_json::from_str(&merged).expect("valid json");
+        let themes = value["themes"].as_array().expect("themes");
+        assert_eq!(themes[0]["colors"]["border"], "#ffffff17");
+        assert_eq!(themes[0]["colors"]["input.border"], "#ffffff29");
+        assert_eq!(themes[1]["colors"]["border"], "#0000001f");
+        assert_eq!(themes[1]["colors"]["input.border"], "#00000033");
     }
 
     #[test]
@@ -356,6 +431,27 @@ mod tests {
         assert!((opaque.a - 1.0).abs() < f32::EPSILON);
         let translucent = hex_to_hsla("#282c3480");
         assert!((translucent.a - 0.5).abs() < 0.01);
+    }
+
+    #[test]
+    fn the_washes_keep_the_theme_text_colour_and_only_set_alpha() {
+        use gpui_kit::component::Theme;
+        let mut theme = Theme::default();
+        theme.foreground = hex_to_hsla("#e6e8ea");
+        theme.warning = hex_to_hsla("#f2b966");
+        let hover = tokens::hover(&theme);
+        let active = tokens::active(&theme);
+        assert_eq!(
+            (hover.h, hover.s, hover.l),
+            (theme.foreground.h, theme.foreground.s, theme.foreground.l)
+        );
+        assert!(active.a > hover.a, "active must be the stronger wash");
+        assert!(hover.a > 0.0 && active.a < 0.2, "washes stay faint");
+        let edited = tokens::edited(&theme);
+        assert_eq!(
+            (edited.h, edited.s, edited.l),
+            (theme.warning.h, theme.warning.s, theme.warning.l)
+        );
     }
 
     #[test]

@@ -286,7 +286,7 @@ impl Workspace {
             .flex()
             .items_center()
             .justify_center()
-            .bg(gpui_kit::hsla(0., 0., 0., 0.45))
+            .bg(crate::theme::tokens::scrim_from(&theme))
             .child(
                 gpui_kit::div()
                     .id("quit-dialog")

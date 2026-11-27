@@ -333,7 +333,7 @@ fn render_versions(
             } else {
                 theme.background
             })
-            .hover(|s| s.bg(theme.muted))
+            .hover(|s| s.bg(crate::theme::tokens::hover(&theme)))
             .on_click(cx.listener(move |this, _, window, cx| {
                 if !version_unavailable {
                     this.choose_version_action(tag.clone(), window, cx);
@@ -698,7 +698,7 @@ pub(super) fn overlay(
             .flex()
             .justify_center()
             .items_center()
-            .bg(gpui_kit::hsla(0.0, 0.0, 0.0, 0.45))
+            .bg(crate::theme::tokens::scrim(cx))
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, _, _, cx| {

@@ -93,7 +93,7 @@ pub fn status_glyph(status: InstanceStatus, size: f32, theme: &Theme) -> Div {
 /// them as legible as square glyphs like PostgreSQL.
 const fn svg_scale_for(engine: EngineKey) -> f32 {
     match engine {
-        EngineKey::Mysql | EngineKey::Rustfs => 0.88,
+        EngineKey::Mysql | EngineKey::Rustfs => 0.96,
         _ => 0.64,
     }
 }
@@ -149,8 +149,10 @@ pub fn engine_icon(engine: EngineKey, size: f32, theme: &Theme) -> Div {
     let is_dark = theme.background.l < 0.5;
     if let Some(svg_path) = crate::assets::service_icon_path(engine) {
         let brand = crate::assets::service_brand_colour(engine, is_dark);
+        // The wordmark glyphs (`mysql`, `rustfs`) are wide and short, so they
+        // are drawn larger than the square ones to read at the same weight.
         let glyph_size = match engine {
-            EngineKey::Mysql | EngineKey::Rustfs => size * 1.2,
+            EngineKey::Mysql | EngineKey::Rustfs => size * 1.5,
             _ => size,
         };
         div()
@@ -174,8 +176,8 @@ pub fn status_pill(status: InstanceStatus, theme: &Theme) -> Div {
     h_flex()
         .flex_none()
         .gap_1p5()
-        .h(px(22.))
-        .px(px(9.))
+        .h(px(20.))
+        .px(px(8.))
         .rounded_full()
         .bg(tokens::tint(colour, 0.14))
         .text_color(colour)
@@ -227,17 +229,15 @@ pub fn card(title: Option<&str>, key: Option<&str>, theme: &Theme) -> gpui_kit::
     let mut base = v_flex()
         .id(SharedString::from(format!("card-{card_key}")))
         .gap_3()
-        .p(px(18.))
-        .pb(px(18.))
+        .p(px(16.))
         .rounded(px(8.))
         .border_1()
         .border_color(theme.border)
-        .bg(theme.popover);
+        .bg(tokens::card(theme));
     if let Some(title) = title {
         base = base.child(
             Label::new(title.to_owned())
                 .id(SharedString::from(format!("card-title-{card_key}")))
-                .text_sm()
                 .font_weight(gpui_kit::FontWeight::SEMIBOLD),
         );
     }
@@ -256,7 +256,7 @@ pub fn kv(label: &str, value: impl IntoElement, theme: &Theme) -> gpui_kit::Stat
         .child(
             Label::new(label.to_owned())
                 .id(SharedString::from(format!("kv-label-{label}")))
-                .w(px(130.))
+                .w(px(120.))
                 .flex_none()
                 .text_color(theme.muted_foreground),
         )
@@ -280,7 +280,7 @@ pub fn banner(colour: Hsla) -> Div {
         .flex_wrap()
         .gap_3()
         .items_start()
-        .p(px(14.))
+        .p(px(12.))
         .rounded(px(8.))
         .border_1()
         .border_color(tokens::banner_border(colour))

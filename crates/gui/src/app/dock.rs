@@ -14,6 +14,7 @@ use gpui_kit::prelude::*;
 use gpui_kit::{Context, Div, IntoElement, ParentElement, SharedString, Styled, Window, div, px};
 
 use crate::format::{self, StatusGlyph};
+use crate::theme::tokens;
 
 use super::Workspace;
 use super::components::{engine_badge, engine_icon, icon, section_label, status_glyph};
@@ -131,13 +132,13 @@ impl Workspace {
         let header_focus = self.dock_group_focus(engine);
         let header = h_flex()
             .id(SharedString::from(format!("group-{}", engine.as_str())))
-            .h(px(30.))
+            .h(px(28.))
             .px(px(6.))
             .gap_2()
             .rounded(px(5.))
             .cursor_pointer()
             .font_weight(gpui_kit::FontWeight::MEDIUM)
-            .hover(|s| s.bg(theme.muted))
+            .hover(|s| s.bg(tokens::hover(theme)))
             .on_click(cx.listener(move |this, _, _, cx| {
                 this.toggle_collapsed(engine);
                 cx.notify();
@@ -197,8 +198,8 @@ impl Workspace {
         );
         let row = h_flex()
             .id(SharedString::from(format!("row-{}", view.id)))
-            .h(px(30.))
-            .pl(px(36.))
+            .h(px(28.))
+            .pl(px(32.))
             .pr(px(10.))
             .gap_2()
             .rounded(px(5.))
@@ -209,21 +210,21 @@ impl Workspace {
                     .into()
             })
             .when(selected, |s| {
-                s.bg(theme.sidebar_accent)
+                s.bg(tokens::active(theme))
                     .text_color(theme.sidebar_accent_foreground)
             })
-            .when(!selected, |s| s.hover(|s| s.bg(theme.muted)))
+            .when(!selected, |s| s.hover(|s| s.bg(tokens::hover(theme))))
             .on_click(cx.listener(move |this, _, _, cx| {
                 this.open_tab(id.clone(), cx);
             }))
             .child(status_glyph(view.status, 9.0, theme))
-            .child(engine_icon(view.engine, 14.0, theme))
+            .child(engine_icon(view.engine, 16.0, theme))
             .child(div().flex_1().min_w_0().truncate().child(view.name.clone()))
             .child(
                 div()
                     .text_xs()
                     .text_color(theme.muted_foreground)
-                    .child(format::short_version(&view.version)),
+                    .child(format::dock_version(view)),
             )
             .child(
                 div()
@@ -267,7 +268,7 @@ impl Workspace {
                     .h(px(26.))
                     .px(px(10.))
                     .gap_2()
-                    .child(engine_icon(row.engine, 14.0, theme))
+                    .child(engine_icon(row.engine, 16.0, theme))
                     .child(
                         Label::new(row.title.clone())
                             .id(SharedString::from(format!("runtime-title-{index}")))

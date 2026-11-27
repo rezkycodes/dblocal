@@ -1,5 +1,7 @@
 # UI direction: DBLocal prototype (D-25)
 
+The visual language is now DBDelve's tonal palette (see "Theme" below); the layout and behaviour in this document are still the D-25 ones.
+
 Decision D-25 (supersedes D-23's "write our own Zed-style shell"; the layout is still Zed-style, the visual language comes from the user's prototype). The owner supplied `docs/design/prototype/dblocal-gpui/` as the reference implementation: same dock, tabbed centre pane, status bar, cards and dialogs. The prototype source is the specification; screenshots are review aids, never the source.
 
 ## Source of truth
@@ -25,23 +27,78 @@ Decision D-25 (supersedes D-23's "write our own Zed-style shell"; the layout is 
 
 ## Theme
 
-- Dark: `DBLocal Dark`, base `#15161d`, source `crates/gui/assets/themes/dblocal-dark.json` (from the prototype `themes/dblocal.json`). This is the default dark theme.
-- Light: `DBLocal Light`, same visual language, source `crates/gui/assets/themes/dblocal-light.json`. The app follows the system appearance (F-PLH-02).
+**The palette and the look follow DBDelve** (owner request, 27 Nov 2026), which supersedes the D-25 prototype colours (base `#15161d`, blue-tinted navy). The layout, the information architecture and the behaviour are unchanged; the prototype stays the specification for those. Credit is in `NOTICE`. The theme files are our own, written from DBDelve's documented token values and the observed look, not copied.
+
+- Dark: `DBLocal Dark`, source `crates/gui/assets/themes/dblocal-dark.json`. This is the default dark theme.
+- Light: `DBLocal Light`, same visual language, source `crates/gui/assets/themes/dblocal-light.json`. The app follows the system appearance (F-PLH-02); `DBLOCAL_THEME=light|dark|system` overrides it.
 - No colour literals in views. Every paint comes from `gpui_kit::component::Theme` or `crate::theme::tokens`, which derive from the active theme.
 - Contrast is a hard rule: every text/control pair in both themes must be >= 4.5:1 (WCAG AA, F-PLH-02). `crates/gui/src/contrast.rs` and `crates/gui/tests/contrast_table.rs` read the real theme JSON and fail below 4.5.
 
-### Contrast changes from the prototype / generated light theme
+### The tonal palette
 
-The prototype dark tokens were kept as-is (they pass). The light theme was authored in the same language and adjusted where needed for AA. The current measured table is produced by `cargo test -p dblocal-gui --test contrast_table -- --nocapture`.
+"The answer gets the light, the prompt sits a step behind it." Three neutral grey planes, chrome darkest and the card plane brightest, with near-black deliberately absent; lines and states are *washes* (white over dark, black over light), never solid greys.
 
-| Theme | Pair | Before | After | Ratio | Reason |
-|---|---|---:|---:|---:|---|
-| DBLocal Light | muted.foreground on muted.background | `#6b7280` on `#eaebf0` | `#545866` on `#eaebf0` | 5.95 | Prototype-like muted grey failed AA on the elevated surface |
-| DBLocal Light | muted.foreground on sidebar.accent.background | `#6b7280` on `#dadbe4` | `#545866` on `#dadbe4` | 5.14 | Selection rows need readable secondary text |
-| DBLocal Light | primary/info/link on surfaces | `#4078f2` family | `#1a609f` family | >= 4.73 on derived surfaces, 6.16 on base | W1-G showed #4078f2 was 3.88 on white; kept hue, darkened for AA |
-| DBLocal Light | success/danger/warning/info semantic tokens | prototype-light approximations | `#256a2b/#a03129/#735300/#085e76` | >= 4.80 on derived surfaces | Semantic colours must be readable as text, not only as fills |
+| Plane | Dark | Light | `gpui_kit` field | What it paints |
+|---|---|---|---|---|
+| chrome | `#191b1c` | `#e9ebee` | `sidebar`, `title_bar`, `status_bar`, `tab_bar`, `table_head` | dock, title bar, status bar, tab strip, list headers |
+| page | `#232426` | `#f4f6f8` | `background` | the centre pane, the instance header, the wells set into a card (URI field, `.env` block) |
+| card | `#2d2e30` | `#ffffff` | `group_box`, `list`, `table` | cards, the log body, the databases table, the config card |
+| overlay | `#393b3d` | `#ffffff` | `popover` | dialogs, menus, the palette |
+| control | `#414244` | `#e3e5e7` | `secondary`, `button` | buttons at rest |
 
-No hue was changed; saturation/value were adjusted minimally until every checked pair passed 4.5:1. Disabled controls are exempt. Status is never colour alone: glyph shape plus text label (F-PLH-02 AC2).
+| Token | Dark | Light | Used for |
+|---|---|---|---|
+| text (`foreground`) | `#e6e8ea` | `#232426` | body text, never pure white or black |
+| muted (`muted.foreground`) | `#b9bbbe` | `#545557` | secondary text |
+| accent (`primary`, `ring`, `link`) | `#53abff` | `#005da2` | focus ring, links, the one primary button, the active sub-tab |
+| on accent (`primary.foreground`) | `#08090b` | `#ffffff` | text on the accent |
+| danger / success / warning / info | `#ff7f77` / `#53be70` / `#f2b966` / `#65d0dc` | `#b4001b` / `#006b2e` / `#7f5400` / `#005e66` | status, always with a glyph and a word |
+| border | `#ffffff17` | `#0000001f` | hairlines |
+| input border (`input.border`) | `#ffffff29` | `#00000033` | outlines that must stand out |
+| hover wash | white 5% | black 4% | `tokens::hover` |
+| active wash | white 9% | black 8% | `tokens::active`: the soft pill under the selected tab, row or segment |
+| selection | `#449df047` | `#006bb933` | selected text |
+| scrim (`overlay`) | `#00000059` | `#00000030` | behind a dialog |
+
+DBDelve's `text_faint` is **not adopted**: the DBLocal theme format has no slot for a third text tone, and `#858689` measures 3.74:1 on the card plane, 4.27:1 on the page, 3.10:1 on the overlay and 2.75:1 on a control (light `#797a7d`: 4.28 on the card and overlay planes, 3.95 on the page, 3.38 on a control), so secondary text uses `muted` everywhere. DBDelve's `edited` fill (`#ac730052`) becomes `tokens::edited`, the warning colour at 20%.
+
+The washes are alpha fills of the theme text colour painted by `tokens::hover` / `tokens::active`. The opaque `sidebar.accent.background`, `list.active.background`, `table.active.background`, `tab.active.background` and `accent.background` values are those washes flattened over the plane they sit on, so `contrast.rs` (which reads opaque channels) checks the colour that lands on screen.
+
+### Contrast changes from DBDelve's values
+
+The gate checks every text/surface pair of the previous version unchanged, and adds `plane_pairs`: body, muted and status text over each plane at rest and under the hover and active washes the screens can reach (`PLANE_RULES` in `contrast.rs`). DBDelve's own tests use a 3:1 floor for some of these; DBLocal's floor is 4.5:1, so a few DBDelve values were moved in Oklch lightness only (same hue and chroma), by the smallest step that clears the floor. Disabled controls are exempt. The measured table is produced by `cargo test -p dblocal-gui --test contrast_table -- --nocapture`.
+
+| Theme | Token | DBDelve | DBLocal | Ratio (before -> after) | Reason |
+|---|---|---|---|---:|---|
+| Dark | danger | `#ff645f` | `#ff7f77` | 3.88 -> 4.58 | danger text on the overlay plane (validation messages in dialogs) |
+| Dark | accent (`primary`, `ring`, `link`, `base.blue`) | `#4ba3f7` | `#53abff` | 4.22 -> 4.63 | accent text (links, badges) on the overlay plane |
+| Dark | muted | `#afb1b4` | `#b9bbbe` | 4.08 -> 4.55 | muted text on a selected option card in a dialog (overlay plane + active wash) |
+| Light | danger | `#c21725` | `#b4001b` | 4.06 -> 4.60 | status badge: danger on its 14% tint over the chrome plane |
+| Light | success | `#007f38` | `#006b2e` | 3.58 -> 4.56 | status badge: success on its tint over the chrome plane, and on the selected dock row |
+| Light | warning | `#865900` | `#7f5400` | 4.24 -> 4.57 | status badge over the chrome plane (DBDelve has no warning text colour; derived from its `edited` hue) |
+| Light | accent (`primary`, `ring`, `link`, `base.blue`) | `#006bb9` | `#005da2` | 3.82 -> 4.63 | accent badge over the chrome plane, link on the dock |
+
+Everything else is DBDelve's value: the five planes, text, on-accent, cursor, success (dark), warning (dark), info (its syntax-type hue), the borders and the washes. DBDelve has no `info` or `warning` token, so those two come from its syntax-type and syntax-number hues. The `base.*.light` variants are our own, one step lighter on dark and one step darker on light, and are checked on both surfaces like every other colour.
+
+Focus stays a ring in `theme.ring` and clears 3:1 on every surface it is drawn on (`focus_ring_pairs`). Status is never colour alone: glyph shape plus the status word (F-PLH-02 AC2).
+
+### Tidiness: one scale, one density
+
+DBDelve is calm because everything sits on one small scale. DBLocal now does the same; none of it changes behaviour.
+
+| Rule | Value | Where it lives |
+|---|---|---|
+| Base text | `font.size` 14 (the window rem size), so `text_sm` is 12.25px and `text_xs` is 10.5px | both theme files |
+| Radii | 5px controls, 8px cards, dialogs and wells (`radius`, `radius.lg`) | both theme files, `components::card` |
+| Card | 16px padding, 12px gap, one hairline, card plane, a semibold title that is the only heading | `components::card` |
+| Field rows | 120px label column, muted label, value in the text colour | `components::kv` |
+| Page gutters | 24px, with 16px above the header and 8px above the sub-tabs | `screens.rs` |
+| Tabs | the open instance is a pill with the active wash; the sub-tabs are one segmented control that hugs its labels | `screens.rs` |
+| Dock rows | 28px, 16px icons, the version label is the engine's full version (RustFS `1.0.7`, not `1.0`) | `dock.rs`, `format::dock_version` |
+| Status bar | 24px, 12px side padding | `status_bar.rs` |
+| Status pill | 20px high, 8px side padding, glyph and word | `components::status_pill` |
+
+A card has one heading. Where a card needs an action beside its heading (Overview, Recent logs) the heading row carries both and the card is built without its own title.
 
 ## Keyboard and accessibility
 

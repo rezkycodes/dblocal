@@ -525,13 +525,19 @@ impl Workspace {
             lines =
                 lines.child(Label::new(strings::UI_LOGS_EMPTY).text_color(theme.muted_foreground));
         }
-        card(Some(strings::UI_OVERVIEW_RECENT_LOGS), None, theme)
+        // The heading row carries the card title and the link, so the card
+        // itself is built without a title of its own.
+        card(None, Some(strings::UI_OVERVIEW_RECENT_LOGS), theme)
             .child(
                 h_flex()
                     .justify_between()
+                    .items_center()
                     .child(
                         Label::new(strings::UI_OVERVIEW_RECENT_LOGS)
-                            .text_sm()
+                            .id(SharedString::from(format!(
+                                "card-title-{}",
+                                strings::UI_OVERVIEW_RECENT_LOGS
+                            )))
                             .font_weight(gpui_kit::FontWeight::SEMIBOLD),
                     )
                     .child(

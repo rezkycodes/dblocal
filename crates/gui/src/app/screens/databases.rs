@@ -137,7 +137,7 @@ impl Workspace {
             .rounded(px(8.))
             .border_1()
             .border_color(theme.border)
-            .bg(theme.popover)
+            .bg(crate::theme::tokens::card(theme))
             .child(
                 h_flex()
                     .p(px(14.))

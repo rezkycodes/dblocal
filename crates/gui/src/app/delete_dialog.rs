@@ -177,7 +177,9 @@ fn mode_card(
         } else {
             theme.border
         })
-        .when(selected, |this| this.bg(theme.muted))
+        .when(selected, |this| {
+            this.bg(crate::theme::tokens::active(theme))
+        })
         // `on_click` (not `on_mouse_down`) so gpui synthesises Enter/Space from
         // the focused element as well as a pointer click.
         .on_click(cx.listener(move |this, _, _, cx| {

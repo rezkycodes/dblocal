@@ -133,6 +133,9 @@ impl Workspace {
             .id("instance-tabs")
             .h(px(36.))
             .flex_none()
+            .items_center()
+            .gap_1()
+            .px(px(8.))
             .bg(theme.tab_bar)
             .border_b_1()
             .border_color(theme.border)
@@ -151,22 +154,25 @@ impl Workspace {
                     window,
                     cx,
                 );
+                // The selected tab is a soft pill (the active wash); the others
+                // only take the hover wash.
                 let tab_row = h_flex()
                     .id(SharedString::from(format!("itab-{index}")))
-                    .h_full()
+                    .h(px(26.))
                     .gap_2()
-                    .pl(px(14.))
-                    .pr(px(8.))
-                    .border_r_1()
-                    .border_color(theme.border)
+                    .pl(px(10.))
+                    .pr(px(4.))
+                    .rounded(px(5.))
                     .cursor_pointer()
                     .when(active, |s| {
                         s.bg(theme.tab_active)
                             .text_color(theme.tab_active_foreground)
                     })
                     .when(!active, |s| {
-                        s.text_color(theme.tab_foreground)
-                            .hover(|s| s.text_color(theme.foreground))
+                        s.text_color(theme.tab_foreground).hover(|s| {
+                            s.bg(crate::theme::tokens::hover(theme))
+                                .text_color(theme.foreground)
+                        })
                     })
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.select_tab(index, cx);
@@ -251,11 +257,11 @@ impl Workspace {
             .id("instance-header")
             .flex_wrap()
             .gap_4()
-            .px(px(32.))
-            .pt(px(24.))
-            .pb(px(6.))
+            .px(px(24.))
+            .pt(px(16.))
+            .pb(px(4.))
             .items_start()
-            .child(engine_badge(view.engine, 44.0, &theme))
+            .child(engine_badge(view.engine, 36.0, &theme))
             .child(
                 v_flex()
                     .flex_1()
@@ -267,7 +273,7 @@ impl Workspace {
                             .items_center()
                             .child(
                                 Label::new(view.name.clone())
-                                    .text_size(px(22.))
+                                    .text_size(px(18.))
                                     .font_weight(gpui_kit::FontWeight::SEMIBOLD),
                             )
                             .child(status_pill(view.status, &theme)),
@@ -420,7 +426,7 @@ impl Workspace {
                         }),
                 )
             })
-            .text_color(theme.muted_foreground)
+            .text_color(theme.foreground)
     }
 
     /// Overview · Logs · Databases · Config.
@@ -428,22 +434,32 @@ impl Workspace {
         let theme = cx.theme().clone();
         div()
             .id("subtabs")
-            .px(px(20.))
-            .pt(px(6.))
+            .px(px(24.))
+            .pt(px(8.))
+            .pb(px(2.))
             .bg(theme.background)
             .child(
-                TabBar::new("inner-tabs")
-                    .underline()
-                    .selected_index(active.index())
-                    .on_click(cx.listener(|this, index: &usize, window, cx| {
-                        this.set_inner_tab_with_window(InnerTab::from_index(*index), window, cx);
-                        cx.notify();
-                    }))
-                    .children(
-                        InnerTab::ALL
-                            .iter()
-                            .map(|tab| Tab::new().label(tab.label())),
+                // Segmented control hugs its labels instead of spanning the page.
+                h_flex().child(
+                    div().flex_none().child(
+                        TabBar::new("inner-tabs")
+                            .segmented()
+                            .selected_index(active.index())
+                            .on_click(cx.listener(|this, index: &usize, window, cx| {
+                                this.set_inner_tab_with_window(
+                                    InnerTab::from_index(*index),
+                                    window,
+                                    cx,
+                                );
+                                cx.notify();
+                            }))
+                            .children(
+                                InnerTab::ALL
+                                    .iter()
+                                    .map(|tab| Tab::new().label(tab.label())),
+                            ),
                     ),
+                ),
             )
     }
 
@@ -466,10 +482,10 @@ impl Workspace {
 /// A page container: the 32px gutters and capped width the prototype uses.
 pub(crate) fn page() -> gpui_kit::Div {
     v_flex()
-        .gap_4()
-        .px(px(32.))
+        .gap_3()
+        .px(px(24.))
         .pt(px(10.))
-        .pb(px(32.))
+        .pb(px(24.))
         .max_w(px(1080.))
 }
 
@@ -478,7 +494,7 @@ pub(crate) fn page() -> gpui_kit::Div {
 pub(crate) fn page_fill() -> gpui_kit::Div {
     v_flex()
         .gap_3()
-        .px(px(32.))
+        .px(px(24.))
         .pt(px(10.))
         .pb(px(12.))
         .max_w(px(1080.))

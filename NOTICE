@@ -22,3 +22,9 @@ local database and storage services managed by DBLocal:
 - **Valkey** and the Valkey logo are trademarks of LF Projects, LLC. (DBLocal
   displays a `VK` monogram badge for Valkey rather than the Valkey logo.)
 - **RustFS** is a trademark of the RustFS project (Apache-2.0).
+
+## DBDelve
+
+Colour palette and look inspired by DBDelve, GPL-3.0, https://github.com/ShayanAbbas1/dbdelve
+
+The DBLocal theme files (`crates/gui/assets/themes/`) are written from DBDelve's documented token values and the observed look; no DBDelve source file or theme file is copied. Where a DBDelve value is moved to meet DBLocal's 4.5:1 contrast floor, the change is recorded in `docs/design/UI-DIRECTION.md`.
