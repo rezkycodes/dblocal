@@ -936,7 +936,7 @@ fn renders_dock_with_runtime_remove_controls_in_both_themes() {
     // the dock is the left column.
     for (dark, name) in [(true, "dock-dark.png"), (false, "dock-light.png")] {
         let frame = render(dark, name, Workspace::preview);
-        let dock = (0, 70, DOCK as u32, LOGICAL_H - 40);
+        let dock = (0, 70, DOCK, LOGICAL_H - 40);
         let (sidebar, warning) = if dark {
             (dark_sidebar(), dark_warning())
         } else {
