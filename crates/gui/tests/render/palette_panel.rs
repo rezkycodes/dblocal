@@ -22,10 +22,6 @@
 use super::frame::Frame;
 use super::{LOGICAL_H, LOGICAL_W, Workspace, render};
 
-/// `border` from the committed theme JSON (`dblocal-dark.json` / `-light.json`).
-const DARK_BORDER: [u8; 3] = [0x30, 0x32, 0x3f];
-const LIGHT_BORDER: [u8; 3] = [0xcf, 0xd0, 0xd9];
-
 fn exact(px: [u8; 4], rgb: [u8; 3]) -> bool {
     px[0] == rgb[0] && px[1] == rgb[1] && px[2] == rgb[2]
 }
@@ -89,7 +85,8 @@ fn measure(frame: &Frame, border: [u8; 3], label: &str) -> (u32, u32) {
 
 #[test]
 fn the_palette_panel_height_follows_its_content() {
-    for (dark, border) in [(true, DARK_BORDER), (false, LIGHT_BORDER)] {
+    for dark in [true, false] {
+        let border = super::wash_over(dark, "border", "popover.background");
         let one = render(
             dark,
             "palette-height-one-row.png",

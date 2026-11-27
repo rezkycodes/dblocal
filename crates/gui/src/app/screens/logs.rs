@@ -142,7 +142,7 @@ impl Workspace {
             .rounded(px(8.))
             .border_1()
             .border_color(theme.border)
-            .bg(theme.background)
+            .bg(crate::theme::tokens::card(theme))
             .child(
                 h_flex()
                     .justify_between()

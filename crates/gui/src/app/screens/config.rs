@@ -231,7 +231,7 @@ impl Workspace {
             .rounded(px(8.))
             .border_1()
             .border_color(theme.border)
-            .bg(theme.popover)
+            .bg(crate::theme::tokens::card(theme))
             .debug_selector(|| card_selector)
             .child(
                 h_flex()
@@ -495,7 +495,7 @@ impl Workspace {
             .py(px(10.))
             .border_t_1()
             .border_color(theme.table_row_border)
-            .when(changed, |this| this.bg(theme.muted))
+            .when(changed, |this| this.bg(crate::theme::tokens::edited(theme)))
             .child(content)
             .into_any_element()
     }

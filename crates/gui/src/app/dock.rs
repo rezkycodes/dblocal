@@ -14,6 +14,7 @@ use gpui_kit::prelude::*;
 use gpui_kit::{Context, Div, IntoElement, ParentElement, SharedString, Styled, Window, div, px};
 
 use crate::format::{self, StatusGlyph};
+use crate::theme::tokens;
 
 use super::Workspace;
 use super::components::{engine_badge, engine_icon, icon, section_label, status_glyph};
@@ -137,7 +138,7 @@ impl Workspace {
             .rounded(px(5.))
             .cursor_pointer()
             .font_weight(gpui_kit::FontWeight::MEDIUM)
-            .hover(|s| s.bg(theme.muted))
+            .hover(|s| s.bg(tokens::hover(theme)))
             .on_click(cx.listener(move |this, _, _, cx| {
                 this.toggle_collapsed(engine);
                 cx.notify();
@@ -209,10 +210,10 @@ impl Workspace {
                     .into()
             })
             .when(selected, |s| {
-                s.bg(theme.sidebar_accent)
+                s.bg(tokens::active(theme))
                     .text_color(theme.sidebar_accent_foreground)
             })
-            .when(!selected, |s| s.hover(|s| s.bg(theme.muted)))
+            .when(!selected, |s| s.hover(|s| s.bg(tokens::hover(theme))))
             .on_click(cx.listener(move |this, _, _, cx| {
                 this.open_tab(id.clone(), cx);
             }))

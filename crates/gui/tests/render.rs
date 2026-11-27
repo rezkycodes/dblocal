@@ -44,19 +44,108 @@ const DOCK: u32 = 272;
 const TAB_TOP: u32 = 34;
 const TAB_BOTTOM: u32 = 70;
 
-/// Theme tokens as opaque RGB (committed JSON; contrast_table proves them).
-const DARK_BG: [u8; 3] = [0x15, 0x16, 0x1d];
-const DARK_SIDEBAR: [u8; 3] = [0x1c, 0x1d, 0x26];
-const DARK_ACTIVE_ROW: [u8; 3] = [0x2a, 0x2c, 0x3a];
-const DARK_SUCCESS: [u8; 3] = [0x98, 0xc3, 0x79];
-const DARK_DANGER: [u8; 3] = [0xef, 0x88, 0x91];
-const DARK_PRIMARY: [u8; 3] = [0x61, 0xaf, 0xef];
-const DARK_WARNING: [u8; 3] = [0xe5, 0xc0, 0x7b];
+/// A theme token as opaque RGB, read from the same JSON files the app embeds,
+/// so the region checks follow the palette instead of repeating its hex.
+fn token(dark: bool, key: &str) -> [u8; 3] {
+    let name = if dark {
+        dblocal_gui::theme::DARK_THEME
+    } else {
+        dblocal_gui::theme::LIGHT_THEME
+    };
+    for (_, text) in dblocal_gui::theme::THEME_FILES {
+        let value: serde_json::Value = serde_json::from_str(text).expect("theme json");
+        let Some(themes) = value["themes"].as_array() else {
+            continue;
+        };
+        for theme in themes {
+            if theme["name"] == name {
+                let hex = theme["colors"][key].as_str().expect("theme colour");
+                let hex = hex.trim_start_matches('#');
+                let byte = |at: usize| u8::from_str_radix(&hex[at..at + 2], 16).expect("hex");
+                return [byte(0), byte(2), byte(4)];
+            }
+        }
+    }
+    panic!("theme {name} not found")
+}
 
-const LIGHT_BG: [u8; 3] = [0xf8, 0xf8, 0xfb];
-const LIGHT_SIDEBAR: [u8; 3] = [0xf0, 0xf0, 0xf4];
-const LIGHT_PRIMARY: [u8; 3] = [0x1a, 0x60, 0x9f];
-const LIGHT_WARNING: [u8; 3] = [0x73, 0x53, 0x00];
+/// A wash token (`#rrggbbaa`) composited over a plane token, the colour a hairline
+/// or a hover fill lands on screen with.
+fn wash_over(dark: bool, key: &str, plane: &str) -> [u8; 3] {
+    let name = if dark {
+        dblocal_gui::theme::DARK_THEME
+    } else {
+        dblocal_gui::theme::LIGHT_THEME
+    };
+    let base = token(dark, plane);
+    for (_, text) in dblocal_gui::theme::THEME_FILES {
+        let value: serde_json::Value = serde_json::from_str(text).expect("theme json");
+        let Some(themes) = value["themes"].as_array() else {
+            continue;
+        };
+        for theme in themes {
+            if theme["name"] == name {
+                let hex = theme["colors"][key].as_str().expect("theme colour");
+                let hex = hex.trim_start_matches('#');
+                let byte =
+                    |at: usize| f64::from(u8::from_str_radix(&hex[at..at + 2], 16).expect("hex"));
+                let alpha = if hex.len() == 8 { byte(6) / 255.0 } else { 1.0 };
+                let mix =
+                    |fg: f64, bg: u8| (fg * alpha + f64::from(bg) * (1.0 - alpha)).round() as u8;
+                return [
+                    mix(byte(0), base[0]),
+                    mix(byte(2), base[1]),
+                    mix(byte(4), base[2]),
+                ];
+            }
+        }
+    }
+    panic!("theme {name} not found")
+}
+
+/// The page plane the centre pane paints.
+fn dark_bg() -> [u8; 3] {
+    token(true, "background")
+}
+/// The chrome plane: dock, title bar, status bar.
+fn dark_sidebar() -> [u8; 3] {
+    token(true, "sidebar.background")
+}
+/// The card plane: cards and the log body.
+fn dark_card() -> [u8; 3] {
+    token(true, "group_box.background")
+}
+/// The selected dock row (the active wash over the chrome plane).
+fn dark_active_row() -> [u8; 3] {
+    token(true, "sidebar.accent.background")
+}
+fn dark_success() -> [u8; 3] {
+    token(true, "success.background")
+}
+fn dark_danger() -> [u8; 3] {
+    token(true, "danger.background")
+}
+fn dark_primary() -> [u8; 3] {
+    token(true, "primary.background")
+}
+fn dark_warning() -> [u8; 3] {
+    token(true, "warning.background")
+}
+fn light_bg() -> [u8; 3] {
+    token(false, "background")
+}
+fn light_sidebar() -> [u8; 3] {
+    token(false, "sidebar.background")
+}
+fn light_card() -> [u8; 3] {
+    token(false, "group_box.background")
+}
+fn light_primary() -> [u8; 3] {
+    token(false, "primary.background")
+}
+fn light_warning() -> [u8; 3] {
+    token(false, "warning.background")
+}
 
 fn seeded_service() -> Arc<dyn DblService> {
     Arc::new(MockService::demo())
@@ -416,7 +505,10 @@ fn log_viewer_body(frame: &Frame, border: [u8; 3]) -> (u32, u32, u32, u32) {
         let top = pair[0];
         let bot = pair[1];
         let gap = bot.saturating_sub(top);
-        if gap > 20 * s && gap < 700 * s {
+        // The body is the tallest gap between two hairlines: the card outline
+        // and the header/footer dividers share one wash colour.
+        let taller = best.is_none_or(|(t, b)| gap > b - t);
+        if gap > 20 * s && gap < 700 * s && taller {
             best = Some((top, bot));
         }
     }
@@ -445,8 +537,8 @@ fn renders_dark_and_light_overview_with_the_prototype_regions() {
     );
 
     for (name, frame, sidebar, bg) in [
-        ("dark", &dark, DARK_SIDEBAR, DARK_BG),
-        ("light", &light, LIGHT_SIDEBAR, LIGHT_BG),
+        ("dark", &dark, dark_sidebar(), dark_bg()),
+        ("light", &light, light_sidebar(), light_bg()),
     ] {
         let sidebar_hits = frame.count_near((0, 0, DOCK / 2, LOGICAL_H), sidebar, 4);
         assert!(
@@ -465,9 +557,11 @@ fn renders_dark_and_light_overview_with_the_prototype_regions() {
         );
     }
 
-    // Tab strip: selected tab paints the active tab background.
-    let active_dark = dark.count_near((DOCK, TAB_TOP, DOCK + 280, TAB_BOTTOM), DARK_BG, 4);
-    let active_light = light.count_near((DOCK, TAB_TOP, DOCK + 280, TAB_BOTTOM), LIGHT_BG, 4);
+    // Tab strip: the selected tab is the soft active pill over the chrome plane.
+    let pill_dark = token(true, "tab.active.background");
+    let pill_light = token(false, "tab.active.background");
+    let active_dark = dark.count_near((DOCK, TAB_TOP, DOCK + 280, TAB_BOTTOM), pill_dark, 3);
+    let active_light = light.count_near((DOCK, TAB_TOP, DOCK + 280, TAB_BOTTOM), pill_light, 3);
     eprintln!("TAB dark={active_dark} light={active_light}");
     assert!(
         active_dark > 500,
@@ -479,14 +573,14 @@ fn renders_dark_and_light_overview_with_the_prototype_regions() {
     );
 
     // Status glyphs per state in dock glyph column: running green, failed red.
-    let running = dark.count_near((20, 0, 60, LOGICAL_H - 40), DARK_SUCCESS, 16);
-    let failed = dark.count_near((20, 0, 60, LOGICAL_H - 40), DARK_DANGER, 16);
+    let running = dark.count_near((20, 0, 60, LOGICAL_H - 40), dark_success(), 16);
+    let failed = dark.count_near((20, 0, 60, LOGICAL_H - 40), dark_danger(), 16);
     eprintln!("GLYPH running={running} failed={failed}");
     assert!(running > 20, "no running glyph ({running})");
     assert!(failed > 20, "no failed glyph ({failed})");
 
     // A selected row in the dock.
-    let selected = dark.count_near((0, 70, DOCK, LOGICAL_H - 80), DARK_ACTIVE_ROW, 4);
+    let selected = dark.count_near((0, 70, DOCK, LOGICAL_H - 80), dark_active_row(), 4);
     eprintln!("DOCK selected={selected}");
     assert!(selected > 150, "no selected dock row ({selected})");
 
@@ -495,7 +589,7 @@ fn renders_dark_and_light_overview_with_the_prototype_regions() {
     // stacked bands (the old status-under-name layout). Both the plain sidebar
     // surface and the selected-row fill count as background.
     let name_col = (78, 86, 210, 246);
-    let bands = text_bands_multi(&dark, name_col, &[DARK_SIDEBAR, DARK_ACTIVE_ROW], 12);
+    let bands = text_bands_multi(&dark, name_col, &[dark_sidebar(), dark_active_row()], 12);
     eprintln!("DOCK bands={} {bands:?}", bands.len());
     // Five visible rows at a 30px pitch: one band each, none taller than a line.
     assert!(
@@ -512,8 +606,9 @@ fn renders_dark_and_light_overview_with_the_prototype_regions() {
     }
 
     // Primary button colour present in each theme.
-    let primary_dark = dark.count_near((DOCK, 70, LOGICAL_W, LOGICAL_H - 40), DARK_PRIMARY, 16);
-    let primary_light = light.count_near((DOCK, 70, LOGICAL_W, LOGICAL_H - 40), LIGHT_PRIMARY, 16);
+    let primary_dark = dark.count_near((DOCK, 70, LOGICAL_W, LOGICAL_H - 40), dark_primary(), 16);
+    let primary_light =
+        light.count_near((DOCK, 70, LOGICAL_W, LOGICAL_H - 40), light_primary(), 16);
     eprintln!("PRIMARY dark={primary_dark} light={primary_light}");
     assert!(
         primary_dark > 200,
@@ -534,10 +629,11 @@ fn renders_overview_failed_with_diagnosis_banner() {
     );
     let danger_tinted = frame.count_tint(
         (DOCK, 80, LOGICAL_W - 20, LOGICAL_H / 2),
-        DARK_BG,
-        DARK_DANGER,
+        dark_bg(),
+        dark_danger(),
     );
-    let danger_text = frame.count_near((DOCK, 80, LOGICAL_W - 20, LOGICAL_H / 2), DARK_DANGER, 28);
+    let danger_text =
+        frame.count_near((DOCK, 80, LOGICAL_W - 20, LOGICAL_H / 2), dark_danger(), 28);
     eprintln!("OVERVIEW-DIAG tint={danger_tinted} danger_text={danger_text}");
     assert!(
         danger_tinted > 2000 || danger_text > 150,
@@ -572,28 +668,31 @@ fn renders_logs_body_bands_from_layout() {
     //   could not locate log viewer borders; found borders at [727, 761]
     // The 727/761 pair is the collapsed 16-logical-px body the coordinator saw.
     // Restoring `v_flex()` makes the same test pass with 8 bands.
-    let border_dark = [38, 40, 51];
-    let border_light = [223, 224, 231];
+    let border_dark = wash_over(true, "table.row.border", "group_box.background");
+    let border_light = wash_over(false, "table.row.border", "group_box.background");
 
     let diagnosis = render(true, "logs-diagnosis-dark.png", Workspace::preview_failure);
-    assert_log_bands(&diagnosis, border_dark, DARK_BG, 8, "DIAG");
+    assert_log_bands(&diagnosis, border_dark, dark_bg(), 8, "DIAG");
     let danger_tinted = diagnosis.count_tint(
         (DOCK, 100, LOGICAL_W - 20, LOGICAL_H / 2),
-        DARK_BG,
-        DARK_DANGER,
+        dark_bg(),
+        dark_danger(),
     );
-    let danger_text =
-        diagnosis.count_near((DOCK, 100, LOGICAL_W - 20, LOGICAL_H / 2), DARK_DANGER, 28);
+    let danger_text = diagnosis.count_near(
+        (DOCK, 100, LOGICAL_W - 20, LOGICAL_H / 2),
+        dark_danger(),
+        28,
+    );
     assert!(
         danger_tinted > 3000 || danger_text > 200,
         "diagnosis banner not visible (tint={danger_tinted}, text={danger_text})"
     );
 
     let light = render(false, "logs-light.png", Workspace::preview_logs);
-    assert_log_bands(&light, border_light, LIGHT_BG, 2, "LOGS");
+    assert_log_bands(&light, border_light, light_bg(), 2, "LOGS");
 
     let short = render(false, "logs-short-light.png", Workspace::preview_logs_short);
-    assert_log_bands(&short, border_light, LIGHT_BG, 1, "SHORT");
+    assert_log_bands(&short, border_light, light_bg(), 1, "SHORT");
 
     assert_logs_long_fills_its_rows();
 }
@@ -601,10 +700,10 @@ fn renders_logs_body_bands_from_layout() {
 /// A 200-line buffer with follow on: the body must be filled with visible rows
 /// and the newest line must sit near the bottom.
 fn assert_logs_long_fills_its_rows() {
-    let border_light = [223, 224, 231];
+    let border_light = wash_over(false, "table.row.border", "group_box.background");
     let long = render(false, "logs-long-light.png", Workspace::preview_logs_long);
     let body = log_viewer_body(&long, border_light);
-    let bands = text_bands(&long, body, LIGHT_BG, 14);
+    let bands = text_bands(&long, body, light_bg(), 14);
     let (_x0, y0, _x1, y1) = body;
     // `log_viewer_body` already returns logical coordinates; band positions from
     // `text_bands` are device pixels, so scale only when mixing the two.
@@ -645,8 +744,8 @@ fn renders_databases_placeholder_in_the_product_build() {
         Workspace::preview_databases,
     );
     let body = (DOCK + 40, 180, LOGICAL_W - 40, LOGICAL_H - 80);
-    let product_text = product.count_not_near(body, LIGHT_BG, 12);
-    let demo_text = demo.count_not_near(body, LIGHT_BG, 12);
+    let product_text = product.count_not_near(body, light_bg(), 12);
+    let demo_text = demo.count_not_near(body, light_bg(), 12);
     eprintln!("DATABASES product={product_text} demo={demo_text}");
     assert!(
         product_text > 100,
@@ -670,7 +769,7 @@ fn renders_the_live_config_tab_in_the_product_build() {
         Workspace::preview_product_config,
     );
     let body = (DOCK + 40, 180, LOGICAL_W - 40, LOGICAL_H - 80);
-    let text = frame.count_not_near(body, LIGHT_BG, 12);
+    let text = frame.count_not_near(body, light_bg(), 12);
     eprintln!("CONFIG product={text}");
     assert!(
         text > 8_000,
@@ -683,8 +782,16 @@ fn renders_create_dialog_with_a_download_and_an_unavailable_version() {
     let download = render(true, "create-download-dark.png", Workspace::preview_create);
     // Modal panel paints popover/surface over a dimmed backdrop.
     let panel = download.count_near((160, 60, LOGICAL_W - 160, LOGICAL_H - 60), [35, 36, 47], 10)
-        + download.count_near((160, 60, LOGICAL_W - 160, LOGICAL_H - 60), DARK_SIDEBAR, 10);
-    let primary = download.count_near((160, 60, LOGICAL_W - 160, LOGICAL_H - 60), DARK_PRIMARY, 18);
+        + download.count_near(
+            (160, 60, LOGICAL_W - 160, LOGICAL_H - 60),
+            dark_sidebar(),
+            10,
+        );
+    let primary = download.count_near(
+        (160, 60, LOGICAL_W - 160, LOGICAL_H - 60),
+        dark_primary(),
+        18,
+    );
     eprintln!("CREATE panel={panel} primary={primary}");
     assert!(panel > 5000, "create panel not painted ({panel})");
     assert!(primary > 200, "create primary button missing ({primary})");
@@ -694,7 +801,8 @@ fn renders_create_dialog_with_a_download_and_an_unavailable_version() {
         "create-unavailable-dark.png",
         Workspace::preview_create_unavailable,
     );
-    let text = unavailable.count_not_near((DOCK, 120, LOGICAL_W - 40, LOGICAL_H - 60), DARK_BG, 16);
+    let text =
+        unavailable.count_not_near((DOCK, 120, LOGICAL_W - 40, LOGICAL_H - 60), dark_bg(), 16);
     eprintln!("CREATE unavailable text={text}");
     assert!(text > 1500, "unavailable card did not render ({text})");
 }
@@ -704,11 +812,11 @@ fn renders_dock_with_the_filter_applied() {
     let full = render(true, "dock-all-dark.png", Workspace::preview);
     let filtered = render(true, "dock-filtered-dark.png", Workspace::preview_filtered);
     let col = (20, 70, 60, LOGICAL_H - 80);
-    let before = full.count_near(col, DARK_SUCCESS, 16)
-        + full.count_near(col, DARK_DANGER, 16)
+    let before = full.count_near(col, dark_success(), 16)
+        + full.count_near(col, dark_danger(), 16)
         + full.count_near(col, [157, 165, 180], 12);
-    let after = filtered.count_near(col, DARK_SUCCESS, 16)
-        + filtered.count_near(col, DARK_DANGER, 16)
+    let after = filtered.count_near(col, dark_success(), 16)
+        + filtered.count_near(col, dark_danger(), 16)
         + filtered.count_near(col, [157, 165, 180], 12);
     eprintln!("FILTER before={before} after={after}");
     assert!(
@@ -722,13 +830,13 @@ fn renders_palette_and_delete_dialog() {
     let palette = render(true, "palette-dark.png", Workspace::preview_palette);
     let (w, h) = (LOGICAL_W, LOGICAL_H);
     let panel = palette.count_near((w / 4, 80, w * 3 / 4, h - 120), [35, 36, 47], 10)
-        + palette.count_near((w / 4, 80, w * 3 / 4, h - 120), DARK_SIDEBAR, 10);
+        + palette.count_near((w / 4, 80, w * 3 / 4, h - 120), dark_sidebar(), 10);
     eprintln!("PALETTE panel={panel}");
     assert!(panel > 2000, "palette panel missing ({panel})");
 
     let delete = render(false, "delete-light.png", Workspace::preview_delete);
     let panel = delete.count_near((w / 4, h / 4, w * 3 / 4, h * 3 / 4), [255, 255, 255], 8)
-        + delete.count_near((w / 4, h / 4, w * 3 / 4, h * 3 / 4), LIGHT_SIDEBAR, 8);
+        + delete.count_near((w / 4, h / 4, w * 3 / 4, h * 3 / 4), light_sidebar(), 8);
     eprintln!("DELETE panel={panel}");
     assert!(panel > 2000, "delete panel missing ({panel})");
 }
@@ -737,9 +845,17 @@ fn renders_palette_and_delete_dialog() {
 fn renders_quit_dialog_with_both_buttons_and_the_default_marked() {
     let frame = render(true, "quit-dark.png", Workspace::preview_quit);
     let panel = frame.count_near((160, 60, LOGICAL_W - 160, LOGICAL_H - 60), [35, 36, 47], 10)
-        + frame.count_near((160, 60, LOGICAL_W - 160, LOGICAL_H - 60), DARK_SIDEBAR, 10);
-    let primary = frame.count_near((160, 60, LOGICAL_W - 160, LOGICAL_H - 60), DARK_PRIMARY, 18);
-    let text = frame.count_not_near((160, 60, LOGICAL_W - 160, LOGICAL_H - 60), DARK_BG, 16);
+        + frame.count_near(
+            (160, 60, LOGICAL_W - 160, LOGICAL_H - 60),
+            dark_sidebar(),
+            10,
+        );
+    let primary = frame.count_near(
+        (160, 60, LOGICAL_W - 160, LOGICAL_H - 60),
+        dark_primary(),
+        18,
+    );
+    let text = frame.count_not_near((160, 60, LOGICAL_W - 160, LOGICAL_H - 60), dark_bg(), 16);
     eprintln!("QUIT panel={panel} primary={primary} text={text}");
     assert!(panel > 3000, "quit panel not painted ({panel})");
     assert!(text > 800, "quit dialog body text missing ({text})");
@@ -754,7 +870,7 @@ fn renders_quit_dialog_reporting_a_failed_stop() {
         "quit-stop-failed-dark.png",
         Workspace::preview_quit_stop_failed,
     );
-    let text = frame.count_not_near((160, 60, LOGICAL_W - 160, LOGICAL_H - 60), DARK_BG, 16);
+    let text = frame.count_not_near((160, 60, LOGICAL_W - 160, LOGICAL_H - 60), dark_bg(), 16);
     eprintln!("QUIT-FAILED text={text}");
     assert!(
         text > 600,
@@ -770,8 +886,8 @@ fn renders_the_neutral_pending_note() {
     // The pending note adds warning-tinted glyphs to the status bar; compare
     // against the same bar in the idle frame with a wide tolerance because text
     // is antialiased and only a few pixels sit on the token colour.
-    let idle_warn = idle.count_near(bar, DARK_WARNING, 60);
-    let pending_warn = pending.count_near(bar, DARK_WARNING, 60);
+    let idle_warn = idle.count_near(bar, dark_warning(), 60);
+    let pending_warn = pending.count_near(bar, dark_warning(), 60);
     eprintln!("PENDING idle={idle_warn} pending={pending_warn}");
     assert!(
         pending_warn > idle_warn + 10,
@@ -783,7 +899,7 @@ fn renders_the_neutral_pending_note() {
 fn renders_the_tray_unavailable_note_once() {
     let frame = render(false, "no-tray-light.png", Workspace::preview_no_tray);
     let bar = (0, LOGICAL_H - 30, LOGICAL_W, LOGICAL_H - 2);
-    let warn = frame.count_near(bar, LIGHT_WARNING, 30);
+    let warn = frame.count_near(bar, light_warning(), 30);
     eprintln!("NO-TRAY warning text={warn}");
     assert!(
         warn > 20,
@@ -794,8 +910,8 @@ fn renders_the_tray_unavailable_note_once() {
 #[test]
 fn renders_stale_banner_and_revealed_uri() {
     let stale = render(false, "stale-light.png", Workspace::preview_stale_banner);
-    let banner = stale.count_near((DOCK, 34, LOGICAL_W, 140), LIGHT_WARNING, 30)
-        + stale.count_tint((DOCK, 34, LOGICAL_W, 140), LIGHT_BG, LIGHT_WARNING);
+    let banner = stale.count_near((DOCK, 34, LOGICAL_W, 140), light_warning(), 30)
+        + stale.count_tint((DOCK, 34, LOGICAL_W, 140), light_bg(), light_warning());
     eprintln!("STALE banner={banner}");
     assert!(banner > 50, "stale catalog banner missing ({banner})");
 

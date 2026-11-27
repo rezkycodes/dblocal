@@ -275,7 +275,8 @@ pub(crate) fn check_all() -> (Vec<CheckedPair>, Vec<CheckedPair>) {
             .chain(derived_pairs(&name, &colours))
             .chain(derived_pairs_from_hsla(&name, &colours))
             .chain(tinted_pairs(&name, &colours))
-            .chain(extra_text_pairs(&name, &colours));
+            .chain(extra_text_pairs(&name, &colours))
+            .chain(plane_pairs(&name, &colours));
         for pair in pairs {
             if pair.ratio < MIN_RATIO {
                 failing.push(pair.clone());
@@ -391,6 +392,129 @@ fn extra_text_pairs(theme_name: &str, colors: &HashMap<String, String>) -> Vec<C
             bg: bg_hex.clone(),
             ratio: contrast_ratio(fg, bg),
         });
+    }
+    out
+}
+
+/// A state wash painted over a plane.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Wash {
+    Rest,
+    Hover,
+    Active,
+}
+
+impl Wash {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Rest => "rest",
+            Self::Hover => "hover",
+            Self::Active => "active",
+        }
+    }
+}
+
+/// What text is drawn on one plane of the tonal palette, and in which states.
+struct PlaneRule {
+    plane: &'static str,
+    key: &'static str,
+    /// States checked for body and muted text.
+    washes: &'static [Wash],
+    /// States checked for status-coloured text (the control plane carries only
+    /// labels, a dialog shows status text at rest).
+    status: &'static [Wash],
+}
+
+/// Where the screens draw text: the dock and chrome take the hover and the
+/// selected-row wash, the page takes the hover wash, a card takes the hover and
+/// (for body text) the active one, dialogs show status text at rest and body
+/// text on the washes, buttons carry body text only.
+const PLANE_RULES: [PlaneRule; 5] = [
+    PlaneRule {
+        plane: "chrome",
+        key: "sidebar.background",
+        washes: &[Wash::Rest, Wash::Hover, Wash::Active],
+        status: &[Wash::Rest, Wash::Hover, Wash::Active],
+    },
+    PlaneRule {
+        plane: "page",
+        key: "background",
+        washes: &[Wash::Rest, Wash::Hover],
+        status: &[Wash::Rest, Wash::Hover],
+    },
+    PlaneRule {
+        plane: "card",
+        key: "group_box.background",
+        washes: &[Wash::Rest, Wash::Hover, Wash::Active],
+        status: &[Wash::Rest, Wash::Hover],
+    },
+    PlaneRule {
+        plane: "overlay",
+        key: "popover.background",
+        washes: &[Wash::Rest, Wash::Hover, Wash::Active],
+        status: &[Wash::Rest],
+    },
+    PlaneRule {
+        plane: "control",
+        key: "secondary.background",
+        washes: &[Wash::Rest],
+        status: &[],
+    },
+];
+
+/// Text over the five planes of the tonal palette and the hover/active washes
+/// the views paint over them (`theme::tokens::hover` / `active`).
+///
+/// The washes are alpha fills of the theme text colour, so the checked
+/// background is that colour composited over the plane at the token's alpha,
+/// which is what GPUI puts on screen.
+pub(crate) fn plane_pairs(theme_name: &str, colors: &HashMap<String, String>) -> Vec<CheckedPair> {
+    use crate::theme::tokens::{ACTIVE_DARK, ACTIVE_LIGHT, HOVER_DARK, HOVER_LIGHT};
+    const STATUS: [&str; 5] = [
+        "success.background",
+        "danger.background",
+        "warning.background",
+        "info.background",
+        "primary.background",
+    ];
+    let parse = |key: &str| colors.get(key).and_then(|hex| Rgb::parse(hex));
+    let (Some(text), Some(page)) = (parse("foreground"), parse("background")) else {
+        return Vec::new();
+    };
+    let dark = relative_luminance(page) < 0.5;
+    let (hover, active) = if dark {
+        (HOVER_DARK, ACTIVE_DARK)
+    } else {
+        (HOVER_LIGHT, ACTIVE_LIGHT)
+    };
+    let mut out = Vec::new();
+    for rule in &PLANE_RULES {
+        let Some(base) = parse(rule.key) else {
+            continue;
+        };
+        for wash in rule.washes {
+            let surface = match wash {
+                Wash::Rest => base,
+                Wash::Hover => composite(text, f64::from(hover), base),
+                Wash::Active => composite(text, f64::from(active), base),
+            };
+            let status_here = rule.status.contains(wash);
+            let texts = ["foreground", "muted.foreground"]
+                .into_iter()
+                .chain(STATUS.into_iter().filter(|_| status_here));
+            for key in texts {
+                let Some(fg) = parse(key) else {
+                    continue;
+                };
+                out.push(CheckedPair {
+                    theme: theme_name.to_owned(),
+                    label: format!("{key} on {}+{}", rule.plane, wash.label()),
+                    fg: colors.get(key).cloned().unwrap_or_default(),
+                    bg: format!("#{:02x}{:02x}{:02x}", surface.r, surface.g, surface.b),
+                    ratio: contrast_ratio(fg, surface),
+                });
+            }
+        }
     }
     out
 }
@@ -665,6 +789,31 @@ mod tests {
         assert!(
             failing.is_empty(),
             "tinted badge contrast failures:\n{}",
+            failing.join("\n")
+        );
+    }
+
+    #[test]
+    fn text_holds_on_every_plane_and_wash() {
+        // The tonal palette puts text on five planes and two washes; a state
+        // the screens can reach must clear 4.5:1 like a resting one.
+        let mut checked = 0;
+        let mut failing = Vec::new();
+        for (name, colours) in parse_themes() {
+            for pair in plane_pairs(&name, &colours) {
+                checked += 1;
+                if pair.ratio < MIN_RATIO {
+                    failing.push(format!(
+                        "{} / {}: {} on {} = {:.2}",
+                        pair.theme, pair.label, pair.fg, pair.bg, pair.ratio
+                    ));
+                }
+            }
+        }
+        assert!(checked >= 120, "expected the plane matrix, got {checked}");
+        assert!(
+            failing.is_empty(),
+            "plane failures:\n{}",
             failing.join("\n")
         );
     }

@@ -232,7 +232,7 @@ pub fn card(title: Option<&str>, key: Option<&str>, theme: &Theme) -> gpui_kit::
         .rounded(px(8.))
         .border_1()
         .border_color(theme.border)
-        .bg(theme.popover);
+        .bg(tokens::card(theme));
     if let Some(title) = title {
         base = base.child(
             Label::new(title.to_owned())

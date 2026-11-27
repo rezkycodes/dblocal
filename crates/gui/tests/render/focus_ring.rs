@@ -11,7 +11,7 @@
 //! Included from `tests/render.rs` (uses its `render`, `Build`, `Frame`).
 
 use super::frame::Frame;
-use super::{DARK_PRIMARY, LIGHT_PRIMARY, Workspace, render};
+use super::{Workspace, dark_primary, light_primary, render};
 
 fn near(px: [u8; 4], rgb: [u8; 3], tol: u8) -> bool {
     px[0].abs_diff(rgb[0]) <= tol && px[1].abs_diff(rgb[1]) <= tol && px[2].abs_diff(rgb[2]) <= tol
@@ -60,7 +60,7 @@ fn new_ring_bbox(
 
 #[test]
 fn a_focused_engine_card_draws_the_theme_ring() {
-    for (dark, ring) in [(true, DARK_PRIMARY), (false, LIGHT_PRIMARY)] {
+    for (dark, ring) in [(true, dark_primary()), (false, light_primary())] {
         let before = render(dark, "ring-before.png", Workspace::preview_create);
         let after = render(
             dark,
@@ -94,7 +94,7 @@ fn a_focused_engine_card_draws_the_theme_ring() {
 /// full outline's bbox is tall; a top-edge-only line's bbox is ~2 device px.
 #[test]
 fn a_focused_version_row_draws_a_full_outline() {
-    for (dark, ring) in [(true, DARK_PRIMARY), (false, LIGHT_PRIMARY)] {
+    for (dark, ring) in [(true, dark_primary()), (false, light_primary())] {
         let before = render(dark, "vring-before.png", Workspace::preview_create);
         let after = render(
             dark,
@@ -130,7 +130,7 @@ fn a_focused_version_row_draws_a_full_outline() {
 /// `G2`: a focused **engine-group header** draws the ring on all four edges.
 #[test]
 fn a_focused_group_header_draws_a_full_outline() {
-    for (dark, ring) in [(true, DARK_PRIMARY), (false, LIGHT_PRIMARY)] {
+    for (dark, ring) in [(true, dark_primary()), (false, light_primary())] {
         let before = render(dark, "hring-before.png", Workspace::preview);
         let after = render(
             dark,

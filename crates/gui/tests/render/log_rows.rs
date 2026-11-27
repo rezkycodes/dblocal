@@ -19,13 +19,10 @@
 //! newest three-line tail, scrolled to the bottom).
 
 use super::frame::Frame;
-use super::{DARK_BG, LIGHT_BG, Workspace, log_viewer_body, render_sized};
+use super::{Workspace, dark_card, light_card, log_viewer_body, render_sized, wash_over};
 
 /// One log row, logical px. Matches `screens/logs.rs` `LOG_ROW_HEIGHT`.
 const ROW_H: f32 = 18.0;
-
-const DARK_BORDER: [u8; 3] = [38, 40, 51];
-const LIGHT_BORDER: [u8; 3] = [223, 224, 231];
 
 /// Asserts the log body holds `rows` one-line bands at the row pitch, with no
 /// band taller than a single line — i.e. nothing wrapped into its neighbour.
@@ -72,8 +69,16 @@ fn a_long_log_line_does_not_wrap_into_the_next_row() {
     // 1280 px (the review window) and the 900 px minimum width, both themes.
     for (width, height) in [(1280, 820), (900, 600)] {
         for (dark, border, bg) in [
-            (true, DARK_BORDER, DARK_BG),
-            (false, LIGHT_BORDER, LIGHT_BG),
+            (
+                true,
+                wash_over(true, "table.row.border", "group_box.background"),
+                dark_card(),
+            ),
+            (
+                false,
+                wash_over(false, "table.row.border", "group_box.background"),
+                light_card(),
+            ),
         ] {
             let frame = render_sized(
                 dark,

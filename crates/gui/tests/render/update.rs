@@ -6,8 +6,8 @@
 //! preview constructors: no release is downloaded and nothing is installed.
 
 use super::{
-    Build, DARK_BG, DARK_DANGER, DARK_PRIMARY, Frame, LIGHT_BG, LIGHT_PRIMARY, LOGICAL_W,
-    Workspace, render,
+    Build, Frame, LOGICAL_W, Workspace, dark_bg, dark_danger, dark_primary, light_bg,
+    light_primary, render,
 };
 
 /// Every update stage renders in both themes, and the light frame is lighter.
@@ -44,8 +44,8 @@ fn every_update_stage_renders_in_both_themes() {
             light.mean_luminance() > dark.mean_luminance(),
             "{name}: the light frame is not lighter than the dark one"
         );
-        assert_update_dialog_painted(&dark, name, "[dark]", DARK_BG);
-        assert_update_dialog_painted(&light, name, "[light]", LIGHT_BG);
+        assert_update_dialog_painted(&dark, name, "[dark]", dark_bg());
+        assert_update_dialog_painted(&light, name, "[light]", light_bg());
     }
 }
 
@@ -75,8 +75,8 @@ fn no_update_draws_no_download_icon() {
         Workspace::preview_update_available,
     );
     let row = (0, 0, LOGICAL_W, 34);
-    let idle_ink = idle.count_not_near(row, DARK_BG, 24);
-    let available_ink = available.count_not_near(row, DARK_BG, 24);
+    let idle_ink = idle.count_not_near(row, dark_bg(), 24);
+    let available_ink = available.count_not_near(row, dark_bg(), 24);
     eprintln!("UPDATE ICON idle={idle_ink} available={available_ink}");
     assert!(
         available_ink > idle_ink + 20,
@@ -94,14 +94,14 @@ fn a_cannot_self_update_dialog_offers_the_release_page() {
         Workspace::preview_update_cannot,
     );
     let dialog = (110, 90, LOGICAL_W - 110, 620);
-    let text = frame.count_not_near(dialog, LIGHT_BG, 14);
+    let text = frame.count_not_near(dialog, light_bg(), 14);
     eprintln!("UPDATE CANNOT text={text}");
     assert!(text > 2_000, "the explanation did not render ({text})");
     // The action row sits in the lower half of the centered dialog (below the
     // header icon): "Open release page" is the sole action, so it must be
     // painted as a filled primary button (> 500 primary pixels).
     let action_row = (380, 410, 900, 560);
-    let primary_button_px = frame.count_near(action_row, LIGHT_PRIMARY, 28);
+    let primary_button_px = frame.count_near(action_row, light_primary(), 28);
     eprintln!("UPDATE CANNOT primary_button_px={primary_button_px}");
     assert!(
         primary_button_px > 500,
@@ -118,7 +118,7 @@ fn a_failed_update_paints_the_danger_colour() {
         Workspace::preview_update_failed,
     );
     let dialog = (110, 90, LOGICAL_W - 110, 620);
-    let danger = frame.count_near(dialog, DARK_DANGER, 28);
+    let danger = frame.count_near(dialog, dark_danger(), 28);
     eprintln!("UPDATE FAILED danger={danger}");
     assert!(danger > 40, "the failure line was not painted ({danger})");
 }
@@ -132,12 +132,12 @@ fn settings_shows_the_automatic_check_and_the_release() {
         Workspace::preview_settings_update,
     );
     let panel = (330, 90, LOGICAL_W - 330, 700);
-    let text = frame.count_not_near(panel, LIGHT_BG, 14);
+    let text = frame.count_not_near(panel, light_bg(), 14);
     eprintln!("SETTINGS UPDATE text={text}");
     assert!(text > 2_000, "the Settings update section did not render");
     assert!(
-        frame.count_near(panel, DARK_PRIMARY, 40) > 0
-            || frame.count_near(panel, LIGHT_PRIMARY, 40) > 0,
+        frame.count_near(panel, dark_primary(), 40) > 0
+            || frame.count_near(panel, light_primary(), 40) > 0,
         "the re-used install action was not painted"
     );
 }
@@ -153,11 +153,11 @@ fn a_previous_failure_draws_its_sentence_and_an_action() {
     );
     let dialog = (110, 90, LOGICAL_W - 110, 620);
     let warning = frame.count_near(dialog, [0x73, 0x53, 0x00], 40);
-    let text = frame.count_not_near(dialog, LIGHT_BG, 14);
+    let text = frame.count_not_near(dialog, light_bg(), 14);
     eprintln!("UPDATE PREVIOUS warning={warning} text={text}");
     assert!(text > 2_000, "the failure note did not render ({text})");
     assert!(
-        frame.count_near(dialog, LIGHT_PRIMARY, 30) > 0,
+        frame.count_near(dialog, light_primary(), 30) > 0,
         "the retry button must be painted as a primary action"
     );
 }
@@ -172,14 +172,14 @@ fn no_signing_key_dialog_explains_and_offers_no_download() {
         Workspace::preview_update_no_signing_key,
     );
     let dialog = (110, 90, LOGICAL_W - 110, 620);
-    let text = frame.count_not_near(dialog, DARK_BG, 14);
+    let text = frame.count_not_near(dialog, dark_bg(), 14);
     eprintln!("UPDATE NOSIGN text={text}");
     assert!(
         text > 2_000,
         "the signing-key reason did not render ({text})"
     );
     let action_row = (380, 410, 900, 560);
-    let primary_button_px = frame.count_near(action_row, DARK_PRIMARY, 28);
+    let primary_button_px = frame.count_near(action_row, dark_primary(), 28);
     eprintln!("UPDATE NOSIGN primary_button_px={primary_button_px}");
     assert!(
         primary_button_px > 500,
@@ -200,7 +200,7 @@ fn no_signing_key_dialog_explains_and_offers_no_download() {
         Workspace::preview,
     );
     assert!(
-        frame.count_not_near(row, DARK_BG, 24) > idle.count_not_near(row, DARK_BG, 24) + 20,
+        frame.count_not_near(row, dark_bg(), 24) > idle.count_not_near(row, dark_bg(), 24) + 20,
         "the update icon must still be drawn without a signing key"
     );
 }
