@@ -15,7 +15,7 @@ Decision D-25 (supersedes D-23's "write our own Zed-style shell"; the layout is 
 
 | Zed element | DBLocal element | Implementation |
 |---|---|---|
-| Client-side title bar | App mark, "DBLocal", breadcrumb `Engine > instance`, catalog freshness word, "+" new instance, window controls per platform | `crates/gui/src/app/title_bar.rs` |
+| Client-side title bar | "DBLocal" name (the rounded app mark was dropped from the title bar), breadcrumb `Engine > instance`, catalog freshness word, "+" new instance, window controls per platform | `crates/gui/src/app/title_bar.rs` |
 | Left dock | `INSTANCES` with "+", filter, collapsible engine groups with counts, status glyph + label + name + version + `:port` (failed port in danger), `RUNTIMES` with unused marker, primary "New instance" | `crates/gui/src/app/dock.rs`, `crates/gui/src/format.rs` |
 | Centre pane tabs | One tab per opened instance (status glyph + close). Header: engine badge, name, status chip, subtitle, Start/Stop, Restart, "Open in…", sub-tabs Overview/Logs/Databases/Config | `crates/gui/src/app/screens.rs` |
 | Overview | Connection (masked URI, Show/Hide, Copy URI, Copy .env, loopback note, credential location), Detail, Process (PID placeholder, health, detached mode, credential ref, autostart through `set_autostart`), recent logs | `crates/gui/src/app/screens/overview.rs` |

@@ -1,4 +1,4 @@
-//! The title bar: app mark, name, breadcrumb, catalog freshness, new-instance
+//! The title bar: name, breadcrumb, catalog freshness, new-instance
 //! button (D-25 prototype).
 //!
 //! Window controls are drawn by `gpui_kit::component::TitleBar`'s client-side
@@ -118,7 +118,6 @@ pub(super) fn render_content_for_controls(
         dblocal_core::model::CatalogStatus::Stale => theme.warning,
         _ => theme.danger,
     };
-    let primary = theme.primary;
 
     h_flex()
         .id("title-bar-content")
@@ -131,7 +130,6 @@ pub(super) fn render_content_for_controls(
         .gap_2()
         .pr_2()
         .items_center()
-        .child(app_mark(primary, theme.primary_foreground))
         .child(
             Label::new(strings::APP_NAME)
                 .flex_shrink_1()
@@ -236,19 +234,6 @@ fn search_button(
         )
         .child(design::kbd("title-search", &keys, theme));
     super::components::apply_focus_ring(button, &focus, window, cx)
-}
-
-/// The rounded app mark: a database glyph on the accent fill.
-fn app_mark(fill: gpui_kit::Hsla, on_fill: gpui_kit::Hsla) -> impl IntoElement {
-    div()
-        .flex()
-        .flex_none()
-        .items_center()
-        .justify_center()
-        .size(px(22.))
-        .rounded(px(5.))
-        .bg(fill)
-        .child(icon(IconName::Database, 14.0, on_fill))
 }
 
 /// `/ [icon] Engine / ● instance` for the selected tab, DBDelve style.
