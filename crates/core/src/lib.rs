@@ -21,6 +21,7 @@ pub mod secrets;
 pub mod service;
 pub mod store;
 pub mod strings;
+pub mod toolchain;
 pub mod update;
 
 pub use error::{DblError, Result};
