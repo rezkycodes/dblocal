@@ -66,7 +66,7 @@ corruption and a bad mirror but not against a compromised release; verify proven
 ```sh
 # install a specific tag
 curl -fsSL https://raw.githubusercontent.com/rezkycodes/dblocal/main/packaging/install.sh \
-  | sh -s -- --version v0.2.0
+  | sh -s -- --version v0.2.1
 
 # see what it would do, without changing anything
 sh install.sh --dry-run
