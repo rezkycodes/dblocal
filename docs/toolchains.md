@@ -140,3 +140,32 @@ dblocal toolchain php-settings open   # prints the managed conf.d and ini paths
 2. Remove individual versions with `dblocal toolchain remove <tool> <version> --yes`, or delete `~/.dblocal/toolchains/` and any DBLocal-generated shims in `~/.dblocal/bin/`.
 
 Your database instances in `~/.dblocal/instances/` and `state.db` are unaffected.
+
+## Desktop GUI
+
+In the DBLocal desktop app, toolchains live in the **TOOLCHAINS** section of the left sidebar (between **INSTANCES** and **RUNTIMES**), listing **PHP**, **Node.js**, and **Composer** with their current active version (or `Not installed` / `Inactive`).
+
+### Version pages
+
+Selecting **PHP**, **Node.js**, or **Composer** opens its version page:
+
+- **Header**: shows the tool icon, the currently active version badge, a quick **Make active** button when installed versions exist without an active selection, and a **Refresh** button.
+- **First-launch callout**: when no version of the tool is installed yet, a top card offers a single **Install** button for the recommended newest version (which is activated automatically on first install).
+- **Versions list**: lists every version available for your OS, newest first, showing status (`Active`, `Installed`, `Available`), an `Update <version>` badge when a newer patch exists in the same series, size, live download progress with **Cancel**, inline errors with **Retry**, **Make active**, and a trash icon opening the removal confirmation dialog.
+- **Linux PHP profiles**: on Linux, the PHP page includes an **Extension profile** selector (**Common (default)** and **Bulk**) with a short description, an expandable **Extensions (N)** list per version row, and an inline notice when a build omits `pdo_pgsql` (such as PHP 8.0 `common`).
+- **Composer dependency notice**: when no PHP version is active, the Composer page displays a banner explaining that Composer runs through the active PHP shim, with a **Go to PHP** shortcut.
+- **Offline / empty catalog**: when the catalog is unavailable, a **Catalog unavailable** banner is shown while already-installed versions remain listed and switchable.
+- **Live refresh**: DBLocal re-scans toolchain state when you open a toolchain page or return focus to the app window (no background polling timers), so installs or switches made via the CLI appear automatically.
+
+### Shell PATH panel and consent dialog
+
+Every toolchain page includes a **SHELL PATH** card showing whether `~/.dblocal/bin` is on `PATH` and first (`On PATH (first)`, `Not on PATH`, or `Needs attention`), along with plain-English findings from `doctor` (such as another `php` or `node` earlier on `PATH` with its full path, or a dangling shim).
+
+Clicking **Add to PATH** never modifies shell files immediately: it opens a **consent dialog** displaying the exact files that will be updated (`~/.profile`, `~/.bashrc`, `~/.zshrc`, `~/.config/fish/conf.d/dblocal.fish`, or `HKCU\Environment#Path` on Windows) and the exact lines that will be appended, noting that `.dblocal-backup` backups are written first. Clicking **Remove from PATH** undoes the managed block cleanly and reports per-file outcomes, including any read-only or unreadable files.
+
+### PHP settings card
+
+The PHP page includes a **PHP SETTINGS** card (enabled whenever a PHP version is active) for editing `memory_limit`, `upload_max_filesize`, `post_max_size`, `max_execution_time`, `date.timezone`, and `display_errors`:
+
+- Values are validated inline using the same parser as the CLI, with specific error messages under any invalid field.
+- **Save** writes `~/.dblocal/toolchains/php/conf.d/99-dblocal.ini` atomically; **Reset to defaults** restores the default values; **Open config folder** opens the managed `conf.d` directory in your OS file manager.
