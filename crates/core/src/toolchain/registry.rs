@@ -186,8 +186,7 @@ pub fn write_registry_at(path: &Path, registry: &Registry) -> crate::Result<()> 
         reason: format!("could not encode toolchain registry: {err}"),
     })?;
     bytes.push(b'\n');
-    crate::fsutil::write_private_file_atomic(path, &bytes)
-        .map_err(|source| DblError::Io { source })
+    crate::fsutil::write_private_file_atomic(path, &bytes).map_err(|source| DblError::Io { source })
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -294,7 +293,8 @@ pub fn write_manifest(
     })?;
     bytes.push(b'\n');
     let path = install_dir.join(consts::INSTALL_MANIFEST_FILE);
-    crate::fsutil::write_private_file_atomic(&path, &bytes).map_err(|source| DblError::Io { source })
+    crate::fsutil::write_private_file_atomic(&path, &bytes)
+        .map_err(|source| DblError::Io { source })
 }
 
 /// Reads the manifest of a directory, or `None` when it is not a valid install.
@@ -349,7 +349,9 @@ pub fn scan_installed_at(toolchains_dir: &Path) -> Vec<InstalledVersion> {
             };
             // Trust the directory name for the identity, but only when it agrees
             // with the manifest; a mismatch means a hand-edited tree.
-            if manifest.version != parsed.version || manifest.profile.as_deref() != parsed.profile.as_deref() {
+            if manifest.version != parsed.version
+                || manifest.profile.as_deref() != parsed.profile.as_deref()
+            {
                 tracing::debug!(leaf = %name, "toolchain scan: manifest disagrees with its directory");
                 continue;
             }

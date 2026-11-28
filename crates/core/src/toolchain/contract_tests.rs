@@ -55,7 +55,12 @@ fn real_catalog_file_parses_when_present() {
                 version.version()
             );
             for artifact in version.artifacts() {
-                assert_eq!(artifact.sha256().len(), 64, "{tool} {} sha256", version.version());
+                assert_eq!(
+                    artifact.sha256().len(),
+                    64,
+                    "{tool} {} sha256",
+                    version.version()
+                );
                 assert!(
                     artifact.url().starts_with("https://"),
                     "{tool} {} url must be https",
@@ -76,7 +81,10 @@ fn real_catalog_file_parses_when_present() {
                     )
                     .is_ok()
         });
-        assert!(installable, "{tool} has no version installable on this host");
+        assert!(
+            installable,
+            "{tool} has no version installable on this host"
+        );
     }
 
     eprintln!(

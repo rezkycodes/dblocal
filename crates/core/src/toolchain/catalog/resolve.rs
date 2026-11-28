@@ -97,10 +97,7 @@ pub fn resolve_version<'a>(
     }
     Err(DblError::NotFound {
         kind: tool.as_str(),
-        name: format!(
-            "{tag} (available: {})",
-            available_summary(versions)
-        ),
+        name: format!("{tag} (available: {})", available_summary(versions)),
     })
 }
 
@@ -237,10 +234,30 @@ mod tests {
         ToolEntry::new(
             ToolId::Php,
             vec![
-                version("8.5.1", "8.5", None, vec![artifact("linux", "x86_64", Some("common"))]),
-                version("8.4.15", "8.4", None, vec![artifact("linux", "x86_64", Some("common"))]),
-                version("8.4.9", "8.4", None, vec![artifact("linux", "x86_64", Some("common"))]),
-                version("8.3.2", "8.3", None, vec![artifact("linux", "x86_64", Some("common"))]),
+                version(
+                    "8.5.1",
+                    "8.5",
+                    None,
+                    vec![artifact("linux", "x86_64", Some("common"))],
+                ),
+                version(
+                    "8.4.15",
+                    "8.4",
+                    None,
+                    vec![artifact("linux", "x86_64", Some("common"))],
+                ),
+                version(
+                    "8.4.9",
+                    "8.4",
+                    None,
+                    vec![artifact("linux", "x86_64", Some("common"))],
+                ),
+                version(
+                    "8.3.2",
+                    "8.3",
+                    None,
+                    vec![artifact("linux", "x86_64", Some("common"))],
+                ),
             ],
         )
     }
@@ -300,7 +317,12 @@ mod tests {
         let entry = ToolEntry::new(
             ToolId::Php,
             vec![
-                version("8.5.13", "8.5", None, vec![artifact("windows", "x86_64", None)]),
+                version(
+                    "8.5.13",
+                    "8.5",
+                    None,
+                    vec![artifact("windows", "x86_64", None)],
+                ),
                 version(
                     "8.5.8",
                     "8.5",
@@ -310,7 +332,12 @@ mod tests {
                         artifact("linux", "x86_64", Some("bulk")),
                     ],
                 ),
-                version("7.4.33", "7.4", None, vec![artifact("windows", "x86_64", None)]),
+                version(
+                    "7.4.33",
+                    "7.4",
+                    None,
+                    vec![artifact("windows", "x86_64", None)],
+                ),
             ],
         );
 

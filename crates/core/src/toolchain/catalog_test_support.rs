@@ -16,7 +16,7 @@ fn build_artifact(os: &str, arch: &str, profile: Option<&str>, sha_prefix: &str)
         profile.and_then(|p| p.parse::<Profile>().ok()),
         Format::TarGz,
         format!("https://example.test/{os}/{arch}/archive.tar.gz"),
-        format!("{}", sha_prefix.repeat(64).chars().take(64).collect::<String>()),
+        sha_prefix.repeat(64).chars().take(64).collect::<String>(),
         1024,
         "test",
         HashOrigin::Pinned,

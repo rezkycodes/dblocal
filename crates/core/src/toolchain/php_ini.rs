@@ -249,7 +249,9 @@ impl Default for PhpSettings {
                 SizeValue::parse(consts::PHP_DEFAULT_POST_MAX_SIZE)
                     .unwrap_or_else(|_| SizeValue::from_mib(64)),
             ),
-            max_execution_time: SettingValue::Seconds(consts::PHP_DEFAULT_MAX_EXECUTION_TIME as u32),
+            max_execution_time: SettingValue::Seconds(
+                consts::PHP_DEFAULT_MAX_EXECUTION_TIME as u32,
+            ),
             date_timezone: SettingValue::Timezone(consts::PHP_DEFAULT_DATE_TIMEZONE.to_owned()),
             display_errors: SettingValue::Toggle(consts::PHP_DEFAULT_DISPLAY_ERRORS),
         }
@@ -294,9 +296,7 @@ impl PhpSettings {
                 if !trimmed.chars().all(|c| c.is_ascii_digit()) || trimmed.is_empty() {
                     return Err(invalid(key, "must be a whole number of seconds"));
                 }
-                let seconds: u32 = trimmed
-                    .parse()
-                    .map_err(|_| invalid(key, "is too large"))?;
+                let seconds: u32 = trimmed.parse().map_err(|_| invalid(key, "is too large"))?;
                 Ok(SettingValue::Seconds(seconds))
             }
             SettingKey::DateTimezone => {
@@ -305,7 +305,8 @@ impl PhpSettings {
                 if trimmed.is_empty() || contains_ini_metachar(trimmed) {
                     return Err(invalid(key, "is not a valid timezone name"));
                 }
-                jiff::tz::TimeZone::get(trimmed).map_err(|_| invalid(key, "is not a known timezone"))?;
+                jiff::tz::TimeZone::get(trimmed)
+                    .map_err(|_| invalid(key, "is not a known timezone"))?;
                 Ok(SettingValue::Timezone(trimmed.to_owned()))
             }
             SettingKey::DisplayErrors => match raw.trim().to_ascii_lowercase().as_str() {
@@ -384,7 +385,10 @@ fn contains_ini_metachar(value: &str) -> bool {
 }
 
 /// Writes the managed `99-dblocal.ini` atomically.
-pub fn write_managed_ini(paths: &ToolchainPaths, settings: &PhpSettings) -> crate::Result<std::path::PathBuf> {
+pub fn write_managed_ini(
+    paths: &ToolchainPaths,
+    settings: &PhpSettings,
+) -> crate::Result<std::path::PathBuf> {
     let path = paths.php_managed_ini();
     let bytes = settings.render_ini();
     crate::fsutil::write_private_file_atomic(&path, bytes.as_bytes())
@@ -405,7 +409,10 @@ pub fn write_windows_base_ini(
     let ext_dir = install_dir.join("ext");
     let mut out = String::new();
     out.push_str("; DBLocal managed php.ini (Windows). Do not edit by hand.\n");
-    out.push_str(&format!("extension_dir = \"{}\"\n", ini_quote(&ext_dir.display().to_string())));
+    out.push_str(&format!(
+        "extension_dir = \"{}\"\n",
+        ini_quote(&ext_dir.display().to_string())
+    ));
     for ext in extensions {
         out.push_str(&format!("extension={ext}\n"));
     }

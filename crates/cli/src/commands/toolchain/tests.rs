@@ -11,9 +11,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use dblocal_core::platform::{Arch, Os};
-use dblocal_core::toolchain::catalog::{
-    CatalogState, CatalogStatus, parse_catalog_allow_loopback,
-};
+use dblocal_core::toolchain::catalog::{CatalogState, CatalogStatus, parse_catalog_allow_loopback};
 use dblocal_core::toolchain::fsops::ToolchainPaths;
 use dblocal_core::toolchain::ops::ToolchainService;
 use tempfile::TempDir;
@@ -103,7 +101,11 @@ fn list_which_and_doctor_over_an_empty_home() {
         None,
     );
     assert_eq!(doctor.code, 0);
-    assert!(doctor.stdout.contains("shims_dir_missing"), "{}", doctor.stdout);
+    assert!(
+        doctor.stdout.contains("shims_dir_missing"),
+        "{}",
+        doctor.stdout
+    );
 }
 
 #[test]
@@ -138,7 +140,11 @@ fn path_print_writes_nothing_and_shows_the_block() {
         None,
     );
     assert_eq!(result.code, 0);
-    assert!(result.stdout.contains(dblocal_core::toolchain::consts::PATH_BLOCK_BEGIN));
+    assert!(
+        result
+            .stdout
+            .contains(dblocal_core::toolchain::consts::PATH_BLOCK_BEGIN)
+    );
     // Nothing was written anywhere.
     assert!(!home.path().join(".bashrc").exists());
 }
@@ -178,7 +184,10 @@ fn path_apply_needs_consent_and_is_reversible() {
     );
     assert_eq!(applied.code, 0, "stderr: {}", applied.stderr);
     let text = std::fs::read_to_string(home.path().join(".bashrc")).expect("read");
-    assert!(text.contains(dblocal_core::toolchain::consts::PATH_BLOCK_BEGIN), "{text}");
+    assert!(
+        text.contains(dblocal_core::toolchain::consts::PATH_BLOCK_BEGIN),
+        "{text}"
+    );
 
     // Remove restores the original bytes.
     let removed = run(
@@ -308,7 +317,11 @@ fn install_activation_and_use_round_trip() {
         ))
         .expect("install");
     assert!(report.activated);
-    assert!(service.active(dblocal_core::toolchain::ToolId::Node).is_some());
+    assert!(
+        service
+            .active(dblocal_core::toolchain::ToolId::Node)
+            .is_some()
+    );
     assert!(service.paths().shim_path("node", Os::Linux).is_file());
 
     // which resolves to the installed node.
@@ -387,11 +400,14 @@ fn sha_hex(data: &[u8]) -> String {
     use sha2::{Digest, Sha256};
     let mut hasher = Sha256::new();
     hasher.update(data);
-    hasher.finalize().iter().map(|b| format!("{b:02x}")).collect()
+    hasher
+        .finalize()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
 }
 
 fn service_for(home: &Home) -> ToolchainService {
     let paths = ToolchainPaths::with_root(home.path());
     ToolchainService::new(paths, home.path())
 }
-

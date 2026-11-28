@@ -56,7 +56,10 @@ impl CatalogFetcher for FakeFetcher {
         _url: &str,
         etag: Option<&str>,
     ) -> impl Future<Output = crate::Result<RefreshOutcome>> + Send {
-        self.calls.lock().expect("lock").push(etag.map(str::to_owned));
+        self.calls
+            .lock()
+            .expect("lock")
+            .push(etag.map(str::to_owned));
         let response = match &self.response {
             Ok(outcome) => Ok(outcome.clone()),
             Err(()) => Err(crate::DblError::Network {
@@ -94,7 +97,10 @@ fn bundled_or_empty_never_errors() {
     let state = bundled_or_empty();
     // Freshness is either Stale (valid empty snapshot) or Offline (unusable); both
     // are acceptable and neither panics.
-    assert!(matches!(state.status(), CatalogStatus::Stale | CatalogStatus::Offline));
+    assert!(matches!(
+        state.status(),
+        CatalogStatus::Stale | CatalogStatus::Offline
+    ));
 }
 
 #[test]
@@ -113,7 +119,10 @@ fn cache_round_trips() {
     write_cache(&paths, &state).expect("write");
     let read = read_cache(&paths).expect("read");
     assert_eq!(read.status(), CatalogStatus::Fresh);
-    assert_eq!(read.catalog().tool(ToolId::Node).unwrap().versions()[0].version(), "24.11.0");
+    assert_eq!(
+        read.catalog().tool(ToolId::Node).unwrap().versions()[0].version(),
+        "24.11.0"
+    );
     assert_eq!(read.etag(), Some("\"etag\""));
 }
 
@@ -123,7 +132,10 @@ fn missing_or_corrupt_cache_falls_back_to_bundled() {
     let paths = ToolchainPaths::with_root(dir.path());
     assert!(read_cache(&paths).is_none());
     let loaded = load_or_bundled(&paths);
-    assert!(matches!(loaded.status(), CatalogStatus::Stale | CatalogStatus::Offline));
+    assert!(matches!(
+        loaded.status(),
+        CatalogStatus::Stale | CatalogStatus::Offline
+    ));
 
     std::fs::create_dir_all(paths.catalog_cache().parent().unwrap()).expect("mkdir");
     std::fs::write(paths.catalog_cache(), b"{ not json").expect("write");

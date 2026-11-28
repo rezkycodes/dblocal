@@ -11,14 +11,12 @@
 
 use std::io::Write;
 
+use dblocal_core::DblError;
 use dblocal_core::paths::DblPaths;
 use dblocal_core::toolchain::catalog::{Profile, ToolId, VersionSpec};
-use dblocal_core::toolchain::ops::{
-    AvailableVersion, InstalledListing, ToolchainService,
-};
+use dblocal_core::toolchain::ops::{AvailableVersion, InstalledListing, ToolchainService};
 use dblocal_core::toolchain::path::Finding;
 use dblocal_core::toolchain::php_ini::{PhpSettings, SettingKey};
-use dblocal_core::DblError;
 
 use crate::cli::{EXIT_BAD_ARGS, EXIT_NOT_FOUND, EXIT_OK, ToolchainCommand};
 use crate::messages;
@@ -29,7 +27,13 @@ pub fn run(command: &ToolchainCommand) -> u8 {
     let mut out = std::io::stdout().lock();
     let mut err = std::io::stderr().lock();
     let is_interactive = output::is_interactive_stdin();
-    run_with(command, &mut out, &mut err, is_interactive, &read_confirmation)
+    run_with(
+        command,
+        &mut out,
+        &mut err,
+        is_interactive,
+        &read_confirmation,
+    )
 }
 
 /// The injectable form: writers and the confirmation source are supplied, so tests
@@ -113,7 +117,15 @@ pub fn dispatch_on(
             key,
             value,
             json,
-        } => php_settings(service, out, err, action, key.as_deref(), value.as_deref(), *json),
+        } => php_settings(
+            service,
+            out,
+            err,
+            action,
+            key.as_deref(),
+            value.as_deref(),
+            *json,
+        ),
     }
 }
 
@@ -191,9 +203,11 @@ fn install(
     };
 
     // Installing needs consent on a non-interactive session, unless --yes.
-    if !yes && !confirm_action(is_interactive, confirm, err, || {
-        messages::toolchain_install_prompt(tool_id.as_str(), version_spec.as_str())
-    }) {
+    if !yes
+        && !confirm_action(is_interactive, confirm, err, || {
+            messages::toolchain_install_prompt(tool_id.as_str(), version_spec.as_str())
+        })
+    {
         return EXIT_BAD_ARGS;
     }
 
@@ -202,15 +216,11 @@ fn install(
         &messages::toolchain_installing(tool_id.as_str(), version_spec.as_str()),
     );
 
-    let report = match block_on(service.install(
-        tool_id,
-        &version_spec,
-        profile_value,
-        !no_activate,
-    )) {
-        Ok(Ok(report)) => report,
-        Ok(Err(e)) | Err(e) => return output::report_error(err, &e),
-    };
+    let report =
+        match block_on(service.install(tool_id, &version_spec, profile_value, !no_activate)) {
+            Ok(Ok(report)) => report,
+            Ok(Err(e)) | Err(e) => return output::report_error(err, &e),
+        };
 
     output::stdout_line(
         out,
@@ -259,6 +269,7 @@ fn use_version(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn remove(
     service: &ToolchainService,
     out: &mut dyn Write,
@@ -280,9 +291,11 @@ fn remove(
         Ok(spec) => spec,
         Err(e) => return output::report_error(err, &e),
     };
-    if !yes && !confirm_action(is_interactive, confirm, err, || {
-        messages::toolchain_remove_prompt(tool_id.as_str(), version_spec.as_str())
-    }) {
+    if !yes
+        && !confirm_action(is_interactive, confirm, err, || {
+            messages::toolchain_remove_prompt(tool_id.as_str(), version_spec.as_str())
+        })
+    {
         return EXIT_BAD_ARGS;
     }
     match block_on(service.remove(tool_id, &version_spec)) {
@@ -292,7 +305,10 @@ fn remove(
                 &messages::toolchain_removed(report.tool.as_str(), &report.version),
             );
             if let Some(cleared) = &report.cleared {
-                output::stdout_line(out, &messages::toolchain_cleared_active(cleared.tool().as_str()));
+                output::stdout_line(
+                    out,
+                    &messages::toolchain_cleared_active(cleared.tool().as_str()),
+                );
                 if report.others_remain {
                     output::stdout_line(
                         out,
@@ -318,7 +334,9 @@ fn which(service: &ToolchainService, out: &mut dyn Write, err: &mut dyn Write, t
         output::stderr_line(err, &messages::toolchain_no_active(tool_id.as_str()));
         return EXIT_NOT_FOUND;
     };
-    let dir = service.paths().install_dir(tool_id, active.version(), active.profile());
+    let dir = service
+        .paths()
+        .install_dir(tool_id, active.version(), active.profile());
     // Resolve to the executable the shim runs, derived from product code.
     let target = dir.join(tool_id.primary_binary_path(service.os()));
     output::stdout_line(out, &target.display().to_string());
@@ -378,7 +396,10 @@ fn path(
     // Default: report the state without changing it.
     output::stdout_line(
         out,
-        &messages::toolchain_path_state(service.path_applied(), &service.paths().shims_dir().display().to_string()),
+        &messages::toolchain_path_state(
+            service.path_applied(),
+            &service.paths().shims_dir().display().to_string(),
+        ),
     );
     EXIT_OK
 }
@@ -389,7 +410,10 @@ fn report_path_edit(
     report: &dblocal_core::toolchain::path::PathEditReport,
 ) {
     for path in &report.changed {
-        output::stdout_line(out, &messages::toolchain_path_changed(&path.display().to_string()));
+        output::stdout_line(
+            out,
+            &messages::toolchain_path_changed(&path.display().to_string()),
+        );
     }
     for (path, reason) in &report.failures {
         output::stderr_line(
@@ -511,12 +535,23 @@ fn confirm_action(
     prompt: impl FnOnce() -> String,
 ) -> bool {
     if !is_interactive {
-        output::stderr_line(err, &messages::code_line(dblocal_core::error::CODE_INVALID_INPUT, messages::ERR_TOOLCHAIN_NEEDS_YES));
+        output::stderr_line(
+            err,
+            &messages::code_line(
+                dblocal_core::error::CODE_INVALID_INPUT,
+                messages::ERR_TOOLCHAIN_NEEDS_YES,
+            ),
+        );
         return false;
     }
     output::stderr_line(err, &prompt());
     match confirm() {
-        Some(answer) if answer.trim().eq_ignore_ascii_case("y") || answer.trim().eq_ignore_ascii_case("yes") => true,
+        Some(answer)
+            if answer.trim().eq_ignore_ascii_case("y")
+                || answer.trim().eq_ignore_ascii_case("yes") =>
+        {
+            true
+        }
         _ => {
             output::stderr_line(err, messages::ERR_TOOLCHAIN_CANCELLED);
             false
@@ -587,7 +622,8 @@ fn format_available_table(service: &ToolchainService, rows: &[AvailableVersion])
             ]
         })
         .collect();
-    let mut table = output::render_table(headers.iter().map(|h| (*h).to_owned()).collect(), rendered);
+    let mut table =
+        output::render_table(headers.iter().map(|h| (*h).to_owned()).collect(), rendered);
     let _ = service;
     while table.ends_with('\n') {
         table.pop();
@@ -625,7 +661,8 @@ fn format_installed_table(rows: &[InstalledListing]) -> String {
             ]
         })
         .collect();
-    let mut table = output::render_table(headers.iter().map(|h| (*h).to_owned()).collect(), rendered);
+    let mut table =
+        output::render_table(headers.iter().map(|h| (*h).to_owned()).collect(), rendered);
     while table.ends_with('\n') {
         table.pop();
     }

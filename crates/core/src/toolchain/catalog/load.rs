@@ -10,11 +10,11 @@ use std::time::{Duration, SystemTime};
 
 use serde::{Deserialize, Serialize};
 
+use crate::DblError;
 use crate::catalog::{CatalogFetcher, RefreshOutcome};
 use crate::toolchain::catalog::{SkipCounts, ToolchainCatalog, parse_catalog};
 use crate::toolchain::consts;
 use crate::toolchain::fsops::ToolchainPaths;
-use crate::DblError;
 
 /// The catalog embedded at build time.
 ///
@@ -99,7 +99,12 @@ impl CatalogState {
     }
 }
 
-fn build_state(raw: &str, status: CatalogStatus, etag: Option<String>, at: SystemTime) -> crate::Result<CatalogState> {
+fn build_state(
+    raw: &str,
+    status: CatalogStatus,
+    etag: Option<String>,
+    at: SystemTime,
+) -> crate::Result<CatalogState> {
     let (catalog, skips) = parse_catalog(raw)?;
     Ok(CatalogState::new(catalog, raw, status, etag, at, skips))
 }
@@ -183,7 +188,8 @@ pub fn write_cache(paths: &ToolchainPaths, state: &CatalogState) -> crate::Resul
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|source| DblError::Io { source })?;
     }
-    crate::fsutil::write_private_file_atomic(&path, &bytes).map_err(|source| DblError::Io { source })
+    crate::fsutil::write_private_file_atomic(&path, &bytes)
+        .map_err(|source| DblError::Io { source })
 }
 
 /// Loads the best snapshot available without touching the network.

@@ -619,7 +619,11 @@ pub struct ToolchainCatalog {
 
 impl ToolchainCatalog {
     /// Builds a catalog from entries (tools in catalog order).
-    pub fn new(generated_at: impl Into<String>, source_url: impl Into<String>, tools: Vec<ToolEntry>) -> Self {
+    pub fn new(
+        generated_at: impl Into<String>,
+        source_url: impl Into<String>,
+        tools: Vec<ToolEntry>,
+    ) -> Self {
         Self {
             generated_at: generated_at.into(),
             source_url: source_url.into(),
@@ -683,7 +687,10 @@ pub fn executable_name(stem: &str, os: Os) -> String {
 }
 
 fn is_sha256_hex(value: &str) -> bool {
-    value.len() == 64 && value.bytes().all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
 }
 
 fn is_https_url(value: &str) -> bool {
@@ -834,11 +841,10 @@ fn parse_catalog_inner(
     text: &str,
     allow_loopback_http: bool,
 ) -> crate::Result<(ToolchainCatalog, SkipCounts)> {
-    let document: WireDocument = serde_json::from_str(text).map_err(|err| {
-        crate::DblError::Storage {
+    let document: WireDocument =
+        serde_json::from_str(text).map_err(|err| crate::DblError::Storage {
             reason: format!("toolchain catalog is not valid JSON: {err}"),
-        }
-    })?;
+        })?;
     if document.schema != CATALOG_SCHEMA_VERSION {
         return Err(crate::DblError::Unsupported {
             reason: format!(
@@ -999,7 +1005,7 @@ fn sort_artifacts(artifacts: &mut [Artifact]) {
             .as_str()
             .cmp(b.os().as_str())
             .then_with(|| a.arch().as_str().cmp(b.arch().as_str()))
-            .then_with(|| profile_key(a.profile()).cmp(&profile_key(b.profile())))
+            .then_with(|| profile_key(a.profile()).cmp(profile_key(b.profile())))
     });
 }
 

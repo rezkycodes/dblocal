@@ -36,7 +36,10 @@ fn node_shims_exec_their_binaries() {
     for shim in [ShimTool::Node, ShimTool::Npm, ShimTool::Npx] {
         let text = render(shim, Os::Linux, install, ini, php_shim);
         assert!(
-            text.contains(&format!("exec '/h/toolchains/node/24.11.0/bin/{}' \"$@\"", shim.name())),
+            text.contains(&format!(
+                "exec '/h/toolchains/node/24.11.0/bin/{}' \"$@\"",
+                shim.name()
+            )),
             "{shim:?}: {text}"
         );
     }
@@ -105,7 +108,11 @@ fn refresh_writes_current_shims_and_removes_stale_ones() {
     let dir = tempdir().expect("tmp");
     let paths = paths(dir.path());
     let registry = Registry::empty()
-        .with_active(ActiveVersion::new(ToolId::Php, "8.4.15", Some("common".into())))
+        .with_active(ActiveVersion::new(
+            ToolId::Php,
+            "8.4.15",
+            Some("common".into()),
+        ))
         .with_active(ActiveVersion::new(ToolId::Node, "24.11.0", None));
 
     refresh(&paths, Os::Linux, &registry).expect("refresh");
@@ -139,10 +146,13 @@ fn refresh_writes_current_shims_and_removes_stale_ones() {
 fn composer_refuses_to_refresh_without_active_php() {
     let dir = tempdir().expect("tmp");
     let paths = paths(dir.path());
-    let registry = Registry::empty()
-        .with_active(ActiveVersion::new(ToolId::Composer, "2.8.4", None));
+    let registry =
+        Registry::empty().with_active(ActiveVersion::new(ToolId::Composer, "2.8.4", None));
     let err = refresh(&paths, Os::Linux, &registry).expect_err("needs php");
-    assert!(matches!(err, crate::DblError::InvalidInput { field: "php", .. }), "{err:?}");
+    assert!(
+        matches!(err, crate::DblError::InvalidInput { field: "php", .. }),
+        "{err:?}"
+    );
 }
 
 #[test]
@@ -150,7 +160,11 @@ fn composer_refreshes_when_php_is_active() {
     let dir = tempdir().expect("tmp");
     let paths = paths(dir.path());
     let registry = Registry::empty()
-        .with_active(ActiveVersion::new(ToolId::Php, "8.4.15", Some("common".into())))
+        .with_active(ActiveVersion::new(
+            ToolId::Php,
+            "8.4.15",
+            Some("common".into()),
+        ))
         .with_active(ActiveVersion::new(ToolId::Composer, "2.8.4", None));
     refresh(&paths, Os::Linux, &registry).expect("refresh");
     assert!(paths.shim_path("composer", Os::Linux).is_file());
@@ -165,7 +179,10 @@ fn removal_never_touches_a_file_dblocal_did_not_write() {
     std::fs::write(&user_file, "#!/bin/sh\necho user's own php\n").expect("write");
 
     // Not ours: no marker, so it must survive.
-    assert!(!remove_shim_if_ours(&user_file), "must not remove a user file");
+    assert!(
+        !remove_shim_if_ours(&user_file),
+        "must not remove a user file"
+    );
     assert!(user_file.exists());
 
     // Ours: marker present, so it is removed.
@@ -179,9 +196,17 @@ fn removal_never_touches_a_file_dblocal_did_not_write() {
 fn shim_target_reads_the_baked_in_path() {
     let dir = tempdir().expect("tmp");
     let paths = paths(dir.path());
-    let registry = Registry::empty()
-        .with_active(ActiveVersion::new(ToolId::Php, "8.4.15", Some("common".into())));
+    let registry = Registry::empty().with_active(ActiveVersion::new(
+        ToolId::Php,
+        "8.4.15",
+        Some("common".into()),
+    ));
     refresh(&paths, Os::Linux, &registry).expect("refresh");
     let target = shim_target(&paths.shim_path("php", Os::Linux)).expect("target");
-    assert_eq!(target, paths.install_dir(ToolId::Php, "8.4.15", Some("common")).join("php"));
+    assert_eq!(
+        target,
+        paths
+            .install_dir(ToolId::Php, "8.4.15", Some("common"))
+            .join("php")
+    );
 }

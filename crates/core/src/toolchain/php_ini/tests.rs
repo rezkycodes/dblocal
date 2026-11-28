@@ -137,8 +137,14 @@ fn parse_pairs_builds_a_validated_update() {
 #[test]
 fn parse_ini_round_trips_and_ignores_junk() {
     let settings = PhpSettings::default()
-        .with_value(SettingKey::MemoryLimit, SettingValue::Size(SizeValue::parse("1G").unwrap()))
-        .with_value(SettingKey::DateTimezone, SettingValue::Timezone("Asia/Jakarta".into()));
+        .with_value(
+            SettingKey::MemoryLimit,
+            SettingValue::Size(SizeValue::parse("1G").unwrap()),
+        )
+        .with_value(
+            SettingKey::DateTimezone,
+            SettingValue::Timezone("Asia/Jakarta".into()),
+        );
     let ini = settings.render_ini();
     let read = PhpSettings::parse_ini(&ini);
     assert_eq!(read.get(SettingKey::MemoryLimit).render(), "1G");
@@ -176,7 +182,11 @@ fn write_managed_ini_is_atomic_and_parsable() {
 #[test]
 fn windows_base_ini_writes_extensions_and_extension_dir() {
     let dir = tempdir().expect("tmp");
-    let extensions = vec!["curl".to_owned(), "mbstring".to_owned(), "pdo_mysql".to_owned()];
+    let extensions = vec![
+        "curl".to_owned(),
+        "mbstring".to_owned(),
+        "pdo_mysql".to_owned(),
+    ];
     let path = write_windows_base_ini(dir.path(), &extensions).expect("write");
     let text = std::fs::read_to_string(&path).expect("read");
     assert!(text.contains("extension=curl"), "{text}");

@@ -171,11 +171,9 @@ pub fn runtime_used_by(users: &[String]) -> String {
 /// A toolchain action was cancelled at the prompt.
 pub const ERR_TOOLCHAIN_CANCELLED: &str = "Cancelled.";
 /// A confirmation-requiring action was run non-interactively without `--yes`.
-pub const ERR_TOOLCHAIN_NEEDS_YES: &str =
-    "This action needs --yes in a non-interactive session.";
+pub const ERR_TOOLCHAIN_NEEDS_YES: &str = "This action needs --yes in a non-interactive session.";
 /// More than one of `--print`/`--apply`/`--remove` was given to `toolchain path`.
-pub const ERR_TOOLCHAIN_PATH_FLAGS: &str =
-    "Pass at most one of --print, --apply or --remove.";
+pub const ERR_TOOLCHAIN_PATH_FLAGS: &str = "Pass at most one of --print, --apply or --remove.";
 /// `php-settings set` was called without a key and value.
 pub const ERR_TOOLCHAIN_SET_USAGE: &str = "Usage: php-settings set <key> <value>";
 /// The PATH block was already in the requested state.

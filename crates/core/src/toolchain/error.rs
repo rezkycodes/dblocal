@@ -133,10 +133,7 @@ impl ToolchainError {
                 field: "php",
                 reason,
             },
-            Self::InvalidSetting { key, reason } => DblError::InvalidInput {
-                field: key,
-                reason,
-            },
+            Self::InvalidSetting { key, reason } => DblError::InvalidInput { field: key, reason },
             Self::PathNotApplied => DblError::NotFound {
                 kind: "PATH block",
                 name: "dblocal".to_owned(),
@@ -209,13 +206,19 @@ mod tests {
             let code = err.code();
             let mapped = err.into_dbl_error();
             assert!(!mapped.code().is_empty(), "{code} produced no code");
-            assert!(!mapped.diagnostic().is_empty(), "{code} produced no message");
+            assert!(
+                !mapped.diagnostic().is_empty(),
+                "{code} produced no message"
+            );
         }
     }
 
     #[test]
     fn composer_needs_php_is_bad_input() {
         let mapped = ToolchainError::ShimNeedsPhp.into_dbl_error();
-        assert!(matches!(mapped, DblError::InvalidInput { field: "php", .. }));
+        assert!(matches!(
+            mapped,
+            DblError::InvalidInput { field: "php", .. }
+        ));
     }
 }

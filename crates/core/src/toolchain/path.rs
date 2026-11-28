@@ -36,9 +36,7 @@ pub fn render_block(shims_dir: &Path) -> String {
     let mut out = String::new();
     out.push_str(consts::PATH_BLOCK_BEGIN);
     out.push('\n');
-    out.push_str(&format!(
-        "# Managed by DBLocal. Remove with `dblocal toolchain path --remove`.\n"
-    ));
+    out.push_str("# Managed by DBLocal. Remove with `dblocal toolchain path --remove`.\n");
     out.push_str(&format!(
         "case \":${{PATH}}:\" in\n  *:{quoted}:*) ;;\n  *) PATH={quoted}${{PATH:+:$PATH}}; export PATH ;;\nesac\n"
     ));
@@ -231,7 +229,10 @@ pub fn diagnose(
     let mut findings = Vec::new();
     let shims_str_dir = shims_dir.display().to_string();
     let separator = path_separator(o);
-    let entries: Vec<&str> = path_var.split(separator).filter(|e| !e.is_empty()).collect();
+    let entries: Vec<&str> = path_var
+        .split(separator)
+        .filter(|e| !e.is_empty())
+        .collect();
 
     let shims_str = normalize_path_str(shims_dir);
     let position = entries
@@ -239,7 +240,9 @@ pub fn diagnose(
         .position(|e| normalize_path_str(Path::new(e)) == shims_str);
 
     match position {
-        None => findings.push(Finding::ShimsDirMissing { dir: shims_str_dir.clone() }),
+        None => findings.push(Finding::ShimsDirMissing {
+            dir: shims_str_dir.clone(),
+        }),
         Some(0) => {}
         Some(_) => findings.push(Finding::ShimsDirNotFirst {
             dir: shims_str_dir.clone(),
@@ -570,7 +573,7 @@ pub fn remove_from_windows_path(current: &str, shims_dir: &Path) -> String {
     let target = normalize_path_str(shims_dir);
     current
         .split(';')
-        .filter(|e| !(normalize_path_str(Path::new(e)) == target))
+        .filter(|e| normalize_path_str(Path::new(e)) != target)
         .collect::<Vec<_>>()
         .join(";")
 }
@@ -728,12 +731,7 @@ pub fn remove(home: &Path, shims_dir: &Path, o: Os) -> crate::Result<PathEditRep
 }
 
 /// Builds the doctor findings for the current home and PATH.
-pub fn doctor(
-    paths: &ToolchainPaths,
-    home: &Path,
-    path_var: &str,
-    o: Os,
-) -> Vec<Finding> {
+pub fn doctor(paths: &ToolchainPaths, home: &Path, path_var: &str, o: Os) -> Vec<Finding> {
     let shims_dir = paths.shims_dir();
     // Collect the shims DBLocal would check for dangling targets.
     let mut shims: Vec<(String, PathBuf)> = Vec::new();

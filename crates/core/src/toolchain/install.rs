@@ -24,7 +24,10 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::download::{CancellationToken, FreeSpaceFn, InstallOptions, ProgressSink, SourceSpec, UrlPolicy};
+use crate::DblError;
+use crate::download::{
+    CancellationToken, FreeSpaceFn, InstallOptions, ProgressSink, SourceSpec, UrlPolicy,
+};
 use crate::model::ArchiveFormat;
 use crate::platform::{Arch, Os};
 use crate::toolchain::catalog::{Artifact, Format, ToolId};
@@ -32,7 +35,6 @@ use crate::toolchain::consts;
 use crate::toolchain::fsops::ToolchainPaths;
 use crate::toolchain::lock::ToolchainLock;
 use crate::toolchain::registry;
-use crate::DblError;
 use sha2::Digest as _;
 
 /// Whether an install wrote anything.
@@ -316,7 +318,14 @@ async fn install_single_file(
         let _ = tokio::fs::remove_file(&part).await;
         return Err(DblError::Io { source: err });
     }
-    if let Err(err) = registry::write_manifest(&staging, request.tool, request.version, None, artifact.url(), artifact.sha256()) {
+    if let Err(err) = registry::write_manifest(
+        &staging,
+        request.tool,
+        request.version,
+        None,
+        artifact.url(),
+        artifact.sha256(),
+    ) {
         let _ = tokio::fs::remove_dir_all(&staging).await;
         return Err(err);
     }
@@ -350,7 +359,13 @@ fn download_label(tool: ToolId, version: &str, os: Os, profile: Option<&str>) ->
     }
     label
         .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_') { c } else { '_' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_') {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect()
 }
 
@@ -378,9 +393,13 @@ async fn download_verified(
         .map_err(|err| DblError::Network {
             reason: err.to_string(),
         })?;
-    let response = client.get(url).send().await.map_err(|err| DblError::Network {
-        reason: err.to_string(),
-    })?;
+    let response = client
+        .get(url)
+        .send()
+        .await
+        .map_err(|err| DblError::Network {
+            reason: err.to_string(),
+        })?;
     if !response.status().is_success() {
         return Err(DblError::Network {
             reason: format!("download got HTTP {}", response.status().as_u16()),
@@ -418,7 +437,11 @@ async fn download_verified(
         hasher.update(&chunk);
         bytes.extend_from_slice(&chunk);
     }
-    let actual: String = hasher.finalize().iter().map(|b| format!("{b:02x}")).collect();
+    let actual: String = hasher
+        .finalize()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
     if actual != artifact.sha256() {
         return Err(DblError::ChecksumMismatch {
             artifact: format!(
@@ -434,7 +457,10 @@ async fn download_verified(
 fn validate_download_url(url: &reqwest::Url, allow_loopback_http: bool) -> crate::Result<()> {
     match url.scheme() {
         "https" => Ok(()),
-        "http" if allow_loopback_http && crate::toolchain::catalog::is_loopback_http_url(url.as_str()) => {
+        "http"
+            if allow_loopback_http
+                && crate::toolchain::catalog::is_loopback_http_url(url.as_str()) =>
+        {
             Ok(())
         }
         other => Err(DblError::Network {
@@ -494,7 +520,8 @@ fn reject_setuid_setgid(dir: &Path) -> crate::Result<()> {
         for entry in entries {
             let entry = entry.map_err(|source| DblError::Io { source })?;
             let path = entry.path();
-            let meta = std::fs::symlink_metadata(&path).map_err(|source| DblError::Io { source })?;
+            let meta =
+                std::fs::symlink_metadata(&path).map_err(|source| DblError::Io { source })?;
             if meta.file_type().is_symlink() {
                 continue;
             }
@@ -641,7 +668,10 @@ pub async fn remove(
 
 /// Renames `dir` to a unique sibling and returns the new path.
 fn set_aside(dir: &Path) -> crate::Result<PathBuf> {
-    let leaf = dir.file_name().and_then(|n| n.to_str()).unwrap_or("install");
+    let leaf = dir
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("install");
     let nonce: u64 = rand::random();
     let aside = dir.with_file_name(format!(".{leaf}.removing-{nonce:016x}"));
     match std::fs::rename(dir, &aside) {
@@ -660,7 +690,10 @@ fn leftovers(dir: &Path) -> Vec<PathBuf> {
     let Ok(entries) = std::fs::read_dir(parent) else {
         return Vec::new();
     };
-    let leaf = dir.file_name().and_then(|n| n.to_str()).unwrap_or("install");
+    let leaf = dir
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("install");
     let removing = format!(".{leaf}.removing-");
     let staging = format!(".{leaf}{}", crate::download::STAGING_MARKER);
     let mut found = Vec::new();

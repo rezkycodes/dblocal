@@ -176,7 +176,12 @@ fn bad_sha_or_non_https_url_drops_only_that_artifact() {
     }"#;
     let (catalog, skips) = parse_catalog(text).expect("parse");
     assert_eq!(skips.artifacts, 2);
-    assert_eq!(catalog.tool(ToolId::Node).expect("node").versions()[0].artifacts().len(), 1);
+    assert_eq!(
+        catalog.tool(ToolId::Node).expect("node").versions()[0]
+            .artifacts()
+            .len(),
+        1
+    );
 }
 
 #[test]
@@ -312,7 +317,10 @@ fn compare_versions_handles_prerelease_and_padding() {
 fn catalog_accessors_expose_the_document() {
     let (catalog, _) = parse_catalog(FULL).expect("parse");
     assert_eq!(catalog.generated_at(), "2026-11-27T12:00:00Z");
-    assert_eq!(catalog.source_url(), "https://example.test/toolchains-v1.json");
+    assert_eq!(
+        catalog.source_url(),
+        "https://example.test/toolchains-v1.json"
+    );
     assert_eq!(catalog.versions(ToolId::Php).len(), 1);
     assert!(catalog.versions(ToolId::Composer).len() == 1);
     let empty: ToolchainCatalog = ToolchainCatalog::empty();
@@ -346,6 +354,10 @@ fn expected_binaries_are_derived_and_windows_aware() {
     );
     assert_eq!(
         ToolId::Node.primary_binary_paths(Os::Windows),
-        vec!["node.exe".to_owned(), "npm.cmd".to_owned(), "npx.cmd".to_owned()]
+        vec![
+            "node.exe".to_owned(),
+            "npm.cmd".to_owned(),
+            "npx.cmd".to_owned()
+        ]
     );
 }

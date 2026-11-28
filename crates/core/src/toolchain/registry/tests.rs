@@ -29,7 +29,11 @@ fn registry_round_trips() {
     let dir = tempdir().expect("tmp");
     let path = dir.path().join("active.json");
     let registry = Registry::empty()
-        .with_active(ActiveVersion::new(ToolId::Php, "8.4.15", Some("common".into())))
+        .with_active(ActiveVersion::new(
+            ToolId::Php,
+            "8.4.15",
+            Some("common".into()),
+        ))
         .with_active(ActiveVersion::new(ToolId::Node, "24.11.0", None));
     write_registry_at(&path, &registry).expect("write");
     let read = read_registry_at(&path);
@@ -46,8 +50,11 @@ fn corrupt_or_unknown_registry_is_empty_not_a_crash() {
     std::fs::write(&path, b"{ not json").expect("write");
     assert!(read_registry_at(&path).is_empty());
 
-    std::fs::write(&path, br#"{"schema": 99, "active": [{"tool":"php","version":"8.4.15"}]}"#)
-        .expect("write");
+    std::fs::write(
+        &path,
+        br#"{"schema": 99, "active": [{"tool":"php","version":"8.4.15"}]}"#,
+    )
+    .expect("write");
     assert!(read_registry_at(&path).is_empty());
 
     // Unknown tools are ignored individually; known ones survive.
@@ -78,7 +85,11 @@ fn unknown_fields_are_tolerated() {
 fn setting_a_tool_replaces_its_previous_entry() {
     let registry = Registry::empty()
         .with_active(ActiveVersion::new(ToolId::Php, "8.3.2", None))
-        .with_active(ActiveVersion::new(ToolId::Php, "8.4.15", Some("bulk".into())));
+        .with_active(ActiveVersion::new(
+            ToolId::Php,
+            "8.4.15",
+            Some("bulk".into()),
+        ));
     assert_eq!(registry.active().len(), 1);
     assert_eq!(registry.get(ToolId::Php).unwrap().version(), "8.4.15");
     assert_eq!(registry.without(ToolId::Php).active().len(), 0);
@@ -92,8 +103,15 @@ fn install(dir: &Path, tool: ToolId, version: &str, profile: Option<&str>) {
     let root = dir.join(tool.as_str()).join(leaf);
     std::fs::create_dir_all(root.join("bin")).expect("mkdir");
     std::fs::write(root.join("bin/payload"), b"x").expect("payload");
-    write_manifest(&root, tool, version, profile, "https://e.t/x", &"a".repeat(64))
-        .expect("manifest");
+    write_manifest(
+        &root,
+        tool,
+        version,
+        profile,
+        "https://e.t/x",
+        &"a".repeat(64),
+    )
+    .expect("manifest");
 }
 
 #[test]
@@ -115,14 +133,28 @@ fn scan_finds_installed_versions_and_ignores_junk() {
     let installed = scan_installed_at(&toolchains);
     let summary: Vec<(String, String, Option<String>)> = installed
         .iter()
-        .map(|v| (v.tool().to_string(), v.version().to_owned(), v.profile().map(str::to_owned)))
+        .map(|v| {
+            (
+                v.tool().to_string(),
+                v.version().to_owned(),
+                v.profile().map(str::to_owned),
+            )
+        })
         .collect();
     assert_eq!(
         summary,
         vec![
             ("node".to_owned(), "24.11.0".to_owned(), None),
-            ("php".to_owned(), "8.4.15".to_owned(), Some("common".to_owned())),
-            ("php".to_owned(), "8.3.2".to_owned(), Some("common".to_owned())),
+            (
+                "php".to_owned(),
+                "8.4.15".to_owned(),
+                Some("common".to_owned())
+            ),
+            (
+                "php".to_owned(),
+                "8.3.2".to_owned(),
+                Some("common".to_owned())
+            ),
         ]
     );
 }
@@ -135,8 +167,15 @@ fn scan_ignores_a_manifest_that_disagrees_with_its_directory() {
     // Directory says 8.4.15-common, manifest says 8.3.2.
     let root = toolchains.join("php/8.4.15-common");
     std::fs::create_dir_all(&root).expect("mkdir");
-    write_manifest(&root, ToolId::Php, "8.3.2", Some("common"), "https://e.t/x", &"a".repeat(64))
-        .expect("manifest");
+    write_manifest(
+        &root,
+        ToolId::Php,
+        "8.3.2",
+        Some("common"),
+        "https://e.t/x",
+        &"a".repeat(64),
+    )
+    .expect("manifest");
     assert!(scan_installed_at(&toolchains).is_empty());
 }
 
@@ -162,12 +201,15 @@ fn scan_of_a_missing_root_is_empty() {
 fn write_registry_uses_the_shared_home_resolver() {
     let dir = tempdir().expect("tmp");
     let paths = paths(dir.path());
-    let registry = Registry::empty()
-        .with_active(ActiveVersion::new(ToolId::Composer, "2.8.4", None));
+    let registry =
+        Registry::empty().with_active(ActiveVersion::new(ToolId::Composer, "2.8.4", None));
     crate::toolchain::registry::write_registry(&paths, &registry).expect("write");
     assert!(paths.active_registry().exists());
     assert_eq!(
-        crate::toolchain::registry::read_registry(&paths).get(ToolId::Composer).unwrap().version(),
+        crate::toolchain::registry::read_registry(&paths)
+            .get(ToolId::Composer)
+            .unwrap()
+            .version(),
         "2.8.4"
     );
 }

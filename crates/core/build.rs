@@ -14,7 +14,8 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 /// Valid, empty catalog used when the generated file is absent.
-const FALLBACK: &str = "{\n  \"schema\": 1,\n  \"generated_at\": \"1970-01-01T00:00:00Z\",\n  \"tools\": []\n}\n";
+const FALLBACK: &str =
+    "{\n  \"schema\": 1,\n  \"generated_at\": \"1970-01-01T00:00:00Z\",\n  \"tools\": []\n}\n";
 
 fn main() -> ExitCode {
     let Ok(manifest) = env::var("CARGO_MANIFEST_DIR") else {

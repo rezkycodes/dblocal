@@ -17,6 +17,7 @@
 
 use std::path::{Path, PathBuf};
 
+use crate::DblError;
 use crate::platform::{Arch, Os};
 use crate::toolchain::catalog::{
     CatalogState, CatalogStatus, Profile, ToolId, VersionSpec, resolve_version_for_platform,
@@ -29,7 +30,6 @@ use crate::toolchain::registry::{
     ActiveVersion, InstalledVersion, Registry, read_registry, scan_installed, write_registry,
 };
 use crate::toolchain::shim;
-use crate::DblError;
 
 /// One catalog version, as a listing shows it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -258,12 +258,9 @@ impl ToolchainService {
         self.installed()
             .into_iter()
             .map(|installed| {
-                let active = registry
-                    .get(installed.tool())
-                    .is_some_and(|a| {
-                        a.version() == installed.version()
-                            && a.profile() == installed.profile()
-                    });
+                let active = registry.get(installed.tool()).is_some_and(|a| {
+                    a.version() == installed.version() && a.profile() == installed.profile()
+                });
                 InstalledListing {
                     tool: installed.tool(),
                     version: installed.version().to_owned(),
@@ -315,16 +312,11 @@ impl ToolchainService {
             ToolId::Php if self.os == Os::Linux => profile.or(Some(Profile::Common)),
             _ => None,
         };
-        let version = resolve_version_for_platform(
-            tool,
-            entry,
-            spec,
-            self.os,
-            self.arch,
-            effective_profile,
-        )?;
-        let artifact = version.select_artifact(self.os, self.arch, effective_profile).map_err(
-            |_| {
+        let version =
+            resolve_version_for_platform(tool, entry, spec, self.os, self.arch, effective_profile)?;
+        let artifact = version
+            .select_artifact(self.os, self.arch, effective_profile)
+            .map_err(|_| {
                 ToolchainError::UnavailableOnPlatform {
                     tool: tool.as_str(),
                     version: version.version().to_owned(),
@@ -337,8 +329,7 @@ impl ToolchainService {
                     ),
                 }
                 .into_dbl_error()
-            },
-        )?;
+            })?;
 
         let mut request = InstallRequest::new(
             tool,
@@ -405,11 +396,7 @@ impl ToolchainService {
     }
 
     /// Removes an installed version, applying the active-version rules.
-    pub async fn remove(
-        &self,
-        tool: ToolId,
-        spec: &VersionSpec,
-    ) -> crate::Result<RemoveReport> {
+    pub async fn remove(&self, tool: ToolId, spec: &VersionSpec) -> crate::Result<RemoveReport> {
         let installed: Vec<InstalledVersion> = self
             .installed()
             .into_iter()
@@ -574,9 +561,7 @@ fn resolve_installed<'a>(
     let newest = || {
         installed
             .iter()
-            .max_by(|a, b| {
-                crate::toolchain::catalog::compare_versions(a.version(), b.version())
-            })
+            .max_by(|a, b| crate::toolchain::catalog::compare_versions(a.version(), b.version()))
             .unwrap_or(&installed[0])
     };
     if matches!(spec, VersionSpec::Latest) {
@@ -588,7 +573,11 @@ fn resolve_installed<'a>(
     }
     if let Some(prefixed) = installed
         .iter()
-        .filter(|v| v.version().strip_prefix(tag).is_some_and(|r| r.starts_with('.')))
+        .filter(|v| {
+            v.version()
+                .strip_prefix(tag)
+                .is_some_and(|r| r.starts_with('.'))
+        })
         .max_by(|a, b| crate::toolchain::catalog::compare_versions(a.version(), b.version()))
     {
         return Ok(prefixed);

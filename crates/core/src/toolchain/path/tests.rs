@@ -10,8 +10,8 @@ use crate::platform::Os;
 use crate::toolchain::consts;
 use crate::toolchain::fsops::ToolchainPaths;
 use crate::toolchain::path::{
-    Finding, apply_posix, block_shims_dir, diagnose, has_block, path_contains, prepend_windows_path,
-    remove_block, remove_from_windows_path, remove_posix, render_block,
+    Finding, apply_posix, block_shims_dir, diagnose, has_block, path_contains,
+    prepend_windows_path, remove_block, remove_from_windows_path, remove_posix, render_block,
 };
 
 #[test]
@@ -60,13 +60,22 @@ fn apply_edits_every_existing_rc_file_and_writes_a_backup() {
     assert!(home_path.join(".bashrc.dblocal-backup").exists());
     let bashrc = std::fs::read_to_string(home_path.join(".bashrc")).expect("read");
     assert!(has_block(&bashrc));
-    assert!(!home_path.join(".zshrc").exists(), "must not create a missing rc file");
+    assert!(
+        !home_path.join(".zshrc").exists(),
+        "must not create a missing rc file"
+    );
 
     // Remove restores both byte for byte.
     let report = remove_posix(home_path, &home_path.join("bin"));
     assert_eq!(report.changed.len(), 2);
-    assert_eq!(std::fs::read_to_string(home_path.join(".bashrc")).unwrap(), "# bashrc\n");
-    assert_eq!(std::fs::read_to_string(home_path.join(".profile")).unwrap(), "# profile\n");
+    assert_eq!(
+        std::fs::read_to_string(home_path.join(".bashrc")).unwrap(),
+        "# bashrc\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(home_path.join(".profile")).unwrap(),
+        "# profile\n"
+    );
 }
 
 #[cfg(unix)]
@@ -105,15 +114,26 @@ fn doctor_reports_missing_not_first_shadow_and_dangling() {
     let shims = Path::new("/home/u/.dblocal/bin");
     // Missing.
     let findings = diagnose("/usr/bin:/bin", shims, Os::Linux, &[], None);
-    assert!(findings.iter().any(|f| matches!(f, Finding::ShimsDirMissing { .. })));
+    assert!(
+        findings
+            .iter()
+            .any(|f| matches!(f, Finding::ShimsDirMissing { .. }))
+    );
 
     // First: clean.
     let findings = diagnose("/home/u/.dblocal/bin:/usr/bin", shims, Os::Linux, &[], None);
-    assert!(findings.is_empty(), "clean PATH must have no findings: {findings:?}");
+    assert!(
+        findings.is_empty(),
+        "clean PATH must have no findings: {findings:?}"
+    );
 
     // Not first.
     let findings = diagnose("/usr/bin:/home/u/.dblocal/bin", shims, Os::Linux, &[], None);
-    assert!(findings.iter().any(|f| matches!(f, Finding::ShimsDirNotFirst { .. })));
+    assert!(
+        findings
+            .iter()
+            .any(|f| matches!(f, Finding::ShimsDirNotFirst { .. }))
+    );
 }
 
 #[test]
@@ -129,7 +149,10 @@ fn doctor_names_a_shadowing_binary_when_it_exists() {
     let shadow = findings
         .iter()
         .find(|f| matches!(f, Finding::ShadowedBinary { name, .. } if name == "php"));
-    assert!(shadow.is_some(), "must name the shadowing php: {findings:?}");
+    assert!(
+        shadow.is_some(),
+        "must name the shadowing php: {findings:?}"
+    );
 }
 
 #[test]
@@ -151,7 +174,9 @@ fn doctor_reports_a_dangling_shim() {
         None,
     );
     assert!(
-        findings.iter().any(|f| matches!(f, Finding::DanglingShim { .. })),
+        findings
+            .iter()
+            .any(|f| matches!(f, Finding::DanglingShim { .. })),
         "{findings:?}"
     );
 }
@@ -166,16 +191,31 @@ fn doctor_reports_a_stale_block_dir() {
         &[],
         Some(Path::new("/old/bin")),
     );
-    assert!(findings.iter().any(|f| matches!(f, Finding::StaleBlock { .. })));
+    assert!(
+        findings
+            .iter()
+            .any(|f| matches!(f, Finding::StaleBlock { .. }))
+    );
 }
 
 #[test]
 fn finding_codes_and_messages_are_present() {
     let findings = vec![
-        Finding::ShimsDirMissing { dir: "/h/bin".into() },
-        Finding::ShimsDirNotFirst { dir: "/h/bin".into(), before: "/usr/bin".into() },
-        Finding::ShadowedBinary { name: "php".into(), earlier: "/usr/bin/php".into() },
-        Finding::DanglingShim { shim: "/h/bin/php".into(), target: "/gone/php".into() },
+        Finding::ShimsDirMissing {
+            dir: "/h/bin".into(),
+        },
+        Finding::ShimsDirNotFirst {
+            dir: "/h/bin".into(),
+            before: "/usr/bin".into(),
+        },
+        Finding::ShadowedBinary {
+            name: "php".into(),
+            earlier: "/usr/bin/php".into(),
+        },
+        Finding::DanglingShim {
+            shim: "/h/bin/php".into(),
+            target: "/gone/php".into(),
+        },
         Finding::StaleBlock { dir: "/old".into() },
     ];
     for finding in findings {
@@ -203,7 +243,11 @@ fn windows_prepend_moves_an_existing_entry_to_the_front() {
     let current = r"C:\Windows;C:\Users\u\.dblocal\bin;C:\Windows\System32";
     let result = prepend_windows_path(current, shims);
     assert!(result.starts_with(r"C:\Users\u\.dblocal\bin;"), "{result}");
-    assert_eq!(result.matches("dblocal").count(), 1, "no duplicate: {result}");
+    assert_eq!(
+        result.matches("dblocal").count(),
+        1,
+        "no duplicate: {result}"
+    );
 }
 
 #[test]
@@ -223,7 +267,11 @@ fn doctor_wires_up_from_a_toolchain_root() {
     let paths = ToolchainPaths::with_root(dir.path());
     // Nothing installed, empty PATH: still reports the missing dir, never panics.
     let findings = crate::toolchain::path::doctor(&paths, dir.path(), "/usr/bin", Os::Linux);
-    assert!(findings.iter().any(|f| matches!(f, Finding::ShimsDirMissing { .. })));
+    assert!(
+        findings
+            .iter()
+            .any(|f| matches!(f, Finding::ShimsDirMissing { .. }))
+    );
     let _: PathBuf = paths.shims_dir();
 }
 
