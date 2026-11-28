@@ -290,3 +290,45 @@ fn windows_cmd_shims_use_setlocal_and_escape_percent() {
     assert!(node_text.contains("endlocal & exit /b %RC%\r\n"), "{node_text}");
     assert!(node_text.contains(r"100%%ok"), "{node_text}");
 }
+
+#[test]
+fn shim_target_parses_paths_with_spaces_quotes_and_cmd_call() {
+    let base = tempdir().expect("tmp");
+
+    for label in ["Jane Doe", "O'Brien"] {
+        let root = base.path().join(label);
+        let paths = paths(&root);
+        let reg = Registry::empty().with_active(ActiveVersion::new(
+            ToolId::Php,
+            "8.4.15",
+            Some("common".into()),
+        ));
+        refresh(&paths, Os::Linux, &reg).expect("refresh");
+        let target = shim_target(&paths.shim_path("php", Os::Linux)).expect("target");
+        assert_eq!(
+            target,
+            paths
+                .install_dir(ToolId::Php, "8.4.15", Some("common"))
+                .join("php"),
+            "failed for home label {label}"
+        );
+    }
+
+    // Windows .cmd with spaces and `call "..."` (Node shim) + `%%` unescaping.
+    let win_dir = base.path().join("win");
+    std::fs::create_dir_all(&win_dir).expect("mkdir");
+    let win_node_shim = win_dir.join("node.cmd");
+    let rendered = render(
+        ShimTool::Node,
+        Os::Windows,
+        Path::new(r"C:\Users\Jane 100% Doe\.dblocal\toolchains\node\24.11.0"),
+        Path::new(r"C:\Users\Jane 100% Doe\.dblocal\toolchains\php\conf.d"),
+        Path::new(r"C:\Users\Jane 100% Doe\.dblocal\bin\php.cmd"),
+    );
+    std::fs::write(&win_node_shim, rendered).expect("write");
+    let win_target = shim_target(&win_node_shim).expect("win target");
+    assert_eq!(
+        win_target,
+        Path::new(r"C:\Users\Jane 100% Doe\.dblocal\toolchains\node\24.11.0").join("node.exe")
+    );
+}

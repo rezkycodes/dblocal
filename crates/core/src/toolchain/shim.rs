@@ -288,27 +288,51 @@ fn write_shim(path: &Path, contents: &[u8]) -> crate::Result<()> {
         .map_err(|source| DblError::Io { source })
 }
 
-/// Reads a shim's first line, for doctor checks and tests.
+/// Reads a shim's target executable path, for doctor checks and tests.
+///
+/// Handles POSIX `exec '...'` tokens (including spaces and `'\''` escapes) and
+/// Windows `.cmd` `"..."` / `call "..."` lines (unescaping `%%` -> `%`).
 pub fn shim_target(path: &Path) -> Option<PathBuf> {
     let text = std::fs::read_to_string(path).ok()?;
     for line in text.lines() {
         let trimmed = line.trim();
         if let Some(rest) = trimmed.strip_prefix("exec ") {
-            let first = rest.split_whitespace().next()?;
-            return Some(PathBuf::from(unquote(first)));
+            let token = parse_shell_token(rest.trim_start())?;
+            return Some(PathBuf::from(token));
         }
-        if let Some(after) = trimmed.strip_prefix('"') {
-            // A .cmd target line: the first quoted path is the executable.
-            if let Some(end) = after.find('"') {
-                return Some(PathBuf::from(&after[..end]));
-            }
+        let cmd_rest = trimmed.strip_prefix("call ").unwrap_or(trimmed);
+        if let Some(after) = cmd_rest.strip_prefix('"')
+            && let Some(end) = after.find('"')
+        {
+            return Some(PathBuf::from(after[..end].replace("%%", "%")));
         }
     }
     None
 }
 
-fn unquote(token: &str) -> String {
-    token.trim_matches('\'').to_owned()
+/// Parses one POSIX shell token starting at `text`: handles single-quoted
+/// strings with `'\''` embedded-quote sequences, or an unquoted whitespace-free
+/// word.
+fn parse_shell_token(text: &str) -> Option<String> {
+    if text.is_empty() {
+        return None;
+    }
+    if !text.starts_with('\'') {
+        return text.split_whitespace().next().map(str::to_owned);
+    }
+    let mut rest = &text[1..];
+    let mut out = String::new();
+    loop {
+        let end = rest.find('\'')?;
+        out.push_str(&rest[..end]);
+        rest = &rest[end + 1..];
+        if let Some(after_escape) = rest.strip_prefix("\\''") {
+            out.push('\'');
+            rest = after_escape;
+        } else {
+            return Some(out);
+        }
+    }
 }
 
 #[cfg(test)]
