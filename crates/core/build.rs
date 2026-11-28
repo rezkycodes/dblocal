@@ -33,15 +33,30 @@ fn main() -> ExitCode {
         .join("catalog")
         .join("toolchains-v1.json");
     let target = PathBuf::from(&out_dir).join("toolchains-v1.json");
+    let profile = env::var("PROFILE").unwrap_or_default();
+    let allow_empty = env::var("DBLOCAL_ALLOW_EMPTY_TOOLCHAIN_CATALOG")
+        .map(|v| matches!(v.trim(), "1" | "true" | "TRUE"))
+        .unwrap_or(false);
 
-    // Rebuild when the generated catalog appears, changes or disappears.
+    // Rebuild when the generated catalog appears, changes, disappears, or the
+    // override env var changes.
     println!("cargo:rerun-if-changed={}", source.display());
+    println!("cargo:rerun-if-env-changed=DBLOCAL_ALLOW_EMPTY_TOOLCHAIN_CATALOG");
 
-    let written = match fs::read(&source) {
-        Ok(bytes) => fs::write(&target, bytes),
-        Err(_) => fs::write(&target, FALLBACK),
+    let bytes = match fs::read(&source) {
+        Ok(bytes) => bytes,
+        Err(_) if profile == "release" && !allow_empty => {
+            eprintln!(
+                "build.rs: {} is missing; refusing to ship an empty toolchain catalog in a release build.\n\
+                 Generate it with `cargo xtask toolchains-catalog --output catalog/toolchains-v1.json`,\n\
+                 or set DBLOCAL_ALLOW_EMPTY_TOOLCHAIN_CATALOG=1 to opt into an empty fallback.",
+                source.display()
+            );
+            return ExitCode::FAILURE;
+        }
+        Err(_) => FALLBACK.as_bytes().to_vec(),
     };
-    match written {
+    match fs::write(&target, bytes) {
         Ok(()) => ExitCode::SUCCESS,
         Err(err) => {
             eprintln!("build.rs: could not write {}: {err}", target.display());
