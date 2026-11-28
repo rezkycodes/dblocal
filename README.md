@@ -167,10 +167,16 @@ in your OS keychain (Secret Service / Keychain / Credential Manager), never in t
 ```
 ~/.dblocal/
 ├─ runtimes/<engine>/<version>/     # downloaded engine binaries
+├─ toolchains/<tool>/<version>/     # installed PHP, Composer, and Node.js versions
+├─ bin/                             # generated toolchain shims (php, composer, node, npm, npx)
 ├─ instances/<name>/{data,logs,run} # per-instance data directory, logs, pidfiles
 ├─ archive/                         # deleted instances whose data you kept
 └─ state.db                         # app state (SQLite, WAL)
 ```
+
+## Toolchains (PHP, Composer, Node.js)
+
+DBLocal also installs and switches per-user **PHP**, **Composer**, and **Node.js** (`node`, `npm`, `npx`) versions without containers or `sudo`, exposed through shims in `~/.dblocal/bin` with explicit PATH consent and managed PHP settings. See [`docs/toolchains.md`](docs/toolchains.md) for CLI usage, PHP profiles, Windows notes, and the checksum trust model.
 
 Uninstalling DBLocal **does not delete** `~/.dblocal/`; your databases survive.
 
