@@ -316,7 +316,7 @@ fn toolchain_breadcrumb(
                 .text_color(muted),
         )
         .child(
-            Label::new("Toolchains")
+            Label::new(strings::UI_TOOLCHAIN_BREADCRUMB)
                 .id("tc-crumb-section")
                 .flex_shrink_1()
                 .min_w_0()

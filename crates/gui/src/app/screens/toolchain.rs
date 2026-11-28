@@ -7,6 +7,7 @@
 //! `toolchain_state.rs`. Every paint comes from the active theme or
 //! [`crate::theme::tokens`] (zero colour literals).
 
+use dblocal_core::strings;
 use dblocal_core::toolchain::catalog::{Profile, ToolId};
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants};
@@ -110,7 +111,7 @@ impl Workspace {
             }
             None => design::chip(
                 &format!("tc-inactive-{}", tool.as_str()),
-                "No active version",
+                strings::UI_TOOLCHAIN_NO_ACTIVE,
                 theme.muted_foreground,
             ),
         };
@@ -191,7 +192,7 @@ impl Workspace {
                             .outline()
                             .small()
                             .icon(IconName::RefreshCw)
-                            .label("Refresh")
+                            .label(strings::UI_TOOLCHAIN_REFRESH)
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.refresh_toolchains_bg(cx);
                             })),
@@ -216,26 +217,23 @@ impl Workspace {
                     .min_w(px(200.))
                     .gap_0p5()
                     .child(
-                        Label::new("Composer requires an active PHP version")
+                        Label::new(strings::UI_TOOLCHAIN_COMPOSER_NEEDS_PHP_TITLE)
                             .id("tc-composer-needs-php-title")
                             .text_sm()
                             .font_weight(FontWeight::SEMIBOLD),
                     )
                     .child(
-                        Label::new(
-                            "The composer shim runs composer.phar through your active PHP shim. \
-                             Install and activate a PHP version so composer can execute.",
-                        )
-                        .id("tc-composer-needs-php-body")
-                        .text_xs()
-                        .text_color(theme.muted_foreground),
+                        Label::new(strings::UI_TOOLCHAIN_COMPOSER_NEEDS_PHP_BODY)
+                            .id("tc-composer-needs-php-body")
+                            .text_xs()
+                            .text_color(theme.muted_foreground),
                     ),
             )
             .child(
                 Button::new("tc-composer-goto-php")
                     .outline()
                     .small()
-                    .label("Go to PHP")
+                    .label(strings::UI_TOOLCHAIN_GO_TO_PHP)
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.select_toolchain(ToolId::Php, cx);
                     })),
@@ -261,7 +259,7 @@ impl Workspace {
                     .min_w(px(200.))
                     .gap_0p5()
                     .child(
-                        Label::new("Catalog unavailable")
+                        Label::new(strings::UI_TOOLCHAIN_CATALOG_UNAVAILABLE)
                             .id("tc-catalog-unavailable-title")
                             .text_sm()
                             .font_weight(FontWeight::SEMIBOLD),
@@ -281,7 +279,7 @@ impl Workspace {
                 Button::new("tc-catalog-retry")
                     .outline()
                     .small()
-                    .label("Retry")
+                    .label(strings::UI_TOOLCHAIN_RETRY)
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.refresh_toolchains_bg(cx);
                     })),
@@ -357,7 +355,10 @@ impl Workspace {
         v_flex()
             .id("tc-php-profile")
             .gap_1p5()
-            .child(design::group_heading("Extension profile", theme))
+            .child(design::group_heading(
+                strings::UI_TOOLCHAIN_EXTENSION_PROFILE,
+                theme,
+            ))
             .child(
                 h_flex()
                     .flex_wrap()
@@ -378,7 +379,7 @@ impl Workspace {
                                     .small()
                                     .when(common_active, |b| b.primary())
                                     .when(!common_active, |b| b.outline())
-                                    .label("Common (default)")
+                                    .label(strings::UI_TOOLCHAIN_PROFILE_COMMON)
                                     .on_click(cx.listener(|this, _, _, cx| {
                                         this.set_php_profile(Profile::Common, cx);
                                     })),
@@ -388,7 +389,7 @@ impl Workspace {
                                     .small()
                                     .when(bulk_active, |b| b.primary())
                                     .when(!bulk_active, |b| b.outline())
-                                    .label("Bulk")
+                                    .label(strings::UI_TOOLCHAIN_PROFILE_BULK)
                                     .on_click(cx.listener(|this, _, _, cx| {
                                         this.set_php_profile(Profile::Bulk, cx);
                                     })),
@@ -419,7 +420,7 @@ impl Workspace {
 
         if rows.is_empty() {
             card = card.child(
-                Label::new("No versions available for this platform.")
+                Label::new(strings::UI_TOOLCHAIN_NO_VERSIONS)
                     .id("tc-versions-empty")
                     .px(px(design::ROW_PAD_X))
                     .py(px(14.))
@@ -434,7 +435,7 @@ impl Workspace {
 
         v_flex()
             .gap_1p5()
-            .child(design::group_heading("Versions", theme))
+            .child(design::group_heading(strings::UI_TOOLCHAIN_VERSIONS, theme))
             .child(card)
             .into_any_element()
     }
@@ -455,15 +456,19 @@ impl Workspace {
         let row_key = row.key.clone();
 
         let status_chip = match row.status {
-            VersionRowStatus::Active => {
-                design::chip(&format!("tc-status-{idx}"), "Active", theme.success)
-            }
-            VersionRowStatus::Installed => {
-                design::chip(&format!("tc-status-{idx}"), "Installed", theme.primary)
-            }
+            VersionRowStatus::Active => design::chip(
+                &format!("tc-status-{idx}"),
+                strings::UI_TOOLCHAIN_STATUS_ACTIVE,
+                theme.success,
+            ),
+            VersionRowStatus::Installed => design::chip(
+                &format!("tc-status-{idx}"),
+                strings::UI_TOOLCHAIN_STATUS_INSTALLED,
+                theme.primary,
+            ),
             VersionRowStatus::Available => design::chip(
                 &format!("tc-status-{idx}"),
-                "Available",
+                strings::UI_TOOLCHAIN_STATUS_AVAILABLE,
                 theme.muted_foreground,
             ),
         };
@@ -484,7 +489,7 @@ impl Workspace {
         }
         if row.missing_pdo_pgsql_note {
             meta_line = meta_line.child(
-                Label::new("· pdo_pgsql not included in this build")
+                Label::new(strings::UI_TOOLCHAIN_NO_PDO_PGSQL)
                     .id(SharedString::from(format!("tc-no-pgsql-{idx}")))
                     .text_xs()
                     .text_color(theme.warning),
@@ -525,7 +530,11 @@ impl Workspace {
                             .font_weight(FontWeight::SEMIBOLD),
                     )
                     .when(row.lts, |r| {
-                        r.child(design::chip(&format!("tc-lts-{idx}"), "LTS", theme.info))
+                        r.child(design::chip(
+                            &format!("tc-lts-{idx}"),
+                            strings::UI_TOOLCHAIN_LTS,
+                            theme.info,
+                        ))
                     })
                     .child(status_chip)
                     .when_some(row.update_available.as_ref(), |r, latest| {
@@ -598,7 +607,7 @@ impl Workspace {
                             .outline()
                             .xsmall()
                             .compact()
-                            .label("Retry")
+                            .label(strings::UI_TOOLCHAIN_RETRY)
                             .disabled(row.busy)
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 this.install_toolchain_version(
@@ -665,7 +674,7 @@ impl Workspace {
                         .outline()
                         .small()
                         .compact()
-                        .label("Cancel")
+                        .label(strings::UI_CANCEL)
                         .disabled(!row.can_cancel())
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.cancel_toolchain_install(&cancel_key, cx);
@@ -682,7 +691,7 @@ impl Workspace {
                     .outline()
                     .small()
                     .icon(IconName::Download)
-                    .label("Update")
+                    .label(strings::UI_TOOLCHAIN_UPDATE)
                     .disabled(!row.can_update())
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.install_toolchain_version(tool, latest.clone(), profile, cx);
@@ -698,7 +707,7 @@ impl Workspace {
                         .outline()
                         .small()
                         .icon(IconName::Download)
-                        .label("Install")
+                        .label(strings::UI_TOOLCHAIN_INSTALL)
                         .disabled(!row.can_install())
                         .loading(row.busy)
                         .on_click(cx.listener(move |this, _, _, cx| {
@@ -714,7 +723,7 @@ impl Workspace {
                         Button::new(SharedString::from(format!("tc-activate-{idx}")))
                             .primary()
                             .small()
-                            .label("Make active")
+                            .label(strings::UI_TOOLCHAIN_MAKE_ACTIVE)
                             .disabled(!row.can_activate())
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 this.activate_toolchain_version(tool, v_act.clone(), cx);
@@ -726,7 +735,7 @@ impl Workspace {
                             .small()
                             .compact()
                             .icon(IconName::Trash)
-                            .tooltip("Remove version")
+                            .tooltip(strings::UI_TOOLCHAIN_REMOVE_VERSION)
                             .accessibility_label(format!(
                                 "Remove {} {v_rem}",
                                 tool_display_name(tool)
@@ -751,7 +760,7 @@ impl Workspace {
                         .small()
                         .compact()
                         .icon(IconName::Trash)
-                        .tooltip("Remove active version")
+                        .tooltip(strings::UI_TOOLCHAIN_REMOVE_ACTIVE)
                         .accessibility_label(format!("Remove {} {v_rem}", tool_display_name(tool)))
                         .disabled(!row.can_remove())
                         .on_click(cx.listener(move |this, _, window, cx| {

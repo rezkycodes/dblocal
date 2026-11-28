@@ -1,5 +1,6 @@
 //! Shared PATH panel and PHP settings card for the Toolchains pages (v0.3.0).
 
+use dblocal_core::strings;
 use dblocal_core::toolchain::php_ini::SettingKey;
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants};
@@ -28,13 +29,21 @@ impl Workspace {
         let mono = theme.mono_font_family.clone();
 
         let status_chip = match path_state.health {
-            PathHealth::AppliedAndFirst => {
-                design::chip("tc-path-status", "On PATH (first)", theme.success)
-            }
-            PathHealth::NotApplied => design::chip("tc-path-status", "Not on PATH", theme.warning),
-            PathHealth::NeedsAttention => {
-                design::chip("tc-path-status", "Needs attention", theme.danger)
-            }
+            PathHealth::AppliedAndFirst => design::chip(
+                "tc-path-status",
+                strings::UI_TOOLCHAIN_PATH_ON_FIRST,
+                theme.success,
+            ),
+            PathHealth::NotApplied => design::chip(
+                "tc-path-status",
+                strings::UI_TOOLCHAIN_PATH_NOT_ON,
+                theme.warning,
+            ),
+            PathHealth::NeedsAttention => design::chip(
+                "tc-path-status",
+                strings::UI_TOOLCHAIN_PATH_ATTENTION,
+                theme.danger,
+            ),
         };
 
         let shims_display = crate::format::abbreviate_home(&path_state.shims_dir, self.home_dir());
@@ -61,7 +70,7 @@ impl Workspace {
                                 .gap_2()
                                 .items_center()
                                 .child(
-                                    Label::new("Shims directory")
+                                    Label::new(strings::UI_TOOLCHAIN_SHIMS_DIR)
                                         .id("tc-path-shims-title")
                                         .text_sm()
                                         .font_weight(FontWeight::SEMIBOLD),
@@ -89,7 +98,7 @@ impl Workspace {
                                         .when(path_state.applied, |b| b.outline())
                                         .small()
                                         .icon(IconName::Terminal)
-                                        .label("Add to PATH")
+                                        .label(strings::UI_TOOLCHAIN_PATH_ADD)
                                         .loading(path_state.busy)
                                         .disabled(path_state.busy)
                                         .on_click(cx.listener(|this, _, window, cx| {
@@ -103,7 +112,7 @@ impl Workspace {
                                 Button::new("tc-path-remove")
                                     .outline()
                                     .small()
-                                    .label("Remove from PATH")
+                                    .label(strings::UI_TOOLCHAIN_PATH_REMOVE)
                                     .disabled(path_state.busy)
                                     .on_click(cx.listener(|this, _, _, cx| {
                                         this.remove_toolchain_path(cx);
@@ -194,7 +203,10 @@ impl Workspace {
 
         v_flex()
             .gap_1p5()
-            .child(design::group_heading("Shell PATH", theme))
+            .child(design::group_heading(
+                strings::UI_TOOLCHAIN_SHELL_PATH,
+                theme,
+            ))
             .child(card)
             .into_any_element()
     }
@@ -224,7 +236,7 @@ impl Workspace {
                     .items_center()
                     .child(icon(IconName::Info, 14.0, theme.muted_foreground))
                     .child(
-                        Label::new("Activate a PHP version to edit PHP settings.")
+                        Label::new(strings::UI_TOOLCHAIN_PHP_SETTINGS_INACTIVE)
                             .id("tc-php-settings-disabled-note")
                             .text_xs()
                             .text_color(theme.muted_foreground),
@@ -379,7 +391,7 @@ impl Workspace {
                                 .outline()
                                 .small()
                                 .icon(IconName::FolderOpen)
-                                .label("Open config folder")
+                                .label(strings::UI_TOOLCHAIN_PHP_OPEN_FOLDER)
                                 .disabled(form.config_dir.as_os_str().is_empty())
                                 .on_click(cx.listener(|this, _, _, cx| {
                                     this.open_php_config_folder(cx);
@@ -396,7 +408,7 @@ impl Workspace {
                                         .debug_selector(|| "tc-php-reset".to_owned())
                                         .outline()
                                         .small()
-                                        .label("Reset to defaults")
+                                        .label(strings::UI_TOOLCHAIN_PHP_RESET)
                                         .disabled(!form.can_reset(php_active))
                                         .on_click(cx.listener(|this, _, _, cx| {
                                             this.reset_php_settings(cx);
@@ -407,7 +419,7 @@ impl Workspace {
                                         .debug_selector(|| "tc-php-save".to_owned())
                                         .primary()
                                         .small()
-                                        .label("Save")
+                                        .label(strings::UI_TOOLCHAIN_PHP_SAVE)
                                         .loading(form.busy)
                                         .disabled(!form.can_save(php_active))
                                         .on_click(cx.listener(|this, _, _, cx| {
@@ -436,7 +448,10 @@ impl Workspace {
 
         v_flex()
             .gap_1p5()
-            .child(design::group_heading("PHP settings", theme))
+            .child(design::group_heading(
+                strings::UI_TOOLCHAIN_PHP_SETTINGS,
+                theme,
+            ))
             .child(card)
             .into_any_element()
     }

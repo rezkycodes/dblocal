@@ -289,7 +289,10 @@ impl Workspace {
                     .pb_1()
                     .gap_2()
                     .items_center()
-                    .child(section_label("TOOLCHAINS").text_color(theme.muted_foreground))
+                    .child(
+                        section_label(strings::UI_DOCK_TOOLCHAINS)
+                            .text_color(theme.muted_foreground),
+                    )
                     .child(count_badge("toolchains", active_count, theme)),
             );
 

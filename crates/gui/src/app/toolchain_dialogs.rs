@@ -5,6 +5,7 @@
 //! * [`render_path_consent`] — explicit consent before modifying shell startup
 //!   files or the Windows user `Path`, showing the exact lines and target files.
 
+use dblocal_core::strings;
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::label::Label;
@@ -45,8 +46,8 @@ pub(super) fn render_remove(
         .small()
         .compact()
         .icon(IconName::Close)
-        .tooltip("Close")
-        .accessibility_label("Close")
+        .tooltip(strings::UI_CLOSE)
+        .accessibility_label(strings::UI_CLOSE)
         .on_click(cx.listener(|this, _, _, cx| {
             this.close_modals_action();
             cx.notify();
@@ -75,7 +76,7 @@ pub(super) fn render_remove(
             h_flex()
                 .gap_2()
                 .child(
-                    Label::new("Disk space to free:")
+                    Label::new(strings::UI_TOOLCHAIN_REMOVE_SPACE)
                         .id("tc-remove-space-label")
                         .text_xs()
                         .text_color(theme.muted_foreground),
@@ -89,7 +90,7 @@ pub(super) fn render_remove(
                 .pt_2()
                 .child(
                     Button::new("tc-remove-cancel")
-                        .label("Cancel")
+                        .label(strings::UI_CANCEL)
                         .compact()
                         .ghost()
                         .on_click(cx.listener(|this, _, _, cx| {
@@ -99,7 +100,7 @@ pub(super) fn render_remove(
                 )
                 .child(
                     Button::new("tc-remove-confirm")
-                        .label("Remove")
+                        .label(strings::UI_TOOLCHAIN_REMOVE_CONFIRM)
                         .compact()
                         .danger()
                         .on_click(cx.listener(|this, _, _, cx| {
@@ -128,7 +129,7 @@ pub(super) fn render_remove(
                         design::dialog_header(
                             "tc-remove",
                             IconName::Trash,
-                            "Remove toolchain version",
+                            strings::UI_TOOLCHAIN_REMOVE_TITLE,
                             Some(&label),
                             &theme,
                         )
@@ -159,8 +160,8 @@ pub(super) fn render_path_consent(
         .small()
         .compact()
         .icon(IconName::Close)
-        .tooltip("Close")
-        .accessibility_label("Close")
+        .tooltip(strings::UI_CLOSE)
+        .accessibility_label(strings::UI_CLOSE)
         .on_click(cx.listener(|this, _, _, cx| {
             this.close_modals_action();
             cx.notify();
@@ -169,7 +170,7 @@ pub(super) fn render_path_consent(
     let mut files_list = v_flex().gap_1();
     if path_state.target_files.is_empty() {
         files_list = files_list.child(
-            Label::new("No existing shell startup files were detected in your home directory.")
+            Label::new(strings::UI_TOOLCHAIN_PATH_CONSENT_NO_FILES)
                 .id("tc-path-no-files")
                 .text_xs()
                 .text_color(theme.muted_foreground),
@@ -216,20 +217,16 @@ pub(super) fn render_path_consent(
         .gap_3()
         .p(px(20.))
         .child(
-            Label::new(
-                "DBLocal will prepend its shims directory to your PATH so php, composer, \
-                 node, npm and npx resolve from any new terminal. A .dblocal-backup copy \
-                 of each file is written first, and you can undo this cleanly at any time.",
-            )
-            .id("tc-path-consent-desc")
-            .text_xs()
-            .text_color(theme.muted_foreground),
+            Label::new(strings::UI_TOOLCHAIN_PATH_CONSENT_DESC)
+                .id("tc-path-consent-desc")
+                .text_xs()
+                .text_color(theme.muted_foreground),
         )
         .child(
             v_flex()
                 .gap_1p5()
                 .child(
-                    Label::new("Files that will be updated")
+                    Label::new(strings::UI_TOOLCHAIN_PATH_CONSENT_FILES)
                         .id("tc-path-files-heading")
                         .text_xs()
                         .font_weight(gpui_kit::FontWeight::SEMIBOLD),
@@ -248,7 +245,7 @@ pub(super) fn render_path_consent(
             v_flex()
                 .gap_1p5()
                 .child(
-                    Label::new("Exact lines to append")
+                    Label::new(strings::UI_TOOLCHAIN_PATH_CONSENT_LINES)
                         .id("tc-path-block-heading")
                         .text_xs()
                         .font_weight(gpui_kit::FontWeight::SEMIBOLD),
@@ -262,7 +259,7 @@ pub(super) fn render_path_consent(
                 .pt_2()
                 .child(
                     Button::new("tc-path-consent-cancel")
-                        .label("Cancel")
+                        .label(strings::UI_CANCEL)
                         .compact()
                         .ghost()
                         .on_click(cx.listener(|this, _, _, cx| {
@@ -272,7 +269,7 @@ pub(super) fn render_path_consent(
                 )
                 .child(
                     Button::new("tc-path-consent-confirm")
-                        .label("Confirm and add to PATH")
+                        .label(strings::UI_TOOLCHAIN_PATH_CONSENT_CONFIRM)
                         .compact()
                         .primary()
                         .on_click(cx.listener(|this, _, _, cx| {
@@ -301,8 +298,8 @@ pub(super) fn render_path_consent(
                         design::dialog_header(
                             "tc-path-consent",
                             IconName::Terminal,
-                            "Add DBLocal shims to PATH",
-                            Some("Review the exact changes before DBLocal edits your shell files"),
+                            strings::UI_TOOLCHAIN_PATH_CONSENT_TITLE,
+                            Some(strings::UI_TOOLCHAIN_PATH_CONSENT_SUBTITLE),
                             &theme,
                         )
                         .flex_1(),
