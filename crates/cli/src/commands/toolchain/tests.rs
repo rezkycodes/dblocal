@@ -81,8 +81,23 @@ fn list_which_and_doctor_over_an_empty_home() {
         None,
     );
     assert_eq!(listed.code, 0, "stderr: {}", listed.stderr);
-    // The bundled fallback catalog has no tools, so the JSON array is empty.
-    assert_eq!(listed.stdout.trim(), "[]");
+    // `list --json` always emits a valid JSON array (populated once the real
+    // catalog is embedded); `--installed` over an empty home is always empty.
+    let parsed: serde_json::Value = serde_json::from_str(listed.stdout.trim()).expect("valid json");
+    assert!(parsed.is_array(), "expected JSON array: {}", listed.stdout);
+
+    let installed_only = run(
+        &service_for(&home),
+        ToolchainCommand::List {
+            tool: None,
+            installed: true,
+            json: true,
+        },
+        false,
+        None,
+    );
+    assert_eq!(installed_only.code, 0, "stderr: {}", installed_only.stderr);
+    assert_eq!(installed_only.stdout.trim(), "[]");
 
     let which = run(
         &service_for(&home),
