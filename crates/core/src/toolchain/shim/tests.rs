@@ -85,7 +85,9 @@ fn windows_php_shim_is_a_cmd_that_propagates_exit_code() {
     // runs on; assert on the stable tail rather than the separators.
     assert!(text.contains("php.exe"), "{text}");
     assert!(text.contains("%*"), "{text}");
-    assert!(text.contains("exit /b %ERRORLEVEL%"));
+    assert!(text.contains("setlocal\r\n"), "{text}");
+    assert!(text.contains("set \"RC=%ERRORLEVEL%\"\r\n"), "{text}");
+    assert!(text.contains("endlocal & exit /b %RC%\r\n"), "{text}");
 }
 
 #[test]
@@ -255,4 +257,36 @@ fn npm_shim_prepends_node_bin_dir_over_system_node() {
         win_npm.contains(r#"set "PATH=C:\h\toolchains\node\24.11.0;%PATH%""#),
         "{win_npm}"
     );
+}
+
+#[test]
+fn windows_cmd_shims_use_setlocal_and_escape_percent() {
+    let install = Path::new(r"C:\Users\100%ok\.dblocal\toolchains\php\8.4.15");
+    let ini = Path::new(r"C:\Users\100%ok\.dblocal\toolchains\php\conf.d");
+    let php_shim = Path::new(r"C:\Users\100%ok\.dblocal\bin\php.cmd");
+    let text = render(ShimTool::Php, Os::Windows, install, ini, php_shim);
+    assert!(text.contains("setlocal\r\n"), "missing setlocal: {text}");
+    assert!(
+        text.contains("endlocal & exit /b %RC%\r\n"),
+        "missing endlocal exit propagation: {text}"
+    );
+    assert!(
+        text.contains(r"100%%ok"),
+        "percent sign must be doubled in cmd paths: {text}"
+    );
+    assert!(
+        !text.contains(r"100%ok"),
+        "unescaped percent must not appear: {text}"
+    );
+
+    let node_text = render(
+        ShimTool::Node,
+        Os::Windows,
+        Path::new(r"C:\Users\100%ok\.dblocal\toolchains\node\24.11.0"),
+        ini,
+        php_shim,
+    );
+    assert!(node_text.contains("setlocal\r\n"), "{node_text}");
+    assert!(node_text.contains("endlocal & exit /b %RC%\r\n"), "{node_text}");
+    assert!(node_text.contains(r"100%%ok"), "{node_text}");
 }
