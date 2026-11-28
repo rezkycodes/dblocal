@@ -187,7 +187,12 @@ pub fn toolchain_badge(tool: ToolId, size: f32, theme: &Theme) -> Div {
         .size(px(size))
         .rounded(px(size * 0.2))
         .bg(tokens::tint(brand, 0.16))
-        .child(svg().path(svg_path).size(px(size * scale)).text_color(brand))
+        .child(
+            svg()
+                .path(svg_path)
+                .size(px(size * scale))
+                .text_color(brand),
+        )
 }
 
 /// Compact inline toolchain icon for the sidebar TOOLCHAINS section and title
