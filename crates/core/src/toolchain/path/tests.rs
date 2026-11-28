@@ -320,7 +320,10 @@ fn fish_fragment_created_idempotently_and_removed_safely() {
     assert!(first.changed.contains(&frag), "{first:?}");
     let text = std::fs::read_to_string(&frag).expect("read fish");
     assert!(text.contains("fish_add_path"), "{text}");
-    assert!(!text.contains("esac"), "must not write POSIX syntax: {text}");
+    assert!(
+        !text.contains("esac"),
+        "must not write POSIX syntax: {text}"
+    );
     assert!(text.contains(consts::PATH_BLOCK_BEGIN), "{text}");
     assert_eq!(block_shims_dir(dir.path()), Some(shims.clone()));
 
@@ -341,11 +344,17 @@ fn fish_fragment_created_idempotently_and_removed_safely() {
         refused.failures.iter().any(|(p, _)| p == &frag),
         "{refused:?}"
     );
-    assert_eq!(std::fs::read_to_string(&frag).unwrap(), "# user fish config\n");
+    assert_eq!(
+        std::fs::read_to_string(&frag).unwrap(),
+        "# user fish config\n"
+    );
 
     let rem_unmanaged = remove_posix(dir.path(), &shims);
     assert!(rem_unmanaged.changed.is_empty(), "{rem_unmanaged:?}");
-    assert_eq!(std::fs::read_to_string(&frag).unwrap(), "# user fish config\n");
+    assert_eq!(
+        std::fs::read_to_string(&frag).unwrap(),
+        "# user fish config\n"
+    );
 }
 
 #[cfg(unix)]

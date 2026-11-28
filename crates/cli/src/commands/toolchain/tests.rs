@@ -341,11 +341,7 @@ fn install_activation_and_use_round_trip() {
 fn use_composer_without_php_succeeds_with_warning() {
     let home = Home::new();
     let paths = ToolchainPaths::with_root(home.path());
-    let comp_dir = paths.install_dir(
-        dblocal_core::toolchain::ToolId::Composer,
-        "2.11.3",
-        None,
-    );
+    let comp_dir = paths.install_dir(dblocal_core::toolchain::ToolId::Composer, "2.11.3", None);
     std::fs::create_dir_all(&comp_dir).expect("mkdir");
     std::fs::write(comp_dir.join("composer.phar"), b"phar").expect("phar");
     dblocal_core::toolchain::registry::write_manifest(

@@ -121,6 +121,10 @@ pub struct ToolchainService {
     allow_loopback_http: bool,
     /// Test seam: free-space probe.
     free_space: Option<crate::download::FreeSpaceFn>,
+    /// Optional download progress sink (used by the GUI).
+    progress: Option<crate::download::ProgressSink>,
+    /// Optional cooperative cancellation token (used by the GUI).
+    cancel: Option<crate::download::CancellationToken>,
 }
 
 impl ToolchainService {
@@ -136,6 +140,8 @@ impl ToolchainService {
             policy: None,
             allow_loopback_http: crate::toolchain::catalog::env_allows_loopback_http(),
             free_space: None,
+            progress: None,
+            cancel: None,
         }
     }
 
@@ -190,6 +196,31 @@ impl ToolchainService {
     pub fn with_free_space(mut self, probe: crate::download::FreeSpaceFn) -> Self {
         self.free_space = Some(probe);
         self
+    }
+
+    /// Attaches a download progress callback (reuses [`crate::download::ProgressSink`]).
+    pub fn with_progress(mut self, progress: crate::download::ProgressSink) -> Self {
+        self.progress = Some(progress);
+        self
+    }
+
+    /// Attaches a cooperative cancellation token (reuses [`crate::download::CancellationToken`]).
+    pub fn with_cancel(mut self, cancel: crate::download::CancellationToken) -> Self {
+        self.cancel = Some(cancel);
+        self
+    }
+
+    /// Returns `true` if another process or task currently holds the install/remove
+    /// lock for `(tool, version, profile)`. Cheap non-blocking probe for the GUI.
+    pub fn is_busy(&self, tool: ToolId, version: &str, profile: Option<&str>) -> bool {
+        let lock_path = self.paths.lock_file(tool, version, profile);
+        if !lock_path.exists() {
+            return false;
+        }
+        matches!(
+            crate::toolchain::lock::ToolchainLock::try_exclusive(&lock_path),
+            Ok(None)
+        )
     }
 
     /// The paths in use.
@@ -342,6 +373,8 @@ impl ToolchainService {
         request.policy = self.policy.clone();
         request.allow_loopback_http = self.allow_loopback_http;
         request.free_space = self.free_space.clone();
+        request.progress = self.progress.clone();
+        request.cancel = self.cancel.clone();
 
         let outcome = install::install(&self.paths, self.os, self.arch, request).await?;
         let already_installed = outcome.kind == InstallKind::AlreadyInstalled;
@@ -392,7 +425,10 @@ impl ToolchainService {
         );
         self.set_active(active.clone())?;
         let warning = if tool == ToolId::Composer && self.active(ToolId::Php).is_none() {
-            Some("composer needs an active PHP; run `dblocal toolchain use php <version>`".to_owned())
+            Some(
+                "composer needs an active PHP; run `dblocal toolchain use php <version>`"
+                    .to_owned(),
+            )
         } else {
             None
         };
@@ -718,15 +754,18 @@ mod tests {
         )
         .expect("manifest");
 
-        let svc = ToolchainService::new(paths.clone(), dir.path())
-            .with_platform(Os::Linux, Arch::X86_64);
+        let svc =
+            ToolchainService::new(paths.clone(), dir.path()).with_platform(Os::Linux, Arch::X86_64);
 
         // Activating Composer first (with no PHP active) must succeed and write its shim.
         let act = svc
             .activate(ToolId::Composer, &VersionSpec::Latest)
             .expect("composer activate without php");
         assert!(paths.shim_path("composer", Os::Linux).is_file());
-        assert!(act.warning.is_some(), "expected warning when php is inactive");
+        assert!(
+            act.warning.is_some(),
+            "expected warning when php is inactive"
+        );
 
         // Activating Node afterwards must also succeed.
         let node_act = svc
@@ -740,5 +779,105 @@ mod tests {
         crate::toolchain::shim::refresh(&paths, Os::Linux, &reg)
             .expect("refresh with composer active and php absent");
         assert!(paths.shim_path("composer", Os::Linux).is_file());
+    }
+
+    #[tokio::test]
+    async fn service_wires_progress_cancel_and_is_busy() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpListener;
+
+        let phar = b"<?php // fake phar for progress/cancel test\n".to_vec();
+        let sha: String = {
+            use sha2::Digest as _;
+            sha2::Sha256::digest(&phar)
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect()
+        };
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        let body = phar.clone();
+        tokio::spawn(async move {
+            while let Ok((mut socket, _)) = listener.accept().await {
+                let b = body.clone();
+                tokio::spawn(async move {
+                    let mut buf = [0u8; 1024];
+                    let _ = socket.read(&mut buf).await;
+                    let head = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        b.len()
+                    );
+                    let _ = socket.write_all(head.as_bytes()).await;
+                    let _ = socket.write_all(&b).await;
+                    let _ = socket.flush().await;
+                });
+            }
+        });
+
+        let doc = format!(
+            r#"{{"schema":1,"generated_at":"2026-11-28T00:00:00Z","tools":[{{"id":"composer","versions":[{{"version":"2.11.3","series":"2","artifacts":[{{"os":"any","arch":"any","profile":null,"format":"phar","url":"http://{addr}/composer.phar","sha256":"{sha}","size_bytes":{},"source":"test","hash_origin":"upstream"}}]}}]}}]}}"#,
+            phar.len()
+        );
+        let (catalog, skips) =
+            crate::toolchain::catalog::parse_catalog_allow_loopback(&doc).expect("parse");
+        let state = CatalogState::new(
+            catalog,
+            doc,
+            CatalogStatus::Fresh,
+            None,
+            std::time::SystemTime::now(),
+            skips,
+        );
+
+        let dir = tempfile::tempdir().expect("tmp");
+        let paths = ToolchainPaths::with_root(dir.path());
+
+        // 1. Pre-cancelled token aborts cleanly with DblError::Cancelled.
+        let cancel = crate::download::CancellationToken::new();
+        cancel.cancel();
+        let cancelled_svc = ToolchainService::new(paths.clone(), dir.path())
+            .with_platform(Os::Linux, Arch::X86_64)
+            .with_catalog(state.clone())
+            .with_loopback_http()
+            .with_cancel(cancel);
+        let err = cancelled_svc
+            .install(ToolId::Composer, &VersionSpec::Latest, None, true)
+            .await
+            .expect_err("cancelled install must fail");
+        assert!(matches!(err, DblError::Cancelled { .. }), "{err:?}");
+        assert!(!paths.install_dir(ToolId::Composer, "2.11.3", None).exists());
+
+        // 2. Progress sink receives events during a normal install.
+        let events = Arc::new(AtomicUsize::new(0));
+        let counter = events.clone();
+        let sink: crate::download::ProgressSink = Arc::new(move |_ev| {
+            counter.fetch_add(1, Ordering::SeqCst);
+        });
+        let svc = ToolchainService::new(paths.clone(), dir.path())
+            .with_platform(Os::Linux, Arch::X86_64)
+            .with_catalog(state)
+            .with_loopback_http()
+            .with_progress(sink);
+        svc.install(ToolId::Composer, &VersionSpec::Latest, None, true)
+            .await
+            .expect("install with progress");
+        assert!(
+            events.load(Ordering::SeqCst) >= 1,
+            "progress sink must fire"
+        );
+
+        // 3. is_busy reflects lock state.
+        assert!(!svc.is_busy(ToolId::Composer, "2.11.3", None));
+        let held = crate::toolchain::lock::ToolchainLock::acquire_default(&paths.lock_file(
+            ToolId::Composer,
+            "2.11.3",
+            None,
+        ))
+        .expect("lock");
+        assert!(svc.is_busy(ToolId::Composer, "2.11.3", None));
+        drop(held);
+        assert!(!svc.is_busy(ToolId::Composer, "2.11.3", None));
     }
 }

@@ -233,8 +233,7 @@ fn npm_shim_prepends_node_bin_dir_over_system_node() {
     std::fs::write(&dbl_npm, "#!/bin/sh\nnode\n").expect("dbl npm");
     std::fs::set_permissions(&dbl_npm, std::fs::Permissions::from_mode(0o755)).expect("chmod");
 
-    let registry =
-        Registry::empty().with_active(ActiveVersion::new(ToolId::Node, "24.11.0", None));
+    let registry = Registry::empty().with_active(ActiveVersion::new(ToolId::Node, "24.11.0", None));
     refresh(&paths, Os::Linux, &registry).expect("refresh");
 
     let npm_shim = paths.shim_path("npm", Os::Linux);
@@ -287,7 +286,10 @@ fn windows_cmd_shims_use_setlocal_and_escape_percent() {
         php_shim,
     );
     assert!(node_text.contains("setlocal\r\n"), "{node_text}");
-    assert!(node_text.contains("endlocal & exit /b %RC%\r\n"), "{node_text}");
+    assert!(
+        node_text.contains("endlocal & exit /b %RC%\r\n"),
+        "{node_text}"
+    );
     assert!(node_text.contains(r"100%%ok"), "{node_text}");
 }
 

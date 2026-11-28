@@ -552,8 +552,8 @@ fn backup_and_write(
     // If `path` is a symlink (e.g. managed by a dotfile manager), resolve it
     // and atomically replace the target so the symlink itself stays intact.
     let target = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
-    let meta = std::fs::metadata(&target)
-        .map_err(|err| format!("could not inspect the file: {err}"))?;
+    let meta =
+        std::fs::metadata(&target).map_err(|err| format!("could not inspect the file: {err}"))?;
     let perms = meta.permissions();
     if perms.readonly() {
         return Err("file is read-only".to_owned());
@@ -567,10 +567,7 @@ fn backup_and_write(
     let parent = target
         .parent()
         .ok_or_else(|| "target file has no parent directory".to_owned())?;
-    let leaf = target
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("rc");
+    let leaf = target.file_name().and_then(|n| n.to_str()).unwrap_or("rc");
     let nonce: u64 = rand::random();
     let tmp = parent.join(format!(".{leaf}.dblocal-tmp-{nonce:016x}"));
 

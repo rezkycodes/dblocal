@@ -185,7 +185,14 @@ pub async fn install(
             request.free_space.as_ref(),
         )?;
         let part = tmp.join(format!("{label}.part"));
-        let download_res = download_verified(artifact, &part, true).await;
+        let download_res = download_verified(
+            artifact,
+            &part,
+            true,
+            request.progress.as_ref(),
+            request.cancel.as_ref(),
+        )
+        .await;
         if let Err(err) = download_res {
             let _ = tokio::fs::remove_file(&part).await;
             Err(err)
@@ -303,7 +310,14 @@ async fn install_single_file(
     let part = tmp.join(format!("{label}.phar.part"));
     let allow_loopback = request.policy.is_some()
         || (cfg!(any(test, debug_assertions)) && request.allow_loopback_http);
-    download_verified(artifact, &part, allow_loopback).await?;
+    download_verified(
+        artifact,
+        &part,
+        allow_loopback,
+        request.progress.as_ref(),
+        request.cancel.as_ref(),
+    )
+    .await?;
 
     let staging = tmp.join(format!(".{label}.phar-staging"));
     if staging.exists() {
@@ -380,7 +394,14 @@ async fn download_verified(
     artifact: &Artifact,
     dest: &Path,
     allow_loopback_http: bool,
+    progress: Option<&ProgressSink>,
+    cancel: Option<&CancellationToken>,
 ) -> crate::Result<()> {
+    if cancel.is_some_and(CancellationToken::is_cancelled) {
+        return Err(DblError::Cancelled {
+            operation: "download".to_owned(),
+        });
+    }
     let url = reqwest::Url::parse(artifact.url()).map_err(|e| DblError::InvalidInput {
         field: "url",
         reason: format!("invalid URL: {e}"),
@@ -435,6 +456,11 @@ async fn download_verified(
     let mut bytes: Vec<u8> = Vec::with_capacity(artifact.size_bytes() as usize);
     let mut stream = response;
     loop {
+        if cancel.is_some_and(CancellationToken::is_cancelled) {
+            return Err(DblError::Cancelled {
+                operation: "download".to_owned(),
+            });
+        }
         let chunk = stream.chunk().await.map_err(|err| DblError::Network {
             reason: err.to_string(),
         })?;
@@ -450,6 +476,16 @@ async fn download_verified(
         }
         hasher.update(&chunk);
         bytes.extend_from_slice(&chunk);
+        if let Some(sink) = progress {
+            sink(crate::download::DownloadEvent::Progress(
+                crate::model::DownloadProgress::new(
+                    bytes.len() as u64,
+                    artifact.size_bytes(),
+                    0,
+                    None,
+                ),
+            ));
+        }
     }
     let actual: String = hasher
         .finalize()
