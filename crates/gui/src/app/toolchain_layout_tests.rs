@@ -46,6 +46,10 @@ fn toolchain_php_page_fits_at_900px_minimum_width(cx: &mut TestAppContext) {
         "tc-row-0",
         "tc-row-1",
         "tc-php-settings-card",
+        "tc-php-open-folder",
+        "tc-php-reset",
+        "tc-php-save",
+        "tc-php-conf-dir",
         "tc-path-card",
     ] {
         let bounds = cx
@@ -62,6 +66,22 @@ fn toolchain_php_page_fits_at_900px_minimum_width(cx: &mut TestAppContext) {
             bounds.left().as_f32()
         );
     }
+
+    // Save must sit on the same row as Reset to defaults, to its right (G2).
+    let reset = cx.debug_bounds("tc-php-reset").expect("tc-php-reset");
+    let save = cx.debug_bounds("tc-php-save").expect("tc-php-save");
+    assert!(
+        (reset.top().as_f32() - save.top().as_f32()).abs() < 1.0,
+        "Save (y={:.1}) must sit on the same row as Reset to defaults (y={:.1})",
+        save.top().as_f32(),
+        reset.top().as_f32()
+    );
+    assert!(
+        save.left().as_f32() >= reset.right().as_f32(),
+        "Save (left={:.1}) must be to the right of Reset (right={:.1})",
+        save.left().as_f32(),
+        reset.right().as_f32()
+    );
 }
 
 #[gpui_kit::test]

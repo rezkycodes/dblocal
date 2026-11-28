@@ -358,59 +358,80 @@ impl Workspace {
             card = card.child(row);
         }
 
-        // Footer: Open config folder, Reset to defaults, Save.
+        // Footer: action row (Open config folder left; Reset + Save together on
+        // the right) with the full config folder path on its own line below so
+        // Save never wraps alone and the path stays readable at 900px.
         let dir_label = crate::format::abbreviate_home(&form.config_dir, self.home_dir());
         card = card.child(
-            h_flex()
-                .flex_wrap()
+            v_flex()
                 .px(px(design::ROW_PAD_X))
                 .py(px(12.))
-                .gap_2()
-                .items_center()
+                .gap_1p5()
                 .border_t_1()
                 .border_color(tokens::hairline(theme))
                 .child(
-                    Button::new("tc-php-open-folder")
-                        .outline()
-                        .small()
-                        .icon(IconName::FolderOpen)
-                        .label("Open config folder")
-                        .disabled(form.config_dir.as_os_str().is_empty())
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.open_php_config_folder(cx);
-                        })),
+                    h_flex()
+                        .gap_2()
+                        .items_center()
+                        .child(
+                            Button::new("tc-php-open-folder")
+                                .debug_selector(|| "tc-php-open-folder".to_owned())
+                                .outline()
+                                .small()
+                                .icon(IconName::FolderOpen)
+                                .label("Open config folder")
+                                .disabled(form.config_dir.as_os_str().is_empty())
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.open_php_config_folder(cx);
+                                })),
+                        )
+                        .child(div().flex_1())
+                        .child(
+                            h_flex()
+                                .flex_none()
+                                .gap_2()
+                                .items_center()
+                                .child(
+                                    Button::new("tc-php-reset")
+                                        .debug_selector(|| "tc-php-reset".to_owned())
+                                        .outline()
+                                        .small()
+                                        .label("Reset to defaults")
+                                        .disabled(!form.can_reset(php_active))
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            this.reset_php_settings(cx);
+                                        })),
+                                )
+                                .child(
+                                    Button::new("tc-php-save")
+                                        .debug_selector(|| "tc-php-save".to_owned())
+                                        .primary()
+                                        .small()
+                                        .label("Save")
+                                        .loading(form.busy)
+                                        .disabled(!form.can_save(php_active))
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            this.save_php_settings(cx);
+                                        })),
+                                ),
+                        ),
                 )
-                .when(!dir_label.is_empty(), |bar| {
-                    bar.child(
-                        Label::new(dir_label)
-                            .id("tc-php-conf-dir")
-                            .text_xs()
-                            .font_family(mono)
-                            .text_color(theme.muted_foreground),
+                .when(!dir_label.is_empty(), |col| {
+                    col.child(
+                        div()
+                            .min_w_0()
+                            .debug_selector(|| "tc-php-conf-dir".to_owned())
+                            .child(
+                                Label::new(dir_label)
+                                    .id("tc-php-conf-dir")
+                                    .min_w_0()
+                                    .truncate()
+                                    .text_xs()
+                                    .font_family(mono)
+                                    .text_color(theme.muted_foreground),
+                            ),
                     )
-                })
-                .child(div().flex_1())
-                .child(
-                    Button::new("tc-php-reset")
-                        .outline()
-                        .small()
-                        .label("Reset to defaults")
-                        .disabled(!form.can_reset(php_active))
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.reset_php_settings(cx);
-                        })),
-                )
-                .child(
-                    Button::new("tc-php-save")
-                        .primary()
-                        .small()
-                        .label("Save")
-                        .loading(form.busy)
-                        .disabled(!form.can_save(php_active))
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.save_php_settings(cx);
-                        })),
-                ),
+                }),
         );
 
         v_flex()
