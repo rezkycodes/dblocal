@@ -387,19 +387,33 @@ async fn download_verified(
     })?;
     validate_download_url(&url, allow_loopback_http)?;
 
+    let redirect_policy = reqwest::redirect::Policy::custom(move |attempt| {
+        if attempt.previous().len() >= consts::PHAR_MAX_REDIRECTS {
+            return attempt.error("too many redirects");
+        }
+        if validate_download_url(attempt.url(), allow_loopback_http).is_err() {
+            return attempt.error("refusing redirect to non-HTTPS URL");
+        }
+        attempt.follow()
+    });
     let client = reqwest::Client::builder()
-        .redirect(reqwest::redirect::Policy::limited(5))
+        .connect_timeout(std::time::Duration::from_secs(
+            consts::PHAR_CONNECT_TIMEOUT_SECS,
+        ))
+        .timeout(std::time::Duration::from_secs(
+            consts::PHAR_OVERALL_TIMEOUT_SECS,
+        ))
+        .redirect(redirect_policy)
         .build()
         .map_err(|err| DblError::Network {
             reason: err.to_string(),
         })?;
-    let response = client
-        .get(url)
-        .send()
-        .await
-        .map_err(|err| DblError::Network {
-            reason: err.to_string(),
-        })?;
+    let response = client.get(url).send().await.map_err(|err| {
+        let detail = std::error::Error::source(&err)
+            .map(|src| format!("{err}: {src}"))
+            .unwrap_or_else(|| err.to_string());
+        DblError::Network { reason: detail }
+    })?;
     if !response.status().is_success() {
         return Err(DblError::Network {
             reason: format!("download got HTTP {}", response.status().as_u16()),

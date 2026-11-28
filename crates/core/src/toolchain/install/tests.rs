@@ -717,6 +717,39 @@ async fn windows_php_zip_install_writes_managed_base_php_ini() {
     assert!(ini.contains("extension=pdo_pgsql"), "{ini}");
 }
 
+#[tokio::test]
+async fn phar_download_refuses_redirect_to_non_https_host() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+    let addr = listener.local_addr().expect("addr");
+    tokio::spawn(async move {
+        if let Ok((mut socket, _)) = listener.accept().await {
+            let mut buf = [0u8; 1024];
+            let _ = socket.read(&mut buf).await;
+            let resp = "HTTP/1.1 302 Found\r\nLocation: http://example.invalid/composer.phar\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+            let _ = socket.write_all(resp.as_bytes()).await;
+            let _ = socket.flush().await;
+        }
+    });
+
+    let (_dir, paths) = home();
+    let artifact = artifact_for(
+        Format::Phar,
+        format!("http://{addr}/composer.phar"),
+        "a".repeat(64),
+        16,
+    );
+    let mut request = InstallRequest::new(ToolId::Composer, &artifact, "2.11.3", None);
+    request.policy = Some(loopback());
+    let err = install(&paths, Os::Linux, Arch::X86_64, request)
+        .await
+        .expect_err("redirect to non-HTTPS must be refused");
+    assert!(
+        err.to_string().contains("non-HTTPS"),
+        "expected non-HTTPS redirect refusal, got: {err}"
+    );
+    assert!(!paths.install_dir(ToolId::Composer, "2.11.3", None).exists());
+}
+
 /// Asserts no staging/removing debris was left beside an install leaf.
 fn assert_no_debris(paths: &ToolchainPaths, leaf: &str) {
     let tool_dir = paths.toolchains_dir();

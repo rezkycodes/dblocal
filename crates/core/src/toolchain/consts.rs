@@ -46,6 +46,15 @@ pub const CATALOG_MAX_BODY_BYTES: u64 = 2 * 1024 * 1024;
 /// Largest toolchain artifact download accepted, in bytes (2 GiB).
 pub const MAX_ARTIFACT_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 
+/// TCP connect timeout for single-file (PHAR) downloads, matching the engine downloader.
+pub const PHAR_CONNECT_TIMEOUT_SECS: u64 = 15;
+
+/// Overall request timeout for single-file (PHAR) downloads.
+pub const PHAR_OVERALL_TIMEOUT_SECS: u64 = 120;
+
+/// Maximum number of HTTPS redirects followed for single-file (PHAR) downloads.
+pub const PHAR_MAX_REDIRECTS: usize = 5;
+
 /// How long an install waits for another operation on the same tool/version.
 pub const LOCK_WAIT_SECS: u64 = 30;
 
