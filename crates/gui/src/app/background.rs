@@ -127,6 +127,7 @@ impl Workspace {
             move |_: &mut Workspace, _: &mut Context<Workspace>| {}
         });
         self.refresh_home_size_bg(cx);
+        self.refresh_toolchains_bg(cx);
     }
 
     /// Recompute the total DBLocal home size in the background, coalesced (R7).

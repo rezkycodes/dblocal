@@ -26,6 +26,7 @@ pub(crate) fn home_dir_from_env() -> Option<std::path::PathBuf> {
 impl Workspace {
     /// Selects a centre-pane tab and loads that instance's own state.
     pub(crate) fn select_tab(&mut self, index: usize, cx: &mut Context<Self>) {
+        self.clear_toolchain_selection();
         if let Some(id) = self.tabs.select(index) {
             self.load_logs_for(&id, cx);
             self.load_data_size(&id, cx);

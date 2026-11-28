@@ -40,6 +40,15 @@ impl Workspace {
             self.restore_dialog_focus_after_close();
             return;
         }
+        if self.toolchain.remove_dialog.take().is_some() {
+            self.restore_dialog_focus_after_close();
+            return;
+        }
+        if self.toolchain.path_consent_open {
+            self.toolchain.path_consent_open = false;
+            self.restore_dialog_focus_after_close();
+            return;
+        }
         if self.drop_dialog.take().is_some() {
             self.restore_dialog_focus_after_close();
             return;
@@ -79,6 +88,8 @@ impl Workspace {
             || self.secret_dialog.is_some()
             || self.config_restore_confirm.is_some()
             || self.runtime_remove_target.is_some()
+            || self.toolchain.remove_dialog.is_some()
+            || self.toolchain.path_consent_open
             || self.quit.is_confirming()
     }
 

@@ -19,8 +19,9 @@ use crate::format;
 
 use super::Workspace;
 use super::actions;
-use super::components::{engine_icon, icon, status_glyph};
+use super::components::{engine_icon, icon, status_glyph, toolchain_icon};
 use super::design;
+use super::toolchain_state::tool_display_name;
 use crate::theme::tokens;
 
 /// Renders the client-side title bar.
@@ -109,10 +110,15 @@ pub(super) fn render_content_for_controls(
     let max_bar_w =
         (window.viewport_size().width.as_f32() - KIT_TITLE_BAR_LEFT_PAD - controls_w).max(0.0);
     let theme = cx.theme().clone();
-    let selected = workspace
-        .tabs
-        .selected_instance()
-        .and_then(|id| workspace.instance(id));
+    let selected_tool = workspace.toolchain.selected_tool;
+    let selected = if selected_tool.is_none() {
+        workspace
+            .tabs
+            .selected_instance()
+            .and_then(|id| workspace.instance(id))
+    } else {
+        None
+    };
     let freshness = format::catalog_freshness_word(workspace.catalog().status);
     let freshness_colour = match workspace.catalog().status {
         dblocal_core::model::CatalogStatus::Fresh => theme.success,
@@ -140,6 +146,9 @@ pub(super) fn render_content_for_controls(
                 .font_weight(gpui_kit::FontWeight::SEMIBOLD),
         )
         .when_some(selected, |this, view| this.child(breadcrumb(view, &theme)))
+        .when_some(selected_tool, |this, tool| {
+            this.child(toolchain_breadcrumb(tool, &theme))
+        })
         .child(div().flex_1().min_w(px(SPACER_MIN_W)))
         .child(search_button(&theme, window, cx))
         .child(div().flex_1().min_w(px(SPACER_MIN_W)))
@@ -277,6 +286,53 @@ fn breadcrumb(
         .child(
             Label::new(view.name.clone())
                 .id("crumb-instance")
+                .flex_shrink(2.0)
+                .min_w_0()
+                .truncate()
+                .font_weight(gpui_kit::FontWeight::MEDIUM)
+                .text_color(theme.foreground),
+        )
+}
+
+/// `/ [icon] Toolchains / <Tool>` when a toolchain page is open.
+fn toolchain_breadcrumb(
+    tool: dblocal_core::toolchain::ToolId,
+    theme: &gpui_kit::component::Theme,
+) -> impl IntoElement {
+    let muted = theme.muted_foreground;
+    h_flex()
+        .id("toolchain-breadcrumb")
+        .debug_selector(|| "title-toolchain-breadcrumb".to_owned())
+        .flex_shrink_1()
+        .min_w_0()
+        .overflow_hidden()
+        .gap_2()
+        .pl_1()
+        .text_xs()
+        .child(
+            Label::new(strings::UI_BREADCRUMB_SEPARATOR)
+                .id("tc-crumb-sep-0")
+                .flex_none()
+                .text_color(muted),
+        )
+        .child(
+            Label::new("Toolchains")
+                .id("tc-crumb-section")
+                .flex_shrink_1()
+                .min_w_0()
+                .truncate()
+                .text_color(muted),
+        )
+        .child(
+            Label::new(strings::UI_BREADCRUMB_SEPARATOR)
+                .id("tc-crumb-sep-1")
+                .flex_none()
+                .text_color(muted),
+        )
+        .child(toolchain_icon(tool, 14.0, theme))
+        .child(
+            Label::new(tool_display_name(tool))
+                .id("tc-crumb-tool")
                 .flex_shrink(2.0)
                 .min_w_0()
                 .truncate()

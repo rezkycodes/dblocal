@@ -19,7 +19,9 @@ use crate::format::{self, StatusGlyph};
 use crate::theme::tokens;
 
 use super::Workspace;
-use super::components::{engine_icon, icon, row_destructive_variant, section_label, status_glyph};
+use super::components::{
+    engine_icon, icon, row_destructive_variant, section_label, status_glyph, toolchain_icon,
+};
 use super::design;
 
 /// Width of the dock in logical pixels; the render tests sample this region.
@@ -98,6 +100,7 @@ impl Workspace {
                 None => div().into_any_element(),
             })
             .child(tree)
+            .child(self.render_toolchains(&theme, window, cx))
             .child(self.render_runtimes(&theme, cx))
             .child(
                 Button::new("dock-create")
@@ -184,7 +187,8 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let selected = self.tabs.selected_instance() == Some(&view.id);
+        let selected = self.toolchain.selected_tool.is_none()
+            && self.tabs.selected_instance() == Some(&view.id);
         let id = view.id.clone();
         let glyph = format::status_glyph(view.status);
         // A failed row paints its port in the danger colour (task requirement 3).
@@ -260,6 +264,99 @@ impl Workspace {
                     .child(format!(":{}", view.port)),
             );
         super::components::apply_focus_ring(row, &row_focus, window, cx)
+    }
+
+    /// The TOOLCHAINS section between INSTANCES and RUNTIMES: PHP, Node.js,
+    /// Composer with Simple Icons marks and a compact state hint.
+    fn render_toolchains(
+        &self,
+        theme: &Theme,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let summaries = self.toolchain.sidebar_summaries();
+        let active_count = summaries.iter().filter(|s| s.has_active).count();
+        let mut section = v_flex()
+            .id("toolchain-list")
+            .debug_selector(|| "sidebar-toolchains".to_owned())
+            .gap_0p5()
+            .pt(px(10.))
+            .border_t_1()
+            .border_color(theme.sidebar_border)
+            .child(
+                h_flex()
+                    .px(px(8.))
+                    .pb_1()
+                    .gap_2()
+                    .items_center()
+                    .child(section_label("TOOLCHAINS").text_color(theme.muted_foreground))
+                    .child(count_badge("toolchains", active_count, theme)),
+            );
+
+        for summary in summaries {
+            let tool = summary.tool;
+            let selected = self.toolchain.selected_tool == Some(tool);
+            let row_focus = super::components::keyed_focus(
+                SharedString::from(format!("tc-nav-focus-{}", tool.as_str())),
+                window,
+                cx,
+            );
+            let accessible = format!("{} — {}", summary.label, summary.hint);
+            let row = h_flex()
+                .id(SharedString::from(format!("tc-nav-{}", tool.as_str())))
+                .debug_selector(move || format!("tc-nav-{}", tool.as_str()))
+                .relative()
+                .h(px(28.))
+                .px(px(8.))
+                .gap_2()
+                .rounded(px(6.))
+                .cursor_pointer()
+                .aria_label(accessible)
+                .when(selected, |s| {
+                    s.bg(tokens::active(theme))
+                        .text_color(theme.sidebar_accent_foreground)
+                        .child(
+                            div()
+                                .absolute()
+                                .left(px(2.))
+                                .top(px(7.))
+                                .w(px(3.))
+                                .h(px(14.))
+                                .rounded_full()
+                                .bg(theme.primary),
+                        )
+                })
+                .when(!selected, |s| s.hover(|s| s.bg(tokens::hover(theme))))
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.select_toolchain(tool, cx);
+                }))
+                .child(toolchain_icon(tool, 14.0, theme))
+                .child(
+                    Label::new(summary.label)
+                        .id(SharedString::from(format!("tc-nav-lbl-{}", tool.as_str())))
+                        .flex_1()
+                        .min_w_0()
+                        .truncate()
+                        .text_sm()
+                        .when(selected, |s| s.font_weight(gpui_kit::FontWeight::MEDIUM)),
+                )
+                .child(
+                    Label::new(summary.hint)
+                        .id(SharedString::from(format!("tc-nav-hint-{}", tool.as_str())))
+                        .flex_none()
+                        .text_xs()
+                        .text_color(if summary.has_active {
+                            theme.foreground
+                        } else {
+                            theme.muted_foreground
+                        }),
+                );
+            section = section.child(super::components::apply_focus_ring(
+                row, &row_focus, window, cx,
+            ));
+        }
+
+        section
     }
 
     /// The runtime list: title, instance count, an "unused" chip when unused, and a

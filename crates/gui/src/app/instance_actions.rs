@@ -18,6 +18,7 @@ use super::{CreateDraft, CreateForm, InnerTab, UriView, Workspace};
 
 impl Workspace {
     pub(crate) fn open_tab(&mut self, id: InstanceId, cx: &mut Context<Self>) {
+        self.clear_toolchain_selection();
         self.tabs.open_or_select(id.clone());
         self.load_logs_for(&id, cx);
         let service = self.service.clone();

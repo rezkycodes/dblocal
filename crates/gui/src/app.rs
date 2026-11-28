@@ -88,6 +88,13 @@ mod title_bar;
 #[cfg(test)]
 #[path = "app/title_bar_layout_tests.rs"]
 mod title_bar_layout_tests;
+mod toolchain_actions;
+mod toolchain_dialogs;
+mod toolchain_panels_state;
+mod toolchain_state;
+#[cfg(test)]
+#[path = "app/toolchain_state_tests.rs"]
+mod toolchain_state_tests;
 #[cfg(test)]
 #[path = "app/tray_close_tests.rs"]
 mod tray_close_tests;
@@ -208,6 +215,15 @@ pub struct Workspace {
     delete_size: u64,
     /// A runtime the confirm-removal dialog targets (`F-RTM-04`), by id.
     runtime_remove_target: Option<String>,
+    /// Toolchains view-model state (PHP, Node.js, Composer, PATH, PHP settings).
+    toolchain: toolchain_state::ToolchainState,
+    /// Backend configuration for building `ToolchainService` off-thread.
+    toolchain_backend: toolchain_actions::ToolchainBackend,
+    /// Cooperative cancellation tokens for in-flight toolchain installs.
+    toolchain_cancels:
+        HashMap<toolchain_state::VersionKey, dblocal_core::download::CancellationToken>,
+    /// Text fields for the PHP settings card, built lazily on render.
+    php_setting_fields: HashMap<dblocal_core::toolchain::php_ini::SettingKey, Entity<InputState>>,
     /// Per-instance Databases tab state (`F-DBU-01..03`).
     admin: admin_state::AdminState,
     /// Per-instance Config tab state (`F-CFG-01`, `F-CFG-02`).
@@ -383,6 +399,7 @@ impl Workspace {
         workspace._activation = Some(cx.observe_window_activation(window, |this, window, cx| {
             if window.is_window_active() {
                 this.refresh_config_on_activation(cx);
+                this.refresh_toolchains_on_activation(cx);
             }
         }));
         // `F-PLH-02` AC1: follow the system appearance while running. A change
@@ -435,6 +452,7 @@ impl Workspace {
         workspace._activation = Some(cx.observe_window_activation(window, |this, window, cx| {
             if window.is_window_active() {
                 this.refresh_config_on_activation(cx);
+                this.refresh_toolchains_on_activation(cx);
             }
         }));
         workspace
@@ -485,6 +503,10 @@ impl Workspace {
             delete_mode: DeleteMode::ArchiveData,
             delete_size: 0,
             runtime_remove_target: None,
+            toolchain: toolchain_state::ToolchainState::default(),
+            toolchain_backend: toolchain_actions::ToolchainBackend::from_env(),
+            toolchain_cancels: HashMap::new(),
+            php_setting_fields: HashMap::new(),
             admin: admin_state::AdminState::default(),
             config: config_state::ConfigState::default(),
             config_restore_confirm: None,
@@ -551,6 +573,7 @@ impl Workspace {
     }
 
     pub(crate) fn open_tab_sync(&mut self, id: InstanceId) {
+        self.clear_toolchain_selection();
         self.tabs.open_or_select(id.clone());
         self.load_logs_sync(&id);
         let _ = self.service.watch_logs(&id, true);
@@ -688,6 +711,9 @@ impl Render for Workspace {
             let id = tab.instance.clone();
             self.ensure_config_fields(&id, window, cx);
         }
+        if self.toolchain.selected_tool == Some(dblocal_core::toolchain::ToolId::Php) {
+            self.ensure_php_setting_fields(window, cx);
+        }
         let colours = cx.theme().clone();
         div()
             .id("root")
@@ -752,6 +778,12 @@ impl Render for Workspace {
             })
             .when(self.runtime_remove_target.is_some(), |this| {
                 this.child(runtime_dialog::render(self, window, cx))
+            })
+            .when(self.toolchain.remove_dialog.is_some(), |this| {
+                this.child(toolchain_dialogs::render_remove(self, window, cx))
+            })
+            .when(self.toolchain.path_consent_open, |this| {
+                this.child(toolchain_dialogs::render_path_consent(self, window, cx))
             })
             .when(self.palette_open, |this| {
                 this.child(palette::render(self, window, cx))

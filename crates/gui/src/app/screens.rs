@@ -15,6 +15,8 @@ mod databases;
 mod launcher;
 mod logs;
 mod overview;
+mod toolchain;
+mod toolchain_panels;
 
 use dblocal_core::model::InstanceStatus;
 use dblocal_core::strings;
@@ -43,6 +45,9 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
+        if let Some(tool) = self.toolchain.selected_tool {
+            return self.render_toolchain_page(tool, window, cx);
+        }
         let theme = cx.theme().clone();
         if self.tabs.is_empty() {
             return self.render_launcher(window, cx).into_any_element();
