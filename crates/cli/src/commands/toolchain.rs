@@ -232,6 +232,13 @@ fn install(
             report.activated,
         ),
     );
+    if report.activated && report.tool == ToolId::Composer && service.active(ToolId::Php).is_none()
+    {
+        output::stderr_line(
+            err,
+            "warning: composer needs an active PHP; run `dblocal toolchain use php <version>`",
+        );
+    }
     EXIT_OK
 }
 
@@ -263,6 +270,9 @@ fn use_version(
                     activation.active.profile(),
                 ),
             );
+            if let Some(warning) = &activation.warning {
+                output::stderr_line(err, &format!("warning: {warning}"));
+            }
             EXIT_OK
         }
         Err(e) => output::report_error(err, &e),

@@ -197,19 +197,28 @@ fn shell_quote(value: &str) -> String {
 ///
 /// Shims for a tool with no active version are removed (if DBLocal wrote them).
 /// This is idempotent: applying the same registry twice rewrites the same bytes.
+/// A failure on one tool does not abort refreshing the remaining tools.
 pub fn refresh(
     paths: &ToolchainPaths,
     os: Os,
     registry: &crate::toolchain::registry::Registry,
 ) -> crate::Result<()> {
     let shims_dir = paths.shims_dir();
+    let mut first_err: Option<DblError> = None;
     for tool in ToolId::all() {
         match registry.get(tool) {
-            Some(active) => write_for_tool(paths, os, active)?,
+            Some(active) => {
+                if let Err(err) = write_for_tool(paths, os, active) {
+                    first_err.get_or_insert(err);
+                }
+            }
             None => remove_for_tool(&shims_dir, os, tool),
         }
     }
-    Ok(())
+    match first_err {
+        Some(err) => Err(err),
+        None => Ok(()),
+    }
 }
 
 /// Writes the shim(s) for one active tool.
@@ -218,12 +227,9 @@ fn write_for_tool(paths: &ToolchainPaths, os: Os, active: &ActiveVersion) -> cra
     let php_ini_dir = paths.php_conf_dir(ToolId::Php);
     let php_shim = paths.shim_path(ShimTool::Php.name(), os);
 
-    // The composer shim depends on an active PHP; refuse to write a shim that
-    // could never run rather than one that fails at call time.
-    if active.tool() == ToolId::Composer && !php_shim.is_file() {
-        return Err(crate::toolchain::error::ToolchainError::ShimNeedsPhp.into_dbl_error());
-    }
-
+    // Always write the Composer shim even if no PHP is active yet: the shim
+    // itself prints a clear runtime error when PHP is missing, and starts
+    // working as soon as a PHP version is activated.
     for shim in ShimTool::for_tool(active.tool()) {
         let text = render(*shim, os, &install_dir, &php_ini_dir, &php_shim);
         let path = paths.shim_path(shim.name(), os);

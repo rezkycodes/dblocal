@@ -337,6 +337,45 @@ fn install_activation_and_use_round_trip() {
     assert!(which.is_file(), "{}", which.display());
 }
 
+#[test]
+fn use_composer_without_php_succeeds_with_warning() {
+    let home = Home::new();
+    let paths = ToolchainPaths::with_root(home.path());
+    let comp_dir = paths.install_dir(
+        dblocal_core::toolchain::ToolId::Composer,
+        "2.11.3",
+        None,
+    );
+    std::fs::create_dir_all(&comp_dir).expect("mkdir");
+    std::fs::write(comp_dir.join("composer.phar"), b"phar").expect("phar");
+    dblocal_core::toolchain::registry::write_manifest(
+        &comp_dir,
+        dblocal_core::toolchain::ToolId::Composer,
+        "2.11.3",
+        None,
+        "https://example.test/composer.phar",
+        &"a".repeat(64),
+    )
+    .expect("manifest");
+
+    let service = ToolchainService::new(paths, home.path()).with_platform(Os::Linux, Arch::X86_64);
+    let used = run(
+        &service,
+        ToolchainCommand::Use {
+            tool: "composer".to_owned(),
+            spec: "latest".to_owned(),
+        },
+        false,
+        None,
+    );
+    assert_eq!(used.code, 0, "stderr: {}", used.stderr);
+    assert!(
+        used.stderr.contains("composer needs an active PHP"),
+        "{}",
+        used.stderr
+    );
+}
+
 // --- fixtures ---------------------------------------------------------------
 
 /// A fixture HTTP server; each instance binds its own ephemeral port.

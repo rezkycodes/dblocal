@@ -143,16 +143,13 @@ fn refresh_writes_current_shims_and_removes_stale_ones() {
 }
 
 #[test]
-fn composer_refuses_to_refresh_without_active_php() {
+fn composer_refreshes_even_without_active_php() {
     let dir = tempdir().expect("tmp");
     let paths = paths(dir.path());
     let registry =
         Registry::empty().with_active(ActiveVersion::new(ToolId::Composer, "2.8.4", None));
-    let err = refresh(&paths, Os::Linux, &registry).expect_err("needs php");
-    assert!(
-        matches!(err, crate::DblError::InvalidInput { field: "php", .. }),
-        "{err:?}"
-    );
+    refresh(&paths, Os::Linux, &registry).expect("composer shim writes even without php");
+    assert!(paths.shim_path("composer", Os::Linux).is_file());
 }
 
 #[test]

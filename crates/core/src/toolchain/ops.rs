@@ -72,6 +72,8 @@ pub struct Activation {
     pub active: ActiveVersion,
     /// Whether shims were (re)generated.
     pub shims_refreshed: bool,
+    /// Optional non-fatal warning (e.g. Composer activated without an active PHP).
+    pub warning: Option<String>,
 }
 
 /// Result of an install.
@@ -389,9 +391,15 @@ impl ToolchainService {
             chosen.profile().map(str::to_owned),
         );
         self.set_active(active.clone())?;
+        let warning = if tool == ToolId::Composer && self.active(ToolId::Php).is_none() {
+            Some("composer needs an active PHP; run `dblocal toolchain use php <version>`".to_owned())
+        } else {
+            None
+        };
         Ok(Activation {
             active,
             shims_refreshed: true,
+            warning,
         })
     }
 
@@ -446,13 +454,19 @@ impl ToolchainService {
         shim::refresh(&self.paths, self.os, &self.registry())
     }
 
-    /// Records `active` and regenerates the shims.
+    /// Records `active` and regenerates the shims crash-safely.
+    ///
+    /// Shims are written first; if updating `active.json` then fails, the shims
+    /// are restored to the previous registry so disk state never disagrees.
     fn set_active(&self, active: ActiveVersion) -> crate::Result<()> {
-        let registry = self.registry().with_active(active);
-        write_registry(&self.paths, &registry)?;
-        // Regenerate every shim: a php switch changes what composer runs, and a
-        // composer activation needs the php shim to exist.
-        shim::refresh(&self.paths, self.os, &registry)
+        let previous = self.registry();
+        let next = previous.with_active(active);
+        shim::refresh(&self.paths, self.os, &next)?;
+        if let Err(err) = write_registry(&self.paths, &next) {
+            let _ = shim::refresh(&self.paths, self.os, &previous);
+            return Err(err);
+        }
+        Ok(())
     }
 
     /// Reads the managed PHP settings from disk (defaults when absent).
@@ -671,5 +685,60 @@ mod tests {
             .map(|v| v.version)
             .collect();
         assert_eq!(win_versions, vec!["8.5.13", "7.4.33"]);
+    }
+
+    #[test]
+    fn composer_without_php_succeeds_and_never_blocks_other_tools() {
+        let dir = tempfile::tempdir().expect("tmp");
+        let paths = ToolchainPaths::with_root(dir.path());
+        // Pre-seed installed composer and node directories with valid manifests.
+        let comp_dir = paths.install_dir(ToolId::Composer, "2.11.3", None);
+        std::fs::create_dir_all(&comp_dir).expect("mkdir");
+        std::fs::write(comp_dir.join("composer.phar"), b"phar").expect("phar");
+        crate::toolchain::registry::write_manifest(
+            &comp_dir,
+            ToolId::Composer,
+            "2.11.3",
+            None,
+            "https://example.test/composer.phar",
+            &"a".repeat(64),
+        )
+        .expect("manifest");
+
+        let node_dir = paths.install_dir(ToolId::Node, "24.11.0", None);
+        std::fs::create_dir_all(node_dir.join("bin")).expect("mkdir");
+        std::fs::write(node_dir.join("bin/node"), b"node").expect("node");
+        crate::toolchain::registry::write_manifest(
+            &node_dir,
+            ToolId::Node,
+            "24.11.0",
+            None,
+            "https://example.test/node.tar.gz",
+            &"b".repeat(64),
+        )
+        .expect("manifest");
+
+        let svc = ToolchainService::new(paths.clone(), dir.path())
+            .with_platform(Os::Linux, Arch::X86_64);
+
+        // Activating Composer first (with no PHP active) must succeed and write its shim.
+        let act = svc
+            .activate(ToolId::Composer, &VersionSpec::Latest)
+            .expect("composer activate without php");
+        assert!(paths.shim_path("composer", Os::Linux).is_file());
+        assert!(act.warning.is_some(), "expected warning when php is inactive");
+
+        // Activating Node afterwards must also succeed.
+        let node_act = svc
+            .activate(ToolId::Node, &VersionSpec::Latest)
+            .expect("node activate after composer");
+        assert!(paths.shim_path("node", Os::Linux).is_file());
+        assert!(node_act.warning.is_none());
+
+        // Refreshing when PHP was removed while Composer stays active must succeed.
+        let reg = svc.registry().without(ToolId::Php);
+        crate::toolchain::shim::refresh(&paths, Os::Linux, &reg)
+            .expect("refresh with composer active and php absent");
+        assert!(paths.shim_path("composer", Os::Linux).is_file());
     }
 }
