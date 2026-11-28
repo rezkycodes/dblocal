@@ -547,14 +547,51 @@ fn backup_and_write(
     _original: &str,
     updated: &str,
 ) -> std::result::Result<PathBuf, String> {
+    use std::io::Write as _;
+
+    // If `path` is a symlink (e.g. managed by a dotfile manager), resolve it
+    // and atomically replace the target so the symlink itself stays intact.
+    let target = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let meta = std::fs::metadata(&target)
+        .map_err(|err| format!("could not inspect the file: {err}"))?;
+    let perms = meta.permissions();
+    if perms.readonly() {
+        return Err("file is read-only".to_owned());
+    }
+
     let backup = backup_path(path);
-    if let Err(err) = std::fs::copy(path, &backup) {
+    if let Err(err) = std::fs::copy(&target, &backup) {
         return Err(format!("could not write a backup: {err}"));
     }
-    match std::fs::write(path, updated) {
-        Ok(()) => Ok(backup),
-        Err(err) => Err(format!("could not write the file: {err}")),
+
+    let parent = target
+        .parent()
+        .ok_or_else(|| "target file has no parent directory".to_owned())?;
+    let leaf = target
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("rc");
+    let nonce: u64 = rand::random();
+    let tmp = parent.join(format!(".{leaf}.dblocal-tmp-{nonce:016x}"));
+
+    let write_res = (|| -> std::io::Result<()> {
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&tmp)?;
+        file.write_all(updated.as_bytes())?;
+        file.sync_all()?;
+        drop(file);
+        std::fs::set_permissions(&tmp, perms)?;
+        std::fs::rename(&tmp, &target)?;
+        Ok(())
+    })();
+
+    if let Err(err) = write_res {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(format!("could not write the file atomically: {err}"));
     }
+    Ok(backup)
 }
 
 fn backup_path(path: &Path) -> PathBuf {

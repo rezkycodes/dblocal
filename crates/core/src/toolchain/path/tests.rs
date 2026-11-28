@@ -347,3 +347,60 @@ fn fish_fragment_created_idempotently_and_removed_safely() {
     assert!(rem_unmanaged.changed.is_empty(), "{rem_unmanaged:?}");
     assert_eq!(std::fs::read_to_string(&frag).unwrap(), "# user fish config\n");
 }
+
+#[cfg(unix)]
+#[test]
+fn rc_write_is_atomic_and_preserves_symlink_and_mode() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let dir = tempdir().expect("tmp");
+    let dotfiles = dir.path().join("dotfiles");
+    std::fs::create_dir_all(&dotfiles).expect("dotfiles");
+    let real_rc = dotfiles.join("bashrc");
+    std::fs::write(&real_rc, "# dotfile\n").expect("write");
+    std::fs::set_permissions(&real_rc, std::fs::Permissions::from_mode(0o600)).expect("chmod");
+
+    let link_rc = dir.path().join(".bashrc");
+    std::os::unix::fs::symlink(&real_rc, &link_rc).expect("symlink");
+
+    let shims = dir.path().join(".dblocal/bin");
+    let report = apply_posix(dir.path(), &shims);
+    assert!(report.changed.contains(&link_rc), "{report:?}");
+    assert!(
+        std::fs::symlink_metadata(&link_rc)
+            .expect("lstat")
+            .file_type()
+            .is_symlink(),
+        "symlink must remain a symlink"
+    );
+    let mode = std::fs::metadata(&real_rc)
+        .expect("stat")
+        .permissions()
+        .mode()
+        & 0o777;
+    assert_eq!(mode, 0o600, "permissions must be preserved");
+    assert!(
+        std::fs::read_to_string(&real_rc)
+            .unwrap()
+            .contains(consts::PATH_BLOCK_BEGIN)
+    );
+
+    // Atomicity check: if the target's parent directory cannot hold a temp file
+    // (0o555), atomic write fails without modifying the writable target file.
+    let ro_dir = dir.path().join("rodir");
+    std::fs::create_dir_all(&ro_dir).expect("rodir");
+    let ro_target = ro_dir.join("zshrc");
+    std::fs::write(&ro_target, "# keep\n").expect("write");
+    std::fs::set_permissions(&ro_dir, std::fs::Permissions::from_mode(0o555)).expect("chmod dir");
+    let link_zsh = dir.path().join(".zshrc");
+    std::os::unix::fs::symlink(&ro_target, &link_zsh).expect("symlink zsh");
+
+    let report2 = apply_posix(dir.path(), &shims);
+    // Restore dir permissions before assertions so tempdir cleanup succeeds.
+    std::fs::set_permissions(&ro_dir, std::fs::Permissions::from_mode(0o755)).expect("restore");
+    assert!(
+        report2.failures.iter().any(|(p, _)| p == &link_zsh),
+        "atomic write must fail when temp file cannot be created in target dir: {report2:?}"
+    );
+    assert_eq!(std::fs::read_to_string(&ro_target).unwrap(), "# keep\n");
+}
