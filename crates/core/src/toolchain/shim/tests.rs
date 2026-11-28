@@ -16,6 +16,8 @@ fn paths(dir: &Path) -> ToolchainPaths {
     ToolchainPaths::with_root(dir)
 }
 
+// POSIX paths and PATH syntax: on Windows `Path::join` and `split_paths` use `\` and `;`.
+#[cfg(unix)]
 #[test]
 fn php_shim_sets_ini_scan_dir_and_execs_the_target() {
     let install = Path::new("/h/toolchains/php/8.4.15-common");
@@ -28,6 +30,8 @@ fn php_shim_sets_ini_scan_dir_and_execs_the_target() {
     assert!(text.contains("# DBLocal shim"));
 }
 
+// POSIX paths and PATH syntax: on Windows `Path::join` and `split_paths` use `\` and `;`.
+#[cfg(unix)]
 #[test]
 fn node_shims_exec_their_binaries() {
     let install = Path::new("/h/toolchains/node/24.11.0");
@@ -45,6 +49,8 @@ fn node_shims_exec_their_binaries() {
     }
 }
 
+// POSIX paths and PATH syntax: on Windows `Path::join` and `split_paths` use `\` and `;`.
+#[cfg(unix)]
 #[test]
 fn composer_shim_delegates_to_sibling_php_and_errors_without_it() {
     let install = Path::new("/h/toolchains/composer/2.8.4");

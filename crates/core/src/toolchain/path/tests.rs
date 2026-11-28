@@ -99,6 +99,8 @@ fn a_read_only_rc_file_is_reported_not_clobbered() {
     std::fs::set_permissions(&rc, perms).expect("restore");
 }
 
+// POSIX paths and PATH syntax: on Windows `Path::join` and `split_paths` use `\` and `;`.
+#[cfg(unix)]
 #[test]
 fn block_shims_dir_is_read_back() {
     let home = tempdir().expect("tmp");
@@ -136,6 +138,8 @@ fn doctor_reports_missing_not_first_shadow_and_dangling() {
     );
 }
 
+// POSIX paths and PATH syntax: on Windows `Path::join` and `split_paths` use `\` and `;`.
+#[cfg(unix)]
 #[test]
 fn doctor_names_a_shadowing_binary_when_it_exists() {
     let dir = tempdir().expect("tmp");
