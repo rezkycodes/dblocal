@@ -7,6 +7,7 @@
 use std::borrow::Cow;
 
 use dblocal_core::model::EngineKey;
+use dblocal_core::toolchain::ToolId;
 use gpui_kit::{AssetSource, Hsla, SharedString, rgb};
 
 const ICON_POSTGRESQL: &[u8] = include_bytes!("../assets/icons/postgresql.svg");
@@ -14,6 +15,9 @@ const ICON_MYSQL: &[u8] = include_bytes!("../assets/icons/mysql.svg");
 const ICON_MARIADB: &[u8] = include_bytes!("../assets/icons/mariadb.svg");
 const ICON_REDIS: &[u8] = include_bytes!("../assets/icons/redis.svg");
 const ICON_RUSTFS: &[u8] = include_bytes!("../assets/icons/rustfs.svg");
+const ICON_PHP: &[u8] = include_bytes!("../assets/icons/php.svg");
+const ICON_NODE: &[u8] = include_bytes!("../assets/icons/node.svg");
+const ICON_COMPOSER: &[u8] = include_bytes!("../assets/icons/composer.svg");
 
 /// Asset source that serves DBLocal's embedded service SVGs alongside `gpui-kit`'s icons.
 #[derive(Debug, Clone, Copy, Default)]
@@ -27,6 +31,9 @@ impl AssetSource for DblocalAssets {
             "icons/services/mariadb.svg" => Some(ICON_MARIADB),
             "icons/services/redis.svg" => Some(ICON_REDIS),
             "icons/services/rustfs.svg" => Some(ICON_RUSTFS),
+            "icons/toolchains/php.svg" => Some(ICON_PHP),
+            "icons/toolchains/node.svg" => Some(ICON_NODE),
+            "icons/toolchains/composer.svg" => Some(ICON_COMPOSER),
             _ => None,
         };
         if let Some(bytes) = embedded {
@@ -43,6 +50,13 @@ impl AssetSource for DblocalAssets {
                 SharedString::from("icons/services/mariadb.svg"),
                 SharedString::from("icons/services/redis.svg"),
                 SharedString::from("icons/services/rustfs.svg"),
+            ]);
+        }
+        if path == "icons/toolchains" {
+            return Ok(vec![
+                SharedString::from("icons/toolchains/php.svg"),
+                SharedString::from("icons/toolchains/node.svg"),
+                SharedString::from("icons/toolchains/composer.svg"),
             ]);
         }
         gpui_kit::assets::AllAssets.list(path)
@@ -82,6 +96,29 @@ pub fn service_brand_colour(engine: EngineKey, is_dark: bool) -> Hsla {
     rgb(hex).into()
 }
 
+/// Asset path of a toolchain's Simple Icons SVG.
+pub const fn toolchain_icon_path(tool: ToolId) -> &'static str {
+    match tool {
+        ToolId::Php => "icons/toolchains/php.svg",
+        ToolId::Node => "icons/toolchains/node.svg",
+        ToolId::Composer => "icons/toolchains/composer.svg",
+    }
+}
+
+/// Brand tint for a toolchain icon, lightened in dark mode so every mark stays
+/// legible on dark chrome and card surfaces.
+pub fn toolchain_brand_colour(tool: ToolId, is_dark: bool) -> Hsla {
+    let hex: u32 = match (tool, is_dark) {
+        (ToolId::Php, false) => 0x5E629C,
+        (ToolId::Php, true) => 0x9CA2E6,
+        (ToolId::Node, false) => 0x468038,
+        (ToolId::Node, true) => 0x74C365,
+        (ToolId::Composer, false) => 0x885630,
+        (ToolId::Composer, true) => 0xD49A6A,
+    };
+    rgb(hex).into()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -106,6 +143,24 @@ mod tests {
             );
         }
         assert_eq!(service_icon_path(EngineKey::Valkey), None);
+    }
+
+    #[test]
+    fn loads_all_three_toolchain_svgs_and_lightens_composer_in_dark() {
+        for tool in ToolId::all() {
+            let path = toolchain_icon_path(tool);
+            let bytes = DblocalAssets
+                .load(path)
+                .expect("load")
+                .expect("embedded bytes");
+            assert!(
+                std::str::from_utf8(&bytes).expect("utf8").contains("<svg"),
+                "{path} must be valid SVG"
+            );
+        }
+        let light = toolchain_brand_colour(ToolId::Composer, false);
+        let dark = toolchain_brand_colour(ToolId::Composer, true);
+        assert!(dark.l > light.l + 0.2, "dark={dark:?} light={light:?}");
     }
 
     #[test]

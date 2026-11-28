@@ -17,6 +17,7 @@ use gpui_kit::{
 };
 
 use dblocal_core::model::{EngineKey, InstanceStatus};
+use dblocal_core::toolchain::ToolId;
 
 use crate::format::{self, StatusGlyph};
 use crate::theme::tokens;
@@ -166,6 +167,46 @@ pub fn engine_icon(engine: EngineKey, size: f32, theme: &Theme) -> Div {
     } else {
         engine_badge(engine, size, theme)
     }
+}
+
+/// Framed badge for a toolchain header: tinted Simple Icons SVG inside a soft
+/// rounded tile, matching [`engine_badge`].
+pub fn toolchain_badge(tool: ToolId, size: f32, theme: &Theme) -> Div {
+    let is_dark = theme.background.l < 0.5;
+    let svg_path = crate::assets::toolchain_icon_path(tool);
+    let brand = crate::assets::toolchain_brand_colour(tool, is_dark);
+    let scale = match tool {
+        ToolId::Php => 0.92,
+        ToolId::Node | ToolId::Composer => 0.68,
+    };
+    div()
+        .flex()
+        .flex_none()
+        .items_center()
+        .justify_center()
+        .size(px(size))
+        .rounded(px(size * 0.2))
+        .bg(tokens::tint(brand, 0.16))
+        .child(svg().path(svg_path).size(px(size * scale)).text_color(brand))
+}
+
+/// Compact inline toolchain icon for the sidebar TOOLCHAINS section and title
+/// bar breadcrumb, matching [`engine_icon`].
+pub fn toolchain_icon(tool: ToolId, size: f32, theme: &Theme) -> Div {
+    let is_dark = theme.background.l < 0.5;
+    let svg_path = crate::assets::toolchain_icon_path(tool);
+    let brand = crate::assets::toolchain_brand_colour(tool, is_dark);
+    let glyph_size = match tool {
+        ToolId::Php => size * 1.35,
+        ToolId::Node | ToolId::Composer => size,
+    };
+    div()
+        .flex_none()
+        .flex()
+        .items_center()
+        .justify_center()
+        .size(px(size))
+        .child(svg().path(svg_path).size(px(glyph_size)).text_color(brand))
 }
 
 /// A status chip: the glyph plus the status word.

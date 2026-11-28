@@ -13,6 +13,9 @@ MariaDB `#003545`).
 | `mariadb.svg` | `mariadb` | `#003545` | `477435746bb2024048c7b71529f615fb70d7e679618f37bac49f78fd07e67dfe` |
 | `redis.svg` | `redis` | `#FF4438` | `428b86deb14c8bdacdcdf75987fe454f367bcd078a7e4ae3f84de29aa5bdf136` |
 | `rustfs.svg` | `rustfs` | `#0196D0` | `d96219c14be44603cac6cfea6f8ebd6f91fe383d01817f52efbdc7ee6a2367d7` |
+| `php.svg` | `php` | `#777BB4` | `cd1beaa0dde7e765b5d2cbae786c1f6db967f72073eb7b9f9bbc63da55b9d0f6` |
+| `node.svg` | `nodedotjs` | `#5FA04E` | `021851b758cde7d3e04819c3ac02047d0ff281c712e8387afa0c76a6dac6db6c` |
+| `composer.svg` | `composer` | `#885630` | `e0a96d475f1bf7a37ce25ebaf8cb813b90a66837f0cb00163a07b695a4044b28` |
 
 **Valkey** is not in Simple Icons and its upstream logo repository
 (`valkey-io/assets`) carries no permissive asset license (it is governed by the
