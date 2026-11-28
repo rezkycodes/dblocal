@@ -217,8 +217,8 @@ pub(super) fn render_path_consent(
         .p(px(20.))
         .child(
             Label::new(
-                "DBLocal will prepend its shims directory to your PATH so `php`, `composer`, \
-                 `node`, `npm` and `npx` resolve from any new terminal. A `.dblocal-backup` copy \
+                "DBLocal will prepend its shims directory to your PATH so php, composer, \
+                 node, npm and npx resolve from any new terminal. A .dblocal-backup copy \
                  of each file is written first, and you can undo this cleanly at any time.",
             )
             .id("tc-path-consent-desc")

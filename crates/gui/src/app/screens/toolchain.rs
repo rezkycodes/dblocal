@@ -224,7 +224,7 @@ impl Workspace {
                     .child(
                         Label::new(
                             "The composer shim runs composer.phar through your active PHP shim. \
-                             Install and activate a PHP version so `composer` can execute.",
+                             Install and activate a PHP version so composer can execute.",
                         )
                         .id("tc-composer-needs-php-body")
                         .text_xs()

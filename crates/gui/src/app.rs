@@ -90,7 +90,11 @@ mod title_bar;
 mod title_bar_layout_tests;
 mod toolchain_actions;
 mod toolchain_dialogs;
+#[cfg(test)]
+#[path = "app/toolchain_layout_tests.rs"]
+mod toolchain_layout_tests;
 mod toolchain_panels_state;
+mod toolchain_preview;
 mod toolchain_state;
 #[cfg(test)]
 #[path = "app/toolchain_state_tests.rs"]

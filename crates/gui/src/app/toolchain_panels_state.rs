@@ -138,7 +138,7 @@ pub fn format_finding_plain(finding: &Finding) -> String {
             "DBLocal shims directory ({dir}) is not first on PATH — {before} appears before it."
         ),
         Finding::ShadowedBinary { name, earlier } => format!(
-            "Another `{name}` at {earlier} comes earlier on PATH and shadows the DBLocal shim."
+            "Another {name} at {earlier} comes earlier on PATH and shadows the DBLocal shim."
         ),
         Finding::DanglingShim { shim, target } => format!(
             "Shim {shim} points to {target}, which no longer exists. Remove or reinstall that version."
@@ -251,7 +251,7 @@ impl PhpSettingsForm {
                 self.errors.remove(&key);
             }
             Err(err) => {
-                self.errors.insert(key, err.user_message());
+                self.errors.insert(key, format_setting_error(&err));
             }
         }
     }
@@ -311,7 +311,7 @@ impl PhpSettingsForm {
             match PhpSettings::parse_value(key, &raw) {
                 Ok(val) => updates.push((key, val)),
                 Err(err) => {
-                    self.errors.insert(key, err.user_message());
+                    self.errors.insert(key, format_setting_error(&err));
                 }
             }
         }
@@ -320,6 +320,15 @@ impl PhpSettingsForm {
         } else {
             Err(())
         }
+    }
+}
+
+/// Extracts the specific validation reason from the core parser error so the
+/// field shows the exact rule instead of a generic invalid-input sentence.
+fn format_setting_error(err: &dblocal_core::DblError) -> String {
+    match err {
+        dblocal_core::DblError::InvalidInput { reason, .. } => reason.clone(),
+        other => other.user_message(),
     }
 }
 
