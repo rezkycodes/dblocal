@@ -207,3 +207,52 @@ fn shim_target_reads_the_baked_in_path() {
             .join("php")
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn npm_shim_prepends_node_bin_dir_over_system_node() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let dir = tempdir().expect("tmp");
+    let sys_bin = dir.path().join("sysbin");
+    std::fs::create_dir_all(&sys_bin).expect("sysbin");
+    let sys_node = sys_bin.join("node");
+    std::fs::write(&sys_node, "#!/bin/sh\necho SYSTEM_NODE\n").expect("sys node");
+    std::fs::set_permissions(&sys_node, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+
+    let paths = paths(dir.path());
+    let install_dir = paths.install_dir(ToolId::Node, "24.11.0", None);
+    let node_bin = install_dir.join("bin");
+    std::fs::create_dir_all(&node_bin).expect("node bin");
+    let dbl_node = node_bin.join("node");
+    std::fs::write(&dbl_node, "#!/bin/sh\necho DBLOCAL_NODE\n").expect("dbl node");
+    std::fs::set_permissions(&dbl_node, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+    let dbl_npm = node_bin.join("npm");
+    std::fs::write(&dbl_npm, "#!/bin/sh\nnode\n").expect("dbl npm");
+    std::fs::set_permissions(&dbl_npm, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+
+    let registry =
+        Registry::empty().with_active(ActiveVersion::new(ToolId::Node, "24.11.0", None));
+    refresh(&paths, Os::Linux, &registry).expect("refresh");
+
+    let npm_shim = paths.shim_path("npm", Os::Linux);
+    let out = std::process::Command::new(&npm_shim)
+        .env("PATH", format!("{}:/usr/bin:/bin", sys_bin.display()))
+        .output()
+        .expect("run npm shim");
+    assert!(out.status.success(), "{:?}", out);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert_eq!(stdout.trim(), "DBLOCAL_NODE", "wrong node ran: {stdout}");
+
+    let win_npm = render(
+        ShimTool::Npm,
+        Os::Windows,
+        Path::new(r"C:\h\toolchains\node\24.11.0"),
+        Path::new(r"C:\h\conf"),
+        Path::new(r"C:\h\bin\php.cmd"),
+    );
+    assert!(
+        win_npm.contains(r#"set "PATH=C:\h\toolchains\node\24.11.0;%PATH%""#),
+        "{win_npm}"
+    );
+}

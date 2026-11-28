@@ -117,7 +117,12 @@ fn render_sh(shim: ShimTool, install_dir: &Path, php_ini_dir: &Path, php_shim: &
             ));
         }
         ShimTool::Node | ShimTool::Npm | ShimTool::Npx => {
+            let bin_dir = install_dir.join("bin");
             let target = install_dir.join(shim.relative_target(Os::Linux));
+            script.push_str(&format!(
+                "PATH={}${{PATH:+:$PATH}}\nexport PATH\n",
+                shell_quote(&bin_dir.display().to_string())
+            ));
             script.push_str(&format!(
                 "exec {} \"$@\"\n",
                 shell_quote(&target.display().to_string())
@@ -159,6 +164,7 @@ fn render_cmd(shim: ShimTool, install_dir: &Path, php_ini_dir: &Path, php_shim: 
         }
         ShimTool::Node | ShimTool::Npm | ShimTool::Npx => {
             let target = install_dir.join(shim.relative_target(Os::Windows));
+            script.push_str(&format!("set \"PATH={};%PATH%\"\r\n", install_dir.display()));
             script.push_str(&format!("call \"{}\" %*\r\n", target.display()));
             script.push_str("exit /b %ERRORLEVEL%\r\n");
         }
