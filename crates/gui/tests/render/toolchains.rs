@@ -74,10 +74,6 @@ fn renders_toolchain_screens_in_both_themes_and_widths() {
         ("path-applied", Workspace::preview_toolchain_path_applied),
         ("path-shadowed", Workspace::preview_toolchain_path_shadowed),
         ("path-consent", Workspace::preview_toolchain_path_consent),
-        (
-            "php-settings-error",
-            Workspace::preview_toolchain_php_settings_error,
-        ),
         ("remove-confirm", Workspace::preview_toolchain_remove_dialog),
         ("empty-catalog", Workspace::preview_toolchain_empty_catalog),
     ];
@@ -105,6 +101,14 @@ fn renders_toolchain_screens_in_both_themes_and_widths() {
             .save(dir.join(format!("sidebar-{theme_name}.png")))
             .expect("save sidebar crop");
     }
+}
+
+#[test]
+fn renders_php_settings_card_in_both_themes_and_widths() {
+    render_both_themes_and_widths(
+        "php-settings-error",
+        Workspace::preview_toolchain_php_settings_error,
+    );
 }
 
 #[test]
