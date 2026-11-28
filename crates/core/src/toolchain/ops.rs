@@ -19,7 +19,7 @@ use std::path::{Path, PathBuf};
 
 use crate::platform::{Arch, Os};
 use crate::toolchain::catalog::{
-    CatalogState, CatalogStatus, Profile, ToolId, VersionSpec, resolve_version,
+    CatalogState, CatalogStatus, Profile, ToolId, VersionSpec, resolve_version_for_platform,
 };
 use crate::toolchain::error::ToolchainError;
 use crate::toolchain::fsops::ToolchainPaths;
@@ -215,13 +215,14 @@ impl ToolchainService {
                 if installed_only && !is_installed {
                     continue;
                 }
+                let available_here = self.is_available_here(id, version);
+                if !available_here && !is_installed {
+                    // Versions without an artifact for this platform are invisible.
+                    continue;
+                }
                 let active = is_active
                     .as_ref()
                     .is_some_and(|a| a.version() == version.version());
-                let profile = self.profile_for(id);
-                let available_here = version
-                    .select_artifact(self.os, self.arch, profile)
-                    .is_ok();
                 out.push(AvailableVersion {
                     tool: id,
                     version: version.version().to_owned(),
@@ -259,11 +260,22 @@ impl ToolchainService {
             .collect()
     }
 
-    /// The default profile for a tool on the running platform.
-    fn profile_for(&self, tool: ToolId) -> Option<Profile> {
+    /// Whether `version` has any installable artifact on the running platform.
+    fn is_available_here(
+        &self,
+        tool: ToolId,
+        version: &crate::toolchain::catalog::ToolVersion,
+    ) -> bool {
         match (tool, self.os) {
-            (ToolId::Php, Os::Linux) => Some(Profile::Common),
-            _ => None,
+            (ToolId::Php, Os::Linux) => {
+                version
+                    .select_artifact(self.os, self.arch, Some(Profile::Common))
+                    .is_ok()
+                    || version
+                        .select_artifact(self.os, self.arch, Some(Profile::Bulk))
+                        .is_ok()
+            }
+            _ => version.select_artifact(self.os, self.arch, None).is_ok(),
         }
     }
 
@@ -284,11 +296,18 @@ impl ToolchainService {
             }
             .into_dbl_error()
         })?;
-        let version = resolve_version(tool, entry, spec)?;
         let effective_profile = match tool {
             ToolId::Php if self.os == Os::Linux => profile.or(Some(Profile::Common)),
             _ => None,
         };
+        let version = resolve_version_for_platform(
+            tool,
+            entry,
+            spec,
+            self.os,
+            self.arch,
+            effective_profile,
+        )?;
         let artifact = version.select_artifact(self.os, self.arch, effective_profile).map_err(
             |_| {
                 ToolchainError::UnavailableOnPlatform {
@@ -558,4 +577,83 @@ fn resolve_installed<'a>(
 /// choose exit code 3 rather than 2).
 pub fn is_not_found(err: &DblError) -> bool {
     matches!(err, DblError::NotFound { .. })
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
+    use super::*;
+    use crate::toolchain::catalog::{CatalogState, CatalogStatus, parse_catalog};
+
+    #[test]
+    fn list_hides_versions_unavailable_on_this_platform() {
+        let doc = r#"{
+          "schema": 1,
+          "generated_at": "2026-11-27T00:00:00Z",
+          "tools": [{
+            "id": "php",
+            "versions": [
+              {
+                "version": "8.5.13", "series": "8.5",
+                "artifacts": [{
+                  "os": "windows", "arch": "x86_64", "profile": null, "format": "zip",
+                  "url": "https://example.test/php-8.5.13.zip",
+                  "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                  "size_bytes": 100, "source": "windows.php.net", "hash_origin": "upstream"
+                }]
+              },
+              {
+                "version": "8.5.8", "series": "8.5",
+                "artifacts": [{
+                  "os": "linux", "arch": "x86_64", "profile": "common", "format": "tar.gz",
+                  "url": "https://example.test/php-8.5.8.tar.gz",
+                  "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                  "size_bytes": 100, "source": "static-php-cli", "hash_origin": "pinned"
+                }]
+              },
+              {
+                "version": "7.4.33", "series": "7.4",
+                "artifacts": [{
+                  "os": "windows", "arch": "x86_64", "profile": null, "format": "zip",
+                  "url": "https://example.test/php-7.4.33.zip",
+                  "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+                  "size_bytes": 100, "source": "windows.php.net", "hash_origin": "upstream"
+                }]
+              }
+            ]
+          }]
+        }"#;
+        let (catalog, skips) = parse_catalog(doc).expect("parse");
+        let state = CatalogState::new(
+            catalog,
+            doc,
+            CatalogStatus::Fresh,
+            None,
+            std::time::SystemTime::now(),
+            skips,
+        );
+        let dir = tempfile::tempdir().expect("tmp");
+        let paths = ToolchainPaths::with_root(dir.path());
+
+        let linux_svc = ToolchainService::new(paths.clone(), dir.path())
+            .with_platform(Os::Linux, Arch::X86_64)
+            .with_catalog(state.clone());
+        let linux_versions: Vec<String> = linux_svc
+            .list(Some(ToolId::Php), false)
+            .into_iter()
+            .map(|v| v.version)
+            .collect();
+        assert_eq!(linux_versions, vec!["8.5.8"]);
+
+        let win_svc = ToolchainService::new(paths, dir.path())
+            .with_platform(Os::Windows, Arch::X86_64)
+            .with_catalog(state);
+        let win_versions: Vec<String> = win_svc
+            .list(Some(ToolId::Php), false)
+            .into_iter()
+            .map(|v| v.version)
+            .collect();
+        assert_eq!(win_versions, vec!["8.5.13", "7.4.33"]);
+    }
 }

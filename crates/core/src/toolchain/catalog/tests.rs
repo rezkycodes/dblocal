@@ -67,7 +67,7 @@ const FULL: &str = r#"{
           "version": "2.8.4", "series": "2.8",
           "artifacts": [
             {
-              "os": "any", "arch": "x86_64", "profile": null, "format": "phar",
+              "os": "any", "arch": "any", "profile": null, "format": "phar",
               "url": "https://example.test/composer.phar",
               "sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
               "size_bytes": 500, "source": "getcomposer.org", "hash_origin": "upstream"

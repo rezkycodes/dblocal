@@ -1,8 +1,7 @@
 //! Shared builders for catalog fixtures used across the toolchain tests.
 
-use crate::platform::Arch;
 use crate::toolchain::catalog::{
-    Artifact, ArtifactOs, Format, HashOrigin, Profile, ToolVersion,
+    Artifact, ArtifactArch, ArtifactOs, Format, HashOrigin, Profile, ToolVersion,
 };
 
 /// A valid artifact for `os`/`arch`/`profile` pointing at a harmless URL.
@@ -45,10 +44,11 @@ fn parse_os(os: &str) -> ArtifactOs {
     }
 }
 
-fn parse_arch(arch: &str) -> Arch {
+fn parse_arch(arch: &str) -> ArtifactArch {
     match arch {
-        "x86_64" => Arch::X86_64,
-        "aarch64" => Arch::Aarch64,
+        "x86_64" => ArtifactArch::X86_64,
+        "aarch64" => ArtifactArch::Aarch64,
+        "any" => ArtifactArch::Any,
         other => panic!("unknown fixture arch {other}"),
     }
 }

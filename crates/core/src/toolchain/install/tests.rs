@@ -14,7 +14,7 @@ use tokio::net::TcpListener;
 
 use crate::download::UrlPolicy;
 use crate::platform::{Arch, Os};
-use crate::toolchain::catalog::{Artifact, Format, HashOrigin, ArtifactOs, ToolId};
+use crate::toolchain::catalog::{Artifact, ArtifactArch, ArtifactOs, Format, HashOrigin, ToolId};
 use crate::toolchain::fsops::ToolchainPaths;
 use crate::toolchain::install::{
     InstallKind, InstallRequest, RemoveOptions, expected_binaries, install, node_root_dir, remove,
@@ -192,7 +192,7 @@ fn sha_hex(data: &[u8]) -> String {
 fn artifact_for(format: Format, url: String, sha: String, size: u64) -> Artifact {
     Artifact::new(
         ArtifactOs::Linux,
-        Arch::X86_64,
+        ArtifactArch::X86_64,
         None,
         format,
         "https://example.test/placeholder",

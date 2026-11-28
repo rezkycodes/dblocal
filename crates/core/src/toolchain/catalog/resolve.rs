@@ -1,8 +1,10 @@
 //! Resolving a user version spec (`8`, `8.4`, `8.4.15`, `latest`) to one version.
 
 use crate::DblError;
+use crate::platform::{Arch, Os};
+use crate::toolchain::error::ToolchainError;
 
-use super::{ToolEntry, ToolId, ToolVersion, compare_versions};
+use super::{Profile, ToolEntry, ToolId, ToolVersion, compare_versions};
 
 /// A parsed user version specification.
 ///
@@ -102,6 +104,104 @@ pub fn resolve_version<'a>(
     })
 }
 
+/// Picks the version of `tool` that `spec` names AND that has an installable
+/// artifact for `(os, arch, profile)`.
+///
+/// Versions without an artifact for this platform are invisible to resolution:
+/// e.g. when PHP `8.5.13` exists only for Windows while `8.5.8` exists for
+/// Linux, `php 8.5` resolves to `8.5.8` on Linux and `8.5.13` on Windows.
+///
+/// If `spec` matches a version in the catalog on another platform (such as
+/// `php 7.4` on Linux, which is Windows-only), this returns
+/// [`ToolchainError::UnavailableOnPlatform`] with a clear explanation instead
+/// of claiming the version does not exist at all.
+pub fn resolve_version_for_platform<'a>(
+    tool: ToolId,
+    entry: &'a ToolEntry,
+    spec: &VersionSpec,
+    os: Os,
+    arch: Arch,
+    profile: Option<Profile>,
+) -> crate::Result<&'a ToolVersion> {
+    let available: Vec<&'a ToolVersion> = entry
+        .versions()
+        .iter()
+        .filter(|v| v.select_artifact(os, arch, profile).is_ok())
+        .collect();
+
+    if let Some(found) = match_spec(&available, spec) {
+        return Ok(found);
+    }
+
+    // Check whether the spec exists on another platform/profile so we can give
+    // a clear "not available on this platform" error.
+    let all_refs: Vec<&'a ToolVersion> = entry.versions().iter().collect();
+    if match_spec(&all_refs, spec).is_some() {
+        let profile_note = profile
+            .map(|p| format!(" with the {} profile", p.as_str()))
+            .unwrap_or_default();
+        return Err(ToolchainError::UnavailableOnPlatform {
+            tool: tool.as_str(),
+            version: spec.as_str().to_owned(),
+            reason: format!("{os}-{arch}{profile_note}"),
+        }
+        .into_dbl_error());
+    }
+
+    if available.is_empty() {
+        return Err(DblError::NotFound {
+            kind: tool.as_str(),
+            name: "any version".to_owned(),
+        });
+    }
+
+    Err(DblError::NotFound {
+        kind: tool.as_str(),
+        name: format!(
+            "{} (available: {})",
+            spec.as_str(),
+            available_summary_refs(&available)
+        ),
+    })
+}
+
+fn match_spec<'a>(versions: &[&'a ToolVersion], spec: &VersionSpec) -> Option<&'a ToolVersion> {
+    if versions.is_empty() {
+        return None;
+    }
+    if matches!(spec, VersionSpec::Latest) {
+        return versions
+            .iter()
+            .copied()
+            .max_by(|a, b| compare_versions(a.version(), b.version()));
+    }
+    let tag = spec.as_str();
+    if let Some(&exact) = versions.iter().find(|v| v.version() == tag) {
+        return Some(exact);
+    }
+    if let Some(prefixed) = versions
+        .iter()
+        .copied()
+        .filter(|v| dotted_prefix(v.version(), tag))
+        .max_by(|a, b| compare_versions(a.version(), b.version()))
+    {
+        return Some(prefixed);
+    }
+    versions
+        .iter()
+        .copied()
+        .filter(|v| v.series() == tag)
+        .max_by(|a, b| compare_versions(a.version(), b.version()))
+}
+
+fn available_summary_refs(versions: &[&ToolVersion]) -> String {
+    let mut series: Vec<&str> = versions.iter().map(|v| v.series()).collect();
+    series.sort_unstable();
+    series.dedup();
+    series.reverse();
+    series.join(", ")
+}
+
 fn newest(versions: &[ToolVersion]) -> &ToolVersion {
     versions
         .iter()
@@ -190,6 +290,66 @@ mod tests {
         assert_eq!(
             VersionSpec::parse("LATEST").expect("latest"),
             VersionSpec::Latest
+        );
+    }
+
+    #[test]
+    fn diverging_patch_versions_resolve_per_os_and_windows_only_series_reports_unavailable() {
+        // Mirrors the real catalog: 8.5.13 is Windows-only while 8.5.8 is Linux-only;
+        // 7.4.33 is Windows-only.
+        let entry = ToolEntry::new(
+            ToolId::Php,
+            vec![
+                version("8.5.13", "8.5", None, vec![artifact("windows", "x86_64", None)]),
+                version(
+                    "8.5.8",
+                    "8.5",
+                    None,
+                    vec![
+                        artifact("linux", "x86_64", Some("common")),
+                        artifact("linux", "x86_64", Some("bulk")),
+                    ],
+                ),
+                version("7.4.33", "7.4", None, vec![artifact("windows", "x86_64", None)]),
+            ],
+        );
+
+        let spec_85 = VersionSpec::parse("8.5").expect("spec");
+        let on_linux = resolve_version_for_platform(
+            ToolId::Php,
+            &entry,
+            &spec_85,
+            Os::Linux,
+            Arch::X86_64,
+            Some(Profile::Common),
+        )
+        .expect("linux 8.5");
+        assert_eq!(on_linux.version(), "8.5.8");
+
+        let on_windows = resolve_version_for_platform(
+            ToolId::Php,
+            &entry,
+            &spec_85,
+            Os::Windows,
+            Arch::X86_64,
+            None,
+        )
+        .expect("windows 8.5");
+        assert_eq!(on_windows.version(), "8.5.13");
+
+        let spec_74 = VersionSpec::parse("7.4").expect("spec");
+        let err = resolve_version_for_platform(
+            ToolId::Php,
+            &entry,
+            &spec_74,
+            Os::Linux,
+            Arch::X86_64,
+            Some(Profile::Common),
+        )
+        .expect_err("7.4 unavailable on linux");
+        assert!(
+            err.to_string().contains("not available on this platform"),
+            "{err}"
         );
     }
 }

@@ -32,7 +32,7 @@ pub use load::{
     BUNDLED_CATALOG_JSON, CatalogState, CatalogStatus, bundled_or_empty, catalog_ttl, load_bundled,
     load_or_bundled, parse_with_skips, read_cache, refresh, write_cache,
 };
-pub use resolve::{VersionSpec, resolve_version};
+pub use resolve::{VersionSpec, resolve_version, resolve_version_for_platform};
 
 /// The three tools the Toolchains release manages.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -237,7 +237,7 @@ impl FromStr for HashOrigin {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Artifact {
     os: ArtifactOs,
-    arch: Arch,
+    arch: ArtifactArch,
     profile: Option<Profile>,
     format: Format,
     url: String,
@@ -287,6 +287,54 @@ impl FromStr for ArtifactOs {
     }
 }
 
+/// The `arch` field of an artifact: a concrete architecture, or `any` for a
+/// platform-neutral artifact (Composer's PHAR).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ArtifactArch {
+    /// 64-bit x86.
+    X86_64,
+    /// 64-bit ARM.
+    Aarch64,
+    /// Runs on any architecture (only used by Composer).
+    Any,
+}
+
+impl ArtifactArch {
+    /// Identifier used in the catalog JSON.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::X86_64 => "x86_64",
+            Self::Aarch64 => "aarch64",
+            Self::Any => "any",
+        }
+    }
+
+    /// Whether this artifact architecture matches `arch`.
+    pub fn matches(self, arch: Arch) -> bool {
+        match self {
+            Self::Any => true,
+            Self::X86_64 => arch == Arch::X86_64,
+            Self::Aarch64 => arch == Arch::Aarch64,
+        }
+    }
+}
+
+impl FromStr for ArtifactArch {
+    type Err = crate::DblError;
+
+    fn from_str(value: &str) -> std::result::Result<Self, Self::Err> {
+        match value {
+            "x86_64" => Ok(Self::X86_64),
+            "aarch64" => Ok(Self::Aarch64),
+            "any" => Ok(Self::Any),
+            other => Err(crate::DblError::InvalidInput {
+                field: "arch",
+                reason: format!("unknown arch: {other}"),
+            }),
+        }
+    }
+}
+
 impl Artifact {
     /// Builds an artifact, rejecting anything uninstallable.
     ///
@@ -296,7 +344,7 @@ impl Artifact {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         os: ArtifactOs,
-        arch: Arch,
+        arch: ArtifactArch,
         profile: Option<Profile>,
         format: Format,
         url: impl Into<String>,
@@ -324,7 +372,7 @@ impl Artifact {
     #[allow(clippy::too_many_arguments)]
     fn new_with_policy(
         os: ArtifactOs,
-        arch: Arch,
+        arch: ArtifactArch,
         profile: Option<Profile>,
         format: Format,
         url: impl Into<String>,
@@ -373,8 +421,8 @@ impl Artifact {
     pub const fn os(&self) -> ArtifactOs {
         self.os
     }
-    /// Target architecture.
-    pub const fn arch(&self) -> Arch {
+    /// Target architecture (or `any`).
+    pub const fn arch(&self) -> ArtifactArch {
         self.arch
     }
     /// Extension profile, or `None` for a profile-less build.
@@ -417,6 +465,11 @@ impl Artifact {
             ArtifactOs::Linux => os == Os::Linux,
             ArtifactOs::Windows => os == Os::Windows,
         }
+    }
+
+    /// Whether this artifact can be installed on `arch`.
+    pub fn matches_arch(&self, arch: Arch) -> bool {
+        self.arch.matches(arch)
     }
 
     /// Returns a copy with a different URL, for tests that serve a fixture over
@@ -485,23 +538,19 @@ impl ToolVersion {
         arch: Arch,
         profile: Option<Profile>,
     ) -> crate::Result<&Artifact> {
-        // Exact platform first, then `any`. Within a bucket the first artifact
-        // whose profile matches wins; artifacts are ordered by the catalog.
+        // Exact platform `(os, arch)` first, then fallback to `any` matches.
         let mut any_match: Option<&Artifact> = None;
         for artifact in &self.artifacts {
-            if artifact.arch() != arch {
+            if !artifact.matches_os(os) || !artifact.matches_arch(arch) {
                 continue;
             }
             if artifact.profile() != profile {
                 continue;
             }
-            if artifact.os() == ArtifactOs::Any {
-                any_match.get_or_insert(artifact);
-                continue;
-            }
-            if artifact.matches_os(os) && artifact.os() != ArtifactOs::Any {
+            if artifact.os() != ArtifactOs::Any && artifact.arch() != ArtifactArch::Any {
                 return Ok(artifact);
             }
+            any_match.get_or_insert(artifact);
         }
         if let Some(artifact) = any_match {
             return Ok(artifact);
@@ -852,7 +901,7 @@ fn convert_artifact(
     allow_loopback_http: bool,
 ) -> std::result::Result<Artifact, String> {
     let os = ArtifactOs::from_str(&wire.os).map_err(|e| e.to_string())?;
-    let arch = Arch::from_str(&wire.arch).map_err(|e| e.to_string())?;
+    let arch = ArtifactArch::from_str(&wire.arch).map_err(|e| e.to_string())?;
     let profile = match wire.profile.as_deref() {
         None | Some("") | Some("null") => None,
         Some(value) => Some(Profile::from_str(value).map_err(|e| e.to_string())?),
