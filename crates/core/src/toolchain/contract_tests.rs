@@ -68,6 +68,11 @@ fn real_catalog_file_parses_when_present() {
                 );
             }
         }
+        // The catalog ships x86_64 artifacts only (no aarch64 yet), so the
+        // installable check applies to x86_64 hosts.
+        if Arch::current() != Arch::X86_64 {
+            continue;
+        }
         // At least one version is installable on the host we test on.
         let installable = entry.versions().iter().any(|version| {
             version
