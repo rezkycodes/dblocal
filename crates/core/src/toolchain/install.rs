@@ -223,6 +223,25 @@ pub async fn install(
         }
     };
 
+    // Reject any setuid/setgid bits left on extracted files (SPEC-common security rule).
+    if let Err(err) = reject_setuid_setgid(&dir) {
+        let _ = tokio::fs::remove_dir_all(&dir).await;
+        return Err(err);
+    }
+
+    // Official Windows PHP zips ship without a php.ini; write our managed base
+    // php.ini with the default extension set enabled.
+    if request.tool == ToolId::Php && os == Os::Windows {
+        let exts: Vec<String> = consts::PHP_WINDOWS_DEFAULT_EXTENSIONS
+            .iter()
+            .map(|s| (*s).to_owned())
+            .collect();
+        if let Err(err) = crate::toolchain::php_ini::write_windows_base_ini(&dir, &exts) {
+            let _ = tokio::fs::remove_dir_all(&dir).await;
+            return Err(err);
+        }
+    }
+
     // Write the manifest last: until it exists the scan ignores the directory, so
     // a crash between extract and here leaves a tree the next install overwrites
     // rather than trusting.
@@ -463,14 +482,55 @@ fn archive_format(format: Format) -> ArchiveFormat {
     }
 }
 
+/// Walks `dir` on Unix and refuses any file carrying setuid (`04000`) or
+/// setgid (`02000`) permission bits.
+#[cfg(unix)]
+fn reject_setuid_setgid(dir: &Path) -> crate::Result<()> {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(current) = stack.pop() {
+        let entries = std::fs::read_dir(&current).map_err(|source| DblError::Io { source })?;
+        for entry in entries {
+            let entry = entry.map_err(|source| DblError::Io { source })?;
+            let path = entry.path();
+            let meta = std::fs::symlink_metadata(&path).map_err(|source| DblError::Io { source })?;
+            if meta.file_type().is_symlink() {
+                continue;
+            }
+            let mode = meta.permissions().mode();
+            if mode & 0o6000 != 0 {
+                return Err(DblError::UnsafeArchive {
+                    entry: format!(
+                        "{}: setuid/setgid bit is not allowed (mode {:o})",
+                        path.display(),
+                        mode & 0o7777
+                    ),
+                });
+            }
+            if meta.is_dir() {
+                stack.push(path);
+            }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn reject_setuid_setgid(_dir: &Path) -> crate::Result<()> {
+    Ok(())
+}
+
 /// The top-level directory stripped from an archive, matched exactly.
 ///
 /// * Node Linux tarballs unpack under `node-vX.Y.Z-linux-x64/`.
+/// * Node Windows zips unpack under `node-vX.Y.Z-win-x64/`.
 /// * PHP static-php-cli tarballs and PHP Windows zips unpack directly.
 /// * Composer's PHAR is a single file (handled separately).
 fn strip_prefix(tool: ToolId, format: Format, version: &str, os: Os) -> Option<String> {
     match (tool, format, os) {
         (ToolId::Node, Format::TarGz, Os::Linux) => Some(node_root_dir(version)),
+        (ToolId::Node, Format::Zip, Os::Windows) => Some(node_windows_root_dir(version)),
         _ => None,
     }
 }
@@ -478,6 +538,11 @@ fn strip_prefix(tool: ToolId, format: Format, version: &str, os: Os) -> Option<S
 /// The wrapper directory of a Node Linux tarball, e.g. `node-v24.11.0-linux-x64`.
 pub fn node_root_dir(version: &str) -> String {
     format!("node-v{version}-linux-x64")
+}
+
+/// The wrapper directory of a Node Windows zip, e.g. `node-v24.11.0-win-x64`.
+pub fn node_windows_root_dir(version: &str) -> String {
+    format!("node-v{version}-win-x64")
 }
 
 /// Exposes the archive strip prefix to tests without making it public API.

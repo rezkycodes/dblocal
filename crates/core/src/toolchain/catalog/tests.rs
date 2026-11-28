@@ -338,10 +338,14 @@ fn expected_binaries_are_derived_and_windows_aware() {
     assert_eq!(ToolId::Composer.shims(), &["composer"]);
     assert_eq!(
         ToolId::Php.primary_binary_paths(Os::Linux),
-        vec!["bin/php".to_owned()]
+        vec!["php".to_owned()]
     );
     assert_eq!(
         ToolId::Php.primary_binary_paths(Os::Windows),
-        vec!["bin/php.exe".to_owned()]
+        vec!["php.exe".to_owned()]
+    );
+    assert_eq!(
+        ToolId::Node.primary_binary_paths(Os::Windows),
+        vec!["node.exe".to_owned(), "npm.cmd".to_owned(), "npx.cmd".to_owned()]
     );
 }

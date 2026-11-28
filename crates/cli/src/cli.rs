@@ -254,6 +254,9 @@ pub enum ToolchainCommand {
         /// Remove the managed PATH block, restoring the files.
         #[arg(long)]
         remove: bool,
+        /// Skip the confirmation prompt for `--apply`.
+        #[arg(long)]
+        yes: bool,
     },
     /// Check PATH, shims and installs for problems.
     Doctor {

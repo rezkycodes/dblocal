@@ -74,22 +74,40 @@ impl ToolId {
         }
     }
 
-    /// The primary executable a shim invokes, relative to the install root.
+    /// Expected executables relative to the install root, derived from the real
+    /// upstream archive layouts:
     ///
-    /// PHP is `bin/php`; Node's binaries live at the root of its tarball (`bin/`
-    /// inside the archive, so `node`/`npm`/`npx` end up directly under the
-    /// install); Composer is a PHAR at the root run through PHP. Windows adds the
-    /// `.exe`/`.cmd` extension, decided by the caller's target OS.
+    /// * PHP Linux (`static-php-cli`) and PHP Windows (`windows.php.net`) unpack
+    ///   `php` / `php.exe` directly at the install root;
+    /// * Node Linux unpacks `bin/node`, `bin/npm`, `bin/npx` (after stripping
+    ///   `node-vX-linux-x64/`); Node Windows unpacks `node.exe`, `npm.cmd`,
+    ///   `npx.cmd` at the install root (after stripping `node-vX-win-x64/`);
+    /// * Composer is a single `composer.phar` at the install root.
     pub fn primary_binary_paths(self, os: Os) -> Vec<String> {
-        let executable = |stem: &str| executable_name(stem, os);
-        match self {
-            Self::Php => vec![format!("bin/{}", executable("php"))],
-            Self::Node => vec![
-                format!("bin/{}", executable("node")),
-                format!("bin/{}", executable("npm")),
-                format!("bin/{}", executable("npx")),
+        match (self, os) {
+            (Self::Php, Os::Windows) => vec![executable_name("php", os)],
+            (Self::Php, _) => vec![executable_name("php", os)],
+            (Self::Node, Os::Windows) => vec![
+                "node.exe".to_owned(),
+                "npm.cmd".to_owned(),
+                "npx.cmd".to_owned(),
             ],
-            Self::Composer => vec![php_phar_file().to_owned()],
+            (Self::Node, _) => vec![
+                "bin/node".to_owned(),
+                "bin/npm".to_owned(),
+                "bin/npx".to_owned(),
+            ],
+            (Self::Composer, _) => vec![php_phar_file().to_owned()],
+        }
+    }
+
+    /// The primary executable path relative to the install root (for `which`).
+    pub fn primary_binary_path(self, os: Os) -> String {
+        match (self, os) {
+            (Self::Php, _) => executable_name("php", os),
+            (Self::Node, Os::Windows) => "node.exe".to_owned(),
+            (Self::Node, _) => "bin/node".to_owned(),
+            (Self::Composer, _) => php_phar_file().to_owned(),
         }
     }
 }

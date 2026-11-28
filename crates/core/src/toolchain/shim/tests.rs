@@ -24,7 +24,7 @@ fn php_shim_sets_ini_scan_dir_and_execs_the_target() {
     let text = render(ShimTool::Php, Os::Linux, install, ini, php_shim);
     assert!(text.starts_with("#!/bin/sh"));
     assert!(text.contains("PHP_INI_SCAN_DIR='/h/toolchains/php/conf.d'"));
-    assert!(text.contains("exec '/h/toolchains/php/8.4.15-common/bin/php' \"$@\""));
+    assert!(text.contains("exec '/h/toolchains/php/8.4.15-common/php' \"$@\""));
     assert!(text.contains("# DBLocal shim"));
 }
 
@@ -183,5 +183,5 @@ fn shim_target_reads_the_baked_in_path() {
         .with_active(ActiveVersion::new(ToolId::Php, "8.4.15", Some("common".into())));
     refresh(&paths, Os::Linux, &registry).expect("refresh");
     let target = shim_target(&paths.shim_path("php", Os::Linux)).expect("target");
-    assert_eq!(target, paths.install_dir(ToolId::Php, "8.4.15", Some("common")).join("bin/php"));
+    assert_eq!(target, paths.install_dir(ToolId::Php, "8.4.15", Some("common")).join("php"));
 }

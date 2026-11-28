@@ -138,9 +138,24 @@ impl ToolchainService {
     }
 
     /// Builds the service from the shared home resolver.
+    ///
+    /// User shell startup files live under `$HOME` (`%USERPROFILE%` on Windows),
+    /// NOT inside `~/.dblocal` (`paths.root()`), so we resolve the user's home
+    /// directory separately from the DBLocal data root.
     pub fn from_paths(paths: &crate::paths::DblPaths) -> crate::Result<Self> {
-        let home = paths.root().to_path_buf();
+        let home = user_home_dir().unwrap_or_else(|| {
+            paths
+                .root()
+                .parent()
+                .map(Path::to_path_buf)
+                .unwrap_or_else(|| paths.root().to_path_buf())
+        });
         Ok(Self::new(ToolchainPaths::from_paths(paths), home))
+    }
+
+    /// The platform OS in use.
+    pub const fn os(&self) -> Os {
+        self.os
     }
 
     /// Overrides the platform (tests).
@@ -533,6 +548,18 @@ impl ToolchainService {
     pub fn home(&self) -> &Path {
         &self.home
     }
+}
+
+/// Resolves the user's home directory (`$HOME` on Unix, `%USERPROFILE%` on Windows).
+fn user_home_dir() -> Option<PathBuf> {
+    if let Some(raw) = std::env::var_os("HOME").filter(|v| !v.is_empty()) {
+        return Some(PathBuf::from(raw));
+    }
+    #[cfg(windows)]
+    if let Some(raw) = std::env::var_os("USERPROFILE").filter(|v| !v.is_empty()) {
+        return Some(PathBuf::from(raw));
+    }
+    None
 }
 
 /// Resolves a spec against installed versions of `tool`.

@@ -95,6 +95,7 @@ pub fn dispatch_on(
             print,
             apply,
             remove,
+            yes,
         } => path(
             service,
             out,
@@ -102,6 +103,7 @@ pub fn dispatch_on(
             *print,
             *apply,
             *remove,
+            *yes,
             is_interactive,
             confirm,
         ),
@@ -135,7 +137,10 @@ fn list(
     };
 
     if installed_only {
-        let rows = service.installed_listing();
+        let mut rows = service.installed_listing();
+        if let Some(id) = tool_id {
+            rows.retain(|row| row.tool == id);
+        }
         if json {
             output::stdout_line(out, &format_installed_json(&rows));
         } else {
@@ -314,20 +319,13 @@ fn which(service: &ToolchainService, out: &mut dyn Write, err: &mut dyn Write, t
         return EXIT_NOT_FOUND;
     };
     let dir = service.paths().install_dir(tool_id, active.version(), active.profile());
-    // Resolve to the executable the shim runs.
-    let target = match tool_id {
-        ToolId::Php => dir.join("bin").join(bin_name("php")),
-        ToolId::Node => dir.join("bin").join(bin_name("node")),
-        ToolId::Composer => dir.join(dblocal_core::toolchain::catalog::php_phar_file()),
-    };
+    // Resolve to the executable the shim runs, derived from product code.
+    let target = dir.join(tool_id.primary_binary_path(service.os()));
     output::stdout_line(out, &target.display().to_string());
     EXIT_OK
 }
 
-fn bin_name(stem: &str) -> String {
-    dblocal_core::toolchain::catalog::executable_name(stem, dblocal_core::platform::Os::current())
-}
-
+#[allow(clippy::too_many_arguments)]
 fn path(
     service: &ToolchainService,
     out: &mut dyn Write,
@@ -335,6 +333,7 @@ fn path(
     print: bool,
     apply: bool,
     remove: bool,
+    yes: bool,
     is_interactive: bool,
     confirm: &dyn Fn() -> Option<String>,
 ) -> u8 {
@@ -349,14 +348,16 @@ fn path(
         return EXIT_OK;
     }
     if apply {
-        // Editing a shell file needs explicit consent on a non-interactive run.
-        if !confirm_action(is_interactive, confirm, err, || {
-            messages::toolchain_path_apply_prompt()
-        }) {
-            return EXIT_BAD_ARGS;
-        }
         // Show the exact lines first, as the design requires.
         output::stderr_line(err, &service.path_block_preview());
+        // Editing a shell file needs explicit consent on a non-interactive run, unless --yes.
+        if !yes
+            && !confirm_action(is_interactive, confirm, err, || {
+                messages::toolchain_path_apply_prompt()
+            })
+        {
+            return EXIT_BAD_ARGS;
+        }
         return match service.apply_path() {
             Ok(report) => {
                 report_path_edit(out, err, &report);

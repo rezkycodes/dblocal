@@ -84,3 +84,18 @@ pub const PHP_DEFAULT_MAX_EXECUTION_TIME: i64 = 120;
 pub const PHP_DEFAULT_DATE_TIMEZONE: &str = "UTC";
 /// Default PHP `display_errors`.
 pub const PHP_DEFAULT_DISPLAY_ERRORS: bool = true;
+
+/// Default PHP extensions enabled in the managed base `php.ini` on Windows.
+pub const PHP_WINDOWS_DEFAULT_EXTENSIONS: &[&str] = &[
+    "curl",
+    "fileinfo",
+    "intl",
+    "mbstring",
+    "opcache",
+    "openssl",
+    "pdo_mysql",
+    "pdo_pgsql",
+    "pdo_sqlite",
+    "sodium",
+    "zip",
+];

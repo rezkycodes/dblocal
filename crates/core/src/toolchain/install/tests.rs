@@ -224,11 +224,15 @@ use tempfile::TempDir;
 
 #[test]
 fn expected_binaries_come_from_product_code() {
-    assert_eq!(expected_binaries(ToolId::Php, Os::Linux), vec!["bin/php"]);
-    assert_eq!(expected_binaries(ToolId::Php, Os::Windows), vec!["bin/php.exe"]);
+    assert_eq!(expected_binaries(ToolId::Php, Os::Linux), vec!["php"]);
+    assert_eq!(expected_binaries(ToolId::Php, Os::Windows), vec!["php.exe"]);
     assert_eq!(
         expected_binaries(ToolId::Node, Os::Linux),
         vec!["bin/node", "bin/npm", "bin/npx"]
+    );
+    assert_eq!(
+        expected_binaries(ToolId::Node, Os::Windows),
+        vec!["node.exe", "npm.cmd", "npx.cmd"]
     );
     assert_eq!(expected_binaries(ToolId::Composer, Os::Linux), vec!["composer.phar"]);
 }
@@ -239,6 +243,10 @@ fn node_wrapper_is_stripped_and_pinned_to_product_code() {
     assert_eq!(
         strip_prefix_for_test(ToolId::Node, Format::TarGz, "24.11.0", Os::Linux),
         Some("node-v24.11.0-linux-x64".to_owned())
+    );
+    assert_eq!(
+        strip_prefix_for_test(ToolId::Node, Format::Zip, "24.11.0", Os::Windows),
+        Some("node-v24.11.0-win-x64".to_owned())
     );
     assert_eq!(strip_prefix_for_test(ToolId::Php, Format::TarGz, "8.4.15", Os::Linux), None);
 }
@@ -286,10 +294,7 @@ async fn install_strips_the_node_wrapper_directory() {
 
 #[tokio::test]
 async fn install_is_idempotent_and_writes_nothing_the_second_time() {
-    let data = tar_gz(vec![
-        ed_dir("bin"),
-        ed_file("bin/php", b"x", 0o755),
-    ]);
+    let data = tar_gz(vec![ed_file("php", b"x", 0o755)]);
     let server = start(data.clone(), false).await;
     let (_dir, paths) = home();
     let artifact = artifact_for(Format::TarGz, server.url("/php.tgz"), sha_hex(&data), data.len() as u64);
@@ -308,7 +313,7 @@ async fn install_is_idempotent_and_writes_nothing_the_second_time() {
 
 #[tokio::test]
 async fn a_wrong_hash_leaves_no_install() {
-    let data = tar_gz(vec![ed_dir("bin"), ed_file("bin/php", b"x", 0o755)]);
+    let data = tar_gz(vec![ed_file("php", b"x", 0o755)]);
     let server = start(data.clone(), false).await;
     let (_dir, paths) = home();
     let artifact = artifact_for(
@@ -328,8 +333,7 @@ async fn a_wrong_hash_leaves_no_install() {
 #[tokio::test]
 async fn a_tar_slip_is_rejected_and_leaves_no_install() {
     let data = tar_gz(vec![
-        ed_dir("bin"),
-        ed_file("bin/php", b"x", 0o755),
+        ed_file("php", b"x", 0o755),
         ed_escape("../escape.txt", b"evil"),
     ]);
     // A `..` in a tar entry is rejected by the extractor.
@@ -349,8 +353,7 @@ async fn a_tar_slip_is_rejected_and_leaves_no_install() {
 #[tokio::test]
 async fn a_zip_slip_is_rejected() {
     let data = zip(vec![
-        ed_dir("bin"),
-        ed_file("bin/php.exe", b"x", 0o755),
+        ed_file("php.exe", b"x", 0o755),
         ed_escape("../escape.txt", b"evil"),
     ]);
     let server = start(data.clone(), false).await;
@@ -366,9 +369,8 @@ async fn a_zip_slip_is_rejected() {
 #[tokio::test]
 async fn a_symlink_escape_is_rejected() {
     let data = tar_gz(vec![
-        ed_dir("bin"),
-        ed_file("bin/php", b"x", 0o755),
-        ed_symlink("bin/evil", "/etc/passwd"),
+        ed_file("php", b"x", 0o755),
+        ed_symlink("evil", "/etc/passwd"),
     ]);
     let server = start(data.clone(), false).await;
     let (_dir, paths) = home();
@@ -382,7 +384,7 @@ async fn a_symlink_escape_is_rejected() {
 
 #[tokio::test]
 async fn a_truncated_body_is_rejected() {
-    let data = tar_gz(vec![ed_dir("bin"), ed_file("bin/php", b"hello world", 0o755)]);
+    let data = tar_gz(vec![ed_file("php", b"hello world", 0o755)]);
     let server = start(data.clone(), true).await;
     let (_dir, paths) = home();
     let artifact = artifact_for(Format::TarGz, server.url("/t.tgz"), sha_hex(&data), data.len() as u64);
@@ -433,7 +435,7 @@ async fn installs_a_phar_as_a_single_file() {
 
 #[tokio::test]
 async fn remove_clears_the_active_entry_and_reports_others() {
-    let data = tar_gz(vec![ed_dir("bin"), ed_file("bin/php", b"x", 0o755)]);
+    let data = tar_gz(vec![ed_file("php", b"x", 0o755)]);
     let server = start(data.clone(), false).await;
     let (_dir, paths) = home();
 
@@ -503,6 +505,49 @@ async fn removing_a_non_active_version_keeps_the_registry() {
         .expect("remove non-active");
     assert!(outcome.cleared_active.is_none());
     assert!(crate::toolchain::registry::read_registry(&paths).get(ToolId::Node).is_some());
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn setuid_bit_in_tarball_is_rejected_and_leaves_no_install() {
+    let data = tar_gz(vec![ed_file("php", b"x", 0o4755)]);
+    let server = start(data.clone(), false).await;
+    let (_dir, paths) = home();
+    let artifact = artifact_for(
+        Format::TarGz,
+        server.url("/suid.tgz"),
+        sha_hex(&data),
+        data.len() as u64,
+    );
+    let mut request = InstallRequest::new(ToolId::Php, &artifact, "8.4.15", Some("common"));
+    request.policy = Some(loopback());
+    let err = install(&paths, Os::Linux, Arch::X86_64, request)
+        .await
+        .expect_err("setuid must be rejected");
+    assert!(matches!(err, crate::DblError::UnsafeArchive { .. }), "{err:?}");
+    assert!(!paths.install_dir(ToolId::Php, "8.4.15", Some("common")).exists());
+    assert_no_debris(&paths, "8.4.15-common");
+}
+
+#[tokio::test]
+async fn windows_php_zip_install_writes_managed_base_php_ini() {
+    let data = zip(vec![ed_file("php.exe", b"MZ", 0o755)]);
+    let server = start(data.clone(), false).await;
+    let (_dir, paths) = home();
+    let artifact = artifact_for(
+        Format::Zip,
+        server.url("/php-win.zip"),
+        sha_hex(&data),
+        data.len() as u64,
+    );
+    let mut request = InstallRequest::new(ToolId::Php, &artifact, "8.4.28", None);
+    request.policy = Some(loopback());
+    let outcome = install(&paths, Os::Windows, Arch::X86_64, request)
+        .await
+        .expect("win php install");
+    let ini = std::fs::read_to_string(outcome.dir.join("php.ini")).expect("php.ini");
+    assert!(ini.contains("extension=mbstring"), "{ini}");
+    assert!(ini.contains("extension=pdo_pgsql"), "{ini}");
 }
 
 /// Asserts no staging/removing debris was left beside an install leaf.

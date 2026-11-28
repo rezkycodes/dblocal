@@ -226,3 +226,35 @@ fn doctor_wires_up_from_a_toolchain_root() {
     assert!(findings.iter().any(|f| matches!(f, Finding::ShimsDirMissing { .. })));
     let _: PathBuf = paths.shims_dir();
 }
+
+#[test]
+fn windows_env_trait_applies_and_removes_idempotently() {
+    struct FakeWinEnv(std::cell::RefCell<Option<String>>);
+    impl crate::toolchain::path::WindowsEnv for FakeWinEnv {
+        fn get_user_path(&self) -> crate::Result<Option<String>> {
+            Ok(self.0.borrow().clone())
+        }
+        fn set_user_path(&self, value: &str) -> crate::Result<()> {
+            *self.0.borrow_mut() = Some(value.to_owned());
+            Ok(())
+        }
+    }
+
+    let env = FakeWinEnv(std::cell::RefCell::new(Some(r"C:\Windows".to_owned())));
+    let shims = Path::new(r"C:\Users\u\.dblocal\bin");
+
+    let first = crate::toolchain::path::apply_windows_with(&env, shims).expect("apply 1");
+    assert_eq!(first.changed.len(), 1);
+    assert_eq!(
+        env.0.borrow().as_deref(),
+        Some(r"C:\Users\u\.dblocal\bin;C:\Windows")
+    );
+
+    let second = crate::toolchain::path::apply_windows_with(&env, shims).expect("apply 2");
+    assert!(second.changed.is_empty());
+    assert_eq!(second.unchanged.len(), 1);
+
+    let removed = crate::toolchain::path::remove_windows_with(&env, shims).expect("remove");
+    assert_eq!(removed.changed.len(), 1);
+    assert_eq!(env.0.borrow().as_deref(), Some(r"C:\Windows"));
+}

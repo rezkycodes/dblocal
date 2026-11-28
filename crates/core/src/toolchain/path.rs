@@ -575,6 +575,114 @@ pub fn remove_from_windows_path(current: &str, shims_dir: &Path) -> String {
         .join(";")
 }
 
+/// Applies the Windows user `Path` update through `env`, idempotently.
+pub fn apply_windows_with<E: WindowsEnv>(
+    env: &E,
+    shims_dir: &Path,
+) -> crate::Result<PathEditReport> {
+    let mut report = PathEditReport::default();
+    let current = env.get_user_path()?.unwrap_or_default();
+    let updated = prepend_windows_path(&current, shims_dir);
+    let label = PathBuf::from(r"HKCU\Environment#Path");
+    if updated == current {
+        report.unchanged.push(label);
+    } else {
+        env.set_user_path(&updated)?;
+        report.changed.push(label);
+    }
+    Ok(report)
+}
+
+/// Removes `shims_dir` from the Windows user `Path` through `env`, idempotently.
+pub fn remove_windows_with<E: WindowsEnv>(
+    env: &E,
+    shims_dir: &Path,
+) -> crate::Result<PathEditReport> {
+    let mut report = PathEditReport::default();
+    let current = env.get_user_path()?.unwrap_or_default();
+    let updated = remove_from_windows_path(&current, shims_dir);
+    let label = PathBuf::from(r"HKCU\Environment#Path");
+    if updated == current {
+        report.unchanged.push(label);
+    } else {
+        env.set_user_path(&updated)?;
+        report.changed.push(label);
+    }
+    Ok(report)
+}
+
+#[cfg(windows)]
+struct RegExeWindowsEnv;
+
+#[cfg(windows)]
+impl RegExeWindowsEnv {
+    fn query_path_and_type(&self) -> crate::Result<(Option<String>, &'static str)> {
+        let output = std::process::Command::new("reg")
+            .args(["query", r"HKCU\Environment", "/v", "Path"])
+            .output()
+            .map_err(|source| DblError::Io { source })?;
+        if !output.status.success() {
+            return Ok((None, "REG_EXPAND_SZ"));
+        }
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        for line in stdout.lines() {
+            if let Some((_, rest)) = line.split_once("REG_EXPAND_SZ") {
+                return Ok((Some(rest.trim().to_owned()), "REG_EXPAND_SZ"));
+            }
+            if let Some((_, rest)) = line.split_once("REG_SZ") {
+                return Ok((Some(rest.trim().to_owned()), "REG_SZ"));
+            }
+        }
+        Ok((None, "REG_EXPAND_SZ"))
+    }
+}
+
+#[cfg(windows)]
+impl WindowsEnv for RegExeWindowsEnv {
+    fn get_user_path(&self) -> crate::Result<Option<String>> {
+        let (val, _) = self.query_path_and_type()?;
+        Ok(val)
+    }
+
+    fn set_user_path(&self, value: &str) -> crate::Result<()> {
+        let (_, value_type) = self.query_path_and_type()?;
+        let status = std::process::Command::new("reg")
+            .args([
+                "add",
+                r"HKCU\Environment",
+                "/v",
+                "Path",
+                "/t",
+                value_type,
+                "/d",
+                value,
+                "/f",
+            ])
+            .status()
+            .map_err(|source| DblError::Io { source })?;
+        if !status.success() {
+            return Err(DblError::Io {
+                source: std::io::Error::other("reg add HKCU\\Environment\\Path failed"),
+            });
+        }
+        // Best-effort broadcast of WM_SETTINGCHANGE so new shells see the updated PATH.
+        let _ = std::process::Command::new("powershell")
+            .args([
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                "[Environment]::SetEnvironmentVariable('Path', $null, 'Process'); \
+                 Add-Type -Namespace Win32 -Name Native -MemberDefinition \
+                 '[DllImport(\"user32.dll\", SetLastError=true, CharSet=CharSet.Auto)] \
+                  public static extern IntPtr SendMessageTimeout(IntPtr hWnd, uint Msg, UIntPtr wParam, string lParam, uint fuFlags, uint uTimeout, out UIntPtr lpdwResult);'; \
+                 $r = [UIntPtr]::Zero; \
+                 [Win32.Native]::SendMessageTimeout([IntPtr]0xffff, 0x001A, [UIntPtr]::Zero, 'Environment', 2, 5000, [ref]$r) | Out-Null",
+            ])
+            .status();
+        Ok(())
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Top-level operations bound to a home
 // ---------------------------------------------------------------------------
@@ -582,9 +690,19 @@ pub fn remove_from_windows_path(current: &str, shims_dir: &Path) -> String {
 /// Applies PATH on the host platform, returning the report.
 pub fn apply(home: &Path, shims_dir: &Path, o: Os) -> crate::Result<PathEditReport> {
     match o {
-        Os::Windows => Err(DblError::Unsupported {
-            reason: "use the Windows registry path editor".to_owned(),
-        }),
+        Os::Windows => {
+            #[cfg(windows)]
+            {
+                apply_windows_with(&RegExeWindowsEnv, shims_dir)
+            }
+            #[cfg(not(windows))]
+            {
+                let _ = (home, shims_dir);
+                Err(DblError::Unsupported {
+                    reason: "Windows registry PATH editing requires running on Windows".to_owned(),
+                })
+            }
+        }
         _ => Ok(apply_posix(home, shims_dir)),
     }
 }
@@ -592,9 +710,19 @@ pub fn apply(home: &Path, shims_dir: &Path, o: Os) -> crate::Result<PathEditRepo
 /// Removes PATH on the host platform, returning the report.
 pub fn remove(home: &Path, shims_dir: &Path, o: Os) -> crate::Result<PathEditReport> {
     match o {
-        Os::Windows => Err(DblError::Unsupported {
-            reason: "use the Windows registry path editor".to_owned(),
-        }),
+        Os::Windows => {
+            #[cfg(windows)]
+            {
+                remove_windows_with(&RegExeWindowsEnv, shims_dir)
+            }
+            #[cfg(not(windows))]
+            {
+                let _ = (home, shims_dir);
+                Err(DblError::Unsupported {
+                    reason: "Windows registry PATH editing requires running on Windows".to_owned(),
+                })
+            }
+        }
         _ => Ok(remove_posix(home, shims_dir)),
     }
 }
