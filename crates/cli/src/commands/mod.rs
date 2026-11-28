@@ -14,6 +14,7 @@ pub mod runtime;
 pub mod start;
 pub mod status;
 pub mod stop;
+pub mod toolchain;
 pub mod update;
 pub mod uri;
 pub mod user;
@@ -98,6 +99,18 @@ pub fn dispatch(ctx: &mut Ctx<'_>, command: &Command) -> u8 {
                 yes,
             } => runtime::remove(ctx, engine, version, *yes),
         },
+        Command::Toolchain { .. } => {
+            // Handled by `cli::run` before the service is built; reaching here
+            // means a caller wired the service path by mistake.
+            output::stderr_line(
+                ctx.err,
+                &crate::messages::code_line(
+                    dblocal_core::error::CODE_INVALID_INPUT,
+                    "toolchain commands run outside the service",
+                ),
+            );
+            crate::cli::EXIT_BAD_ARGS
+        }
     }
 }
 

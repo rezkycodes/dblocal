@@ -165,3 +165,142 @@ pub fn runtime_remove_prompt(engine: &str, version: &str) -> String {
 pub fn runtime_used_by(users: &[String]) -> String {
     format!("Used by: {}", users.join(", "))
 }
+
+// --- toolchain (v0.3.0) ------------------------------------------------------
+
+/// A toolchain action was cancelled at the prompt.
+pub const ERR_TOOLCHAIN_CANCELLED: &str = "Cancelled.";
+/// A confirmation-requiring action was run non-interactively without `--yes`.
+pub const ERR_TOOLCHAIN_NEEDS_YES: &str =
+    "This action needs --yes in a non-interactive session.";
+/// More than one of `--print`/`--apply`/`--remove` was given to `toolchain path`.
+pub const ERR_TOOLCHAIN_PATH_FLAGS: &str =
+    "Pass at most one of --print, --apply or --remove.";
+/// `php-settings set` was called without a key and value.
+pub const ERR_TOOLCHAIN_SET_USAGE: &str = "Usage: php-settings set <key> <value>";
+/// The PATH block was already in the requested state.
+pub const MSG_TOOLCHAIN_PATH_UNCHANGED: &str = "PATH already in the requested state.";
+/// The doctor found no problems.
+pub const MSG_TOOLCHAIN_DOCTOR_OK: &str = "No problems found.";
+
+/// An unknown tool name was supplied.
+pub fn toolchain_unknown_tool(tool: &str) -> String {
+    format!(
+        "[{}] Unknown tool: {tool} (expected php, node or composer)",
+        dblocal_core::error::CODE_INVALID_INPUT
+    )
+}
+
+/// Prompt before installing.
+pub fn toolchain_install_prompt(tool: &str, spec: &str) -> String {
+    format!("Install {tool} {spec}? [y/N] ")
+}
+
+/// Progress line before an install starts.
+pub fn toolchain_installing(tool: &str, spec: &str) -> String {
+    format!("Installing {tool} {spec}...")
+}
+
+/// Success line after an install.
+pub fn toolchain_installed(
+    tool: &str,
+    version: &str,
+    profile: Option<&str>,
+    already: bool,
+    activated: bool,
+) -> String {
+    let label = match profile {
+        Some(profile) => format!("{tool} {version} ({profile})"),
+        None => format!("{tool} {version}"),
+    };
+    let mut line = if already {
+        format!("{label} is already installed.")
+    } else {
+        format!("Installed {label}.")
+    };
+    if activated {
+        line.push_str(" It is now active.");
+    }
+    line
+}
+
+/// Success line after `use`.
+pub fn toolchain_activated(tool: &str, version: &str, profile: Option<&str>) -> String {
+    match profile {
+        Some(profile) => format!("Now using {tool} {version} ({profile})."),
+        None => format!("Now using {tool} {version}."),
+    }
+}
+
+/// Prompt before removing.
+pub fn toolchain_remove_prompt(tool: &str, spec: &str) -> String {
+    format!("Remove {tool} {spec}? [y/N] ")
+}
+
+/// Success line after a remove.
+pub fn toolchain_removed(tool: &str, version: &str) -> String {
+    format!("Removed {tool} {version}.")
+}
+
+/// The active entry was cleared as part of a remove.
+pub fn toolchain_cleared_active(tool: &str) -> String {
+    format!("{tool} no longer has an active version.")
+}
+
+/// Other versions of a tool remain installed after its active one was removed.
+pub fn toolchain_others_remain(tool: &str) -> String {
+    format!(
+        "Other {tool} versions are still installed; pick one with `dblocal toolchain use {tool} <version>`."
+    )
+}
+
+/// A tool has no active version.
+pub fn toolchain_no_active(tool: &str) -> String {
+    format!(
+        "[{}] No active {tool}; run `dblocal toolchain use {tool} <version>` first.",
+        dblocal_core::toolchain::error::CODE_NO_ACTIVE_VERSION
+    )
+}
+
+/// Prompt for `toolchain path --apply`.
+pub fn toolchain_path_apply_prompt() -> String {
+    "This adds the lines above to your shell startup files (a backup is written first). Continue? [y/N] "
+        .to_owned()
+}
+
+/// One file changed by a PATH edit.
+pub fn toolchain_path_changed(path: &str) -> String {
+    format!("Updated {path}")
+}
+
+/// A PATH edit could not touch a file.
+pub fn toolchain_path_failed(path: &str, reason: &str) -> String {
+    format!("Could not update {path}: {reason}")
+}
+
+/// Summary of the backups written by a PATH edit.
+pub fn toolchain_backups_written(count: usize) -> String {
+    format!("Wrote {count} backup file(s).")
+}
+
+/// The current PATH state, with the shims dir.
+pub fn toolchain_path_state(applied: bool, dir: &str) -> String {
+    if applied {
+        format!("PATH block applied ({dir} is prepended).")
+    } else {
+        format!("PATH block not applied. Shims live in {dir}.")
+    }
+}
+
+/// The managed settings file was written.
+pub fn toolchain_settings_written(path: &str) -> String {
+    format!("Wrote {path}")
+}
+
+/// An unknown `php-settings` action was supplied.
+pub fn toolchain_unknown_action(action: &str) -> String {
+    format!(
+        "[{}] Unknown action: {action} (expected get, set, reset or open)",
+        dblocal_core::error::CODE_INVALID_INPUT
+    )
+}

@@ -126,7 +126,7 @@ fn human_size(bytes: i64) -> String {
 }
 
 /// The same rendering for an unsigned count (runtime sizes).
-pub(crate) fn human_size_u64(bytes: u64) -> String {
+pub fn human_size_u64(bytes: u64) -> String {
     const MIB: u64 = 1024 * 1024;
     const KIB: u64 = 1024;
     if bytes >= MIB {
@@ -352,6 +352,14 @@ fn runtime_users(runtime: &dblocal_core::model::Runtime, instances: &[InstanceVi
     } else {
         names.join(", ")
     }
+}
+
+/// Aligned table over an arbitrary number of columns, ragged edges untouched.
+///
+/// Public so the `toolchain` handlers can render their own tables with the same
+/// alignment as `list` and `runtime list`.
+pub fn render_table(headers: Vec<String>, rows: Vec<Vec<String>>) -> String {
+    table(headers, rows)
 }
 
 /// Aligned table over an arbitrary number of columns, ragged edges untouched.

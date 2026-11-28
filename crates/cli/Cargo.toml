@@ -19,7 +19,10 @@ tokio = { workspace = true, features = ["signal"] }
 
 [dev-dependencies]
 dblocal-core = { workspace = true, features = ["mock"] }
+flate2 = { workspace = true }
 redis = { workspace = true }
+sha2 = { workspace = true }
+tar = { workspace = true }
 tempfile = { workspace = true }
 
 [build-dependencies]

@@ -181,6 +181,98 @@ pub enum Command {
         #[command(subcommand)]
         command: RuntimeCommand,
     },
+    /// Install, switch and remove PHP, Node.js and Composer (v0.3.0).
+    Toolchain {
+        #[command(subcommand)]
+        command: ToolchainCommand,
+    },
+}
+
+/// `dblocal toolchain ...` subcommands.
+///
+/// A noun (`toolchain`, not bare `install`) because `dblocal list` already lists
+/// instances; see `docs/toolchains.md`.
+#[derive(Debug, Subcommand)]
+pub enum ToolchainCommand {
+    /// List available or installed toolchain versions.
+    List {
+        /// Restrict to one tool: php, node or composer.
+        tool: Option<String>,
+        /// Show only versions installed on this machine.
+        #[arg(long)]
+        installed: bool,
+        /// Print JSON that can be piped.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Install a version. Activates it only when the tool has no active version.
+    Install {
+        /// Tool: php, node or composer.
+        tool: String,
+        /// Version, series or `latest` (e.g. `php 8.4`, `node 24`).
+        spec: String,
+        /// PHP profile on Linux: common or bulk.
+        #[arg(long)]
+        profile: Option<String>,
+        /// Install without activating it, even when nothing is active.
+        #[arg(long = "no-activate")]
+        no_activate: bool,
+        /// Skip the confirmation prompt.
+        #[arg(long)]
+        yes: bool,
+    },
+    /// Switch the active version of a tool to an installed one.
+    Use {
+        /// Tool: php, node or composer.
+        tool: String,
+        /// Installed version, series or `latest`.
+        spec: String,
+    },
+    /// Remove an installed version.
+    Remove {
+        /// Tool: php, node or composer.
+        tool: String,
+        /// Installed version, series or `latest`.
+        spec: String,
+        /// Skip the confirmation prompt.
+        #[arg(long)]
+        yes: bool,
+    },
+    /// Print the path of the active executable of a tool.
+    Which {
+        /// Tool: php, node or composer.
+        tool: String,
+    },
+    /// Inspect or change DBLocal's PATH entry (consent required to change it).
+    Path {
+        /// Print the lines that would be added, without writing.
+        #[arg(long)]
+        print: bool,
+        /// Add the managed PATH block.
+        #[arg(long)]
+        apply: bool,
+        /// Remove the managed PATH block, restoring the files.
+        #[arg(long)]
+        remove: bool,
+    },
+    /// Check PATH, shims and installs for problems.
+    Doctor {
+        /// Print JSON that can be piped.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Read or change the managed PHP settings.
+    PhpSettings {
+        /// Action: get, set <key> <value>, reset, or open.
+        action: String,
+        /// Setting key for `set`.
+        key: Option<String>,
+        /// Setting value for `set`.
+        value: Option<String>,
+        /// Print JSON that can be piped (for `get`).
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 /// `dblocal runtime ...` subcommands.
@@ -349,6 +441,9 @@ pub fn run(args: Vec<OsString>) -> ExitCode {
         // so it is dispatched before the service is built (a first run on a
         // login item must not fail because the store could not be opened).
         Some(Command::Autostart { action, json }) => run_autostart_command(&action, json),
+        // Toolchains are their own small file tree, not instances, so they are
+        // dispatched without the state database too.
+        Some(Command::Toolchain { command }) => run_toolchain_command(&command),
         Some(command) => run_command(command),
     }
 }
@@ -451,6 +546,12 @@ fn normalize_autostart_flag(args: Vec<OsString>) -> Vec<OsString> {
 fn run_autostart_mode(headless: bool) -> ExitCode {
     let code = commands::autostart::run_login_mode(headless);
     ExitCode::from(code)
+}
+
+/// Dispatches a `toolchain` command. It needs no state database, so it does not
+/// build the service.
+fn run_toolchain_command(command: &ToolchainCommand) -> ExitCode {
+    ExitCode::from(commands::toolchain::run(command))
 }
 
 fn run_command(command: Command) -> ExitCode {

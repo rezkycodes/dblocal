@@ -23,6 +23,7 @@ pub mod error;
 pub mod fsops;
 pub mod install;
 pub mod lock;
+pub mod ops;
 pub mod path;
 pub mod php_ini;
 pub mod registry;

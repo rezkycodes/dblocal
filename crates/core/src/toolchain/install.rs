@@ -73,6 +73,8 @@ pub struct InstallRequest<'a> {
     pub cancel: Option<CancellationToken>,
     /// Free-space probe override (tests).
     pub free_space: Option<FreeSpaceFn>,
+    /// Allow loopback `http://` in debug/test builds only. Ignored in release builds.
+    pub allow_loopback_http: bool,
 }
 
 impl<'a> InstallRequest<'a> {
@@ -92,6 +94,7 @@ impl<'a> InstallRequest<'a> {
             progress: None,
             cancel: None,
             free_space: None,
+            allow_loopback_http: false,
         }
     }
 }
@@ -160,14 +163,57 @@ pub async fn install(
     let expected: Vec<String> = expected_binaries(request.tool, os);
     let expected_refs: Vec<&str> = expected.iter().map(String::as_str).collect();
 
-    let result = crate::download::install_source_to(
-        &source,
-        &tmp,
-        &final_dir,
-        &expected_refs,
-        install_options(&request),
-    )
-    .await;
+    let use_loopback_fetch = {
+        #[cfg(any(test, debug_assertions))]
+        {
+            request.allow_loopback_http
+                && request.policy.is_none()
+                && crate::toolchain::catalog::is_loopback_http_url(artifact.url())
+        }
+        #[cfg(not(any(test, debug_assertions)))]
+        {
+            false
+        }
+    };
+
+    let result = if use_loopback_fetch {
+        crate::download::check_disk_space(
+            &tmp,
+            artifact.size_bytes(),
+            request.free_space.as_ref(),
+        )?;
+        let part = tmp.join(format!("{label}.part"));
+        let download_res = download_verified(artifact, &part, true).await;
+        if let Err(err) = download_res {
+            let _ = tokio::fs::remove_file(&part).await;
+            Err(err)
+        } else {
+            let opts = crate::download::ExtractOptions {
+                expected_binaries: expected.clone(),
+                strip_prefix: strip.clone(),
+                ..Default::default()
+            };
+            let extracted = crate::download::extract_runtime(
+                &part,
+                archive_format(artifact.format()),
+                artifact.size_bytes(),
+                &final_dir,
+                &opts,
+            )
+            .await;
+            let _ = tokio::fs::remove_file(&part).await;
+            extracted
+        }
+    } else {
+        crate::download::install_source_to(
+            &source,
+            &tmp,
+            &final_dir,
+            &expected_refs,
+            install_options(&request),
+        )
+        .await
+    };
 
     let dir = match result {
         Ok(dir) => dir,
@@ -234,7 +280,9 @@ async fn install_single_file(
     crate::download::check_disk_space(&tmp, size_bytes, request.free_space.as_ref())?;
 
     let part = tmp.join(format!("{label}.phar.part"));
-    download_verified(artifact, &part, request.policy.clone()).await?;
+    let allow_loopback = request.policy.is_some()
+        || (cfg!(any(test, debug_assertions)) && request.allow_loopback_http);
+    download_verified(artifact, &part, allow_loopback).await?;
 
     let staging = tmp.join(format!(".{label}.phar-staging"));
     if staging.exists() {
@@ -297,13 +345,13 @@ fn download_label(tool: ToolId, version: &str, os: Os, profile: Option<&str>) ->
 async fn download_verified(
     artifact: &Artifact,
     dest: &Path,
-    policy: Option<UrlPolicy>,
+    allow_loopback_http: bool,
 ) -> crate::Result<()> {
     let url = reqwest::Url::parse(artifact.url()).map_err(|e| DblError::InvalidInput {
         field: "url",
         reason: format!("invalid URL: {e}"),
     })?;
-    validate_download_url(&url, policy.is_some())?;
+    validate_download_url(&url, allow_loopback_http)?;
 
     let client = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::limited(5))
@@ -367,7 +415,9 @@ async fn download_verified(
 fn validate_download_url(url: &reqwest::Url, allow_loopback_http: bool) -> crate::Result<()> {
     match url.scheme() {
         "https" => Ok(()),
-        "http" if allow_loopback_http => Ok(()),
+        "http" if allow_loopback_http && crate::toolchain::catalog::is_loopback_http_url(url.as_str()) => {
+            Ok(())
+        }
         other => Err(DblError::Network {
             reason: format!("refusing non-HTTPS download URL scheme '{other}'"),
         }),

@@ -133,6 +133,14 @@ enum SuffixedSize {
 }
 
 impl SizeValue {
+    /// Builds a mebibyte size directly (used for infallible defaults).
+    const fn from_mib(amount: u64) -> Self {
+        Self {
+            bytes: (amount as i64).saturating_mul(1024 * 1024),
+            raw: SuffixedSize::Bytes { amount, unit: b'm' },
+        }
+    }
+
     /// Parses a PHP size string (`512M`, `64m`, `1G`, `-1`, `1024`).
     pub fn parse(value: &str) -> crate::Result<Self> {
         let trimmed = value.trim();
@@ -229,9 +237,18 @@ pub struct PhpSettings {
 impl Default for PhpSettings {
     fn default() -> Self {
         Self {
-            memory_limit: SettingValue::Size(SizeValue::parse(consts::PHP_DEFAULT_MEMORY_LIMIT).expect("default")),
-            upload_max_filesize: SettingValue::Size(SizeValue::parse(consts::PHP_DEFAULT_UPLOAD_MAX_FILESIZE).expect("default")),
-            post_max_size: SettingValue::Size(SizeValue::parse(consts::PHP_DEFAULT_POST_MAX_SIZE).expect("default")),
+            memory_limit: SettingValue::Size(
+                SizeValue::parse(consts::PHP_DEFAULT_MEMORY_LIMIT)
+                    .unwrap_or_else(|_| SizeValue::from_mib(512)),
+            ),
+            upload_max_filesize: SettingValue::Size(
+                SizeValue::parse(consts::PHP_DEFAULT_UPLOAD_MAX_FILESIZE)
+                    .unwrap_or_else(|_| SizeValue::from_mib(64)),
+            ),
+            post_max_size: SettingValue::Size(
+                SizeValue::parse(consts::PHP_DEFAULT_POST_MAX_SIZE)
+                    .unwrap_or_else(|_| SizeValue::from_mib(64)),
+            ),
             max_execution_time: SettingValue::Seconds(consts::PHP_DEFAULT_MAX_EXECUTION_TIME as u32),
             date_timezone: SettingValue::Timezone(consts::PHP_DEFAULT_DATE_TIMEZONE.to_owned()),
             display_errors: SettingValue::Toggle(consts::PHP_DEFAULT_DISPLAY_ERRORS),

@@ -306,6 +306,35 @@ impl Artifact {
         hash_origin: HashOrigin,
         extensions: Vec<String>,
     ) -> crate::Result<Self> {
+        Self::new_with_policy(
+            os,
+            arch,
+            profile,
+            format,
+            url,
+            sha256,
+            size_bytes,
+            source,
+            hash_origin,
+            extensions,
+            false,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn new_with_policy(
+        os: ArtifactOs,
+        arch: Arch,
+        profile: Option<Profile>,
+        format: Format,
+        url: impl Into<String>,
+        sha256: impl Into<String>,
+        size_bytes: u64,
+        source: impl Into<String>,
+        hash_origin: HashOrigin,
+        extensions: Vec<String>,
+        allow_loopback_http: bool,
+    ) -> crate::Result<Self> {
         let sha256 = sha256.into();
         if !is_sha256_hex(&sha256) {
             return Err(crate::DblError::InvalidInput {
@@ -314,7 +343,7 @@ impl Artifact {
             });
         }
         let url = url.into();
-        if !is_https_url(&url) {
+        if !is_allowed_artifact_url(&url, allow_loopback_http) {
             return Err(crate::DblError::InvalidInput {
                 field: "url",
                 reason: "must be an absolute https URL".to_owned(),
@@ -597,6 +626,48 @@ fn is_https_url(value: &str) -> bool {
     scheme == "https" && !rest.is_empty() && !rest.contains(char::is_whitespace)
 }
 
+pub(crate) fn is_loopback_http_url(value: &str) -> bool {
+    let Ok(parsed) = reqwest::Url::parse(value) else {
+        return false;
+    };
+    if parsed.scheme() != "http" {
+        return false;
+    }
+    match parsed.host() {
+        Some(url::Host::Domain(host)) => host.eq_ignore_ascii_case("localhost"),
+        Some(url::Host::Ipv4(ip)) => ip.is_loopback(),
+        Some(url::Host::Ipv6(ip)) => ip.is_loopback(),
+        None => false,
+    }
+}
+
+fn is_allowed_artifact_url(value: &str, allow_loopback_http: bool) -> bool {
+    if is_https_url(value) {
+        return true;
+    }
+    #[cfg(any(test, debug_assertions))]
+    if allow_loopback_http && is_loopback_http_url(value) {
+        return true;
+    }
+    let _ = allow_loopback_http;
+    false
+}
+
+/// Whether debug-only loopback HTTP is enabled via environment variable.
+/// Release builds always return `false`.
+pub(crate) fn env_allows_loopback_http() -> bool {
+    #[cfg(debug_assertions)]
+    {
+        std::env::var(super::consts::ENV_ALLOW_LOOPBACK_HTTP)
+            .map(|v| matches!(v.trim(), "1" | "true" | "TRUE"))
+            .unwrap_or(false)
+    }
+    #[cfg(not(debug_assertions))]
+    {
+        false
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Wire format (serde) and the tolerant parser
 // ---------------------------------------------------------------------------
@@ -683,6 +754,19 @@ impl SkipCounts {
 /// OS/arch/profile/format, or an artifact that fails validation is dropped with a
 /// `tracing::debug!` line, and the rest of the file loads.
 pub fn parse_catalog(text: &str) -> crate::Result<(ToolchainCatalog, SkipCounts)> {
+    parse_catalog_inner(text, env_allows_loopback_http())
+}
+
+/// Parses a catalog allowing loopback HTTP URLs (debug/test builds only).
+#[cfg(any(test, debug_assertions))]
+pub fn parse_catalog_allow_loopback(text: &str) -> crate::Result<(ToolchainCatalog, SkipCounts)> {
+    parse_catalog_inner(text, true)
+}
+
+fn parse_catalog_inner(
+    text: &str,
+    allow_loopback_http: bool,
+) -> crate::Result<(ToolchainCatalog, SkipCounts)> {
     let document: WireDocument = serde_json::from_str(text).map_err(|err| {
         crate::DblError::Storage {
             reason: format!("toolchain catalog is not valid JSON: {err}"),
@@ -721,7 +805,7 @@ pub fn parse_catalog(text: &str) -> crate::Result<(ToolchainCatalog, SkipCounts)
             };
             let mut artifacts: Vec<Artifact> = Vec::new();
             for wire_artifact in wire_version.artifacts {
-                match convert_artifact(id, &wire_artifact) {
+                match convert_artifact(id, &wire_artifact, allow_loopback_http) {
                     Ok(artifact) => artifacts.push(artifact),
                     Err(reason) => {
                         tracing::debug!(
@@ -762,7 +846,11 @@ pub fn parse_catalog(text: &str) -> crate::Result<(ToolchainCatalog, SkipCounts)
     Ok((catalog, skips))
 }
 
-fn convert_artifact(tool: ToolId, wire: &WireArtifact) -> std::result::Result<Artifact, String> {
+fn convert_artifact(
+    tool: ToolId,
+    wire: &WireArtifact,
+    allow_loopback_http: bool,
+) -> std::result::Result<Artifact, String> {
     let os = ArtifactOs::from_str(&wire.os).map_err(|e| e.to_string())?;
     let arch = Arch::from_str(&wire.arch).map_err(|e| e.to_string())?;
     let profile = match wire.profile.as_deref() {
@@ -776,7 +864,7 @@ fn convert_artifact(tool: ToolId, wire: &WireArtifact) -> std::result::Result<Ar
     // Windows PHP build has no profile either.
     let profile = normalize_profile(tool, os, profile);
 
-    Artifact::new(
+    Artifact::new_with_policy(
         os,
         arch,
         profile,
@@ -787,6 +875,7 @@ fn convert_artifact(tool: ToolId, wire: &WireArtifact) -> std::result::Result<Ar
         wire.source.clone(),
         hash_origin,
         sorted_extensions(&wire.extensions),
+        allow_loopback_http,
     )
     .map_err(|e| e.to_string())
 }
