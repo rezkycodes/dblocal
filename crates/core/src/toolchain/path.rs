@@ -329,16 +329,16 @@ pub struct RcFile {
     pub path: PathBuf,
 }
 
-/// The startup files that exist under `home`, in a deterministic order.
+/// The POSIX startup files that exist under `home`, in a deterministic order.
 ///
 /// Only files that exist are returned, so `apply` never creates a shell file the
-/// user did not have. Fish uses a `conf.d` fragment.
+/// user did not have. Fish is handled separately via [`fish_fragment`] using
+/// fish syntax, never the POSIX block.
 pub fn existing_rc_files(home: &Path) -> Vec<RcFile> {
     let candidates = [
         home.join(".profile"),
         home.join(".bashrc"),
         home.join(".zshrc"),
-        home.join(".config/fish/conf.d/dblocal.fish"),
     ];
     candidates
         .into_iter()
@@ -347,9 +347,40 @@ pub fn existing_rc_files(home: &Path) -> Vec<RcFile> {
         .collect()
 }
 
+/// The fish config directory under `home`.
+pub fn fish_config_dir(home: &Path) -> PathBuf {
+    home.join(".config/fish")
+}
+
 /// The fish fragment path (inside `conf.d`), whether or not it exists yet.
 pub fn fish_fragment(home: &Path) -> PathBuf {
     home.join(".config/fish/conf.d/dblocal.fish")
+}
+
+/// Renders the fish-syntax managed fragment for `shims_dir`.
+pub fn render_fish_block(shims_dir: &Path) -> String {
+    let quoted = fish_single_quote(&shims_dir.display().to_string());
+    let mut out = String::new();
+    out.push_str(consts::PATH_BLOCK_BEGIN);
+    out.push('\n');
+    out.push_str("# Managed by DBLocal. Remove with `dblocal toolchain path --remove`.\n");
+    out.push_str(&format!("fish_add_path --prepend --move {quoted}\n"));
+    out.push_str(consts::PATH_BLOCK_END);
+    out.push('\n');
+    out
+}
+
+fn fish_single_quote(value: &str) -> String {
+    let mut out = String::from("'");
+    for ch in value.chars() {
+        match ch {
+            '\\' => out.push_str("\\\\"),
+            '\'' => out.push_str("\\'"),
+            _ => out.push(ch),
+        }
+    }
+    out.push('\'');
+    out
 }
 
 /// The result of applying or removing the block across rc files.
@@ -405,20 +436,62 @@ pub fn apply_posix(home: &Path, shims_dir: &Path) -> PathEditReport {
             Err(reason) => report.failures.push((rc.path, reason)),
         }
     }
+    apply_fish(home, shims_dir, &mut report);
     report
 }
 
-/// Removes the managed block from every existing rc file under `home`.
+fn apply_fish(home: &Path, shims_dir: &Path, report: &mut PathEditReport) {
+    if !fish_config_dir(home).is_dir() {
+        return;
+    }
+    let frag = fish_fragment(home);
+    let rendered = render_fish_block(shims_dir);
+    if frag.exists() {
+        let original = match std::fs::read_to_string(&frag) {
+            Ok(text) => text,
+            Err(err) => {
+                report.failures.push((frag, err.to_string()));
+                return;
+            }
+        };
+        if !has_block(&original) {
+            report.failures.push((
+                frag,
+                "existing fish fragment is not managed by DBLocal".to_owned(),
+            ));
+            return;
+        }
+        if original == rendered {
+            report.unchanged.push(frag);
+            return;
+        }
+        match backup_and_write(&frag, &original, &rendered) {
+            Ok(backup) => {
+                report.changed.push(frag);
+                report.backups.push(backup);
+            }
+            Err(reason) => report.failures.push((frag, reason)),
+        }
+        return;
+    }
+    if let Some(parent) = frag.parent()
+        && let Err(err) = std::fs::create_dir_all(parent)
+    {
+        report.failures.push((frag, err.to_string()));
+        return;
+    }
+    match crate::fsutil::write_private_file_atomic(&frag, rendered.as_bytes()) {
+        Ok(()) => report.changed.push(frag),
+        Err(err) => report.failures.push((frag, err.to_string())),
+    }
+}
+
+/// Removes the managed block from every existing rc file under `home`, and
+/// deletes the managed fish fragment if it carries DBLocal's markers.
 pub fn remove_posix(home: &Path, shims_dir: &Path) -> PathEditReport {
     let _ = shims_dir;
     let mut report = PathEditReport::default();
-    let mut files = existing_rc_files(home);
-    // The fish fragment may exist even when the other files do not.
-    let fish = fish_fragment(home);
-    if fish.is_file() && !files.iter().any(|rc| rc.path == fish) {
-        files.push(RcFile { path: fish });
-    }
-    for rc in files {
+    for rc in existing_rc_files(home) {
         let original = match std::fs::read_to_string(&rc.path) {
             Ok(text) => text,
             Err(err) => {
@@ -443,7 +516,30 @@ pub fn remove_posix(home: &Path, shims_dir: &Path) -> PathEditReport {
             Err(reason) => report.failures.push((rc.path, reason)),
         }
     }
+    remove_fish(home, &mut report);
     report
+}
+
+fn remove_fish(home: &Path, report: &mut PathEditReport) {
+    let frag = fish_fragment(home);
+    if !frag.is_file() {
+        return;
+    }
+    let original = match std::fs::read_to_string(&frag) {
+        Ok(text) => text,
+        Err(err) => {
+            report.failures.push((frag, err.to_string()));
+            return;
+        }
+    };
+    if !has_block(&original) {
+        report.unchanged.push(frag);
+        return;
+    }
+    match std::fs::remove_file(&frag) {
+        Ok(()) => report.changed.push(frag),
+        Err(err) => report.failures.push((frag, err.to_string())),
+    }
 }
 
 fn backup_and_write(
@@ -467,7 +563,8 @@ fn backup_path(path: &Path) -> PathBuf {
     PathBuf::from(name)
 }
 
-/// Reads the shims dir the managed block names in the first rc file that has one.
+/// Reads the shims dir the managed block names in the first rc file (or fish
+/// fragment) that has one.
 pub fn block_shims_dir(home: &Path) -> Option<PathBuf> {
     for rc in existing_rc_files(home) {
         let Ok(text) = std::fs::read_to_string(&rc.path) else {
@@ -477,20 +574,36 @@ pub fn block_shims_dir(home: &Path) -> Option<PathBuf> {
             return Some(dir);
         }
     }
+    let fish = fish_fragment(home);
+    if let Ok(text) = std::fs::read_to_string(&fish)
+        && let Some(dir) = parse_block_dir(&text)
+    {
+        return Some(dir);
+    }
     None
 }
 
-/// Extracts the shims dir from a rendered block.
+/// Extracts the shims dir from a rendered POSIX or fish block.
 fn parse_block_dir(text: &str) -> Option<PathBuf> {
     let start = text.find(consts::PATH_BLOCK_BEGIN)?;
     let end = text.find(consts::PATH_BLOCK_END)?;
     let block = &text[start..end];
-    // The assignment form is `PATH='<dir>'${PATH:+:$PATH}`.
-    let marker = "PATH=";
-    let idx = block.find(marker)? + marker.len();
-    let rest = &block[idx..];
-    let dir = parse_single_quoted(rest)?;
-    Some(PathBuf::from(dir))
+    // POSIX form: `PATH='<dir>'${PATH:+:$PATH}`.
+    if let Some(pos) = block.find("PATH=") {
+        let rest = &block[pos + "PATH=".len()..];
+        if let Some(dir) = parse_single_quoted(rest) {
+            return Some(PathBuf::from(dir));
+        }
+    }
+    // Fish form: `fish_add_path --prepend --move '<dir>'`.
+    let fish_marker = "fish_add_path --prepend --move ";
+    if let Some(pos) = block.find(fish_marker) {
+        let rest = &block[pos + fish_marker.len()..];
+        if let Some(dir) = parse_single_quoted(rest) {
+            return Some(PathBuf::from(dir));
+        }
+    }
+    None
 }
 
 fn parse_single_quoted(text: &str) -> Option<String> {

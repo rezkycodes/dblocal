@@ -306,3 +306,44 @@ fn windows_env_trait_applies_and_removes_idempotently() {
     assert_eq!(removed.changed.len(), 1);
     assert_eq!(env.0.borrow().as_deref(), Some(r"C:\Windows"));
 }
+
+#[test]
+fn fish_fragment_created_idempotently_and_removed_safely() {
+    let dir = tempdir().expect("tmp");
+    let fish_dir = dir.path().join(".config/fish");
+    std::fs::create_dir_all(&fish_dir).expect("mkdir fish");
+    let shims = dir.path().join(".dblocal/bin");
+    let frag = dir.path().join(".config/fish/conf.d/dblocal.fish");
+
+    // First apply creates conf.d/dblocal.fish with fish syntax (no POSIX `case`).
+    let first = apply_posix(dir.path(), &shims);
+    assert!(first.changed.contains(&frag), "{first:?}");
+    let text = std::fs::read_to_string(&frag).expect("read fish");
+    assert!(text.contains("fish_add_path"), "{text}");
+    assert!(!text.contains("esac"), "must not write POSIX syntax: {text}");
+    assert!(text.contains(consts::PATH_BLOCK_BEGIN), "{text}");
+    assert_eq!(block_shims_dir(dir.path()), Some(shims.clone()));
+
+    // Second apply is idempotent.
+    let second = apply_posix(dir.path(), &shims);
+    assert!(second.changed.is_empty(), "{second:?}");
+    assert!(second.unchanged.contains(&frag), "{second:?}");
+
+    // Remove deletes the managed fish file.
+    let removed = remove_posix(dir.path(), &shims);
+    assert!(removed.changed.contains(&frag), "{removed:?}");
+    assert!(!frag.exists(), "managed fish fragment must be deleted");
+
+    // A user-authored fish file without our marker is never modified or deleted.
+    std::fs::write(&frag, "# user fish config\n").expect("write user fish");
+    let refused = apply_posix(dir.path(), &shims);
+    assert!(
+        refused.failures.iter().any(|(p, _)| p == &frag),
+        "{refused:?}"
+    );
+    assert_eq!(std::fs::read_to_string(&frag).unwrap(), "# user fish config\n");
+
+    let rem_unmanaged = remove_posix(dir.path(), &shims);
+    assert!(rem_unmanaged.changed.is_empty(), "{rem_unmanaged:?}");
+    assert_eq!(std::fs::read_to_string(&frag).unwrap(), "# user fish config\n");
+}
