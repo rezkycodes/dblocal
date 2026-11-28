@@ -251,7 +251,8 @@ impl PhpSettingsForm {
                 self.errors.remove(&key);
             }
             Err(err) => {
-                self.errors.insert(key, format_setting_error(&err));
+                self.errors
+                    .insert(key, format_setting_error(key, &value, &err));
             }
         }
     }
@@ -311,7 +312,8 @@ impl PhpSettingsForm {
             match PhpSettings::parse_value(key, &raw) {
                 Ok(val) => updates.push((key, val)),
                 Err(err) => {
-                    self.errors.insert(key, format_setting_error(&err));
+                    self.errors
+                        .insert(key, format_setting_error(key, &raw, &err));
                 }
             }
         }
@@ -323,13 +325,36 @@ impl PhpSettingsForm {
     }
 }
 
-/// Extracts the specific validation reason from the core parser error so the
-/// field shows the exact rule instead of a generic invalid-input sentence.
-fn format_setting_error(err: &dblocal_core::DblError) -> String {
-    match err {
-        dblocal_core::DblError::InvalidInput { reason, .. } => reason.clone(),
-        other => other.user_message(),
+/// Formats a core PHP-setting parse error as a complete sentence that names the
+/// offending value (never a dangling lowercase fragment like "is not a known
+/// timezone").
+fn format_setting_error(key: SettingKey, raw: &str, err: &dblocal_core::DblError) -> String {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return format!("{} cannot be empty.", key.as_str());
     }
+    let reason = match err {
+        dblocal_core::DblError::InvalidInput { reason, .. } => reason.as_str(),
+        other => {
+            return format!(
+                "'{trimmed}' is not valid for {}: {}",
+                key.as_str(),
+                other.user_message()
+            );
+        }
+    };
+    if reason.contains(trimmed) && !starts_with_lowercase_fragment(reason) {
+        return reason.to_owned();
+    }
+    if reason.starts_with("is ") || reason.starts_with("must ") {
+        format!("'{trimmed}' {reason}")
+    } else {
+        format!("'{trimmed}' is not valid: {reason}")
+    }
+}
+
+fn starts_with_lowercase_fragment(text: &str) -> bool {
+    text.chars().next().is_some_and(|c| c.is_ascii_lowercase())
 }
 
 /// Confirmation dialog payload for removing an installed toolchain version.

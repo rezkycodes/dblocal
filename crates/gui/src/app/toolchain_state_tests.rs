@@ -383,6 +383,48 @@ fn php_settings_validation_and_button_enablement() {
 }
 
 #[test]
+fn php_settings_validation_messages_are_complete_sentences_naming_the_value() {
+    let cases: &[(SettingKey, &str)] = &[
+        (SettingKey::MemoryLimit, "not-a-size"),
+        (SettingKey::UploadMaxFilesize, "0"),
+        (SettingKey::PostMaxSize, "12TB"),
+        (SettingKey::MaxExecutionTime, "fast"),
+        (SettingKey::DateTimezone, "Mars/Olympus"),
+        (SettingKey::DisplayErrors, "maybe"),
+    ];
+    for &(key, bad_value) in cases {
+        let mut form = PhpSettingsForm::from_settings(
+            PhpSettings::default(),
+            PathBuf::from("/tmp/php/conf.d"),
+        );
+        form.set_field(key, bad_value.to_owned());
+        let msg = form
+            .errors
+            .get(&key)
+            .unwrap_or_else(|| panic!("expected error for {key:?} = {bad_value:?}"));
+        assert!(
+            !msg.chars().next().is_some_and(|c| c.is_ascii_lowercase()),
+            "{key:?}: validation message must not start with a lowercase fragment: {msg:?}"
+        );
+        assert!(
+            msg.contains(bad_value),
+            "{key:?}: validation message must include the typed value {bad_value:?}: {msg:?}"
+        );
+    }
+    // Check the exact timezone example too.
+    let mut tz_form =
+        PhpSettingsForm::from_settings(PhpSettings::default(), PathBuf::from("/tmp/php/conf.d"));
+    tz_form.set_field(SettingKey::DateTimezone, "Mars/Olympus".to_owned());
+    assert_eq!(
+        tz_form
+            .errors
+            .get(&SettingKey::DateTimezone)
+            .map(String::as_str),
+        Some("'Mars/Olympus' is not a known timezone")
+    );
+}
+
+#[test]
 fn remove_dialog_explains_active_and_no_auto_switch() {
     let mut state = state_with_catalog();
     state.installed.push(installed_item(
