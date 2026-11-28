@@ -164,6 +164,9 @@ fn path_print_writes_nothing_and_shows_the_block() {
     assert!(!home.path().join(".bashrc").exists());
 }
 
+// Edits `~/.bashrc`; on Windows the PATH target is the user registry, which a
+// unit test must never touch.
+#[cfg(unix)]
 #[test]
 fn path_apply_needs_consent_and_is_reversible() {
     let home = Home::new();
